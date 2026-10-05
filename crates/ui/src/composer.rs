@@ -8066,6 +8066,10 @@ impl Composer {
         // Fully-resolved model/reasoning/options — concrete values (chat config
         // or defaults), so the engine never has to guess a "default".
         let resolved = self.pickers.read(cx).resolved(cx);
+        // The Run runs what the picker SHOWS: explicit picks plus each
+        // offered option's default (the picker renders the default as
+        // selected). Chat rows still persist only explicit picks.
+        let run_options = self.pickers.read(cx).run_model_options(cx);
         let existing_cwd = self
             .state
             .read(cx)
@@ -8654,7 +8658,7 @@ impl Composer {
                         harness: resolved.harness,
                         model: resolved.model.clone(),
                         reasoning: resolved.reasoning,
-                        model_options: resolved.model_options.clone(),
+                        model_options: run_options.clone(),
                         cwd,
                         sandbox: SandboxLevel::WorkspaceWrite,
                         auto_approve: false,
