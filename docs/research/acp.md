@@ -215,3 +215,26 @@ delay extension fails rather than skips. Historical ACP verification used pi-acp
 Pi 0.85.1, and `gpt-5.6-luna`: three sessions each completed the original turn and
 two queued follow-ups after 36.6–36.8-second post-tool gaps; cancellation during a
 32-second post-tool gap also completed as Interrupted.
+
+## DeepSeek Harness (`dsh`) — 2026-10
+
+`AcpHarness::dsh()` registers DeepSeek's CLI as `dsh --profile acp-plus`,
+falling back to the shipped `acp` profile when `$DSH_HOME/profiles/acp-plus`
+is absent; `DSH_PROFILE` pins an explicit profile. acp-plus is the
+user-maintained out-of-tree bundle (github:AndPuQing/dsh-acp-plus, installed
+with `dsh plugin --profile acp-plus add …`) and is what adds `session/load`,
+additional directories, elicitation, and the `_meta.steering` extension in its
+`initialize` result — no client capability gate, so the existing runtime check
+picks steering up unchanged. dsh authenticates itself (`authMethods: []`; no
+zeron sign-in), and zeron deliberately does not manage the install or updates:
+Settings only shows the documented npm hint and npm's `latest` tag.
+
+dsh exposed a gap in the shared client: its model select uses ACP
+`SessionConfigSelectGroup` entries (provider-grouped options), which the
+previous flat-shape parsing dropped — the picker came up empty and every run
+failed `validate_config_model_selection`. `select_choices()` now flattens
+groups at all five consumers. Model values are raw provider-scoped JSON tuples
+(`"[\"deepseek-official\",\"deepseek-v4-pro\"]"`), persisted verbatim and
+round-tripped by exact match; the reasoning select is a flat
+`off/low/high/max` ladder (`off` ↔ `ReasoningLevel::Minimal`). The fake
+`tests/fixtures/fake-dsh-acp.sh` mirrors these shapes.

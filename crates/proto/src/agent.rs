@@ -23,6 +23,10 @@ pub enum HarnessId {
     /// google's antigravity agent over acp (`agy_acp_server`, installed from
     /// its pinned release archive).
     Antigravity,
+    /// DeepSeek's harness (`dsh`) driven over ACP (`dsh --profile acp-plus`,
+    /// falling back to the shipped `acp` profile). Zeron never installs or
+    /// updates dsh itself.
+    Dsh,
     /// Test harness; never shown in production pickers.
     Mock,
 }

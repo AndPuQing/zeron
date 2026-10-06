@@ -2,10 +2,11 @@
 //! stdio, protocol v1) and maps its session updates onto [`AgentEvent`]s.
 //!
 //! KEPT ONLY for agents built ground-up on ACP: Grok ([`AcpHarness::grok`],
-//! `grok agent stdio`), Devin ([`AcpHarness::devin`], `devin acp`) and Hermes
-//! ([`AcpHarness::hermes`], `hermes acp`) and Antigravity
+//! `grok agent stdio`), Devin ([`AcpHarness::devin`], `devin acp`), Hermes
+//! ([`AcpHarness::hermes`], `hermes acp`), Antigravity
 //! ([`AcpHarness::antigravity`], Google's `agy_acp_server`, installed from its
-//! pinned release archive). Pi, Claude, Codex and Cursor use native drivers
+//! pinned release archive) and DeepSeek Harness ([`AcpHarness::dsh`],
+//! `dsh --profile acp-plus`). Pi, Claude, Codex and Cursor use native drivers
 //! ([`crate::ClaudeHarness`], [`crate::CodexHarness`], [`crate::CursorHarness`])
 //! after adapter-mediated ACP kept manufacturing done-status bugs the native
 //! wires don't have (turn-hold bookkeeping vs the CLI's own eager result).
@@ -79,8 +80,9 @@ struct AcpAgentSpec {
     executable: &'static str,
     /// Env var overriding executable resolution (tests, custom installs).
     env_override: &'static str,
-    /// Arguments that put the binary in ACP-serving mode.
-    args: &'static [&'static str],
+    /// Arguments that put the binary in ACP-serving mode. A closure because
+    /// dsh picks its profile at runtime (see [`dsh_profile`]).
+    args: fn() -> Vec<String>,
     /// Pinned npm package (`name@version`) installed ONCE into the managed
     /// adapters dir when the binary isn't already present — the launch then
     /// spawns `node <entry>` directly, keeping npm (and every way a user's
@@ -154,6 +156,11 @@ fn identity_transform(_reasoning: Option<ReasoningLevel>, text: &str) -> String 
     text.to_owned()
 }
 
+/// A static argument list as the launch's owned form.
+fn args(list: &[&str]) -> Vec<String> {
+    list.iter().map(|arg| (*arg).to_string()).collect()
+}
+
 /// PATH + login-shell + extra dirs + node-version-manager scan for a binary.
 pub(crate) fn find_on_paths(exe: &str, extra: Vec<PathBuf>) -> Option<PathBuf> {
     crate::executable::find_on_paths(exe, extra)
@@ -217,7 +224,7 @@ fn grok_spec() -> AcpAgentSpec {
         // `[cli] use_leader` is set — leader mode ATTACHES `agent stdio` to a
         // shared process via ~/.grok/leader.sock, so a wedged/stale leader
         // (the user's TUI) reads as total silent non-response in zeron.
-        args: &["--no-auto-update", "agent", "--no-leader", "stdio"],
+        args: || args(&["--no-auto-update", "agent", "--no-leader", "stdio"]),
         npm_package: Some("@xai-official/grok@1.0.4"),
         archive: None,
         extra_paths: grok_install_paths,
@@ -287,7 +294,7 @@ fn devin_spec() -> AcpAgentSpec {
         display_name: "Devin",
         executable: "devin",
         env_override: "DEVIN_EXECUTABLE",
-        args: &["acp"],
+        args: || args(&["acp"]),
         // Native ACP server — no adapter package in between.
         npm_package: None,
         archive: None,
@@ -363,7 +370,7 @@ fn hermes_spec() -> AcpAgentSpec {
         display_name: "Hermes",
         executable: "hermes",
         env_override: "HERMES_EXECUTABLE",
-        args: &["acp"],
+        args: || args(&["acp"]),
         // Python/uv install — no npm fallback exists.
         npm_package: None,
         archive: None,
@@ -1074,10 +1081,12 @@ fn antigravity_spec() -> AcpAgentSpec {
         display_name: "Antigravity",
         executable: "agy_acp_server",
         env_override: "ANTIGRAVITY_ACP_EXECUTABLE",
-        args: if cfg!(target_os = "linux") {
-            ANTIGRAVITY_LINUX_ARGS
-        } else {
-            &[]
+        args: || {
+            if cfg!(target_os = "linux") {
+                args(ANTIGRAVITY_LINUX_ARGS)
+            } else {
+                Vec::new()
+            }
         },
         npm_package: None,
         archive: antigravity_archive(),
@@ -1120,6 +1129,133 @@ fn antigravity_spec() -> AcpAgentSpec {
         // preserves any method already selected in antigravity's settings.
         auth_method: Some("oauth-personal"),
         skill_dirs: antigravity_skill_dirs,
+        hidden_commands: &[],
+        drops_unstarted_cancelled_prompt: false,
+    }
+}
+
+/// dsh's data home (`$DSH_HOME`, default `~/.dsh`): profiles, credentials and
+/// session logs all live below it.
+pub(crate) fn dsh_home() -> PathBuf {
+    crate::model_context::root(
+        "DSH_HOME",
+        crate::executable::home_or_current_dir().join(".dsh"),
+    )
+}
+
+/// Which profile to boot. `acp` ships with dsh and auto-initializes on first
+/// use; `acp-plus` is the extended out-of-tree ACP bundle (session/load,
+/// additionalDirectories, elicitation, steering) the user installs with
+/// `dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus`. Prefer
+/// acp-plus once its profile exists; `DSH_PROFILE` pins an explicit choice.
+pub(crate) fn dsh_profile() -> String {
+    dsh_profile_from(
+        std::env::var_os("DSH_PROFILE").filter(|p| !p.is_empty()),
+        &dsh_home(),
+    )
+}
+
+/// [`dsh_profile`]'s decision, pure so tests don't mutate process env.
+fn dsh_profile_from(explicit: Option<std::ffi::OsString>, home: &Path) -> String {
+    if let Some(profile) = explicit {
+        return profile.to_string_lossy().into_owned();
+    }
+    if home.join("profiles").join("acp-plus").is_dir() {
+        "acp-plus".into()
+    } else {
+        "acp".into()
+    }
+}
+
+fn dsh_args() -> Vec<String> {
+    args(&["--profile", &dsh_profile()])
+}
+
+fn dsh_install_paths() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = crate::executable::home_dir() {
+        // bun/npm user-global bins commonly hold `dsh` without a login shell.
+        dirs.push(home.join(".bun").join("bin").join("dsh"));
+        dirs.push(home.join(".local").join("bin").join("dsh"));
+        dirs.push(home.join(".npm-global").join("bin").join("dsh"));
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin/dsh"));
+    dirs.push(PathBuf::from("/usr/local/bin/dsh"));
+    dirs
+}
+
+/// dsh's `off/low/high/max` ladder: Zeron's lowest level IS its `off`
+/// ("no reasoning"); everything above follows the generic preference order.
+fn dsh_effort_values(reasoning: Option<ReasoningLevel>, model: Option<&str>) -> Vec<&'static str> {
+    match reasoning {
+        Some(ReasoningLevel::Minimal) => vec!["off", "low"],
+        _ => default_effort_values(reasoning, model),
+    }
+}
+
+/// User-global skill folders dsh-skill-filesystem loads: `$DSH_HOME/skills`
+/// plus the shared agent skills home (`$DSH_AGENTS_HOME`, default
+/// `~/.agents`). Project-side `.dsh/skills` and `.agents/skills` come from
+/// the shared discovery in [`crate::skills`].
+pub(crate) fn dsh_skill_dirs() -> Vec<PathBuf> {
+    let agents = std::env::var_os("DSH_AGENTS_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::executable::home_or_current_dir().join(".agents"));
+    vec![dsh_home().join("skills"), agents.join("skills")]
+}
+
+fn dsh_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Dsh,
+        display_name: "DeepSeek Harness",
+        executable: "dsh",
+        env_override: "DSH_EXECUTABLE",
+        // `dsh <name>` abbreviates `--profile <name>`; the profile is chosen
+        // at launch time (acp-plus when installed, else the shipped acp).
+        args: dsh_args,
+        // Not managed: zeron never installs or updates dsh (user decision) —
+        // the install hint and manual command are guidance only.
+        npm_package: None,
+        archive: None,
+        extra_paths: dsh_install_paths,
+        cli_executable: "dsh",
+        cli_extra_paths: dsh_install_paths,
+        install_hint: "dsh (searched PATH, the login shell's PATH, ~/.bun/bin, \
+             ~/.local/bin, ~/.npm-global/bin, /opt/homebrew/bin, /usr/local/bin, and \
+             fnm/nvm/volta/pnpm/bun install dirs; install with \
+             `npm install -g @deepseek-ai/dsh` (or `bun install -g @deepseek-ai/dsh`), \
+             then add the extended ACP profile with \
+             `dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus`; \
+             zeron boots `dsh --profile acp-plus`, or the shipped `acp` profile \
+             until acp-plus exists; set DSH_EXECUTABLE to override)",
+        // Wire-first: dsh advertises its provider-scoped model catalog on
+        // `session/new` (grouped select values like
+        // `["deepseek-official","deepseek-v4-pro"]`), so there is no static
+        // fallback to get subtly wrong — an unadvertised id would fail the
+        // config-option check.
+        models: Vec::new,
+        // dsh-acp-plus advertises `_meta.steering` with `promptRequired`
+        // idle behavior: mid-turn injection at the next step boundary.
+        steering_mode: SteeringMode::StepBoundary,
+        // Advertised `thought_level` ladder (off/low/high/max); `off` is
+        // Zeron's Minimal.
+        reasoning_levels: &[
+            ReasoningLevel::Minimal,
+            ReasoningLevel::Low,
+            ReasoningLevel::High,
+            ReasoningLevel::Max,
+        ],
+        prompt_transform: identity_transform,
+        effort_values: dsh_effort_values,
+        ladder_extras: &[],
+        prompt_complete_extension: false,
+        prompt_stall: None,
+        stall_hint: "The agent process is likely wedged.",
+        effort_in_model_id: false,
+        // No ACP sign-in: credentials live in $DSH_HOME/.credentials.yaml.
+        auth_method: None,
+        skill_dirs: dsh_skill_dirs,
         hidden_commands: &[],
         drops_unstarted_cancelled_prompt: false,
     }
@@ -1301,6 +1437,12 @@ impl AcpHarness {
     pub fn antigravity() -> Self {
         Self::with_spec(antigravity_spec())
             .with_model_discovery_timeout(ANTIGRAVITY_DISCOVERY_TIMEOUT)
+    }
+
+    /// DeepSeek Harness (`dsh --profile acp-plus`, or the shipped `acp`
+    /// profile before acp-plus is installed).
+    pub fn dsh() -> Self {
+        Self::with_spec(dsh_spec())
     }
 
     /// sign the agent out with acp `logout`, clearing the credentials its
@@ -1558,7 +1700,7 @@ impl AcpHarness {
     }
 
     fn resolve_launch(&self) -> Result<Launch, HarnessError> {
-        let spec_args: Vec<String> = self.spec.args.iter().map(|a| a.to_string()).collect();
+        let spec_args = (self.spec.args)();
         if let Some(p) = &self.executable {
             return crate::executable::validate_native_override(p)
                 .map(|program| Launch::Program(program, spec_args));
@@ -1661,7 +1803,9 @@ impl AcpHarness {
     /// (Grok, Devin, Hermes); Pi's server is a separate adapter.
     pub async fn cli_command(&self, args: &[&str]) -> Result<Command, HarnessError> {
         let (exe, mut launch_args) = self.resolve_program(false).await?;
-        let prefix = launch_args.len().saturating_sub(self.spec.args.len());
+        let prefix = launch_args
+            .len()
+            .saturating_sub((self.spec.args)().len());
         launch_args.truncate(prefix);
         let mut cmd = Command::new(&exe);
         cmd.args(launch_args).args(args);
@@ -1906,6 +2050,9 @@ impl AcpHarness {
 /// Map an advertised `thought_level` value id onto zeron's ladder.
 fn reasoning_from_value(value: &str) -> Option<ReasoningLevel> {
     match norm_id(value).as_str() {
+        // dsh spells its lowest rung `off` ("no reasoning"); Zeron's lowest is
+        // Minimal either way.
+        "off" | "none" => Some(ReasoningLevel::Minimal),
         "minimal" => Some(ReasoningLevel::Minimal),
         "low" => Some(ReasoningLevel::Low),
         "medium" => Some(ReasoningLevel::Medium),
@@ -1917,6 +2064,24 @@ fn reasoning_from_value(value: &str) -> Option<ReasoningLevel> {
         "ultrathink" => Some(ReasoningLevel::Ultrathink),
         _ => None,
     }
+}
+
+/// The choice rows of a `select` config option as a flat list. ACP's
+/// `SessionConfigSelectOptions` is a union: org adapters send a flat array,
+/// while dsh groups its model list by provider (`SessionConfigSelectGroup`,
+/// `{group, name, options: […]}`). Every consumer here wants the leaves.
+fn select_choices(option: &Value) -> Vec<&Value> {
+    let Some(options) = option.get("options").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut choices = Vec::new();
+    for entry in options {
+        match entry.get("options").and_then(Value::as_array) {
+            Some(group) => choices.extend(group.iter().filter(|c| c.get("value").is_some())),
+            None => choices.push(entry),
+        }
+    }
+    choices
 }
 
 /// Derive the model list a `session/new` response advertises. The `model`
@@ -1940,9 +2105,10 @@ fn models_from_session(session_response: &Value, catalog: &[Model]) -> Vec<Model
     let ladder: Vec<ReasoningLevel> = config_options
         .iter()
         .find(|o| o.get("category").and_then(Value::as_str) == Some("thought_level"))
-        .and_then(|o| o.get("options").and_then(Value::as_array))
-        .map(|opts| {
-            opts.iter()
+        .map(select_choices)
+        .map(|choices| {
+            choices
+                .into_iter()
                 .filter_map(|o| o.get("value").and_then(Value::as_str))
                 .filter_map(reasoning_from_value)
                 .collect()
@@ -1998,8 +2164,7 @@ fn models_from_session(session_response: &Value, catalog: &[Model]) -> Vec<Model
     let model_select: Vec<&Value> = config_options
         .iter()
         .find(|o| o.get("category").and_then(Value::as_str) == Some("model"))
-        .and_then(|o| o.get("options").and_then(Value::as_array))
-        .map(|opts| opts.iter().collect())
+        .map(select_choices)
         .unwrap_or_default();
     if !model_select.is_empty() {
         let raw_ids: Vec<&str> = model_select
@@ -2096,10 +2261,8 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
     let label = option.get("name").and_then(Value::as_str).unwrap_or(id);
     match option.get("type").and_then(Value::as_str)? {
         "select" => {
-            let choices: Vec<ModelOptionChoice> = option
-                .get("options")
-                .and_then(Value::as_array)?
-                .iter()
+            let choices: Vec<ModelOptionChoice> = select_choices(option)
+                .into_iter()
                 .filter_map(|c| {
                     let id = c.get("value").and_then(Value::as_str)?;
                     Some(ModelOptionChoice {
@@ -2748,12 +2911,8 @@ fn validate_config_model_selection(
     else {
         return Ok(());
     };
-    let available: Vec<&str> = option
-        .get("options")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-        .iter()
+    let available: Vec<&str> = select_choices(option)
+        .into_iter()
         .filter_map(|choice| choice.get("value").and_then(Value::as_str))
         .collect();
     let context_1m = model_options
@@ -2817,12 +2976,8 @@ fn config_option_sets(
         let kind = option.get("type").and_then(Value::as_str).unwrap_or("");
         let category = option.get("category").and_then(Value::as_str);
         let current = option.get("currentValue");
-        let available: Vec<&str> = option
-            .get("options")
-            .and_then(Value::as_array)
-            .map(|a| a.as_slice())
-            .unwrap_or_default()
-            .iter()
+        let available: Vec<&str> = select_choices(option)
+            .into_iter()
             .filter_map(|o| o.get("value").and_then(Value::as_str))
             .collect();
 
@@ -5731,6 +5886,183 @@ mod tests {
             config_option_sets(&json!({"sessionId": "s"}), Some("x"), &["high"], &no_opts),
             Vec::new()
         );
+    }
+
+    /// dsh boots the extended `acp-plus` profile once its profile dir exists,
+    /// the shipped `acp` profile until then, and `DSH_PROFILE` pins an
+    /// explicit choice; its ladder's lowest rung is `off`.
+    #[test]
+    fn dsh_profile_and_effort_ladder() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path();
+        assert_eq!(dsh_profile_from(None, home), "acp");
+        std::fs::create_dir_all(home.join("profiles").join("acp-plus")).unwrap();
+        assert_eq!(dsh_profile_from(None, home), "acp-plus");
+        assert_eq!(
+            dsh_profile_from(
+                Some(std::ffi::OsString::from("custom")),
+                &home.to_path_buf()
+            ),
+            "custom"
+        );
+        assert_eq!((dsh_spec().args)(), args(&["--profile", &dsh_profile()]));
+        assert_eq!(
+            dsh_effort_values(Some(ReasoningLevel::Minimal), None),
+            vec!["off", "low"]
+        );
+        assert_eq!(
+            dsh_effort_values(Some(ReasoningLevel::High), None),
+            vec!["high"]
+        );
+    }
+
+    /// dsh groups its model select by provider (`SessionConfigSelectGroup`:
+    /// `{group, name, options: […]}`), so every consumer of a select has to
+    /// flatten group leaves: the model rows (a group entry has no `value`, so
+    /// the old flat scan produced an EMPTY catalog), the Traits dropdown, the
+    /// model-selection check and the send path. Values are the raw
+    /// provider-scoped JSON tuples dsh persists verbatim.
+    #[test]
+    fn dsh_provider_grouped_model_options_flow_through() {
+        let pro = "[\"deepseek-official\",\"deepseek-v4-pro\"]";
+        let flash = "[\"deepseek-official\",\"deepseek-v4-flash\"]";
+        let chat = "[\"deepseek-platform\",\"deepseek-chat\"]";
+        let response = json!({
+            "sessionId": "s-1",
+            "configOptions": [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": flash,
+                    "options": [
+                        {
+                            "group": "deepseek-official",
+                            "name": "DeepSeek",
+                            "options": [
+                                { "value": pro, "name": "DeepSeek V4 Pro" },
+                                { "value": flash, "name": "DeepSeek V4 Flash" },
+                            ],
+                        },
+                        {
+                            "group": "deepseek-platform",
+                            "name": "DeepSeek Platform",
+                            "options": [
+                                { "value": chat, "name": "DeepSeek Chat" },
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "id": "reasoning",
+                    "name": "Reasoning",
+                    "category": "thought_level",
+                    "type": "select",
+                    "currentValue": "high",
+                    "options": [
+                        { "value": "off", "name": "Off" },
+                        { "value": "low", "name": "Low" },
+                        { "value": "high", "name": "High" },
+                        { "value": "max", "name": "Max" },
+                    ],
+                },
+                {
+                    "id": "sandbox",
+                    "name": "Sandbox",
+                    "category": "model_config",
+                    "type": "select",
+                    "currentValue": "workspace",
+                    "options": [
+                        {
+                            "group": "access",
+                            "name": "Access",
+                            "options": [
+                                { "value": "read-only", "name": "Read only" },
+                                { "value": "workspace", "name": "Workspace write" },
+                            ],
+                        },
+                    ],
+                },
+            ],
+        });
+
+        // Flattened rows keep the wire ids and read the shared `off`-anchored
+        // ladder (`off` maps to Minimal).
+        let models = models_from_session(&response, &[]);
+        let rows: Vec<(String, String, Vec<ReasoningLevel>)> = models
+            .iter()
+            .map(|m| (m.id.clone(), m.label.clone(), m.reasoning_levels.clone()))
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    pro.into(),
+                    "DeepSeek V4 Pro".into(),
+                    vec![
+                        ReasoningLevel::Minimal,
+                        ReasoningLevel::Low,
+                        ReasoningLevel::High,
+                        ReasoningLevel::Max,
+                    ],
+                ),
+                (
+                    flash.into(),
+                    "DeepSeek V4 Flash".into(),
+                    vec![
+                        ReasoningLevel::Minimal,
+                        ReasoningLevel::Low,
+                        ReasoningLevel::High,
+                        ReasoningLevel::Max,
+                    ],
+                ),
+                (
+                    chat.into(),
+                    "DeepSeek Chat".into(),
+                    vec![
+                        ReasoningLevel::Minimal,
+                        ReasoningLevel::Low,
+                        ReasoningLevel::High,
+                        ReasoningLevel::Max,
+                    ],
+                ),
+            ]
+        );
+        // The grouped trait select flattens too (labels come from the group).
+        let sandbox = models[0]
+            .options
+            .iter()
+            .find(|option| option.id == "sandbox")
+            .expect("grouped select surfaces as a trait");
+        assert_eq!(sandbox.default_choice, "workspace");
+        assert_eq!(
+            sandbox
+                .choices
+                .iter()
+                .map(|c| (c.id.as_str(), c.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("read-only", "Read only"), ("workspace", "Workspace write")]
+        );
+
+        // Send path: the saved raw tuple matches the advertised value exactly,
+        // and the effort preference list lands on dsh's `off` for Minimal.
+        let no_opts = serde_json::Map::new();
+        assert_eq!(
+            config_option_sets(&response, Some(pro), &["off", "low"], &no_opts),
+            vec![
+                ("model".to_owned(), json!({ "value": pro })),
+                ("reasoning".to_owned(), json!({ "value": "off" })),
+            ]
+        );
+        // Already-current model and effort set nothing.
+        assert_eq!(
+            config_option_sets(&response, Some(flash), &["high"], &no_opts),
+            Vec::new()
+        );
+        assert!(validate_config_model_selection(&response, Some(pro), &no_opts).is_ok());
+        // A bare id the groups don't advertise still fails loudly.
+        assert!(validate_config_model_selection(&response, Some("deepseek-v4-pro"), &no_opts).is_err());
     }
 
     #[test]

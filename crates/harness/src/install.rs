@@ -104,6 +104,10 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
             "curl -fsSL https://cli.devin.ai/install.sh | bash",
             "bash",
         )],
+        // Not managed: dsh and its profiles are the user's own install
+        // (npm/bun global). Zeron only checks for it and surfaces
+        // `manual_command` as guidance.
+        Dsh => vec![],
     }
 }
 
@@ -158,6 +162,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Grok => "npm install -g @xai-official/grok",
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
+        Dsh => "npm install -g @deepseek-ai/dsh",
         Antigravity | Mock => return None,
     })
 }
@@ -173,6 +178,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Grok => ("grok", "~/.grok/bin or the npm global bin"),
         Hermes => ("hermes", "~/.local/bin or ~/.hermes/bin"),
         Devin => ("devin", "~/.local/bin"),
+        Dsh => ("dsh", "the npm or bun global bin (~/.bun/bin)"),
         Antigravity => ("agy_acp_server", "~/.zerun/adapters"),
         Mock => ("mock", "PATH"),
     }
@@ -190,6 +196,7 @@ pub fn installed(id: HarnessId) -> bool {
         Hermes => crate::AcpHarness::hermes().installed(),
         Devin => crate::AcpHarness::devin().installed(),
         Antigravity => crate::AcpHarness::antigravity().installed(),
+        Dsh => crate::AcpHarness::dsh().installed(),
         Mock => false,
     }
 }
@@ -391,7 +398,7 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 10] = [
+    const IDS: [HarnessId; 11] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
         HarnessId::Cursor,
@@ -401,6 +408,7 @@ mod tests {
         HarnessId::Hermes,
         HarnessId::Devin,
         HarnessId::Antigravity,
+        HarnessId::Dsh,
         HarnessId::Mock,
     ];
 
@@ -409,7 +417,8 @@ mod tests {
         for platform in [Platform::Unix, Platform::Mac, Platform::Windows] {
             for id in IDS {
                 let list = methods(id, platform);
-                assert_eq!(list.is_empty(), id == HarnessId::Mock);
+                // dsh is deliberately unmanaged: no installer on any platform.
+                assert_eq!(list.is_empty(), matches!(id, HarnessId::Mock | HarnessId::Dsh));
                 for method in list {
                     assert!(available(method, platform, &|_| true, true));
                     assert!(!available(method, platform, &|_| false, false));

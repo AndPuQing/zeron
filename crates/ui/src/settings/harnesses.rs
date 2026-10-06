@@ -86,7 +86,14 @@ fn install_hint(harness: HarnessId, enabled: bool, can_install: bool) -> String 
         format!("Install the {} CLI to enable", cli_name(harness))
     };
     if !can_install && let Some(command) = zeron_harness::install::manual_command(harness) {
-        format!("{hint}. Install with `{command}`")
+        let mut hint = format!("{hint}. Install with `{command}`");
+        if harness == HarnessId::Dsh {
+            hint.push_str(
+                ", then add the extended ACP profile: \
+                 `dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus`",
+            );
+        }
+        hint
     } else {
         hint
     }
@@ -112,6 +119,7 @@ pub fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Pi => "pi",
         HarnessId::Opencode => "opencode",
         HarnessId::Antigravity => "Antigravity",
+        HarnessId::Dsh => "dsh",
         HarnessId::Mock => "mock",
     }
 }

@@ -272,6 +272,15 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "Update the configured Antigravity ACP server",
         },
+        HarnessId::Dsh => ProviderSpec {
+            version_args: &["--version"],
+            // Notify-only: the dsh install (and its profiles) belong to the
+            // user, so zeron never runs an updater — it just reports npm's
+            // `latest` dist-tag (what `npm install -g` would fetch).
+            latest: LatestSource::Npm("@deepseek-ai/dsh"),
+            update_args: None,
+            manual_command: "npm install -g @deepseek-ai/dsh@latest",
+        },
         HarnessId::Mock => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,

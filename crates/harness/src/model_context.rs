@@ -63,6 +63,16 @@ pub(crate) fn context(
         HarnessId::Pi => {
             vec![root("PI_CODING_AGENT_DIR", home.join(".pi/agent")).join("auth.json")]
         }
+        HarnessId::Dsh => {
+            let root = root("DSH_HOME", home.join(".dsh"));
+            let profile = root.join("profiles").join(crate::acp::dsh_profile());
+            vec![
+                root.join(".credentials.yaml"),
+                root.join("cordis.patch.yml"),
+                profile.join("package.json"),
+                profile.join("cordis.patch.yml"),
+            ]
+        }
         HarnessId::Devin => {
             let data = root("XDG_DATA_HOME", home.join(".local/share"));
             let mut files = vec![data.join("devin/credentials.toml")];
@@ -105,6 +115,7 @@ pub(crate) fn context(
         HarnessId::Pi => &["PI_", "OPENAI_", "ANTHROPIC_"],
         HarnessId::Devin => &["DEVIN_"],
         HarnessId::Antigravity => &["GEMINI_", "GOOGLE_"],
+        HarnessId::Dsh => &["DSH_", "DEEPSEEK_"],
         HarnessId::Cursor => &["CURSOR_"],
         _ => &[],
     };

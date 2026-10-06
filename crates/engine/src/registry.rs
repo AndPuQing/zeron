@@ -863,6 +863,31 @@ pub fn default_registry() -> HarnessRegistry {
             )
         }),
     );
+    // DeepSeek Harness over ACP (`dsh --profile acp-plus`, or the shipped
+    // `acp` profile until acp-plus is installed), same lazy pattern: the
+    // static descriptor mirrors AcpHarness::dsh() exactly. dsh-acp-plus
+    // advertises mid-turn `_session/steering`, and the effort ladder is
+    // off/low/high/max on the wire (`off` == Minimal). No managed install:
+    // can_install stays false and zeron never updates the dsh install.
+    registry.register_lazy(
+        HarnessDescriptor {
+            id: HarnessId::Dsh,
+            name: "DeepSeek Harness".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::StepBoundary,
+            reasoning_levels: vec![
+                ReasoningLevel::Minimal,
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+                ReasoningLevel::Max,
+            ],
+            installed: true,
+            can_install: false,
+            enabled: None,
+        },
+        Box::new(|| zeron_harness::AcpHarness::dsh().installed()),
+        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::dsh()) as Arc<dyn Harness>)),
+    );
     registry
 }
 
@@ -945,7 +970,8 @@ mod tests {
                 HarnessId::Hermes,
                 HarnessId::Pi,
                 HarnessId::Opencode,
-                HarnessId::Antigravity
+                HarnessId::Antigravity,
+                HarnessId::Dsh
             ]
         );
         assert!(registry.resolve(HarnessId::Mock).is_ok());
@@ -1008,6 +1034,19 @@ mod tests {
         assert_eq!(pi.display_name(), "Pi");
         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
         assert!(pi.reasoning_levels().is_empty());
+        let dsh = registry.resolve(HarnessId::Dsh).unwrap();
+        assert_eq!(dsh.id(), HarnessId::Dsh);
+        assert_eq!(dsh.display_name(), "DeepSeek Harness");
+        assert_eq!(dsh.steering_mode(), SteeringMode::StepBoundary);
+        assert_eq!(
+            dsh.reasoning_levels(),
+            &[
+                ReasoningLevel::Minimal,
+                ReasoningLevel::Low,
+                ReasoningLevel::High,
+                ReasoningLevel::Max,
+            ]
+        );
     }
 
     /// Catalogs serialized by engines that predate the `installed`/`enabled`
