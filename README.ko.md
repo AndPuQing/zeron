@@ -8,7 +8,7 @@
 
 ## 데스크톱 앱
 
-[GitHub Releases](https://github.com/zeronsh/zeron/releases/latest)에서 플랫폼에 맞는 최신 버전을 내려받으세요.
+[GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest)에서 플랫폼에 맞는 최신 버전을 내려받으세요.
 
 - **macOS** — `zeron-<version>-macos-arm64.dmg`
 - **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
@@ -21,7 +21,7 @@
 서버처럼 디스플레이가 없는 머신용입니다. 예를 들어 노트북을 닫은 뒤에도 에이전트를 계속 돌려 두는 VPS에 쓰면 됩니다. Linux만 지원합니다.
 
 ```bash
-curl -fsSL https://zeron.sh/install.sh | sh
+curl -fsSL https://zerun.puqing.work/install.sh | sh
 zeron status
 ```
 

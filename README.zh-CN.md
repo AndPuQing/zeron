@@ -8,7 +8,7 @@
 
 ## 桌面应用
 
-从 [GitHub Releases](https://github.com/zeronsh/zeron/releases/latest) 下载对应平台的最新版本：
+从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载对应平台的最新版本：
 
 - **macOS** — `zeron-<version>-macos-arm64.dmg`
 - **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
@@ -21,7 +21,7 @@
 适用于服务器等没有显示器的机器，比如在你合上笔记本之后继续跑 agent 的 VPS。仅支持 Linux：
 
 ```bash
-curl -fsSL https://zeron.sh/install.sh | sh
+curl -fsSL https://zerun.puqing.work/install.sh | sh
 zeron status
 ```
 

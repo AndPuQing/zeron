@@ -8,7 +8,7 @@
 
 ## デスクトップアプリ
 
-[GitHub Releases](https://github.com/zeronsh/zeron/releases/latest) から、お使いのプラットフォーム向けの最新版をダウンロードしてください。
+[GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) から、お使いのプラットフォーム向けの最新版をダウンロードしてください。
 
 - **macOS** — `zeron-<version>-macos-arm64.dmg`
 - **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
@@ -21,7 +21,7 @@
 サーバーなど、ディスプレイのないマシン向けです。たとえば、ノートパソコンを閉じたあともエージェントを動かし続ける VPS に使えます。Linux のみ対応しています。
 
 ```bash
-curl -fsSL https://zeron.sh/install.sh | sh
+curl -fsSL https://zerun.puqing.work/install.sh | sh
 zeron status
 ```
 

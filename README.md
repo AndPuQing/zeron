@@ -8,7 +8,7 @@ Control your coding agents (Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi,
 
 ## Desktop app
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/zeronsh/zeron/releases/latest):
+Download the latest release for your platform from [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest):
 
 - **macOS** — `zeron-<version>-macos-arm64.dmg`
 - **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
@@ -21,7 +21,7 @@ No account or network connection is needed; sessions stay on your device. The ap
 For servers and other machines without a display, such as a VPS that keeps agents running after you close your laptop. Linux only:
 
 ```bash
-curl -fsSL https://zeron.sh/install.sh | sh
+curl -fsSL https://zerun.puqing.work/install.sh | sh
 zeron status
 ```
 
