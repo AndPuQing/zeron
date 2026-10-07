@@ -65,6 +65,7 @@ conflicts.
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |
+| Versioning | the fork releases independently, starting at `v0.3.0`; fork tags are never shared with upstream |
 
 ## Fork configuration (not in git)
 
