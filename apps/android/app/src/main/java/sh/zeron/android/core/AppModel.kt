@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -131,7 +132,10 @@ class AppModel(private val app: Application) {
 
     val isDemo: Boolean get() = _client.value?.isDemo() == true
     private var refreshScheduled = false
-    private var authState: String? = null
+    private val signInState = SignInState(
+        read = { settings.getString("auth.pendingState", null) },
+        write = { settings.edit().putString("auth.pendingState", it).apply() },
+    )
 
     private val listener = object : ClientListener {
         override fun onEvent(event: ClientEvent) {
@@ -240,17 +244,24 @@ class AppModel(private val app: Application) {
 
     /** The WorkOS authorize URL to open in a Custom Tab. */
     fun beginSignIn(): String {
-        val state = UUID.randomUUID().toString()
-        authState = state
-        return workosAuthorizeUrl(state)
+        signInError.value = null
+        return workosAuthorizeUrl(signInState.begin())
     }
 
-    /** `zeron://callback?code=…`: code → tokens → org → client. */
+    /** `zerun-dev://callback?code=…`: verify state → tokens → org → client. */
     fun handleCallback(url: String) {
-        when (val cb = parseAuthCallback(url)) {
+        val cb = parseAuthCallback(url) ?: return
+        val returnedState = when (cb) {
+            is AuthCallback.Code -> cb.state
+            is AuthCallback.Error -> Uri.parse(url).getQueryParameter("state")
+        }
+        if (!signInState.accept(returnedState)) {
+            signInError.value = "Sign-in didn't complete. Try signing in again."
+            return
+        }
+        when (cb) {
             is AuthCallback.Code -> scope.launch { signIn(cb.code) }
             is AuthCallback.Error -> signInError.value = cb.description ?: cb.error
-            null -> Unit
         }
     }
 
@@ -280,6 +291,7 @@ class AppModel(private val app: Application) {
     }
 
     fun signOut() {
+        signInState.clear()
         val wasDemo = isDemo
         _client.value?.shutdown()
         _client.value = null
@@ -300,7 +312,7 @@ class AppModel(private val app: Application) {
 
     val accountDetail: String
         get() = if (isDemo) "Offline demo workspace" else credentials.profile.let { p ->
-            listOfNotNull(if (p.name != null) p.email else null, p.orgName).joinToString(" · ").ifEmpty { "Zeron account" }
+            listOfNotNull(if (p.name != null) p.email else null, p.orgName).joinToString(" · ").ifEmpty { "Zerun account" }
         }
 
     // ── events ─────────────────────────────────────────────────────────────

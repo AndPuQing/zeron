@@ -11,6 +11,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import sh.zeron.android.core.LaunchOptions
 import sh.zeron.android.ui.ZeronRoot
+import uniffi.zeron_core.authCallbackScheme
 
 /**
  * Launch extras mirror the iOS launch arguments, e.g.
@@ -54,6 +55,6 @@ class MainActivity : ComponentActivity() {
 
     private fun handleCallback(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == "zeron") model.handleCallback(data.toString())
+        if (data.scheme == authCallbackScheme() && data.host == "callback") model.handleCallback(data.toString())
     }
 }

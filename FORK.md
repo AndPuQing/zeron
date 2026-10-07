@@ -62,6 +62,7 @@ conflicts.
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://zerun.puqing.work` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; bundles `work.puqing.zerun[.ios]`; binary/product names stay `zeron` for now |
+| Android | app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; Gradle/Maven prefer China mirrors |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |

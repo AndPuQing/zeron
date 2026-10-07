@@ -22,12 +22,12 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- WorkOS sign-in returns to zeron://callback (shared with iOS). -->
+            <!-- WorkOS sign-in returns to zerun-dev://callback. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="zeron" android:host="callback" />
+                <data android:scheme="zerun-dev" android:host="callback" />
             </intent-filter>
         </activity>
     </application>

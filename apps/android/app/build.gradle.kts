@@ -8,6 +8,15 @@ plugins {
 // reuses the last build while iterating on Kotlin only.
 val NDK_VERSION = "29.0.14206865"
 val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
+val forkVersion = Regex("(?m)^version = \"(\\d+\\.\\d+\\.\\d+)\"$")
+    .find(repoRoot.resolve("Cargo.toml").readText())?.groupValues?.get(1)
+    ?: error("Missing numeric workspace version in Cargo.toml")
+val versionParts = forkVersion.split('.').map(String::toInt)
+require(versionParts[1] < 1000 && versionParts[2] < 1000) {
+    "Android versionCode requires minor and patch versions below 1000"
+}
+val forkVersionCode = versionParts[0].toLong() * 1_000_000 + versionParts[1] * 1000 + versionParts[2]
+require(forkVersionCode in 1..2_100_000_000L) { "Android versionCode is out of range" }
 val coreOut = repoRoot.resolve("target/android-core")
 val iconsOut = layout.buildDirectory.dir("generated/zeron-icons")
 val skipCore = providers.gradleProperty("zeronSkipCore").isPresent
@@ -41,11 +50,11 @@ android {
     ndkVersion = NDK_VERSION
 
     defaultConfig {
-        applicationId = "sh.zeron.android"
+        applicationId = "work.puqing.zerun.android"
         minSdk = 29
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.2.97"
+        versionCode = forkVersionCode.toInt()
+        versionName = forkVersion
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
@@ -96,6 +105,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
+    testImplementation("junit:junit:4.13.2")
 }
 
 kotlin {

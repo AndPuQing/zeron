@@ -1,4 +1,4 @@
-# Zeron for Android
+# Zerun for Android
 
 A Jetpack Compose viewport onto the zeron mesh, built on the same Rust mobile
 core as the iOS app (`crates/mobile`). **Rust decides what to paint and
@@ -12,7 +12,8 @@ segmented lists) themed with Zeron's own palette and Geist type.
 
 ## Build & run
 
-Requires JDK 21, the Android SDK (platform 37, NDK 29.0.14206865), and Rust
+Requires JDK 21, the Android SDK (platform 37.0, Build Tools 36.0.0,
+NDK 29.0.14206865), and Rust
 with `cargo install cargo-ndk` and
 `rustup target add aarch64-linux-android x86_64-linux-android`.
 
@@ -20,6 +21,29 @@ with `cargo install cargo-ndk` and
 cd apps/android
 ./gradlew :app:installDebug
 ```
+
+The wrapper downloads Gradle from Huawei Cloud and repositories prefer Aliyun
+mirrors, retaining the original Maven
+repositories as fallbacks. The Gradle distribution's SHA256 is verified.
+
+The application ID is `work.puqing.zerun.android`, the display name is `Zerun`,
+and WorkOS returns to `zerun-dev://callback`. Endpoints and WorkOS settings
+come from the shared Rust core. Kotlin packages retain `sh.zeron.android`.
+The pending OAuth state survives process recreation and is consumed once.
+
+The app version follows the workspace's numeric version in `Cargo.toml`.
+Android `versionCode` is `major * 1,000,000 + minor * 1,000 + patch`; minor
+and patch components must stay below 1,000. For example, `0.3.0` is `3000`
+and `0.3.1` is `3001`.
+
+Build and run the login-state regression tests with:
+
+```sh
+./gradlew :app:testDebugUnitTest :app:assembleDebug
+```
+
+The APK is at `app/build/outputs/apk/debug/app-debug.apk`. This is a debug
+build; production signing, app updates and Android CI are still pending.
 
 The `buildCore` task runs `scripts/android/build-core.sh`, which builds
 `crates/mobile` for Android (`jniLibs`) and generates its Kotlin bindings into
@@ -49,7 +73,7 @@ ui/          Sign-in, sessions, session + composer, new session, search,
 Mirrors the iOS launch arguments:
 
 ```sh
-adb shell am start -n sh.zeron.android/.MainActivity \
+adb shell am start -n work.puqing.zerun.android/sh.zeron.android.MainActivity \
   --ez demo true --es route chat:chat-veil
 ```
 
@@ -60,5 +84,5 @@ adb shell am start -n sh.zeron.android/.MainActivity \
 | `--ez big true` / `--ez huge true` | Demo transcripts with 120 / 600 turns |
 | `--es route chat:<id>` / `new` / `search` / `settings` | Open a screen at launch |
 | `--ez signedout true` | Clear stored credentials |
-| `--es wallpaper <path>` / `none` | Set (or clear) the wallpaper from a file the app can read, e.g. `adb push art.jpg /data/local/tmp/ && adb shell run-as sh.zeron.android cp /data/local/tmp/art.jpg files/` then `--es wallpaper /data/user/0/sh.zeron.android/files/art.jpg` |
+| `--es wallpaper <path>` / `none` | Set (or clear) the wallpaper from a file the app can read, e.g. `adb push art.jpg /data/local/tmp/ && adb shell run-as work.puqing.zerun.android cp /data/local/tmp/art.jpg files/` then `--es wallpaper /data/user/0/work.puqing.zerun.android/files/art.jpg` |
 | `--es wallpaper-effect <none\|dither\|ascii\|halftone\|scanlines>` | Wallpaper effect |
