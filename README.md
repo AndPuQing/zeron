@@ -16,6 +16,14 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 No account or network connection is needed; sessions stay on your device. The app updates itself.
 
+## Android
+
+Download `zerun-<version>-android.apk` from [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest).
+The signed APK supports Android 10 and later on arm64 and x86_64. Open the demo
+without an account, or sign in to follow your synced sessions. Settings →
+**Check for updates** downloads a verified release and opens Android's installer.
+See [Android setup and updates](apps/android/README.md).
+
 ## Headless (CLI)
 
 For servers and other machines without a display, such as a VPS that keeps agents running after you close your laptop. Linux only:

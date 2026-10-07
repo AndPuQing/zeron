@@ -71,6 +71,7 @@ data class LaunchOptions(
  * arrive on Rust threads and hop to the main thread here.
  */
 class AppModel(private val app: Application) {
+    val updates = sh.zeron.android.update.AndroidUpdater(app)
     private val scope = MainScope()
     private val main = Handler(Looper.getMainLooper())
     val credentials = CredentialStore(app)
@@ -344,6 +345,7 @@ class AppModel(private val app: Application) {
     }
 
     fun onForeground() {
+        updates.onForeground()
         _client.value?.onForeground()
         refreshWorkspace()
     }

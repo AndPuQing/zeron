@@ -16,6 +16,14 @@
 
 不用账号，也不用联网，会话就存在这台设备上。应用会自动更新。
 
+## Android
+
+从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载
+`zerun-<version>-android.apk`，支持 Android 10 及以上的 arm64 和 x86_64 设备。
+可以免登录体验演示，登录后查看同步会话。在设置中选择 **Check for updates**，
+应用会下载并校验新版，再由 Android 系统确认安装。首次安装或更新时，按系统提示
+允许 Zerun 安装应用。详见 [Android 安装、构建与更新说明](apps/android/README.md)。
+
 ## 无界面运行（CLI）
 
 适用于服务器等没有显示器的机器，比如在你合上笔记本之后继续跑 agent 的 VPS。仅支持 Linux：

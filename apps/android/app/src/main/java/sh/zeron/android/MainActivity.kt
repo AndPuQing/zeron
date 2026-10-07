@@ -53,6 +53,11 @@ class MainActivity : ComponentActivity() {
         handleCallback(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        model.updates.onResume(this)
+    }
+
     private fun handleCallback(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme == authCallbackScheme() && data.host == "callback") model.handleCallback(data.toString())

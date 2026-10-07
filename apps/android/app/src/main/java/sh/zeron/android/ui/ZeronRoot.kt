@@ -56,6 +56,7 @@ fun ZeronRoot(model: AppModel) {
                 if (signedIn) MainNav(model) else SignInScreen(model)
             }
         }
+        UpdateDialog(model.updates)
     }
 }
 

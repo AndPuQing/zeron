@@ -74,6 +74,10 @@ android {
         targetSdk = 37
         versionCode = forkVersionCode.toInt()
         versionName = forkVersion
+        buildConfigField(
+            "String", "RELEASE_CERTIFICATE_SHA256",
+            "\"${repoRoot.resolve("apps/android/release-certificate.sha256").readText().trim()}\"",
+        )
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
@@ -100,7 +104,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     sourceSets["main"].apply {
         kotlin.directories.add(coreOut.resolve("kotlin").path)

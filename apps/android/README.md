@@ -113,8 +113,33 @@ the configured R2 download source at
 artifacts and the manifest are uploaded. A manual `release` run builds
 artifacts without publishing them.
 
-In-app update checks and installation prompts are still pending. These workflows
-provide signed APKs and the version/checksum feed for that follow-up.
+## In-app updates
+
+The app checks the production `releases/manifest.json` source when returning to
+the foreground, at most once an hour after a successful check. Settings →
+**Check for updates** performs a check immediately. The sign-in screen has the
+same entry, so updating does not require an account. A newer Android version
+opens a dismissible update prompt; downloads start only when requested.
+
+The app streams the universal APK over HTTPS into its private cache and shows
+download progress. It rejects missing checksums, incomplete downloads, a SHA256
+mismatch, a different application ID, a version different from the manifest,
+downgrades, and signing certificates different from the pinned production
+identity. Only a verified APK is made available to Android's installer through
+a narrowly scoped FileProvider. Failed downloads can be retried.
+
+**Install** opens Android's per-app installation permission screen if needed.
+Allow Zerun to install apps, then return to the app; the system installer asks
+for confirmation. Installation is never silent. Cancelling installation leaves
+the verified download available for another attempt. A completed download is
+revalidated after restarting the app, and obsolete downloads are cleaned up
+after upgrading. Android's package replacement preserves account data and
+settings; the app does not clear them during updates.
+
+Version 0.3.0 predates this updater: install a newer production APK once to
+enable future in-app updates. Debug APKs have a different signer and cannot be
+upgraded to production APKs in place. Download-cache eviction or terminating
+the app during an incomplete download requires downloading again.
 
 ## Shared core and assets
 

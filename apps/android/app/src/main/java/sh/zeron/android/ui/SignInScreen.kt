@@ -82,6 +82,7 @@ fun SignInScreen(model: AppModel) {
         ) {
             Text("Explore the demo", style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
         }
+        TextButton(onClick = { model.updates.check() }) { Text("Check for updates") }
         error?.let {
             Spacer(Modifier.height(20.dp))
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)

@@ -54,6 +54,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SettingsScreen(model: AppModel) {
+    val update by model.updates.state.collectAsState()
     val appearance by model.appearance.collectAsState()
     val workspace by model.workspace.collectAsState()
     val devices = workspace?.devices.orEmpty()
@@ -175,14 +176,31 @@ fun SettingsScreen(model: AppModel) {
             Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
                 SegmentedListItem(
                     onClick = {},
-                    shapes = segmentedShapes(0, 2),
+                    shapes = segmentedShapes(0, 3),
                     colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
                     leadingContent = { IconTile(ZIcons.Info) },
-                    supportingContent = { Text("Zerun for Android · core ${coreVersion()}") },
+                    supportingContent = { Text("Zerun ${update.currentVersion} · core ${coreVersion()}") },
                 ) { Text("Version") }
                 SegmentedListItem(
+                    onClick = { model.updates.check() },
+                    shapes = segmentedShapes(1, 3),
+                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
+                    leadingContent = { IconTile(ZIcons.Info) },
+                    supportingContent = {
+                        Text(when {
+                            update.downloading -> "Downloading update…"
+                            update.checking -> "Checking…"
+                            update.ready -> "Version ${update.latest?.version} is ready to install"
+                            update.latest != null -> "Version ${update.latest?.version} is available"
+                            update.error != null -> "Check failed — tap to retry"
+                            update.checked -> "You're up to date"
+                            else -> "Check for a newer version of Zerun"
+                        })
+                    },
+                ) { Text("Check for updates") }
+                SegmentedListItem(
                     onClick = { model.signOut() },
-                    shapes = segmentedShapes(1, 2),
+                    shapes = segmentedShapes(2, 3),
                     colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
                     leadingContent = { IconTile(ZIcons.Logout, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) },
                 ) { Text(if (model.isDemo) "Leave demo" else "Sign out", color = MaterialTheme.colorScheme.error) }
