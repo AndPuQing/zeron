@@ -19,33 +19,39 @@ Remotes:
 
 ## Syncing upstream
 
-Rebase the trunk onto upstream by hand:
+`dev` is not rebased or merged wholesale onto upstream. Upstream feature work
+is cherry-picked in as needed:
 
 ```sh
-git checkout dev
 git fetch --no-tags upstream main
-git rebase upstream/main
+git cherry-pick -x <commit>...   # one feature or PR at a time
 ```
 
-Upstream commits stay original — their IDs, authors and parents are preserved —
-and the fork's work is replayed on top as a small number of functional commits
-(fork setup and CI wiring, self-hosted configuration, per-sync adaptations).
-Never move a published tag and never mirror upstream tags into the fork: a tag
-marks the tree that was actually released.
+`-x` records the upstream commit in the message. Resolve conflicts inside the
+pick when the fix belongs to that feature, or with a small follow-up commit.
+`dev` history is not rewritten, and published tags never move.
+
+`main` is refreshed by hand only when a pristine upstream reference is useful:
+
+```sh
+git push origin upstream/main:main
+```
+
+Never mirror upstream tags into the fork: a tag marks the tree that was
+actually released.
 
 To land an upstream PR before upstream merges it:
 
 ```sh
 git fetch upstream pull/<number>/head:pr-<number>
-git rebase pr-<number>
+git cherry-pick -x pr-<number>
 ```
 
-Rebasing onto `upstream/main` after upstream lands the same patches drops the
-duplicates automatically.
+Cherry-pick a range when the PR mixes unrelated commits.
 
 ## Deliberate divergence
 
-Keep this list small and current; it is the checklist for resolving rebase
+Keep this list small and current; it is the checklist for resolving cherry-pick
 conflicts.
 
 | Area | Change |
