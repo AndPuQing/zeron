@@ -130,7 +130,7 @@ TestFlight workflow enables the Push capability on the App ID itself.
 
 ## TestFlight release
 
-Run the **TestFlight** workflow from GitHub Actions on `main`. It installs the
+Run the **TestFlight** workflow from GitHub Actions on `dev`. It installs the
 Rust iOS targets, selects the next build number from App Store Connect,
 archives (device, Release — the Rust core builds in the archive) with
 automatic signing, and uploads a TestFlight build (internal, or external with

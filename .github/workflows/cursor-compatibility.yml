@@ -10,7 +10,7 @@ on:
       - 'scripts/*cursor-sdk*'
       - '.github/workflows/cursor-*.yml'
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'crates/harness/**'
       - 'crates/doc/**'
@@ -43,12 +43,12 @@ jobs:
 
   # The Rust half (harness compatibility, steering, session recovery, durable
   # commands, message delivery, native Pi RPC) is part of the `core-tests` job
-  # of ui-tests.yml, which already runs on pull requests and on main with a
+  # of ui-tests.yml, which already runs on pull requests and on dev with a
   # superset of this workflow's paths. Run it here only for the callers that
   # do not get that: release.yml (tag push), cursor-sdk-update.yml (manual
   # dispatch on the update branch) and manual runs.
   rust-tests:
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'push' && github.ref == 'refs/heads/dev') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

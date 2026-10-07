@@ -14,7 +14,7 @@ on:
       - 'scripts/test-linux-browser.sh'
       - '.github/workflows/ui-tests.yml'
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'

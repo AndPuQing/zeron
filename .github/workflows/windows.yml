@@ -13,7 +13,7 @@ on:
       - 'scripts/package-windows.ps1'
       - '.github/workflows/windows.yml'
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'

@@ -3,7 +3,7 @@ on:
   pull_request:
     paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml']
   push:
-    branches: [main]
+    branches: [dev]
     paths: ['crates/preview/**', 'crates/proto/**', 'Cargo.toml', 'Cargo.lock', 'edge/**', '.github/workflows/preview-tests.yml']
 permissions:
   contents: read

@@ -11,7 +11,7 @@ on:
       - 'dist/zeron.png'
       - '.github/workflows/linux-installer.yml'
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'edge/src/install.sh'
       - 'scripts/package-linux.sh'

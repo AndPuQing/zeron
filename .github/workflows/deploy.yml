@@ -1,7 +1,7 @@
 name: deploy
 
 # Autodeploy the edge Worker + Durable Objects (session/device rooms, R2,
-# WorkOS auth routes) on every push to main that touches edge/. Skips
+# WorkOS auth routes) on every push to dev that touches edge/. Skips
 # gracefully until the CLOUDFLARE_API_TOKEN secret is configured (until then:
 # `npm -C edge run deploy` from a wrangler-authenticated machine).
 #
@@ -10,7 +10,7 @@ name: deploy
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
   workflow_dispatch:
 
 concurrency:
