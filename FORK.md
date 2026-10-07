@@ -19,27 +19,33 @@ Remotes:
 
 ## Syncing upstream
 
-Merge upstream into the trunk by hand:
+Rebase the trunk onto upstream by hand:
 
 ```sh
 git checkout dev
-git fetch upstream
-git merge upstream/main
+git fetch --no-tags upstream main
+git rebase upstream/main
 ```
+
+Upstream commits stay original — their IDs, authors and parents are preserved —
+and the fork's work is replayed on top as a small number of functional commits
+(fork setup and CI wiring, self-hosted configuration, per-sync adaptations).
+Never move a published tag and never mirror upstream tags into the fork: a tag
+marks the tree that was actually released.
 
 To land an upstream PR before upstream merges it:
 
 ```sh
 git fetch upstream pull/<number>/head:pr-<number>
-git merge pr-<number>
+git rebase pr-<number>
 ```
 
-When upstream later merges the same PR, the merge into `dev` is usually clean
-because the patches are identical.
+Rebasing onto `upstream/main` after upstream lands the same patches drops the
+duplicates automatically.
 
 ## Deliberate divergence
 
-Keep this list small and current; it is the checklist for resolving merge
+Keep this list small and current; it is the checklist for resolving rebase
 conflicts.
 
 | Area | Change |
@@ -48,8 +54,10 @@ conflicts.
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `zerun.puqing.work`, account `fc5a16c75e508b812ee6edd119fd32ae` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://zerun.puqing.work` |
-| URL scheme | `zerun-dev` (OAuth callback and `zerun-dev://open/chat/...` deep links) |
+| URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; bundles `work.puqing.zerun[.ios]`; binary/product names stay `zeron` for now |
+| Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
+| Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |
 
 ## Fork configuration (not in git)
@@ -60,10 +68,14 @@ conflicts.
 | WorkOS API key | `wrangler secret put WORKOS_API_KEY` in `edge/` | configured on `zerun-edge`; deployed auth routes recognize the secret |
 | WorkOS redirects | WorkOS Dashboard → Applications → Redirects | mobile, CLI and desktop loopback authorization requests accepted (including an alternate port) |
 | APNs key | `wrangler secret put APNS_KEY_P8` / `APNS_KEY_ID`, vars `APNS_TEAM_ID` / `APNS_TOPIC` | pending (topic = iOS bundle id) |
-| Apple Team ID | GitHub repo variable `APPLE_TEAM_ID` + `DEVELOPMENT_TEAM` in the Xcode project | pending |
-| `CLOUDFLARE_API_TOKEN` | GitHub repo secret in `AndPuQing/zeron` | configured; actual deployment permissions await CI verification |
+| Apple Team ID | GitHub repo variable `APPLE_TEAM_ID` + `DEVELOPMENT_TEAM` for the app and Live Activity targets in Xcode | pending |
+| `CLOUDFLARE_API_TOKEN` | GitHub repo secret in `AndPuQing/zeron` | configured; Worker deployment verified in CI |
 | `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` | GitHub repo secret (Developer ID) | pending |
 | `AC_API_KEY_P8` / `AC_API_KEY_ID` / `AC_API_ISSUER_ID` | GitHub repo secrets | pending |
+
+The iOS app embeds `work.puqing.zerun.ios.LiveActivity`. Apple signing setup
+must use the same Team for the app and extension and provision both bundle
+identifiers.
 
 Allowed redirect URIs for the fork's WorkOS staging application:
 
