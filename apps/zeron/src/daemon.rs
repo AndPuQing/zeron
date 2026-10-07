@@ -12,7 +12,7 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 
-const LAUNCHD_LABEL: &str = "sh.zeron.app";
+const LAUNCHD_LABEL: &str = "work.puqing.zerun";
 /// Same unit name the curl|sh installer (`edge/src/install.sh`) writes, so
 /// `zeron daemon …` manages that installation rather than a competing copy.
 const SYSTEMD_UNIT: &str = "zeron.service";
@@ -441,7 +441,7 @@ mod tests {
             &[("ZERON_EDGE_URL".into(), "https://e?a=1&b=2".into())],
             Path::new("/Users/x/.zeron/daemon.log"),
         );
-        assert!(plist.contains("<key>Label</key><string>sh.zeron.app</string>"));
+        assert!(plist.contains("<key>Label</key><string>work.puqing.zerun</string>"));
         // XML-escaped exe path and env value.
         assert!(plist.contains("<string>/Users/x/zeron &amp; co/zeron</string>"));
         assert!(plist.contains("<string>https://e?a=1&amp;b=2</string>"));

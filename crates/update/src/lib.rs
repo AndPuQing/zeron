@@ -317,11 +317,11 @@ fn validate_release_override(value: &str) -> anyhow::Result<String> {
 /// The project's GitHub releases page — the advisory update strip opens this
 /// for unmanaged installs (source builds, hand-copied binaries), where no
 /// updater flow exists to drive.
-pub const RELEASES_PAGE: &str = "https://github.com/zeronsh/zeron/releases";
+pub const RELEASES_PAGE: &str = "https://github.com/AndPuQing/zeron/releases";
 
 /// The newest release's page — the download destination offered when this
 /// installation cannot replace itself.
-pub const LATEST_RELEASE_PAGE: &str = "https://github.com/zeronsh/zeron/releases/latest";
+pub const LATEST_RELEASE_PAGE: &str = "https://github.com/AndPuQing/zeron/releases/latest";
 
 fn release_base(edge_url: &str) -> anyhow::Result<String> {
     if let Ok(url) = std::env::var("ZERON_RELEASES_URL")
@@ -768,7 +768,7 @@ pub fn apply_headless(app_root: &Path, version: &str) -> anyhow::Result<()> {
 /// `XPC_SERVICE_NAME`.
 pub fn running_as_installed_service() -> bool {
     if cfg!(target_os = "macos") {
-        std::env::var("XPC_SERVICE_NAME").is_ok_and(|label| label == "sh.zeron.app")
+        std::env::var("XPC_SERVICE_NAME").is_ok_and(|label| label == "work.puqing.zerun")
     } else if cfg!(target_os = "linux") {
         std::fs::read_to_string("/proc/self/cgroup")
             .is_ok_and(|cgroups| in_zeron_service_cgroup(&cgroups))
@@ -795,7 +795,7 @@ pub fn restart_service() -> anyhow::Result<()> {
         let uid = String::from_utf8_lossy(&output.stdout).trim().to_string();
         run(
             "launchctl",
-            &["kickstart", "-k", &format!("gui/{uid}/sh.zeron.app")],
+            &["kickstart", "-k", &format!("gui/{uid}/work.puqing.zerun")],
         )
     } else {
         run(

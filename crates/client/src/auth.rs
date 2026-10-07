@@ -27,11 +27,13 @@ pub const EARLY_REFRESH_SECS: i64 = 60;
 
 /// Production endpoints (edge/wrangler.jsonc). Mobile always talks to prod —
 /// a stale override once broke sign-in in the worst ghost way.
-pub const PRODUCTION_EDGE_URL: &str = "https://edge.zeron.sh";
-pub const WORKOS_CLIENT_ID: &str = "client_01KWD0EAKZKD50YCQJNYSRE4BY";
+pub const PRODUCTION_EDGE_URL: &str = "https://zerun.puqing.work";
+/// WorkOS client id for this fork's own `workos` environment. Keep in sync
+/// with `edge/wrangler.jsonc` and the iOS sign-in view.
+pub const WORKOS_CLIENT_ID: &str = "client_01M4AN0G973H42GQJY8RAAC0RS";
 pub const WORKOS_API_BASE: &str = "https://api.workos.com";
-/// OAuth redirect: `zeron://callback?code=…&state=…`.
-pub const CALLBACK_SCHEME: &str = "zeron";
+/// OAuth redirect: `zerun-dev://callback?code=…&state=…`.
+pub const CALLBACK_SCHEME: &str = "zerun-dev";
 
 fn percent_encode(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -456,20 +458,20 @@ mod tests {
         assert!(
             url.starts_with("https://api.workos.com/user_management/authorize?response_type=code")
         );
-        assert!(url.contains("redirect_uri=zeron%3A%2F%2Fcallback"));
+        assert!(url.contains("redirect_uri=zerun-dev%3A%2F%2Fcallback"));
         assert!(url.contains("state=s%20t%261"));
         assert_eq!(
-            parse_auth_callback("zeron://callback?code=abc&state=s%20t%261"),
+            parse_auth_callback("zerun-dev://callback?code=abc&state=s%20t%261"),
             Some(AuthCallback::Code {
                 code: "abc".into(),
                 state: Some("s t&1".into())
             })
         );
         assert!(matches!(
-            parse_auth_callback("zeron://callback?error=access_denied"),
+            parse_auth_callback("zerun-dev://callback?error=access_denied"),
             Some(AuthCallback::Error { .. })
         ));
-        assert_eq!(parse_auth_callback("zeron://callback"), None);
+        assert_eq!(parse_auth_callback("zerun-dev://callback"), None);
     }
 
     /// A raw HTTP/1.1 responder: counts requests, answers each with `reply`.

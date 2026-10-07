@@ -1,7 +1,7 @@
 #!/bin/sh
 # Zeron (native) headless installer.
 #
-#   curl -fsSL https://zeron.sh/install.sh | sh
+#   curl -fsSL https://zerun.puqing.work/install.sh | sh
 #
 # Installs the native binary (requires the system ALSA runtime) to
 # ~/.zeron/app, puts `zeron` on PATH, adds a launcher entry and icon under
@@ -14,7 +14,7 @@
 # client-id configuration needed. Overrides (if any) go in ~/.zeron/env.
 set -eu
 
-BASE="${ZERON_BASE_URL:-https://zeron.sh}"
+BASE="${ZERON_BASE_URL:-https://zerun.puqing.work}"
 
 # --- platform ---------------------------------------------------------------
 os="$(uname -s)"

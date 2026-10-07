@@ -584,7 +584,7 @@ extension Credentials {
         return false
     }
 
-    private static let service = "sh.zeron.ios"
+    private static let service = "work.puqing.zerun.ios"
     private static let account = "credentials"
 
     static func stored() -> Credentials? {
@@ -670,7 +670,7 @@ struct AccountProfile: Codable {
     var email: String?
     var orgName: String?
 
-    private static let service = "sh.zeron.ios"
+    private static let service = "work.puqing.zerun.ios"
     private static let account = "profile"
 
     static func load() -> AccountProfile {

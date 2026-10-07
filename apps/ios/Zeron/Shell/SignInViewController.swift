@@ -2,9 +2,9 @@ import AuthenticationServices
 import UIKit
 
 enum Endpoints {
-    static let edgeURL = URL(string: "https://edge.zeron.sh")!
-    static let workosClientId = "client_01KWD0EAKZKD50YCQJNYSRE4BY"
-    static let callbackScheme = "zeron"
+    static let edgeURL = URL(string: "https://zerun.puqing.work")!
+    static let workosClientId = "client_01M4AN0G973H42GQJY8RAAC0RS"
+    static let callbackScheme = "zerun-dev"
 
     static func authorizeURL(state: String) -> URL {
         var c = URLComponents(string: "https://api.workos.com/user_management/authorize")!

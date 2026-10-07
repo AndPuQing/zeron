@@ -1,6 +1,6 @@
 # Install, inspect, and uninstall the packaged per-user installer
 # (dist/windows/zeron.iss) silently. Registers and removes the real per-user
-# uninstall entry and zeron:// handler, so it refuses to run outside CI unless
+# uninstall entry and zerun-dev:// handler, so it refuses to run outside CI unless
 # -Force is given.
 param(
     [string]$Setup,
@@ -20,8 +20,8 @@ $match = [regex]::Match((Split-Path $Setup -Leaf), '\Azeron-(\d+\.\d+\.\d+)-wind
 if (-not $match.Success) { throw "Unexpected installer name: $Setup" }
 $version = $match.Groups[1].Value
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{AD5DEC34-E254-467B-8F24-8127EBAF4DA6}_is1'
-$protocolKey = 'HKCU:\Software\Classes\zeron'
-$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Zeron.lnk'
+$protocolKey = 'HKCU:\Software\Classes\zerun-dev'
+$shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Zerun.lnk'
 $root = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $dir = Join-Path $root "zeron installer test $([guid]::NewGuid().ToString('N'))"
 
@@ -71,13 +71,13 @@ Write-Output "PASS: installed executable is $version"
 
 $entry = Get-ItemProperty -LiteralPath $uninstallKey
 if ($entry.DisplayVersion -ne $version) { throw "DisplayVersion is '$($entry.DisplayVersion)', expected '$version'" }
-if ($entry.DisplayName -ne 'Zeron') { throw "DisplayName is '$($entry.DisplayName)'" }
+if ($entry.DisplayName -ne 'Zerun') { throw "DisplayName is '$($entry.DisplayName)'" }
 $installed = [IO.Path]::GetFullPath($entry.InstallLocation).TrimEnd('\')
 if ($installed -ne [IO.Path]::GetFullPath($dir).TrimEnd('\')) { throw "InstallLocation is '$installed'" }
 $command = (Get-ItemProperty -LiteralPath "$protocolKey\shell\open\command").'(default)'
-if ($command -ne "`"$exe`" `"%1`"") { throw "zeron:// handler is '$command'" }
+if ($command -ne "`"$exe`" `"%1`"") { throw "zerun-dev:// handler is '$command'" }
 if (-not (Test-Path -LiteralPath $shortcut)) { throw "Start menu shortcut missing: $shortcut" }
-Write-Output 'PASS: uninstall entry, zeron:// handler, Start menu shortcut'
+Write-Output 'PASS: uninstall entry, zerun-dev:// handler, Start menu shortcut'
 
 # Leftovers an in-app update can leave behind must go with the uninstall.
 Set-Content -LiteralPath (Join-Path $dir 'zeron.exe.old') -Value 'previous image'
@@ -92,6 +92,6 @@ Wait-Until { -not (Test-Path -LiteralPath $exe) } 'zeron.exe to be removed'
 foreach ($leftover in @('zeron.exe.old', '.zeron-update-test', 'zeron-update.json', 'licenses')) {
     Wait-Until { -not (Test-Path -LiteralPath (Join-Path $dir $leftover)) } "$leftover to be removed"
 }
-if (Test-Path -LiteralPath $protocolKey) { throw 'zeron:// handler survived uninstall' }
+if (Test-Path -LiteralPath $protocolKey) { throw 'zerun-dev:// handler survived uninstall' }
 if (Test-Path -LiteralPath $shortcut) { throw 'Start menu shortcut survived uninstall' }
 Write-Output 'PASS: uninstall removes the install, update leftovers, and registrations'

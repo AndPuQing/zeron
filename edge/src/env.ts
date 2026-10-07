@@ -26,19 +26,19 @@ export interface Env {
    * key id. Unset ⇒ session notifications are decided and logged, not sent. */
   APNS_KEY_P8?: string;
   APNS_KEY_ID?: string;
-  /** Apple team id and the app's bundle id (defaults: the Zeron iOS app). */
+  /** Apple team id and the app's bundle id (this fork's Zerun iOS app). */
   APNS_TEAM_ID?: string;
   APNS_TOPIC?: string;
 }
 
 /** APNs settings, when push is set up for this deployment. */
 export const apnsConfig = (env: Env) =>
-  env.APNS_KEY_P8 && env.APNS_KEY_ID
+  env.APNS_KEY_P8 && env.APNS_KEY_ID && env.APNS_TEAM_ID
     ? {
         keyP8: env.APNS_KEY_P8,
         keyId: env.APNS_KEY_ID,
-        teamId: env.APNS_TEAM_ID ?? "5XY3M483YQ",
-        topic: env.APNS_TOPIC ?? "sh.zeron.ios"
+        teamId: env.APNS_TEAM_ID,
+        topic: env.APNS_TOPIC ?? "work.puqing.zerun.ios"
       }
     : undefined;
 

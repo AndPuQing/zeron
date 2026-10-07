@@ -119,7 +119,7 @@ export default {
       return json({ ok: true, auth: env.AUTH_MODE === "dev" ? "dev" : "workos" });
     }
 
-    // ── public install surface (also routed from zeron.sh): the
+    // ── public install surface (routed from zerun.puqing.work): the
     //    `curl | sh` installer and the release artifacts it downloads ───────
     if (url.pathname === "/install.sh" && (request.method === "GET" || request.method === "HEAD")) {
       return new Response(request.method === "HEAD" ? null : installSh, {

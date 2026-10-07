@@ -14874,7 +14874,7 @@ public func coreVersion() -> String  {
 })
 }
 /**
- * OAuth callback scheme (`zeron`).
+ * OAuth callback scheme (`zerun-dev`).
  */
 public func authCallbackScheme() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
@@ -15004,7 +15004,7 @@ public func modelLabel(harness: String, model: String) -> String  {
 })
 }
 /**
- * `code`/`state` (or the provider error) of a `zeron://callback?…` URL.
+ * `code`/`state` (or the provider error) of a `zerun-dev://callback?…` URL.
  */
 public func parseAuthCallback(url: String) -> AuthCallback?  {
     return try!  FfiConverterOptionTypeAuthCallback.lift(try! rustCall() {
@@ -15193,7 +15193,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_func_core_version() != 46096) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_func_auth_callback_scheme() != 8202) {
+    if (uniffi_zeron_mobile_checksum_func_auth_callback_scheme() != 60720) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_auth_exchange_code() != 47073) {
@@ -15226,7 +15226,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_func_model_label() != 26905) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_func_parse_auth_callback() != 22318) {
+    if (uniffi_zeron_mobile_checksum_func_parse_auth_callback() != 31058) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_parse_user_message() != 19553) {
