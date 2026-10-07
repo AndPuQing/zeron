@@ -15,3 +15,6 @@ edge/dist/
 CLAUDE.md
 /AGENTS.md
 /scripts/**/__pycache__/
+*.jks
+*.keystore
+/apps/android/local.properties

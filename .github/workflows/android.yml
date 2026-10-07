@@ -1,0 +1,164 @@
+name: Android
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - 'apps/android/**'
+      - 'apps/ios/Zeron/Assets.xcassets/**'
+      - 'apps/ios/Zeron/Fonts/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'scripts/android/**'
+      - 'scripts/package-android.sh'
+      - '.github/workflows/android.yml'
+      - '.github/workflows/release.yml'
+  pull_request:
+    branches: [dev]
+    paths:
+      - 'apps/android/**'
+      - 'apps/ios/Zeron/Assets.xcassets/**'
+      - 'apps/ios/Zeron/Fonts/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'scripts/android/**'
+      - 'scripts/package-android.sh'
+      - '.github/workflows/android.yml'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Build a signed release APK (dev branch only)
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+    secrets:
+      ANDROID_KEYSTORE_BASE64:
+        required: false
+      ANDROID_KEYSTORE_PASSWORD:
+        required: false
+      ANDROID_KEY_ALIAS:
+        required: false
+      ANDROID_KEY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.workflow }}-${{ github.ref }}-${{ inputs.release || false }}
+  cancel-in-progress: ${{ inputs.release != true }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ZERUN_CHINA_MIRRORS: 'false'
+      ZERON_ANDROID_ABIS: 'arm64-v8a x86_64'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Prepare release signing
+        if: inputs.release == true
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/heads/dev && "$GITHUB_REF_TYPE" != tag ]]; then
+            echo "Signed Android builds must use dev or a release tag." >&2
+            exit 2
+          fi
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [[ -n "${!name:-}" ]] || { echo "Required repository secret $name is not configured." >&2; exit 2; }
+          done
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/zerun-release.keystore"
+          echo "ZERUN_ANDROID_KEYSTORE=$RUNNER_TEMP/zerun-release.keystore" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Use official Gradle distribution
+        run: sed -i 's@mirrors.huaweicloud.com/gradle/@services.gradle.org/distributions/@' apps/android/gradle/wrapper/gradle-wrapper.properties
+
+      - uses: gradle/actions/setup-gradle@ed408507eac070d1f99cc633dbcf757c94c7933a # v4
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+        with:
+          cmdline-tools-version: '16111833'
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: 'false'
+      - name: Android SDK and system dependencies
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-37' 'build-tools;36.0.0' 'ndk;29.0.14206865'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq librsvg2-bin
+
+      - name: Rust toolchain and Android targets
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-linux-android x86_64-linux-android
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: android-mobile-ndk29
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+
+      - name: Test and build debug APK
+        if: inputs.release != true
+        working-directory: apps/android
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain
+
+      - name: Test, sign and verify release APK
+        if: inputs.release == true
+        env:
+          ZERUN_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ZERUN_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ZERUN_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: bash scripts/package-android.sh
+
+      - name: Remove release keystore
+        if: always() && inputs.release == true
+        run: rm -f "$RUNNER_TEMP/zerun-release.keystore"
+
+      - name: Upload debug APK
+        if: inputs.release != true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-debug
+          path: apps/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+      - name: Upload release APK and checksum
+        if: inputs.release == true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-release
+          path: target/package/zerun-*-android.apk*
+          if-no-files-found: error
+
+      - name: Upload failing unit test reports
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-test-reports
+          path: apps/android/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore

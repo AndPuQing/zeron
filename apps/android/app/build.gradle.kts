@@ -20,6 +20,24 @@ require(forkVersionCode in 1..2_100_000_000L) { "Android versionCode is out of r
 val coreOut = repoRoot.resolve("target/android-core")
 val iconsOut = layout.buildDirectory.dir("generated/zeron-icons")
 val skipCore = providers.gradleProperty("zeronSkipCore").isPresent
+val releaseSigning = listOf(
+    "ZERUN_ANDROID_KEYSTORE",
+    "ZERUN_ANDROID_STORE_PASSWORD",
+    "ZERUN_ANDROID_KEY_ALIAS",
+    "ZERUN_ANDROID_KEY_PASSWORD",
+).associateWith { providers.environmentVariable(it).orNull }
+val missingSigning = releaseSigning.filterValues { it.isNullOrBlank() }.keys
+val releaseKeystore = releaseSigning["ZERUN_ANDROID_KEYSTORE"]?.let(::file)
+
+val validateReleaseSigning by tasks.registering {
+    description = "Requires the production signing credentials for release builds."
+    doLast {
+        check(missingSigning.isEmpty()) {
+            "Release signing requires: ${missingSigning.joinToString()}. See apps/android/README.md."
+        }
+        check(releaseKeystore?.isFile == true) { "The release keystore file does not exist." }
+    }
+}
 
 val buildCore by tasks.registering(Exec::class) {
     description = "Builds crates/mobile for Android and generates Kotlin bindings."
@@ -47,6 +65,7 @@ val genIcons by tasks.registering(Exec::class) {
 android {
     namespace = "sh.zeron.android"
     compileSdk = 37
+    buildToolsVersion = "36.0.0"
     ndkVersion = NDK_VERSION
 
     defaultConfig {
@@ -58,10 +77,21 @@ android {
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
+    signingConfigs {
+        if (missingSigning.isEmpty()) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = releaseSigning["ZERUN_ANDROID_STORE_PASSWORD"]
+                keyAlias = releaseSigning["ZERUN_ANDROID_KEY_ALIAS"]
+                keyPassword = releaseSigning["ZERUN_ANDROID_KEY_PASSWORD"]
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 
@@ -85,6 +115,9 @@ android {
 }
 
 tasks.named("preBuild") { dependsOn(buildCore, genIcons) }
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseSigning)
+}
 
 dependencies {
     implementation(libs.androidx.core.ktx)

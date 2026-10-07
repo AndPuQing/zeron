@@ -25,6 +25,10 @@ cd apps/android
 The wrapper downloads Gradle from Huawei Cloud and repositories prefer Aliyun
 mirrors, retaining the original Maven
 repositories as fallbacks. The Gradle distribution's SHA256 is verified.
+GitHub Actions uses the official Gradle distribution and sets
+`ZERUN_CHINA_MIRRORS=false` to use Google Maven, Maven Central and the Gradle
+Plugin Portal directly. CI also installs the SDK/NDK and Rust from official
+sources.
 
 The application ID is `work.puqing.zerun.android`, the display name is `Zerun`,
 and WorkOS returns to `zerun-dev://callback`. Endpoints and WorkOS settings
@@ -42,8 +46,77 @@ Build and run the login-state regression tests with:
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
 ```
 
-The APK is at `app/build/outputs/apk/debug/app-debug.apk`. This is a debug
-build; production signing, app updates and Android CI are still pending.
+The APK is at `app/build/outputs/apk/debug/app-debug.apk`.
+
+## Release signing
+
+Release builds require a dedicated production key. They fail when credentials
+are missing and never fall back to the Debug signing key. Keep the same key
+for every release: Android requires it to upgrade an installed app. A Debug
+installation must be uninstalled before installing a production APK with the
+same application ID; export any local data first.
+
+Provide these environment variables without putting passwords in command
+arguments or tracked files:
+
+| Variable | Value |
+| --- | --- |
+| `ZERUN_ANDROID_KEYSTORE` | Absolute path to the release keystore |
+| `ZERUN_ANDROID_STORE_PASSWORD` | Keystore password |
+| `ZERUN_ANDROID_KEY_ALIAS` | Signing key alias |
+| `ZERUN_ANDROID_KEY_PASSWORD` | Signing key password |
+
+Back up your release keystore securely; Actions Secrets cannot recover the
+original private key. With the required environment variables set, build from
+the repository root:
+
+```sh
+bash scripts/package-android.sh
+```
+
+The public certificate SHA256 in `release-certificate.sha256` pins the signing
+identity. The packaging script rejects a different keystore certificate, so
+replacing Actions Secrets cannot silently produce an incompatible update.
+
+The script runs unit tests, builds Release with the configuration cache disabled
+so signing credentials are not serialized into it, verifies the certificate
+against the pinned identity, checks 16 KiB ZIP alignment and requires the native core
+for both arm64-v8a and x86_64. The outputs are
+`target/package/zerun-<version>-android.apk` and its `.apk.sha256` checksum.
+Direct Gradle release builds should also pass `--no-configuration-cache`.
+
+## CI and publication
+
+The `Android` workflow tests and builds a Debug APK for Android-related pushes
+and pull requests targeting `dev`. Download the `android-debug` workflow
+artifact to install it. These builds do not need production signing secrets.
+
+Signed builds use these repository Actions Secrets:
+
+| Secret | Value |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | Base64-encoded release keystore |
+| `ANDROID_KEYSTORE_PASSWORD` | Keystore password |
+| `ANDROID_KEY_ALIAS` | Signing key alias |
+| `ANDROID_KEY_PASSWORD` | Signing key password |
+
+Run the `Android` workflow manually on `dev` with `release=true` to test the
+signed pipeline without publishing a release. Its `android-release` artifact
+contains the APK and checksum. The temporary keystore is removed after the build.
+
+The existing `release` workflow calls the same signed build and requires it
+to succeed before publication. On a `v<version>` tag matching `Cargo.toml`,
+it publishes the APK alongside the desktop artifacts to GitHub Release and
+the configured R2 download source at
+`https://zerun.puqing.work/releases/zerun-<version>-android.apk`. The shared
+`manifest.json` includes the APK's SHA256; `latest.txt` is updated only after
+artifacts and the manifest are uploaded. A manual `release` run builds
+artifacts without publishing them.
+
+In-app update checks and installation prompts are still pending. These workflows
+provide signed APKs and the version/checksum feed for that follow-up.
+
+## Shared core and assets
 
 The `buildCore` task runs `scripts/android/build-core.sh`, which builds
 `crates/mobile` for Android (`jniLibs`) and generates its Kotlin bindings into

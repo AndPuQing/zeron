@@ -62,7 +62,7 @@ conflicts.
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://zerun.puqing.work` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; bundles `work.puqing.zerun[.ios]`; binary/product names stay `zeron` for now |
-| Android | app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; Gradle/Maven prefer China mirrors |
+| Android | app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |
@@ -77,6 +77,7 @@ conflicts.
 | WorkOS redirects | WorkOS Dashboard → Applications → Redirects | mobile, CLI and desktop loopback authorization requests accepted (including an alternate port) |
 | APNs key | `wrangler secret put APNS_KEY_P8` / `APNS_KEY_ID`, vars `APNS_TEAM_ID` / `APNS_TOPIC` | pending (topic = iOS bundle id) |
 | Apple Team ID | GitHub repo variable `APPLE_TEAM_ID` + `DEVELOPMENT_TEAM` for the app and Live Activity targets in Xcode | pending |
+| Android signing | repo secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | dedicated key; required by the signed Android build |
 | `CLOUDFLARE_API_TOKEN` | GitHub repo secret in `AndPuQing/zeron` | configured; Worker deployment verified in CI |
 | `MACOS_CERT_P12` / `MACOS_CERT_PASSWORD` | GitHub repo secret (Developer ID) | pending |
 | `AC_API_KEY_P8` / `AC_API_KEY_ID` / `AC_API_ISSUER_ID` | GitHub repo secrets | pending |

@@ -6,11 +6,21 @@
 #
 # Kotlin generation needs only the host toolchain. The .so build needs the
 # Android NDK + cargo-ndk (`cargo install cargo-ndk`,
-# `rustup target add aarch64-linux-android x86_64-linux-android`); it is
-# skipped with a note when they are missing. Run by the app's `buildCore`
+# `rustup target add aarch64-linux-android x86_64-linux-android`); the script
+# fails when they are missing. Run by the app's `buildCore`
 # Gradle task (apps/android). `ZERON_ANDROID_ABIS` picks the ABIs (default
 # arm64-v8a x86_64).
 set -euo pipefail
+
+command -v cargo-ndk >/dev/null || { echo "cargo-ndk is required to build the Android core" >&2; exit 2; }
+[[ -d "${ANDROID_NDK_HOME:-}" ]] || { echo "ANDROID_NDK_HOME must point to the installed NDK" >&2; exit 2; }
+ABIS=()
+for abi in ${ZERON_ANDROID_ABIS:-arm64-v8a x86_64}; do
+  case "$abi" in
+    arm64-v8a|x86_64) ABIS+=(-t "$abi") ;;
+    *) echo "Unsupported Android ABI: $abi" >&2; exit 2 ;;
+  esac
+done
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OUT="${1:-$ROOT/target/android-core}"
@@ -24,12 +34,6 @@ HOST_LIB="$ROOT/target/mobile/libzeron_mobile.$([[ "$(uname)" == Darwin ]] && ec
   --metadata-no-deps --no-format --out-dir "$OUT/kotlin"
 echo "kotlin bindings: $OUT/kotlin"
 
-if command -v cargo-ndk >/dev/null && [[ -n "${ANDROID_NDK_HOME:-}" ]]; then
-  ABIS=()
-  for abi in ${ZERON_ANDROID_ABIS:-arm64-v8a x86_64}; do ABIS+=(-t "$abi"); done
-  cargo ndk "${ABIS[@]}" -o "$OUT/jniLibs" \
-    build --locked -p zeron-mobile --lib --profile mobile
-  echo "jniLibs: $OUT/jniLibs"
-else
-  echo "note: cargo-ndk / ANDROID_NDK_HOME not found — skipped the .so build"
-fi
+cargo ndk "${ABIS[@]}" -o "$OUT/jniLibs" \
+  build --locked -p zeron-mobile --lib --profile mobile
+echo "jniLibs: $OUT/jniLibs"
