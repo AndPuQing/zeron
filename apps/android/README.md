@@ -113,6 +113,17 @@ the configured R2 download source at
 artifacts and the manifest are uploaded. A manual `release` run builds
 artifacts without publishing them.
 
+If all platform builds passed but publication failed, recover from their
+existing artifacts without rebuilding or moving the tag:
+
+```sh
+gh workflow run release.yml --ref dev -f publish_run_id=<release-run-id> -f publish_tag=v<version>
+```
+
+Recovery verifies the original release workflow, tag commit, version, and every
+platform/test job before downloading its artifacts. Publication uses a dedicated
+temporary directory so repository packaging templates cannot become assets.
+
 ## In-app updates
 
 The app checks the production `releases/manifest.json` source when returning to

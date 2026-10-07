@@ -12,21 +12,34 @@ name: release
 #
 # Trigger: push a tag `v<version>` matching the workspace version in
 # Cargo.toml (bump it in the same commit), or run manually via
-# workflow_dispatch (builds + uploads artifacts, no release/R2 publish).
+# workflow_dispatch (builds only by default; publish_run_id + publish_tag
+# recover publication from a matching tag whose platform builds all passed).
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Recover publication from a release run whose platform builds all passed (blank builds only)
+        type: string
+        default: ''
+      publish_tag:
+        description: Existing version tag for publication recovery, e.g. v0.3.2
+        type: string
+        default: ''
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   cursor-compatibility:
+    if: inputs.publish_run_id == ''
     uses: ./.github/workflows/cursor-compatibility.yml
 
   android:
+    if: inputs.publish_run_id == ''
     uses: ./.github/workflows/android.yml
     with:
       release: true
@@ -37,6 +50,7 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
   linux:
+    if: inputs.publish_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -75,6 +89,7 @@ jobs:
   #     key (raw .p8 contents), for notarytool. All three present → the package
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
   macos:
+    if: inputs.publish_run_id == ''
     runs-on: macos-latest # Apple silicon
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -127,6 +142,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    if: inputs.publish_run_id == ''
     runs-on: windows-2022
     timeout-minutes: 90
     defaults:
@@ -154,7 +170,14 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      always() && (
+        (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
+         !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+         !contains(needs.*.result, 'skipped')) ||
+        (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' &&
+         inputs.publish_run_id != '' && inputs.publish_tag != '')
+      )
     needs: [cursor-compatibility, linux, macos, windows, android]
     runs-on: ubuntu-latest
     env:
@@ -162,29 +185,62 @@ jobs:
       # the token through job env and gate on that instead.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: fc5a16c75e508b812ee6edd119fd32ae
+      SOURCE_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
+      RELEASE_TAG: ${{ inputs.publish_tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.publish_tag || github.ref }}
+      - name: Verify publication recovery source
+        if: inputs.publish_run_id != ''
+        run: |
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]] || { echo 'Invalid source run ID'; exit 1; }
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Invalid release tag'; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > "$RUNNER_TEMP/source-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/jobs?per_page=100" > "$RUNNER_TEMP/source-jobs.json"
+          python3 - <<'PY'
+          import json, os, subprocess
+          with open(os.environ['RUNNER_TEMP'] + '/source-run.json') as source:
+              run = json.load(source)
+          with open(os.environ['RUNNER_TEMP'] + '/source-jobs.json') as source:
+              jobs = json.load(source)['jobs']
+          assert run['event'] == 'push' and run['path'] == '.github/workflows/release.yml', 'Not a tagged release build'
+          assert run['head_sha'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'Tag does not match the source build'
+          assert run['head_branch'] == os.environ['RELEASE_TAG'], 'Source build has a different tag'
+          required = {'android / build', 'linux (ubuntu-24.04)', 'linux (ubuntu-24.04-arm)', 'macos', 'windows', 'cursor-compatibility / cursor-compatibility', 'cursor-compatibility / rust-tests'}
+          builds = [job for job in jobs if job['name'] != 'publish']
+          assert required <= {job['name'] for job in builds}, 'Missing platform or test jobs'
+          assert all(job['conclusion'] == 'success' for job in builds), 'Source builds did not all pass'
+          print('Source builds all passed and match the release tag')
+          PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          path: dist
+          path: ${{ runner.temp }}/zerun-release-assets
           merge-multiple: true
+          run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
       - name: version guard (tag == artifact version)
         run: |
-          ver="${GITHUB_REF_NAME#v}"
-          ls dist/
+          ver="${RELEASE_TAG#v}"
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+          [[ "$ver" == "$version" ]] || { echo 'Tag does not match the workspace version'; exit 1; }
+          cd "$RUNNER_TEMP/zerun-release-assets"
+          ls
           for platform in linux-x86_64.tar.gz linux-aarch64.tar.gz \
               macos-arm64.dmg macos-arm64-app.tar.gz \
               windows-x86_64.zip windows-x86_64.exe windows-x86_64-setup.exe; do
-            test -f "dist/zeron-$ver-$platform" \
+            test -f "zeron-$ver-$platform" \
               || { echo "missing artifact for tag v$ver: $platform — check builds and Cargo.toml version"; exit 1; }
           done
-          test -f "dist/zerun-$ver-android.apk" \
+          test -f "zerun-$ver-android.apk" \
             || { echo "missing signed Android APK for tag v$ver"; exit 1; }
           echo "VERSION=$ver" >> "$GITHUB_ENV"
       - name: updater manifest
         run: |
           manifest=$(jq -n --arg version "$VERSION" '{version: $version, files: {}}')
-          for f in dist/*; do
+          for f in "$RUNNER_TEMP/zerun-release-assets"/*; do
+            test -f "$f" || { echo "Unexpected artifact directory: $f"; exit 1; }
             sha=$(sha256sum "$f" | cut -d' ' -f1)
             manifest=$(jq --arg name "$(basename "$f")" --arg sha "$sha" \
               '.files[$name] = {sha256: $sha}' <<<"$manifest")
@@ -199,15 +255,25 @@ jobs:
           fi
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
+          tag_name: ${{ env.RELEASE_TAG }}
           files: |
-            dist/*
+            ${{ runner.temp }}/zerun-release-assets/*
             manifest.json
           body_path: release-notes.md
           generate_release_notes: false
+          overwrite_files: true
       - name: upload to R2 (zerun.puqing.work/releases/*)
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
-          for f in dist/*; do
+          if [[ "${{ inputs.publish_run_id != '' }}" == true ]]; then
+            # Remove files uploaded by the interrupted publication before the
+            # isolated artifact set is written again.
+            for stale in README.md zeron.desktop zeron.png zeron.svg macos; do
+              npx wrangler@4 r2 object delete "zerun-releases/$stale" --remote || true
+            done
+          fi
+          for f in "$RUNNER_TEMP/zerun-release-assets"/*; do
+            test -f "$f" || { echo "Unexpected artifact directory: $f"; exit 1; }
             npx wrangler@4 r2 object put "zerun-releases/$(basename "$f")" \
               --file "$f" --remote
           done
