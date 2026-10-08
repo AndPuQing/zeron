@@ -711,6 +711,7 @@ struct CachedClaudeCredentials {
 }
 
 struct Inner {
+    environment_registry: Mutex<Option<Arc<crate::registry::HarnessRegistry>>>,
     config: AgentAccountsConfig,
     http: reqwest::Client,
     endpoints: ProbeEndpoints,
@@ -817,6 +818,7 @@ impl AgentAccounts {
             .unwrap_or_default();
         Self {
             inner: Arc::new(Inner {
+                environment_registry: Mutex::new(None),
                 config,
                 http,
                 endpoints,
@@ -840,6 +842,23 @@ impl AgentAccounts {
         lock(&self.inner.cli_overrides).insert(harness, path.into());
     }
 
+    pub fn set_environment_registry(&self, registry: Arc<crate::registry::HarnessRegistry>) {
+        *lock(&self.inner.environment_registry) = Some(registry);
+    }
+
+    fn environment(
+        &self,
+        harness: HarnessId,
+    ) -> Result<Arc<zeron_harness::environment::EnvironmentSnapshot>, EngineError> {
+        match &*lock(&self.inner.environment_registry) {
+            Some(registry) => registry
+                .environment
+                .snapshot(harness)
+                .map_err(EngineError::Other),
+            None => Ok(Default::default()),
+        }
+    }
+
     /// The ACP harness for `harness`'s CLI, honouring [`Self::override_cli`].
     fn acp_harness(&self, harness: HarnessId) -> Option<zeron_harness::AcpHarness> {
         let acp = match harness {
@@ -849,6 +868,7 @@ impl AgentAccounts {
             HarnessId::Antigravity => zeron_harness::AcpHarness::antigravity(),
             _ => return None,
         };
+        let acp = acp.with_environment(self.environment(harness).ok()?);
         Some(match lock(&self.inner.cli_overrides).get(&harness) {
             Some(path) => acp.with_executable(path.clone()),
             None => acp,
@@ -1415,6 +1435,7 @@ impl AgentAccounts {
         provider: Option<&str>,
         requester: Option<&str>,
     ) -> Result<AgentLoginStart, EngineError> {
+        self.environment(harness)?;
         self.sweep_flows();
         let provider = provider.filter(|p| !p.is_empty());
         let mut start = match harness {
@@ -1426,7 +1447,7 @@ impl AgentAccounts {
             }
             HarnessId::Codex => self.start_codex_login(requester).await?,
             HarnessId::Cursor => self.start_cursor_login().await?,
-            HarnessId::Antigravity => self.start_antigravity_login(requester),
+            HarnessId::Antigravity => self.start_antigravity_login(requester)?,
             HarnessId::Grok => self.start_grok_login(requester).await?,
             HarnessId::Devin => self.start_devin_login(requester)?,
             HarnessId::Opencode => match provider.unwrap_or("openai") {
@@ -1667,6 +1688,7 @@ impl AgentAccounts {
         completion: SpawnedCompletion,
         scan_url: fn(&str) -> Option<String>,
         requester: Option<&str>,
+        environment: Arc<zeron_harness::environment::EnvironmentSnapshot>,
     ) -> Result<AgentLoginStart, EngineError> {
         command
             .stdin(zeron_harness::process::Stdio::null())
@@ -1686,7 +1708,7 @@ impl AgentAccounts {
                 ));
             }
         };
-        let (child, output, exit) = wire_login_child(child);
+        let (child, output, exit) = wire_login_child_with_environment(child, environment);
         lock(&self.inner.flows).insert(
             login_id.clone(),
             LoginFlow::Spawned {
@@ -1714,6 +1736,7 @@ impl AgentAccounts {
         &self,
         requester: Option<&str>,
     ) -> Result<AgentLoginStart, EngineError> {
+        let environment = self.environment(HarnessId::Codex)?;
         self.reap_spawned_flows(HarnessId::Codex);
         // `codex login` binds the same fixed port as the ChatGPT sign-ins.
         self.reap_port_flows(oauth::OPENAI_LOOPBACK_PORT);
@@ -1739,6 +1762,7 @@ impl AgentAccounts {
                 }));
             }
         };
+        environment.apply(&mut command);
         command
             .stdin(zeron_harness::process::Stdio::null())
             .stdout(zeron_harness::process::Stdio::piped())
@@ -1764,6 +1788,7 @@ impl AgentAccounts {
             SpawnedCompletion::CredentialFile,
             scan_openai_url,
             requester,
+            environment,
         )
         .await
     }
@@ -1773,7 +1798,13 @@ impl AgentAccounts {
     /// the browser url once the server prints it. A server that already holds
     /// a valid token answers `authenticate` without any browser at all, which
     /// is success: the poll reports done and the list shows the login.
-    fn start_antigravity_login(&self, requester: Option<&str>) -> AgentLoginStart {
+    fn start_antigravity_login(
+        &self,
+        requester: Option<&str>,
+    ) -> Result<AgentLoginStart, EngineError> {
+        let harness = self.acp_harness(HarnessId::Antigravity).ok_or_else(|| {
+            EngineError::Other("Antigravity environment configuration is unavailable".into())
+        })?;
         self.reap_spawned_flows(HarnessId::Antigravity);
         let login_id = new_id();
         let state = Arc::new(Mutex::new(TaskLoginState {
@@ -1795,7 +1826,7 @@ impl AgentAccounts {
         let task_state = state.clone();
         let handle = tokio::spawn(async move {
             let progress_state = task_state.clone();
-            let mut outcome = zeron_harness::AcpHarness::antigravity()
+            let mut outcome = harness
                 .sign_in(browser, move |progress| match progress {
                     zeron_harness::acp::SignInProgress::OpenBrowser(url) => {
                         lock(&progress_state).url = Some(url);
@@ -1827,12 +1858,12 @@ impl AgentAccounts {
                 port: None,
             },
         );
-        AgentLoginStart {
+        Ok(AgentLoginStart {
             login_id,
             url: String::new(),
             mode: AgentLoginMode::Browser,
             callback_port: None,
-        }
+        })
     }
 
     /// Cursor: the SDK's own PKCE browser flow, driven through the zeron shim
@@ -1840,15 +1871,17 @@ impl AgentAccounts {
     /// the live `~/.cursor/sdk/auth.json`), then snapshots into a slot on
     /// poll — mirroring codex's throwaway `CODEX_HOME`.
     async fn start_cursor_login(&self) -> Result<AgentLoginStart, EngineError> {
+        let environment = self.environment(HarnessId::Cursor)?;
         self.reap_spawned_flows(HarnessId::Cursor);
         let login_id = new_id();
         let home = self.login_home(&login_id)?;
-        let cmd = zeron_harness::cursor::login_command(&home.join("auth.json"))
+        let mut cmd = zeron_harness::cursor::login_command(&home.join("auth.json"))
             .await
             .map_err(|e| {
                 let _ = std::fs::remove_dir_all(&home);
                 EngineError::Other(format!("Could not start the Cursor login: {e}"))
             })?;
+        environment.apply(&mut cmd);
         self.spawn_login_child(
             login_id,
             HarnessId::Cursor,
@@ -1857,6 +1890,7 @@ impl AgentAccounts {
             SpawnedCompletion::CredentialFile,
             scan_cursor_url,
             None,
+            environment,
         )
         .await
     }
@@ -3837,8 +3871,12 @@ type LoginChildHandles = (
 /// (the URL can land on either stream), and a monitor polls `try_wait` so the
 /// child is reaped without owning it — the cancel path needs concurrent kill
 /// access.
-fn wire_login_child(mut child: zeron_harness::process::Child) -> LoginChildHandles {
+fn wire_login_child_with_environment(
+    mut child: zeron_harness::process::Child,
+    environment: Arc<zeron_harness::environment::EnvironmentSnapshot>,
+) -> LoginChildHandles {
     let output = Arc::new(Mutex::new(String::new()));
+    let redacted_pipes = Arc::new(Mutex::new([String::new(), String::new()]));
     for pipe in [
         child
             .stdout
@@ -3850,18 +3888,28 @@ fn wire_login_child(mut child: zeron_harness::process::Child) -> LoginChildHandl
             .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
     ]
     .into_iter()
-    .flatten()
+    .enumerate()
+    .filter_map(|(index, pipe)| pipe.map(|pipe| (index, pipe)))
     {
+        let (index, pipe) = pipe;
         let sink = output.clone();
+        let environment = environment.clone();
+        let redacted_pipes = redacted_pipes.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut pipe = pipe;
             let mut buf = [0u8; 4096];
+            let mut raw = Vec::new();
             while let Ok(n) = pipe.read(&mut buf).await {
                 if n == 0 {
                     break;
                 }
-                lock(&sink).push_str(&String::from_utf8_lossy(&buf[..n]));
+                raw.extend_from_slice(&buf[..n]);
+                // Keep raw bytes per pipe so split UTF-8, overlapping secrets
+                // and interleaved stdout/stderr still redact correctly.
+                let mut pipes = lock(&redacted_pipes);
+                pipes[index] = environment.redact_streaming(&String::from_utf8_lossy(&raw));
+                *lock(&sink) = pipes.concat();
             }
         });
     }
@@ -5134,5 +5182,62 @@ mod login_tests {
         assert!(routes.is_registered(&remote.login_id));
         accounts.cancel_login(&remote.login_id);
         assert!(!routes.is_registered(&remote.login_id));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod agent_environment_tests {
+    use super::*;
+    #[tokio::test]
+    async fn login_child_uses_the_captured_binding_and_redacts_accumulated_output() {
+        let environment = Arc::new(
+            zeron_harness::environment::EnvironmentSnapshot::default()
+                .patched(&[
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "API_KEY".into(),
+                        value: "private-login-token中文".into(),
+                        sensitive: true,
+                    },
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "API_PREFIX".into(),
+                        value: "private-".into(),
+                        sensitive: true,
+                    },
+                ])
+                .unwrap(),
+        );
+        let mut command = zeron_harness::process::Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf '%s' \"${API_KEY%token中文}\"; sleep 0.3; printf '%s' \"${API_KEY#private-login-}\"; exit 1")
+            .stdout(zeron_harness::process::Stdio::piped())
+            .stderr(zeron_harness::process::Stdio::piped());
+        environment.apply(&mut command);
+        let (_child, output, exit) =
+            wire_login_child_with_environment(command.spawn().unwrap(), environment);
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while lock(&output).is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            !lock(&output).contains("private-login-"),
+            "partial secrets stay hidden while login is running"
+        );
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if lock(&exit).is_some() && lock(&output).contains("[redacted]") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!lock(&output).contains("token中文"));
+        assert_eq!(&*lock(&output), "[redacted]");
+        assert_eq!(*lock(&exit), Some(Some(1)));
     }
 }

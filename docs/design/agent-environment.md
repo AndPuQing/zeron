@@ -331,7 +331,7 @@ test artifacts committed to the repository.
 | --- | --- | --- | --- |
 | M0 | `docs: design per-provider agent environment configuration` | Task branch, current baseline, this design, development workflow, documentation checks | Complete |
 | M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Complete locally; platform checks tracked in M4 |
-| M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | In progress |
+| M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | Complete locally; corrected Windows ACL requires CI |
 | M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | In progress |
 | M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | In progress |
 
@@ -343,17 +343,38 @@ release tags as part of this feature task.
 
 ### Current validation state
 
-M0: `e1e9adcf`. M1 adds the validated wire types, acknowledged private store,
-CAS revisions and execution-device routing. Shared protocol tests (69), RPC
-unit tests (16), private store transaction tests and the new actual relay test
-have passed locally. The M1 commit ID is recorded at the next checkpoint.
+M0: `e1e9adcf`. M1: `901121cf`. The validated wire types, acknowledged private
+store, CAS revisions and execution-device routing are implemented. Shared
+protocol tests (69), RPC unit tests (16), private store transaction tests and
+the actual relay test have passed locally.
 
-M2 and M3 are under regression validation. Initial environment/runtime tests
-and both desktop editor tests pass; final suite evidence is recorded below
-when complete. No live provider account is used by these fixture checks.
+M2 implements immutable provider bindings across all nine production drivers,
+discovery, title generation and provider-owned login subprocesses. Runtime
+tests preserve active turns, accepted steering, input answers, native resume,
+subagents and voice ownership while the next ordinary send waits for the
+latest configuration. Diagnostic redaction covers multiline/escaped values,
+partial login reads and HTTP errors before truncation. The existing OpenCode
+HTTP timeout test now resumes the clock before awaiting real socket cleanup.
+
+Local M2 checks: engine library 446 passed / 2 ignored; harness library 326
+passed; new agent-environment subprocess integration 2 passed; existing
+provider/discovery/saved-session integrations 183 passed / 8 ignored. Selected
+engine integrations passed (device routing, subagents, profiles, queues,
+Pi/restart resume and session publication). Clippy passed for proto, RPC,
+harness, engine and UI libraries, with existing repository warnings. The M2
+commit ID is recorded at the next checkpoint.
+
+M3 desktop tests passed 1,594 tests with the native-font test filtered out;
+an additional connection/capability race correction is under final validation.
+No live provider account is used by these fixture checks.
 
 The Rust toolchain is operational after restoring its Z3 dependency. The local
 Apple developer directory lacks the Metal compiler; desktop checks use the
 existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
 block tests are included in the Windows workflow and require that platform.
+M1 Windows CI exposed an ACL handle-access failure: tempfile's data handle
+does not request WRITE_DAC. M2 reopens the uniquely named temporary file with
+WRITE_DAC before protecting its ACL and before writing any configuration.
+The API signatures have been checked against windows-sys 0.61.2 sources;
+execution of the corrected implementation is still pending Windows CI.
 No deployment, merge, release or generated mobile binding change is included.

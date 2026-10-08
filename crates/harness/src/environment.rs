@@ -167,12 +167,12 @@ impl EnvironmentSnapshot {
             if !names.insert(normalized_name(name)) {
                 return Err(format!("Duplicate environment variable: {name}"));
             }
-            if let EnvironmentEntry::Set { value, .. } = entry {
-                if value.contains('\0') || value.len() > MAX_VALUE_BYTES {
-                    return Err(format!(
-                        "{name}: values must have no NUL and be at most 16 KiB"
-                    ));
-                }
+            if let EnvironmentEntry::Set { value, .. } = entry
+                && (value.contains('\0') || value.len() > MAX_VALUE_BYTES)
+            {
+                return Err(format!(
+                    "{name}: values must have no NUL and be at most 16 KiB"
+                ));
             }
         }
         if serde_json::to_vec(&self.entries)
@@ -239,24 +239,69 @@ impl EnvironmentSnapshot {
         }
     }
 
-    pub fn redact(&self, text: &str) -> String {
-        let mut values: Vec<&str> = self
+    fn sensitive_variants(&self) -> Vec<String> {
+        let mut values: Vec<String> = self
             .entries
             .values()
             .filter_map(|entry| match entry {
                 EnvironmentEntry::Set {
                     value,
                     sensitive: true,
-                } if !value.is_empty() => Some(value.as_str()),
+                } if !value.is_empty() => Some(value),
                 _ => None,
+            })
+            .flat_map(|value| {
+                // Stderr is consumed line by line, and JSON-RPC diagnostics
+                // may contain escaped strings. Protect both representations.
+                let mut variants = vec![value.clone()];
+                variants.extend(
+                    value
+                        .lines()
+                        .filter(|line| !line.is_empty())
+                        .map(str::to_owned),
+                );
+                if let Ok(encoded) = serde_json::to_string(value) {
+                    variants.push(encoded[1..encoded.len() - 1].to_owned());
+                }
+                variants
             })
             .collect();
         values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.dedup();
+        values
+    }
+
+    pub fn redact(&self, text: &str) -> String {
         let mut result = text.to_owned();
-        for value in values {
-            result = result.replace(value, "[redacted]");
+        for value in self.sensitive_variants() {
+            result = result.replace(&value, "[redacted]");
         }
         result
+    }
+
+    /// A live pipe may end in a partial secret until the next read arrives.
+    /// Call on the complete raw buffer, never on previously redacted output.
+    pub fn redact_streaming(&self, text: &str) -> String {
+        let mut hidden_suffix = 0;
+        for value in self.sensitive_variants() {
+            for (end, _) in value.char_indices().rev() {
+                if end <= hidden_suffix || end > text.len() {
+                    continue;
+                }
+                if text.ends_with(&value[..end]) {
+                    hidden_suffix = end;
+                    break;
+                }
+            }
+        }
+        if hidden_suffix == 0 {
+            self.redact(text)
+        } else {
+            format!(
+                "{}[redacted]",
+                self.redact(&text[..text.len() - hidden_suffix])
+            )
+        }
     }
 
     pub fn partition_context(&self, mut context: crate::ModelContext) -> crate::ModelContext {
@@ -342,6 +387,29 @@ mod tests {
                     EnvironmentChange::Delete { name: "A".into() }
                 ])
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn multiline_and_json_escaped_diagnostics_hide_sensitive_values() {
+        let snapshot = EnvironmentSnapshot::default()
+            .patched(&[EnvironmentChange::Set {
+                name: "CERTIFICATE".into(),
+                value: "private-first-line\nprivate-second-line".into(),
+                sensitive: true,
+            }])
+            .unwrap();
+        assert_eq!(
+            snapshot.redact("stderr: private-first-line"),
+            "stderr: [redacted]"
+        );
+        assert_eq!(
+            snapshot.redact("stderr: private-second-line"),
+            "stderr: [redacted]"
+        );
+        assert_eq!(
+            snapshot.redact(r#"{\"error\":\"private-first-line\nprivate-second-line\"}"#),
+            r#"{\"error\":\"[redacted]\"}"#
         );
     }
 

@@ -200,7 +200,18 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             .set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     #[cfg(windows)]
-    private_windows_file(temporary.as_file())?;
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
+        // tempfile's data handle has read/write access but not WRITE_DAC.
+        // Reopen this private, uniquely named file with the permission needed
+        // to protect its DACL, before writing any configuration bytes.
+        let security_handle = std::fs::OpenOptions::new()
+            .read(true)
+            .access_mode(WRITE_DAC)
+            .open(temporary.path())?;
+        private_windows_file(&security_handle)?;
+    }
     temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;

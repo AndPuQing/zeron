@@ -110,6 +110,13 @@ pub struct TitleSettings {
 }
 
 type Factory = Box<dyn Fn() -> Result<Arc<dyn Harness>, HarnessError> + Send + Sync>;
+type ConfiguredFactory = Box<
+    dyn Fn(
+            Arc<zeron_harness::environment::EnvironmentSnapshot>,
+        ) -> Result<Arc<dyn Harness>, HarnessError>
+        + Send
+        + Sync,
+>;
 type InstalledProbe = Box<dyn Fn() -> bool + Send + Sync>;
 
 enum Slot {
@@ -119,7 +126,8 @@ enum Slot {
         /// Re-run on every `descriptors()` call — a CLI installed mid-session
         /// shows up on the next settings/picker open, no restart needed.
         installed: InstalledProbe,
-        factory: Factory,
+        factory: ConfiguredFactory,
+        cached: Option<(String, Arc<dyn Harness>)>,
     },
 }
 
@@ -148,6 +156,11 @@ impl Default for HarnessRegistry {
 }
 
 impl HarnessRegistry {
+    pub fn environment_changed(&self, id: HarnessId, revision: &str) -> bool {
+        self.environment
+            .snapshot(id)
+            .is_ok_and(|snapshot| snapshot.revision != revision)
+    }
     pub async fn discover_models(
         &self,
         id: HarnessId,
@@ -164,6 +177,13 @@ impl HarnessRegistry {
         lease: Arc<tokio::sync::OwnedRwLockReadGuard<()>>,
     ) -> Result<Vec<zeron_proto::Model>, HarnessError> {
         let harness = self.resolve(id)?;
+        Self::discover_models_bound(harness, lease).await
+    }
+
+    pub(crate) async fn discover_models_bound(
+        harness: Arc<dyn Harness>,
+        lease: Arc<tokio::sync::OwnedRwLockReadGuard<()>>,
+    ) -> Result<Vec<zeron_proto::Model>, HarnessError> {
         tokio::spawn(async move {
             // An RPC cancellation must not drop the gate before the probe's
             // own deadline and child cleanup finish.
@@ -182,14 +202,22 @@ impl HarnessRegistry {
         let cwd = cwd.to_owned();
         let lease = self.execution_lease(id).await;
         let harness = self.resolve(id)?;
+        let revision = harness.environment().revision.clone();
         tokio::spawn(async move {
             let _lease = lease;
             harness.commands_for(&cwd).await
         })
         .await
-        .map_err(|error| {
-            HarnessError::Protocol(format!("command discovery task failed: {error}"))
-        })?
+        .map_err(|error| HarnessError::Protocol(format!("command discovery task failed: {error}")))?
+        .and_then(|commands| {
+            if self.environment_changed(id, &revision) {
+                Err(HarnessError::Protocol(
+                    "Environment settings changed during command discovery; retry".into(),
+                ))
+            } else {
+                Ok(commands)
+            }
+        })
     }
 
     pub async fn discover_skills(
@@ -200,6 +228,7 @@ impl HarnessRegistry {
         let cwd = cwd.to_owned();
         let lease = self.execution_lease(id).await;
         let harness = self.resolve(id)?;
+        let revision = harness.environment().revision.clone();
         tokio::spawn(async move {
             // Retain the read lease through the adapter's deadline and cleanup,
             // even when the requesting RPC is dropped.
@@ -208,6 +237,15 @@ impl HarnessRegistry {
         })
         .await
         .map_err(|error| HarnessError::Protocol(format!("skill discovery task failed: {error}")))?
+        .and_then(|skills| {
+            if self.environment_changed(id, &revision) {
+                Err(HarnessError::Protocol(
+                    "Environment settings changed during skill discovery; retry".into(),
+                ))
+            } else {
+                Ok(skills)
+            }
+        })
     }
 
     pub fn new() -> Self {
@@ -466,6 +504,15 @@ impl HarnessRegistry {
         installed: InstalledProbe,
         factory: Factory,
     ) {
+        self.register_configured(descriptor, installed, Box::new(move |_| factory()));
+    }
+
+    pub fn register_configured(
+        &self,
+        descriptor: HarnessDescriptor,
+        installed: InstalledProbe,
+        factory: ConfiguredFactory,
+    ) {
         let id = descriptor.id;
         if self
             .slots()
@@ -475,6 +522,7 @@ impl HarnessRegistry {
                     descriptor,
                     installed,
                     factory,
+                    cached: None,
                 },
             )
             .is_none()
@@ -484,12 +532,24 @@ impl HarnessRegistry {
     }
 
     pub fn resolve(&self, id: HarnessId) -> Result<Arc<dyn Harness>, HarnessError> {
+        let environment = self
+            .environment
+            .snapshot(id)
+            .map_err(HarnessError::Protocol)?;
         let mut slots = self.slots();
-        match slots.get(&id) {
+        match slots.get_mut(&id) {
             Some(Slot::Ready(harness)) => Ok(harness.clone()),
-            Some(Slot::Lazy { factory, .. }) => {
-                let harness = factory()?;
-                slots.insert(id, Slot::Ready(harness.clone()));
+            Some(Slot::Lazy {
+                factory, cached, ..
+            }) => {
+                if let Some((revision, harness)) = cached
+                    && revision == &environment.revision
+                {
+                    return Ok(harness.clone());
+                }
+                let revision = environment.revision.clone();
+                let harness = factory(environment)?;
+                *cached = Some((revision, harness.clone()));
                 Ok(harness)
             }
             None => Err(HarnessError::NotInstalled(format!("{id:?}"))),
@@ -575,7 +635,7 @@ pub fn default_registry() -> HarnessRegistry {
             },
         ],
     }));
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::ClaudeCode,
             name: "Claude Code".into(),
@@ -595,7 +655,12 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::ClaudeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::ClaudeHarness::new()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::ClaudeHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Codex, same lazy pattern: the static descriptor mirrors AcpHarness::codex()
     // exactly (`describe()` after the first resolve must not change the
@@ -603,7 +668,7 @@ pub fn default_registry() -> HarnessRegistry {
     // steering via native `turn/steer`, and the unified reasoning ladder from
     // zeron_harness::codex::catalog. CLI discovery only happens when a
     // run/model call actually resolves the slot.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Codex,
             name: "Codex".into(),
@@ -623,12 +688,17 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::CodexHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::CodexHarness::new()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::CodexHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Cursor via the pinned @cursor/sdk shim (NOT ACP — that surface strips
     // subagent transcripts), same lazy pattern: the static descriptor mirrors
     // CursorHarness exactly. Native step-boundary steering; no effort ladder.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Cursor,
             name: "Cursor".into(),
@@ -640,13 +710,18 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::CursorHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::CursorHarness::new()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::CursorHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Devin over ACP (`devin acp`), same lazy pattern: the static descriptor
     // mirrors AcpHarness::devin() exactly. No steering extension (turn
     // boundaries) and no effort ladder — Devin bakes effort into the
     // advertised model ids instead of a `thought_level` option.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Devin,
             name: "Devin".into(),
@@ -658,13 +733,18 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::AcpHarness::devin().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::devin()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::devin().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Grok Build over ACP, same lazy pattern: the static descriptor mirrors
     // AcpHarness::grok() exactly. No `_session/steering` extension yet, so
     // steers deliver at turn boundaries; the effort ladder applies per
     // session via the `thought_level` config option.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Grok,
             name: "Grok".into(),
@@ -680,13 +760,18 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::AcpHarness::grok().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::grok()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::grok().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Hermes Agent over ACP (`hermes acp`), same lazy pattern: the static
     // descriptor mirrors AcpHarness::hermes() exactly. No steering extension
     // (turn boundaries) and no effort ladder — Hermes exposes no effort
     // config over ACP today (hybrid reasoning is model-internal).
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Hermes,
             name: "Hermes".into(),
@@ -698,10 +783,15 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::AcpHarness::hermes().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::hermes()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::hermes().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Native Pi RPC. Thinking levels are discovered per model.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Pi,
             name: "Pi".into(),
@@ -713,14 +803,19 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::PiHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::PiHarness::new()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::PiHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
     // desktop app speaks — `opencode serve` + the /global/event bus), same
     // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
     // Turn-boundary steering; the effort ladder rides model VARIANTS (the
     // run sends the first advertised variant id for the picked level).
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Opencode,
             name: "OpenCode".into(),
@@ -738,13 +833,18 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::OpencodeHarness::new().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::OpencodeHarness::new()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::OpencodeHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // antigravity over acp (google's agy_acp_server), same lazy pattern: the
     // static descriptor mirrors AcpHarness::antigravity() exactly. No steering
     // extension (turn boundaries), and effort is baked into the model ids, so
     // the ladder lives on each model rather than the harness.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             id: HarnessId::Antigravity,
             name: "Antigravity".into(),
@@ -756,7 +856,12 @@ pub fn default_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::AcpHarness::antigravity().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::antigravity()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::antigravity().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     registry
 }
@@ -1451,5 +1556,131 @@ mod gate_tests {
         );
         assert!(!called);
         registry.end_update(HarnessId::Codex);
+    }
+}
+
+#[cfg(test)]
+mod agent_environment_tests {
+    use super::*;
+    use zeron_harness::environment::EnvironmentSnapshot;
+    use zeron_proto::{EnvironmentChange, PatchHarnessEnvironmentParams};
+    struct Discovery {
+        environment: Arc<EnvironmentSnapshot>,
+        started: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    }
+    #[async_trait::async_trait]
+    impl Harness for Discovery {
+        fn id(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+        fn display_name(&self) -> &str {
+            "Environment discovery"
+        }
+        fn supports_steering(&self) -> bool {
+            false
+        }
+        fn steering_mode(&self) -> SteeringMode {
+            SteeringMode::TurnBoundary
+        }
+        fn reasoning_levels(&self) -> &[ReasoningLevel] {
+            &[]
+        }
+        fn environment(&self) -> Arc<EnvironmentSnapshot> {
+            self.environment.clone()
+        }
+        async fn models(&self) -> Result<Vec<zeron_proto::Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn commands(&self) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(vec![])
+        }
+        async fn skills(
+            &self,
+            _: &Path,
+        ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
+            self.started.notify_one();
+            self.release.notified().await;
+            Ok(Some(vec![]))
+        }
+        async fn run(
+            &self,
+            _: zeron_proto::RunRequest,
+            _: zeron_harness::RunControls,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+            HarnessError,
+        > {
+            unreachable!()
+        }
+    }
+    #[tokio::test]
+    async fn immutable_bindings_reuse_current_instance_and_fence_stale_discovery() {
+        let registry = Arc::new(HarnessRegistry::new());
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let descriptor = describe(&Discovery {
+            environment: Arc::default(),
+            started: started.clone(),
+            release: release.clone(),
+        });
+        let signal = started.clone();
+        let gate = release.clone();
+        registry.register_configured(
+            descriptor,
+            Box::new(|| true),
+            Box::new(move |environment| {
+                Ok(Arc::new(Discovery {
+                    environment,
+                    started: signal.clone(),
+                    release: gate.clone(),
+                }))
+            }),
+        );
+        for skills in [false, true] {
+            let old = registry.resolve(HarnessId::Codex).unwrap();
+            assert!(Arc::ptr_eq(
+                &old,
+                &registry.resolve(HarnessId::Codex).unwrap()
+            ));
+            let worker = registry.clone();
+            let request = tokio::spawn(async move {
+                if skills {
+                    worker
+                        .discover_skills(HarnessId::Codex, Path::new("/tmp"))
+                        .await
+                        .map(|_| ())
+                } else {
+                    worker
+                        .discover_commands(HarnessId::Codex, Path::new("/tmp"))
+                        .await
+                        .map(|_| ())
+                }
+            });
+            started.notified().await;
+            let saved = registry
+                .environment
+                .patch(PatchHarnessEnvironmentParams {
+                    harness: HarnessId::Codex,
+                    target_device_id: None,
+                    expected_revision: old.environment().revision.clone(),
+                    changes: vec![EnvironmentChange::Set {
+                        name: "API_KEY".into(),
+                        value: format!("secret-{skills}"),
+                        sensitive: true,
+                    }],
+                })
+                .unwrap();
+            let new = registry.resolve(HarnessId::Codex).unwrap();
+            assert!(!Arc::ptr_eq(&old, &new));
+            assert_ne!(old.environment().revision, saved.metadata.revision);
+            assert_eq!(new.environment().revision, saved.metadata.revision);
+            release.notify_one();
+            let error = request.await.unwrap().unwrap_err().to_string();
+            assert!(error.contains("changed during"), "{error}");
+            assert!(!error.contains("secret-"));
+        }
     }
 }

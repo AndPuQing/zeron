@@ -84,6 +84,10 @@ pub struct ModelContext {
 
 #[async_trait]
 pub trait Harness: Send + Sync {
+    /// Host-side binding; never serialized into prompts or session documents.
+    fn environment(&self) -> std::sync::Arc<environment::EnvironmentSnapshot> {
+        std::sync::Arc::new(environment::EnvironmentSnapshot::default())
+    }
     fn id(&self) -> HarnessId;
     fn display_name(&self) -> &str;
     fn supports_steering(&self) -> bool;

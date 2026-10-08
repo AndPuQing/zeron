@@ -1225,6 +1225,7 @@ enum Launch {
 /// The ACP harness. Construct with [`AcpHarness::grok`]; tests point it at a
 /// fake agent with [`AcpHarness::with_executable`].
 pub struct AcpHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     spec: AcpAgentSpec,
     executable: Option<PathBuf>,
     /// Override of the agent's on-disk sessions root (grok's
@@ -1250,8 +1251,18 @@ pub struct AcpHarness {
 }
 
 impl AcpHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     fn with_spec(spec: AcpAgentSpec) -> Self {
         Self {
+            environment: Default::default(),
             spec,
             executable: None,
             sessions_root: None,
@@ -1297,14 +1308,19 @@ impl AcpHarness {
         let (_scratch, mut child, _stderr, sign_in_prompted) =
             self.spawn_agent(home.as_deref(), false, &[], None).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => {
-                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
-            }
+            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
+                stdin,
+                stdout,
+                self.spec.id,
+                &sign_in_prompted,
+                self.environment.clone(),
+            ),
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
             }
         };
+        let client = client.redact_errors(self.environment.clone());
         let flow = async {
             client
                 .request("initialize", initialize_params(self.spec.id))
@@ -1376,6 +1392,7 @@ impl AcpHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(home) = std::env::var_os("HOME") {
             cmd.current_dir(home);
@@ -1407,16 +1424,18 @@ impl AcpHarness {
         let on_progress = std::sync::Arc::new(on_progress);
         let announced = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Some(stderr) = child.stderr.take() {
+            let environment = self.environment.clone();
             let on_progress = on_progress.clone();
             let announced = announced.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let diagnostic = environment.redact(&line);
                     // Sign-in output carries authorize urls and device codes.
                     tracing::debug!(
                         target: "zeron_harness::acp",
                         "sign-in stderr: {}",
-                        crate::redact::redact_output(&line)
+                        crate::redact::redact_output(&diagnostic)
                     );
                     if let Some(url) = sign_in_url(&line).filter(|url| accept_url(url))
                         && !announced.swap(true, std::sync::atomic::Ordering::AcqRel)
@@ -1652,6 +1671,7 @@ impl AcpHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(launch_args).args(args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         Ok(cmd)
     }
 
@@ -1694,6 +1714,7 @@ impl AcpHarness {
         cmd.args(extra_args);
         child::configure(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
             cmd.current_dir(cwd);
@@ -1730,12 +1751,14 @@ impl AcpHarness {
         let stderr_tail = crate::StderrTail::default();
         let sign_in_prompted = CancellationToken::new();
         if let Some(stderr) = child.stderr.take() {
+            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             let prompted = sign_in_prompted.clone();
             let harness = self.spec.id;
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::acp", "stderr: {line}");
                     tail.push(&line);
                     if is_sign_in_prompt(harness, &line) {
@@ -1761,9 +1784,13 @@ impl AcpHarness {
             .spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], None)
             .await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => {
-                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
-            }
+            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
+                stdin,
+                stdout,
+                self.spec.id,
+                &sign_in_prompted,
+                self.environment.clone(),
+            ),
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
@@ -1832,9 +1859,13 @@ impl AcpHarness {
         let (_scratch, mut child, stderr_tail, sign_in_prompted) =
             self.spawn_agent(None, false, &[], None).await?;
         let (client, _incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => {
-                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
-            }
+            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
+                stdin,
+                stdout,
+                self.spec.id,
+                &sign_in_prompted,
+                self.environment.clone(),
+            ),
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
@@ -2133,6 +2164,10 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
 
 #[async_trait]
 impl Harness for AcpHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         self.spec.id
     }
@@ -2225,7 +2260,8 @@ impl Harness for AcpHarness {
         } else {
             vec![]
         };
-        crate::model_context::context(self.id(), &binary, &extra).map(Some)
+        crate::model_context::context(self.id(), &binary, &extra)
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     fn fallback_models(&self) -> Vec<Model> {
         (self.spec.models)()
@@ -2241,7 +2277,11 @@ impl Harness for AcpHarness {
                     if self.id() == HarnessId::Devin {
                         let (exe, _) = self.resolve_program(false).await?;
                         self.devin_models
-                            .refresh(&exe, self.model_discovery_timeout)
+                            .refresh_with_environment(
+                                &exe,
+                                self.model_discovery_timeout,
+                                &self.environment,
+                            )
                             .await
                     } else {
                         self.discover_models().await
@@ -2337,19 +2377,25 @@ impl Harness for AcpHarness {
             .stdout
             .take()
             .ok_or_else(|| HarnessError::Protocol("agent child has no stdout".into()))?;
-        let (client, incoming) =
-            client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted);
+        let (client, incoming) = client_with_sign_in_prompt(
+            stdin,
+            stdout,
+            self.spec.id,
+            &sign_in_prompted,
+            self.environment.clone(),
+        );
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         let devin_selection = match request.model.as_deref() {
             Some(model) if self.spec.id == HarnessId::Devin => {
                 let (exe, _) = self.resolve_program(false).await?;
                 let selection = self
                     .devin_models
-                    .selection(
+                    .selection_with_environment(
                         &exe,
                         self.model_discovery_timeout,
                         model,
                         &request.model_options,
+                        &self.environment,
                     )
                     .await;
                 if selection.is_none() && model == devin_models::FUSION {
@@ -3104,12 +3150,16 @@ fn client_with_sign_in_prompt(
     stdout: ChildStdout,
     harness: HarnessId,
     sign_in_prompted: &CancellationToken,
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
 ) -> (RpcClient, mpsc::Receiver<Incoming>) {
     if harness != HarnessId::Antigravity {
-        return RpcClient::new(stdin, stdout);
+        let (client, incoming) = RpcClient::new(stdin, stdout);
+        return (client.redact_errors(environment), incoming);
     }
     let prompted = sign_in_prompted.clone();
-    RpcClient::with_stdout_observer(stdin, stdout, Some(Box::new(move |_| prompted.cancel())))
+    let (client, incoming) =
+        RpcClient::with_stdout_observer(stdin, stdout, Some(Box::new(move |_| prompted.cancel())));
+    (client.redact_errors(environment), incoming)
 }
 
 async fn unless_sign_in_prompted<T>(

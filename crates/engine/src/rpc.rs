@@ -1832,13 +1832,15 @@ impl RpcService for EngineRpc {
                 {
                     return Err(RpcError::BadParams("Unknown production provider".into()));
                 }
-                RpcReply::value(
-                    &self
-                        .registry
-                        .environment
-                        .metadata(p.harness)
-                        .map_err(RpcError::Failed)?,
-                )
+                let mut metadata = self
+                    .registry
+                    .environment
+                    .metadata(p.harness)
+                    .map_err(RpcError::Failed)?;
+                metadata.previous_environment_sessions = self
+                    .sessions
+                    .previous_environment_sessions(p.harness, &metadata.revision);
+                RpcReply::value(&metadata)
             }
             methods::PATCH_HARNESS_ENVIRONMENT => {
                 let p: zeron_proto::PatchHarnessEnvironmentParams = parse_params(params)
@@ -1851,11 +1853,15 @@ impl RpcService for EngineRpc {
                 {
                     return Err(RpcError::BadParams("Unknown production provider".into()));
                 }
+                let harness = p.harness;
                 let registry = self.registry.clone();
-                let reply = tokio::task::spawn_blocking(move || registry.environment.patch(p))
+                let mut reply = tokio::task::spawn_blocking(move || registry.environment.patch(p))
                     .await
                     .map_err(|_| RpcError::Failed("Environment save task failed".into()))?
                     .map_err(RpcError::Failed)?;
+                reply.metadata.previous_environment_sessions = self
+                    .sessions
+                    .previous_environment_sessions(harness, &reply.metadata.revision);
                 RpcReply::value(&reply)
             }
             methods::REVEAL_HARNESS_ENVIRONMENT_VALUE => {
@@ -1915,6 +1921,7 @@ impl RpcService for EngineRpc {
                     .registry
                     .resolve(p.harness)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let environment = harness.environment();
                 let models = crate::model_catalogs::list_with_lease(
                     self.repos.data_dir(),
                     harness,
@@ -1923,6 +1930,14 @@ impl RpcService for EngineRpc {
                 )
                 .await
                 .map_err(|e| RpcError::Failed(e.to_string()))?;
+                if self
+                    .registry
+                    .environment_changed(p.harness, &environment.revision)
+                {
+                    return Err(RpcError::Failed(
+                        "Provider environment changed during discovery; reload the catalog".into(),
+                    ));
+                }
                 RpcReply::value(&models)
             }
             methods::LIST_SKILLS => {

@@ -2379,6 +2379,9 @@ async fn stalled_prompt_post_has_a_bounded_timeout() {
     tokio::task::yield_now().await;
     tokio::time::pause();
     tokio::time::advance(CALL_TIMEOUT + Duration::from_secs(1)).await;
+    // The expired HTTP future still needs real socket I/O to settle. Avoid
+    // auto-advancing done()'s watchdog before that I/O gets a reactor turn.
+    tokio::time::resume();
     assert_eq!(wire.done().await.0, DoneStatus::Errored);
 }
 

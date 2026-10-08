@@ -89,6 +89,7 @@ fn cursor_cli_paths() -> Vec<PathBuf> {
 /// The Cursor harness. Construct with [`CursorHarness::new`]; tests point it
 /// at a fake shim process with [`CursorHarness::with_executable`].
 pub struct CursorHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     /// Test seam: run this program AS the shim instead of node+managed SDK.
     executable: Option<PathBuf>,
     interrupt_grace: Duration,
@@ -100,6 +101,7 @@ pub struct CursorHarness {
 impl Default for CursorHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
@@ -109,6 +111,15 @@ impl Default for CursorHarness {
 }
 
 impl CursorHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     /// The SDK selected by this engine, not the viewer or installed native CLI.
     pub fn sdk_version() -> &'static str {
         if std::env::var_os("CURSOR_SDK_SHIM_EXECUTABLE").is_some() {
@@ -139,6 +150,7 @@ impl CursorHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(&args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         cmd.arg("models")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -182,6 +194,7 @@ impl CursorHarness {
         tokio::time::timeout(Duration::from_secs(15), run)
             .await
             .map_err(|_| HarnessError::Protocol("cursor models probe timed out".into()))?
+            .map_err(|error| self.environment.redact_error(error))
     }
 
     /// (program, args) for the shim process: the test override, or node
@@ -220,6 +233,10 @@ pub async fn login_command(store_path: &std::path::Path) -> Result<Command, Harn
 
 #[async_trait]
 impl Harness for CursorHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Cursor
     }
@@ -265,6 +282,7 @@ impl Harness for CursorHarness {
         let binary = binary.canonicalize().unwrap_or(binary);
         let mut hash = Sha256::new();
         hash.update(catalog::credential_context()?);
+        hash.update(self.environment.revision.as_bytes());
         hash.update(binary.as_os_str().as_encoded_bytes());
         hash.update(Self::sdk_version().as_bytes());
         if let Ok(metadata) = binary.metadata() {
@@ -311,6 +329,7 @@ impl Harness for CursorHarness {
             cmd.env("ZERUN_CURSOR_STATE_DIR", state::state_root());
         }
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }
@@ -336,10 +355,12 @@ impl Harness for CursorHarness {
             .ok_or_else(|| HarnessError::Protocol("cursor shim has no stdout".into()))?;
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
+            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::cursor", "stderr: {line}");
                     tail.push(&line);
                 }
@@ -364,6 +385,7 @@ impl Harness for CursorHarness {
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
+            environment: self.environment.clone(),
             lease,
             child,
             stdout_lines: BufReader::new(stdout).lines(),
@@ -484,6 +506,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Str
 }
 
 struct Session {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     lease: Option<state::Lease>,
     child: Child,
     stdout_lines: tokio::io::Lines<BufReader<crate::process::ChildStdout>>,
@@ -503,6 +526,7 @@ fn new_message_id() -> String {
 
 async fn run_session(session: Session) {
     let Session {
+        environment,
         lease: _lease,
         mut child,
         mut stdout_lines,
@@ -610,7 +634,7 @@ async fn run_session(session: Session) {
                             {
                                 tracing::warn!(target: "zeron_harness::cursor",
                                     session_id = ?session_id,
-                                    error = ?frame.get("error").or_else(|| frame.get("message")),
+                                    error = ?frame.get("error").or_else(|| frame.get("message")).map(|value| environment.redact(&value.to_string())),
                                     "Cursor SDK run failed");
                             }
                             for ev in map_shim_frame(&frame, interrupted) {

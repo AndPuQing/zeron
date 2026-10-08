@@ -26,6 +26,7 @@ use tokio::{
 use zeron_proto::{AgentEvent, HarnessId, Model, ReasoningLevel, RunRequest, SteeringMode};
 
 pub struct PiHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     models_cache: crate::catalog::Catalog,
     workspace_commands: crate::skills::CommandDiscovery,
     session_store: Option<PathBuf>,
@@ -37,6 +38,7 @@ pub struct PiHarness {
 impl Default for PiHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             session_store: None,
             agent_dir: None,
@@ -48,6 +50,15 @@ impl Default for PiHarness {
     }
 }
 impl PiHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -132,6 +143,7 @@ impl PiHarness {
         // Process group plus the same env scrubbing the ACP launch applied.
         crate::process::owned::configure(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         if let Some(dir) = &self.agent_dir {
             cmd.env("PI_CODING_AGENT_DIR", dir);
         }
@@ -149,9 +161,10 @@ impl PiHarness {
         let tail = crate::StderrTail::default();
         let mut lines = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
         let stderr = tail.clone();
+        let environment = self.environment.clone();
         let stderr_task = tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                stderr.push(&line);
+                stderr.push(&environment.redact(&line));
             }
             stderr.close();
         });
@@ -160,6 +173,7 @@ impl PiHarness {
             child.stdout.take().expect("piped stdout"),
         );
         Ok(Process {
+            environment: self.environment.clone(),
             child,
             _scratch: scratch,
             transport,
@@ -171,6 +185,7 @@ impl PiHarness {
     }
 }
 struct Process {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     child: Child,
     _scratch: Option<crate::scratch::ScratchDir>,
     transport: rpc::Transport,
@@ -214,7 +229,7 @@ impl Process {
         loop {
             let frame = self.next().await?;
             if frame["type"] == "response" && frame["id"] == id {
-                return response_data(frame);
+                return response_data(frame).map_err(|error| self.environment.redact_error(error));
             }
             if frame["type"] == "extension_ui_request" {
                 self.dialogs.request(self.transport.client.clone(), &frame);
@@ -241,6 +256,10 @@ fn response_data(frame: Value) -> Result<Value, HarnessError> {
 }
 #[async_trait]
 impl Harness for PiHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Pi
     }
@@ -275,7 +294,7 @@ impl Harness for PiHarness {
             &self.resolve_executable()?,
             &[root.join("models.json"), root.join("settings.json")],
         )
-        .map(Some)
+        .map(|context| Some(self.environment.partition_context(context)))
     }
     async fn model_catalog(&self, force: bool) -> Result<crate::ModelCatalog, HarnessError> {
         self.models_cache

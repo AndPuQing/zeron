@@ -115,10 +115,21 @@ pub(super) struct Catalog {
 }
 
 impl Catalog {
+    #[cfg(test)]
     pub(super) async fn refresh(
         &self,
         exe: &Path,
         timeout: Duration,
+    ) -> Result<Vec<Model>, HarnessError> {
+        self.refresh_with_environment(exe, timeout, &Default::default())
+            .await
+    }
+
+    pub(super) async fn refresh_with_environment(
+        &self,
+        exe: &Path,
+        timeout: Duration,
+        environment: &crate::environment::EnvironmentSnapshot,
     ) -> Result<Vec<Model>, HarnessError> {
         let requested_at = Instant::now();
         let mut latest = self.latest.lock().await;
@@ -130,6 +141,7 @@ impl Catalog {
         let mut cmd = Command::new(exe);
         cmd.args(["models", "list", "--format", "json"]);
         crate::compose_child_path(&mut cmd, exe);
+        environment.apply(&mut cmd);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -157,10 +169,11 @@ impl Catalog {
             return Err(HarnessError::Protocol(format!(
                 "Devin models list failed ({}): {}",
                 status,
-                String::from_utf8_lossy(&err).trim()
+                environment.redact(String::from_utf8_lossy(&err).trim())
             )));
         }
-        let (models, groups) = parse_catalog(&out)?;
+        let (models, groups) =
+            parse_catalog(&out).map_err(|error| environment.redact_error(error))?;
         *latest = Some((Instant::now(), models.clone(), groups));
         Ok(models)
     }
@@ -169,6 +182,7 @@ impl Catalog {
     /// process has none yet. `None` when the catalog does not know the id —
     /// or, for [`FUSION`], when it offers no pair for the chosen lead and
     /// sidekick (`options`, falling back to the catalog's first pair).
+    #[cfg(test)]
     pub(super) async fn selection(
         &self,
         exe: &Path,
@@ -176,9 +190,23 @@ impl Catalog {
         model: &str,
         options: &serde_json::Map<String, serde_json::Value>,
     ) -> Option<Selection> {
+        self.selection_with_environment(exe, timeout, model, options, &Default::default())
+            .await
+    }
+
+    pub(super) async fn selection_with_environment(
+        &self,
+        exe: &Path,
+        timeout: Duration,
+        model: &str,
+        options: &serde_json::Map<String, serde_json::Value>,
+        environment: &crate::environment::EnvironmentSnapshot,
+    ) -> Option<Selection> {
         let known = self.latest.lock().await.is_some();
         if !known {
-            self.refresh(exe, timeout).await.ok()?;
+            self.refresh_with_environment(exe, timeout, environment)
+                .await
+                .ok()?;
         }
         let latest = self.latest.lock().await;
         let (_, _, groups) = latest.as_ref()?;

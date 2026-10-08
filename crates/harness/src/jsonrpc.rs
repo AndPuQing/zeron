@@ -53,6 +53,7 @@ struct VoiceRouter {
 
 #[derive(Clone)]
 pub(crate) struct RpcClient {
+    environment: Arc<crate::environment::EnvironmentSnapshot>,
     next_id: Arc<AtomicI64>,
     pending: Pending,
     writer: mpsc::UnboundedSender<String>,
@@ -61,6 +62,13 @@ pub(crate) struct RpcClient {
 }
 
 impl RpcClient {
+    pub(crate) fn redact_errors(
+        mut self,
+        environment: Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
     /// Spawn the writer + reader tasks over the child's stdio; returns the
     /// client and the incoming (notification/request) channel.
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> (Self, mpsc::Receiver<Incoming>) {
@@ -106,6 +114,7 @@ impl RpcClient {
         ));
         (
             Self {
+                environment: Default::default(),
                 next_id: Arc::new(AtomicI64::new(0)),
                 pending,
                 writer: writer_tx,
@@ -163,6 +172,7 @@ impl RpcClient {
         params: Value,
     ) -> futures::future::BoxFuture<'static, Result<Value, HarnessError>> {
         let method = method.to_owned();
+        let environment = self.environment.clone();
         let id = self.next_id.fetch_add(1, Ordering::Relaxed) + 1;
         let (tx, rx) = oneshot::channel();
         {
@@ -190,7 +200,9 @@ impl RpcClient {
         Box::pin(async move {
             match rx.await {
                 Ok(Ok(result)) => Ok(result),
-                Ok(Err(message)) => Err(HarnessError::Protocol(format!("{method}: {message}"))),
+                Ok(Err(message)) => Err(HarnessError::Protocol(
+                    environment.redact(&format!("{method}: {message}")),
+                )),
                 // Sender dropped: the reader hit EOF and failed all pending.
                 Err(_) => Err(HarnessError::Protocol(format!(
                     "{method}: app-server exited before responding"
@@ -427,6 +439,7 @@ mod tests {
     fn cancel_notification_wire_has_no_id() {
         let (writer, mut receiver) = mpsc::unbounded_channel();
         let client = RpcClient {
+            environment: Default::default(),
             next_id: Arc::new(AtomicI64::new(0)),
             pending: Arc::default(),
             writer,
@@ -446,6 +459,7 @@ mod tests {
     #[test]
     fn stale_voice_unsubscribe_keeps_the_newer_subscription() {
         let client = RpcClient {
+            environment: Default::default(),
             next_id: Arc::new(AtomicI64::new(0)),
             pending: Arc::default(),
             writer: mpsc::unbounded_channel().0,
@@ -464,6 +478,7 @@ mod tests {
     async fn requests_after_eof_fail_without_entering_pending_map() {
         let (writer, mut receiver) = mpsc::unbounded_channel();
         let client = RpcClient {
+            environment: Default::default(),
             next_id: Arc::new(AtomicI64::new(0)),
             pending: Arc::default(),
             writer,

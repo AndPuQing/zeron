@@ -1178,19 +1178,29 @@ impl AgentAccounts {
         &self,
         harness: HarnessId,
         args: &[&str],
-    ) -> Result<zeron_harness::process::Command, EngineError> {
+    ) -> Result<
+        (
+            zeron_harness::process::Command,
+            Arc<zeron_harness::environment::EnvironmentSnapshot>,
+        ),
+        EngineError,
+    > {
         let acp = self
             .acp_harness(harness)
             .ok_or_else(|| EngineError::Other(format!("{harness:?} has no CLI sign-in")))?;
-        acp.cli_command(args).await.map_err(|err| {
-            EngineError::Other(match err {
-                zeron_harness::HarnessError::NotInstalled(hint) => format!(
-                    "The `{}` CLI was not found on this device — install it first. ({hint})",
-                    cli_name(harness)
-                ),
-                other => format!("Could not resolve the {} CLI: {other}", cli_name(harness)),
+        let environment = zeron_harness::Harness::environment(&acp);
+        acp.cli_command(args)
+            .await
+            .map(|command| (command, environment))
+            .map_err(|err| {
+                EngineError::Other(match err {
+                    zeron_harness::HarnessError::NotInstalled(hint) => format!(
+                        "The `{}` CLI was not found on this device — install it first. ({hint})",
+                        cli_name(harness)
+                    ),
+                    other => format!("Could not resolve the {} CLI: {other}", cli_name(harness)),
+                })
             })
-        })
     }
 
     /// Grok: `grok login --device-auth` into a throwaway `GROK_HOME`. It
@@ -1203,7 +1213,7 @@ impl AgentAccounts {
         self.reap_spawned_flows(HarnessId::Grok);
         let login_id = new_id();
         let home = self.login_home(&login_id)?;
-        let mut command = match self
+        let (mut command, environment) = match self
             .cli_command(
                 HarnessId::Grok,
                 &["--no-auto-update", "login", "--device-auth"],
@@ -1229,6 +1239,7 @@ impl AgentAccounts {
             SpawnedCompletion::CredentialFile,
             scan_grok_url,
             requester,
+            environment,
         )
         .await
     }
@@ -1245,7 +1256,7 @@ impl AgentAccounts {
         self.reap_spawned_flows(HarnessId::Hermes);
         let login_id = new_id();
         let home = self.login_home(&login_id)?;
-        let mut command = match self
+        let (mut command, environment) = match self
             .cli_command(
                 HarnessId::Hermes,
                 &["auth", "add", provider, "--type", "oauth", "--no-browser"],
@@ -1269,6 +1280,7 @@ impl AgentAccounts {
             SpawnedCompletion::ExitSuccess,
             scan_hermes_url,
             None,
+            environment,
         )
         .await
     }

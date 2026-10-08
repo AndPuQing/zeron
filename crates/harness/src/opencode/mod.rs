@@ -219,6 +219,7 @@ fn free_localhost_port() -> Option<u16> {
 // ---------------------------------------------------------------------------
 
 pub struct OpencodeHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     executable: Option<PathBuf>,
     /// Test seam: an already-running server (no spawn, no auth unless given).
     base_url: Option<String>,
@@ -235,6 +236,7 @@ pub struct OpencodeHarness {
 impl Default for OpencodeHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             base_url: None,
             interrupt_grace: Duration::from_secs(2),
@@ -248,6 +250,15 @@ impl Default for OpencodeHarness {
 }
 
 impl OpencodeHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -288,7 +299,14 @@ impl OpencodeHarness {
             return Ok(Server::attached(base.clone()));
         }
         let exe = self.resolve_executable()?;
-        Server::spawn(&exe, cwd, self.startup_timeout, mcp).await
+        Server::spawn_with_environment(
+            &exe,
+            cwd,
+            self.startup_timeout,
+            mcp,
+            self.environment.clone(),
+        )
+        .await
     }
 
     /// One short-lived server answers both discovery calls. Also primes the
@@ -339,6 +357,10 @@ impl OpencodeHarness {
 
 #[async_trait]
 impl Harness for OpencodeHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Opencode
     }
@@ -382,7 +404,8 @@ impl Harness for OpencodeHarness {
         } else {
             self.resolve_executable()?
         };
-        crate::model_context::context(self.id(), &binary, &[]).map(Some)
+        crate::model_context::context(self.id(), &binary, &[])
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     async fn model_catalog(&self, force: bool) -> Result<crate::ModelCatalog, HarnessError> {
         self.model_context()?.unwrap().log();
@@ -472,6 +495,7 @@ impl Harness for OpencodeHarness {
 // ---------------------------------------------------------------------------
 
 struct Server {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     child: Option<Child>,
     base: String,
     /// `Authorization` header value (`Basic <b64>`), when we own the process.
@@ -562,6 +586,7 @@ impl Protocol {
 impl Server {
     fn attached(base: String) -> Self {
         Self {
+            environment: Default::default(),
             child: None,
             base: base.trim_end_matches('/').to_owned(),
             auth: None,
@@ -590,11 +615,22 @@ impl Server {
     /// Spawn `opencode serve` on a free loopback port with a per-run Basic
     /// password, and wait for a generation-bearing health answer (which
     /// also resolves [`Protocol`]).
+    #[cfg(test)]
     async fn spawn(
         exe: &std::path::Path,
         cwd: Option<&str>,
         startup: Duration,
         mcp: Option<&zeron_proto::McpServer>,
+    ) -> Result<Self, HarnessError> {
+        Self::spawn_with_environment(exe, cwd, startup, mcp, Default::default()).await
+    }
+
+    async fn spawn_with_environment(
+        exe: &std::path::Path,
+        cwd: Option<&str>,
+        startup: Duration,
+        mcp: Option<&zeron_proto::McpServer>,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     ) -> Result<Self, HarnessError> {
         let port = free_localhost_port().ok_or_else(|| {
             HarnessError::Protocol("no free localhost port for opencode serve".into())
@@ -637,6 +673,7 @@ impl Server {
             }
         }
         crate::compose_child_path(&mut cmd, exe);
+        environment.apply(&mut cmd);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -654,9 +691,11 @@ impl Server {
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
             let tail = stderr_tail.clone();
+            let environment = environment.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
+                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::opencode", "stderr: {line}");
                     tail.push(&line);
                 }
@@ -669,6 +708,7 @@ impl Server {
             base64::engine::general_purpose::STANDARD.encode(format!("opencode:{password}"))
         );
         let mut server = Self {
+            environment,
             child: Some(child),
             base: format!("http://127.0.0.1:{port}"),
             auth: Some(auth),
@@ -701,7 +741,10 @@ impl Server {
             };
             if let Some(protocol) = detected {
                 tracing::debug!(
-                    version = server.version.get().map(|v| v.raw.as_str()),
+                    version = server
+                        .version
+                        .get()
+                        .map(|v| server.environment.redact(&v.raw)),
                     "opencode ready"
                 );
                 let _ = server.protocol.set(protocol);
@@ -780,7 +823,7 @@ impl Server {
             let body = resp.text().await.unwrap_or_default();
             return Err(HarnessError::Protocol(format!(
                 "opencode GET {path}: {status} {}",
-                truncate_body(&body)
+                truncate_body(&self.environment.redact(&body))
             )));
         }
         Ok(resp)
@@ -795,7 +838,9 @@ impl Server {
         let (status, text) = self.post_json_raw(path, directory, body).await?;
         if !status.is_success() {
             return Err(HarnessError::Protocol(post_error_message(
-                path, status, &text,
+                path,
+                status,
+                &self.environment.redact(&text),
             )));
         }
         Ok(serde_json::from_str(&text).unwrap_or(Value::Null))
@@ -2253,7 +2298,9 @@ async fn create_session(
             continue;
         }
         return Err(HarnessError::Protocol(post_error_message(
-            "/session", status, &text,
+            "/session",
+            status,
+            &server.environment.redact(&text),
         )));
     }
     unreachable!("create_session retry loop returns from every path")
@@ -2463,8 +2510,10 @@ async fn post_prompt(
         let path_owned = path.clone();
         let protocol = server.protocol.clone();
         let command_failure_tx = command_failure_tx.clone();
+        let environment = server.environment.clone();
         tokio::spawn(async move {
             let server = Server {
+                environment,
                 child: None,
                 base: server_base,
                 auth,
@@ -2485,7 +2534,11 @@ async fn post_prompt(
                 Ok(response) => {
                     let status = response.status();
                     let body = response.text().await.unwrap_or_default();
-                    Some(post_error_message(&path_owned, status, &body))
+                    Some(post_error_message(
+                        &path_owned,
+                        status,
+                        &server.environment.redact(&body),
+                    ))
                 }
                 Err(error) => Some(format!("opencode POST {path_owned}: {error}")),
             };
@@ -2514,6 +2567,7 @@ async fn post_prompt(
         ),
     };
     let server = Server {
+        environment: server.environment.clone(),
         child: None,
         base: server.base.clone(),
         auth: server.auth.clone(),
@@ -2992,8 +3046,10 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             } else {
                 "reply"
             };
+            let environment = server.environment.clone();
             tokio::spawn(async move {
                 let server = Server {
+                    environment,
                     child: None,
                     base,
                     auth,
@@ -3061,8 +3117,10 @@ async fn handle_bus_event(ctx: BusCtx<'_>) -> BusOutcome {
             let request_id = id.to_owned();
             let tx = event_tx.clone();
             let protocol_cell = server.protocol.clone();
+            let environment = server.environment.clone();
             tokio::spawn(async move {
                 let server = Server {
+                    environment,
                     child: None,
                     base,
                     auth,
@@ -4544,5 +4602,75 @@ if (process.argv.includes('--version')) {{
             }
             mcp.env.insert("ZERON_CHAT_ID".into(), "first".into());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod agent_environment_tests {
+    use super::*;
+    use std::sync::Arc;
+    #[tokio::test]
+    async fn owned_server_observes_the_binding_and_redacts_http_failures() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("opencode");
+        std::fs::write(&exe, r#"#!/usr/bin/env node
+const http = require('node:http');
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+http.createServer((req, res) => {
+  res.setHeader('content-type', 'application/json');
+  if (req.url === '/global/health') { res.end(JSON.stringify({version:'1.18.31'})); return; }
+  if (req.url === '/environment') { res.end(JSON.stringify({value:process.env.AGENT_ENV_TEST, empty:process.env.AGENT_ENV_EMPTY, password:!!process.env.OPENCODE_SERVER_PASSWORD})); return; }
+  res.statusCode = 500; res.end('request failed: ' + process.env.AGENT_ENV_TEST);
+}).listen(port, '127.0.0.1');
+"#).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        // Longer than the diagnostic cap: truncation before redaction would
+        // expose the beginning of the configured value.
+        let value = "private-http-token".repeat(100);
+        let environment = Arc::new(
+            crate::environment::EnvironmentSnapshot::default()
+                .patched(&[
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "AGENT_ENV_TEST".into(),
+                        value: value.clone(),
+                        sensitive: true,
+                    },
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "AGENT_ENV_EMPTY".into(),
+                        value: String::new(),
+                        sensitive: true,
+                    },
+                ])
+                .unwrap(),
+        );
+        let mut server = Server::spawn_with_environment(
+            &exe,
+            root.path().to_str(),
+            Duration::from_secs(5),
+            None,
+            environment,
+        )
+        .await
+        .unwrap();
+        let report = server.get_json("/environment", None).await.unwrap();
+        assert_eq!(report["value"], value);
+        assert_eq!(report["empty"], "");
+        assert_eq!(report["password"], true);
+        let error = server
+            .get_json("/failure", None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("[redacted]"));
+        assert!(!error.contains("private-http-token"));
+        let error = server
+            .post_json("/failure", None, &serde_json::json!({}))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("[redacted]"));
+        assert!(!error.contains("private-http-token"));
+        server.shutdown(Duration::from_millis(100)).await;
     }
 }

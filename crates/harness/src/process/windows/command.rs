@@ -115,6 +115,9 @@ impl Command {
             block.push(0);
         }
         block.push(0);
+        if block.len() > 32767 {
+            return Err(invalid("Windows environment exceeds 32767 UTF-16 units"));
+        }
         let executable = resolve(program, child_path, child_pathext)?;
         let (application, line) = if is_batch_script(&executable) {
             // npm exposes CLIs as `.cmd`/`.bat` shims. Run them through
