@@ -885,9 +885,7 @@ async fn dsh_runs_the_picked_tuple_model_at_off_effort() {
         })
         .collect();
     assert!(
-        text.contains(
-            "sets:model=[\"deepseek-official\",\"deepseek-v4-pro\"];thought_level=off;"
-        ),
+        text.contains("sets:model=[\"deepseek-official\",\"deepseek-v4-pro\"];thought_level=off;"),
         "{text}"
     );
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);

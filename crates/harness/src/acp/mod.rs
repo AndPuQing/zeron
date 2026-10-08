@@ -1803,9 +1803,7 @@ impl AcpHarness {
     /// (Grok, Devin, Hermes); Pi's server is a separate adapter.
     pub async fn cli_command(&self, args: &[&str]) -> Result<Command, HarnessError> {
         let (exe, mut launch_args) = self.resolve_program(false).await?;
-        let prefix = launch_args
-            .len()
-            .saturating_sub((self.spec.args)().len());
+        let prefix = launch_args.len().saturating_sub((self.spec.args)().len());
         launch_args.truncate(prefix);
         let mut cmd = Command::new(&exe);
         cmd.args(launch_args).args(args);
@@ -6059,7 +6057,9 @@ mod tests {
         );
         assert!(validate_config_model_selection(&response, Some(pro), &no_opts).is_ok());
         // A bare id the groups don't advertise still fails loudly.
-        assert!(validate_config_model_selection(&response, Some("deepseek-v4-pro"), &no_opts).is_err());
+        assert!(
+            validate_config_model_selection(&response, Some("deepseek-v4-pro"), &no_opts).is_err()
+        );
     }
 
     #[test]

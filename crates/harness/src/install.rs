@@ -418,7 +418,10 @@ mod tests {
             for id in IDS {
                 let list = methods(id, platform);
                 // dsh is deliberately unmanaged: no installer on any platform.
-                assert_eq!(list.is_empty(), matches!(id, HarnessId::Mock | HarnessId::Dsh));
+                assert_eq!(
+                    list.is_empty(),
+                    matches!(id, HarnessId::Mock | HarnessId::Dsh)
+                );
                 for method in list {
                     assert!(available(method, platform, &|_| true, true));
                     assert!(!available(method, platform, &|_| false, false));
