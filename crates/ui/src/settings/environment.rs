@@ -208,6 +208,14 @@ impl EnvironmentEditor {
         self.metadata = Some(metadata);
     }
 
+    fn invalidate_catalog(&self, engine: &EngineHandle, cx: &mut Context<Self>) {
+        let target = self
+            .target
+            .clone()
+            .unwrap_or_else(|| engine.engine_info().device_id.clone());
+        crate::pickers::bump_harness_environment(target, self.harness, cx);
+    }
+
     fn load(&mut self, preserve: bool, cx: &mut Context<Self>) {
         if self.loading || self.saving || !self.supported(cx) {
             return;
@@ -241,6 +249,13 @@ impl EnvironmentEditor {
                 editor.loading = false;
                 match result {
                     Ok(metadata) => {
+                        if editor
+                            .metadata
+                            .as_ref()
+                            .is_some_and(|previous| previous.revision != metadata.revision)
+                        {
+                            editor.invalidate_catalog(&engine, cx);
+                        }
                         editor.install_metadata(metadata, preserve);
                         editor.uncertain = false;
                     }
@@ -346,10 +361,10 @@ impl EnvironmentEditor {
                 editor.saving = false;
                 match result {
                     Ok(reply) => {
-                        if !reply.conflict {
-                            let target = editor.target.clone()
-                                .unwrap_or_else(|| engine.engine_info().device_id.clone());
-                            crate::pickers::bump_harness_environment(target, editor.harness, cx);
+                        let revision_changed = editor.metadata.as_ref()
+                            .is_some_and(|previous| previous.revision != reply.metadata.revision);
+                        if !reply.conflict || revision_changed {
+                            editor.invalidate_catalog(&engine, cx);
                         }
                         editor.install_metadata(reply.metadata, reply.conflict);
                         if reply.conflict {
@@ -969,6 +984,13 @@ mod tests {
             .update(cx, |editor, _, cx| {
                 assert_eq!(editor.rows[0].value(cx), "  中文\n$HOME `literal`  ");
                 assert_eq!(editor.metadata.as_ref().unwrap().revision, "two");
+                assert_eq!(
+                    cx.global::<crate::pickers::HarnessEnvironmentChanged>()
+                        .generations
+                        .get(&("local".into(), HarnessId::Grok)),
+                    Some(&1),
+                    "conflicts refresh catalogs to the observed committed revision"
+                );
                 editor.save(cx);
             })
             .unwrap();
@@ -1007,6 +1029,13 @@ mod tests {
         window
             .update(cx, |editor, _, cx| {
                 assert!(!editor.uncertain);
+                assert_eq!(
+                    cx.global::<crate::pickers::HarnessEnvironmentChanged>()
+                        .generations
+                        .get(&("local".into(), HarnessId::Grok)),
+                    Some(&2),
+                    "lost-ack recovery refreshes catalogs without replaying the save"
+                );
                 editor.save(cx);
             })
             .unwrap();

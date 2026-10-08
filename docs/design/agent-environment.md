@@ -379,6 +379,12 @@ binding/runtime/login tests passed after this correction; affected core
 libraries passed Clippy again. The PR records the M4 commit and final CI
 results so documentation does not imply a platform result before it exists.
 
+Final editor review also refreshes provider catalogs when conflict replies or
+lost-acknowledgement recovery reveal a newer committed revision. The existing
+RPC editor fixture verifies both cases; all 1,594 desktop tests passed again
+with the same native-font exclusion. Windows ownership hardening is in
+`ce6cb8c4`; the PR tracks the final editor correction and platform results.
+
 The Rust toolchain is operational after restoring its Z3 dependency. The local
 Apple developer directory lacks the Metal compiler; desktop checks use the
 existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
