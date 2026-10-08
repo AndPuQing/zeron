@@ -63,7 +63,7 @@ jobs:
     timeout-minutes: 60
     env:
       ZERUN_CHINA_MIRRORS: 'false'
-      ZERON_ANDROID_ABIS: 'arm64-v8a x86_64'
+      ZERON_ANDROID_ABIS: ${{ inputs.release == true && 'arm64-v8a' || 'arm64-v8a x86_64' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -115,7 +115,10 @@ jobs:
       - name: Rust toolchain and Android targets
         run: |
           rustup show active-toolchain || rustup toolchain install
-          rustup target add aarch64-linux-android x86_64-linux-android
+          rustup target add aarch64-linux-android
+          if [[ "$ZERON_ANDROID_ABIS" == *x86_64* ]]; then
+            rustup target add x86_64-linux-android
+          fi
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: android-mobile-ndk29

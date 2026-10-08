@@ -78,10 +78,14 @@ The public certificate SHA256 in `release-certificate.sha256` pins the signing
 identity. The packaging script rejects a different keystore certificate, so
 replacing Actions Secrets cannot silently produce an incompatible update.
 
+Release APKs support ARM64 (`arm64-v8a`) only. Debug APKs also support `x86_64`
+for emulators. Release enables R8 code optimization and resource shrinking;
+the JNA/UniFFI native interfaces are preserved for reflection.
+
 The script runs unit tests, builds Release with the configuration cache disabled
 so signing credentials are not serialized into it, verifies the certificate
 against the pinned identity, checks 16 KiB ZIP alignment and requires the native core
-for both arm64-v8a and x86_64. The outputs are
+for arm64-v8a, rejecting libraries for other architectures. The outputs are
 `target/package/zerun-<version>-android.apk` and its `.apk.sha256` checksum.
 Direct Gradle release builds should also pass `--no-configuration-cache`.
 
@@ -132,7 +136,7 @@ the foreground, at most once an hour after a successful check. Settings →
 same entry, so updating does not require an account. A newer Android version
 opens a dismissible update prompt; downloads start only when requested.
 
-The app streams the universal APK over HTTPS into its private cache and shows
+The app streams the ARM64 APK over HTTPS into its private cache and shows
 download progress. It rejects missing checksums, incomplete downloads, a SHA256
 mismatch, a different application ID, a version different from the manifest,
 downgrades, and signing certificates different from the pinned production

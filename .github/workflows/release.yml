@@ -5,7 +5,7 @@ name: release
 #   - macOS dmg (Apple silicon) via scripts/package-macos.sh
 #   - Windows per-user installer, portable zip, and updater exe (x86_64) via
 #     scripts/package-windows.ps1
-#   - Android signed universal APK (arm64-v8a + x86_64)
+#   - Android signed ARM64 APK (arm64-v8a)
 # then create a GitHub Release AND upload everything to the
 # `zerun-releases` R2 bucket (served at zerun.puqing.work/releases/* for
 # `curl -fsSL https://zerun.puqing.work/install.sh | sh`), bumping latest.txt.

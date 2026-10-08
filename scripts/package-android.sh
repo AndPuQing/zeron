@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, verify and package the signed universal Android APK.
+# Build, verify and package the signed ARM64 Android APK.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -31,6 +31,8 @@ keystore_cert="$(keytool -exportcert -keystore "$ZERUN_ANDROID_KEYSTORE" \
 [[ "$keystore_cert" == "$expected" ]] \
   || { echo "Keystore certificate does not match the configured release identity." >&2; exit 3; }
 
+# Release is ARM64-only, even when a developer's debug build uses both ABIs.
+export ZERON_ANDROID_ABIS=arm64-v8a
 "$ROOT/apps/android/gradlew" -p "$ROOT/apps/android" \
   :app:testDebugUnitTest :app:assembleRelease \
   --no-daemon --no-configuration-cache --console=plain "$@"
@@ -45,9 +47,11 @@ python3 - "$APK" <<'PY'
 import sys
 import zipfile
 with zipfile.ZipFile(sys.argv[1]) as apk:
-    for abi in ("arm64-v8a", "x86_64"):
-        if apk.getinfo(f"lib/{abi}/libzeron_mobile.so").file_size == 0:
-            raise SystemExit(f"Empty native core for {abi}")
+    abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
+    if abis != {"arm64-v8a"}:
+        raise SystemExit(f"Release APK must contain only arm64-v8a libraries, found: {sorted(abis)}")
+    if apk.getinfo("lib/arm64-v8a/libzeron_mobile.so").file_size == 0:
+        raise SystemExit("Empty native core for arm64-v8a")
 PY
 
 OUT="$ROOT/target/package"

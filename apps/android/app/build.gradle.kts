@@ -78,7 +78,6 @@ android {
             "String", "RELEASE_CERTIFICATE_SHA256",
             "\"${repoRoot.resolve("apps/android/release-certificate.sha256").readText().trim()}\"",
         )
-        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
 
     signingConfigs {
@@ -93,8 +92,17 @@ android {
     }
 
     buildTypes {
+        debug {
+            ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
+            ndk { abiFilters += "arm64-v8a" }
             signingConfig = signingConfigs.findByName("release")
         }
     }
