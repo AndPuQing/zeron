@@ -27,7 +27,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.3.5"
+version = "0.3.6"
 edition = "2024"
 license = "MIT"
 publish = false
@@ -85,8 +85,8 @@ loro-protocol = "0.3"
 # stopped vending CABackdropLayer for Selection — window blur went dead);
 # b68970e rasterizes BackdropBlur in the wgpu renderer (frosted floats on
 # Linux — the Metal path's snapshot/blur/composite, ported).
-# Paint-time rounded image masks (#9), bounded Windows backdrop blur and
-# translucent compositing, plus blur-aware scene batching (#10).
+# Paint-time rounded image masks, bounded Windows backdrop blur and
+# translucent compositing, plus blur-aware scene batching.
 gpui = { git = "https://github.com/zeronsh/zui", rev = "dce5c1f737a834b32c2b531d552ea78035e54093" }
 gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "dce5c1f737a834b32c2b531d552ea78035e54093", features = [
     "wayland",
