@@ -4,6 +4,10 @@ import UIKit
 /// shell is on screen (iPhone tabs or the iPad split).
 protocol AppRouter: AnyObject {
     func openSession(_ chatId: String)
+    /// Open a chat that hangs off the one on screen. iPhone pushes it on the
+    /// current stack (back returns to the parent); iPad swaps the detail
+    /// column, where the title's "Side chat of …" links back.
+    func openChildSession(_ chatId: String)
     func presentNewSession(prompt: String?)
     func showSettings()
     func showSearch()
@@ -87,6 +91,14 @@ final class SplitRootController: UISplitViewController, UISplitViewControllerDel
         sidebar.showSessions()
         show(.primary)
         Toast.show("Couldn't open session. Try again.", in: view.window)
+    }
+
+    func openChildSession(_ chatId: String) {
+        // Collapsed (Slide Over / narrow Split View) uses the tab shell's
+        // stack, which keeps the parent below; expanded swaps the detail
+        // column, where the child's "Side chat of …" title is the way back.
+        guard !isCollapsed else { return tabs.openChildSession(chatId) }
+        openSession(chatId)
     }
 
     func presentNewSession(prompt: String?) {

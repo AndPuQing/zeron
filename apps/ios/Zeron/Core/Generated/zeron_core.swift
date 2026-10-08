@@ -1057,6 +1057,13 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func createSession(newSession: NewSession) throws  -> String
     
     /**
+     * Mint an empty side chat under `parent_chat_id`, inheriting the
+     * parent's project, host and provider config (the mobile sheet's "new
+     * side chat"). Returns the new chat id, ready to open.
+     */
+    func createSideChat(parentChatId: String, title: String?) throws  -> String
+    
+    /**
      * Create a worktree off `base`; returns its path.
      */
     func createWorktree(deviceId: String, spaceId: String, repoPath: String, base: String) async throws  -> String
@@ -1075,6 +1082,13 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * Devices that can run sessions (new-session / new-project pickers).
      */
     func executionDevices()  -> [DeviceView]
+    
+    /**
+     * Fork a chat through its latest completed response into a side chat on
+     * its owning host (`ForkSideChat`); `parentChatId` defaults to the
+     * source. Returns the new chat id.
+     */
+    func forkSideChat(sourceChatId: String, parentChatId: String?) async throws  -> String
     
     /**
      * Threads page: pinned, sections, recent.
@@ -1167,6 +1181,12 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * composer `@` mentions.
      */
     func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query: String) async throws  -> [FileMatch]
+    
+    /**
+     * The same search including side chats and agent-spawned child chats,
+     * so mobile clients can find them across parents and group the results.
+     */
+    func searchIncludingChildren(query: String, limit: UInt32)  -> [SearchHit]
     
     /**
      * An already-open session.
@@ -1425,6 +1445,22 @@ open func createSession(newSession: NewSession)throws  -> String  {
 }
     
     /**
+     * Mint an empty side chat under `parent_chat_id`, inheriting the
+     * parent's project, host and provider config (the mobile sheet's "new
+     * side chat"). Returns the new chat id, ready to open.
+     */
+open func createSideChat(parentChatId: String, title: String?)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_create_side_chat(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(parentChatId),
+        FfiConverterOptionString.lower(title),uniffiCallStatus
+    )
+})
+}
+    
+    /**
      * Create a worktree off `base`; returns its path.
      */
 open func createWorktree(deviceId: String, spaceId: String, repoPath: String, base: String)async throws  -> String  {
@@ -1498,6 +1534,27 @@ open func executionDevices() -> [DeviceView]  {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * Fork a chat through its latest completed response into a side chat on
+     * its owning host (`ForkSideChat`); `parentChatId` defaults to the
+     * source. Returns the new chat id.
+     */
+open func forkSideChat(sourceChatId: String, parentChatId: String?)async throws  -> String  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_fork_side_chat(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(sourceChatId),FfiConverterOptionString.lower(parentChatId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -1822,6 +1879,21 @@ open func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query
             liftFunc: FfiConverterSequenceTypeFileMatch.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
+}
+    
+    /**
+     * The same search including side chats and agent-spawned child chats,
+     * so mobile clients can find them across parents and group the results.
+     */
+open func searchIncludingChildren(query: String, limit: UInt32) -> [SearchHit]  {
+    return try!  FfiConverterSequenceTypeSearchHit.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_search_including_children(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(query),
+        FfiConverterUInt32.lower(limit),uniffiCallStatus
+    )
+})
 }
     
     /**
@@ -3086,6 +3158,13 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
     
     func beginQueuedEdit(id: String, instanceId: String) async  -> QueueEditStart
     
+    /**
+     * True when the session has a completed response for `ForkSideChat` to
+     * copy through. A working tail does not block forking the last complete
+     * response (same boundary [`zeron_doc::fork_entries`] uses).
+     */
+    func canFork()  -> Bool
+    
     func chatId()  -> String
     
     func clearQueueError() 
@@ -3230,6 +3309,20 @@ open func beginQueuedEdit(id: String, instanceId: String)async  -> QueueEditStar
             errorHandler: nil
             
         )
+}
+    
+    /**
+     * True when the session has a completed response for `ForkSideChat` to
+     * copy through. A working tail does not block forking the last complete
+     * response (same boundary [`zeron_doc::fork_entries`] uses).
+     */
+open func canFork() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_sessionhandle_can_fork(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
 open func chatId() -> String  {
@@ -15301,6 +15394,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_create_session() != 13340) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_create_side_chat() != 31574) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_create_worktree() != 42932) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15320,6 +15416,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_execution_devices() != 15578) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_fork_side_chat() != 13748) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_front_page() != 3792) {
@@ -15397,6 +15496,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_search_files() != 31096) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_including_children() != 10816) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session() != 12772) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -15455,6 +15557,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_begin_queued_edit() != 9014) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_sessionhandle_can_fork() != 40958) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_chat_id() != 51345) {

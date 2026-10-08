@@ -220,7 +220,8 @@ jobs:
           path: ${{ runner.temp }}/ios-include
           retention-days: 1
 
-  # iOS unit tests in the simulator (only when iOS or the mobile core changed, see `changes`).
+  # iOS unit tests and side-chat UI regressions in the simulator (only when
+  # iOS or the mobile core changed, see `changes`).
   # Waiting for macos-frame-source keeps a run to two macOS runners at a time.
   # Do not boot the simulator in the background: hundreds of launchd_sim daemons starve the 3-vCPU
   # VM and slow every other step down by minutes. xcodebuild boots it when needed.
@@ -267,7 +268,7 @@ jobs:
         with:
           name: ios-ffi-include
           path: target/ios-core/iphonesimulator/include
-      - name: Run iOS unit tests
+      - name: Run iOS unit tests and side-chat UI regressions
         working-directory: apps/ios
         env:
           # Reuse the core built above instead of rebuilding it in the Xcode build phase.
@@ -276,7 +277,14 @@ jobs:
           xcodebuild -project Zeron.xcodeproj -scheme Zeron \
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
             -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
-            -only-testing:ZeronTests CODE_SIGNING_ALLOWED=NO test
+            -only-testing:ZeronTests \
+            -only-testing:ZeronUITests/SessionFlowTests/testSideChatsSheetAndForkSeam \
+            -only-testing:ZeronUITests/SessionFlowTests/testSearchFindsSideChats \
+            -only-testing:ZeronUITests/SessionFlowTests/testNewSideChatFromMenu \
+            -only-testing:ZeronUITests/SessionFlowTests/testSheetForkEnablesWhenFirstReplyLands \
+            -only-testing:ZeronUITests/SessionFlowTests/testArchivingSideChatUpdatesParent \
+            -only-testing:ZeronUITests/SessionFlowTests/testForkToSideChatFromMenu \
+            CODE_SIGNING_ALLOWED=NO test
       - name: Upload iOS test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
