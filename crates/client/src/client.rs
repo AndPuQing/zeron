@@ -834,6 +834,7 @@ impl Client {
         }
         let now = Utc::now();
         let chat = Chat {
+            import_source: None,
             id: crate::new_id(),
             device_id: parent.device_id.clone(),
             title: title
