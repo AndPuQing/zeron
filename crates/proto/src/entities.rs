@@ -240,6 +240,9 @@ pub struct Chat {
     /// deleted) is tolerated rather than cascaded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_chat_id: Option<String>,
+    /// Imported histories continue an independent native copy on their source device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_source: Option<crate::SessionImportSource>,
 }
 
 impl Chat {

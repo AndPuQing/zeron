@@ -39,6 +39,7 @@
 pub(crate) mod catalog;
 mod normalize;
 pub mod realtime;
+mod saved;
 mod subagents;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -133,6 +134,7 @@ pub fn login_command(codex_home: &std::path::Path) -> Result<Command, HarnessErr
 pub struct CodexHarness {
     models_cache: crate::catalog::Catalog,
     executable: Option<PathBuf>,
+    saved_home: Option<PathBuf>,
     /// Grace between `turn/interrupt` and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -144,6 +146,7 @@ impl Default for CodexHarness {
         Self {
             models_cache: crate::catalog::Catalog::default(),
             executable: None,
+            saved_home: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
         }
@@ -158,6 +161,12 @@ impl CodexHarness {
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
+        self
+    }
+
+    /// Explicit store for isolated history tests and read/copy probes.
+    pub fn with_saved_session_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(path.into());
         self
     }
 
@@ -602,6 +611,31 @@ impl Harness for CodexHarness {
     fn executable_path(&self) -> Option<PathBuf> {
         self.resolve_executable().ok()
     }
+
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.saved_store_id()
+    }
+
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.list_saved(cursor).await
+    }
+
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.read_saved(session).await
+    }
+
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.copy_saved(session).await
+    }
     /// Done is the CLI's own terminal frame, for wake turns too.
     fn deterministic_turn_end(&self) -> bool {
         true
@@ -685,6 +719,7 @@ impl Harness for CodexHarness {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         request.resume = None;
+        request.require_native_resume = false;
         request.worktree = None;
         request.attachments.clear();
         request.mcp = None;
@@ -702,6 +737,11 @@ impl CodexHarness {
         title_only: bool,
         idle: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        if request.require_native_resume && request.resume.as_ref().is_none_or(|id| id.is_empty()) {
+            return Err(HarnessError::Protocol(
+                "The imported Codex copy binding is missing.".into(),
+            ));
+        }
         let native = command_request(&request.prompt, "")?;
         if native
             .as_ref()
@@ -738,6 +778,9 @@ impl CodexHarness {
         };
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
+        if let Some(root) = &self.saved_home {
+            cmd.env("CODEX_HOME", root);
+        }
         crate::compose_child_path(&mut cmd, &exe);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
@@ -1124,6 +1167,11 @@ async fn run_session(session: Session) {
                 Ok(thread) => thread,
                 // A missing/foreign rollout falls back to a fresh thread.
                 Err(e) => {
+                    if request.require_native_resume {
+                        return Err(HarnessError::Protocol(format!(
+                            "The imported Codex copy could not be resumed: {e}"
+                        )));
+                    }
                     if command_request(&request.prompt, resume)?.is_some() {
                         return Err(e);
                     }
@@ -1142,6 +1190,11 @@ async fn run_session(session: Session) {
                 .await?
         };
         let thread_id = thread["thread"]["id"].as_str().unwrap_or("").to_owned();
+        if request.require_native_resume && request.resume.as_deref() != Some(thread_id.as_str()) {
+            return Err(HarnessError::Protocol(
+                "Codex resumed a different session; the imported copy binding was retained.".into(),
+            ));
+        }
         let mut children = subagents::Subagents::new(thread_id.clone());
         children.restore(&thread["thread"]);
         let voice_context = realtime::ThreadContext {

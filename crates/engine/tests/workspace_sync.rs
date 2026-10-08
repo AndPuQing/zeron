@@ -145,6 +145,7 @@ where
 
 fn run_request(prompt: &str) -> RunRequest {
     RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,
@@ -699,6 +700,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
             .unwrap();
         legacy
             .upsert_chat(&Chat {
+                import_source: None,
                 id: "chat-legacy".into(),
                 device_id: "dev-a".into(),
                 title: Some("Migrated chat".into()),

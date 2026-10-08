@@ -287,6 +287,14 @@ impl WorkspaceDoc {
         )?;
         set_opt_str(&row, "spaceId", chat.space_id.as_deref())?;
         set_opt_str(&row, "parentChatId", chat.parent_chat_id.as_deref())?;
+        match &chat.import_source {
+            Some(source) => {
+                row.insert("importSource", serde_json::to_value(source)?)?;
+            }
+            None => {
+                row.delete("importSource")?;
+            }
+        }
         set_opt_ms(&row, "lastSeenAt", chat.last_seen_at)?;
         set_opt_str(&row, "parentChatId", chat.parent_chat_id.as_deref())?;
         self.doc.commit();
@@ -722,6 +730,8 @@ pub(crate) struct RawChat {
     room_gen: Option<u32>,
     #[serde(default)]
     parent_chat_id: Option<String>,
+    #[serde(default)]
+    import_source: Option<zeron_proto::SessionImportSource>,
 }
 
 /// Decode a chat row's `config` leniently: unknown enum values (a newer
@@ -745,6 +755,7 @@ where
 impl From<RawChat> for Chat {
     fn from(raw: RawChat) -> Self {
         Chat {
+            import_source: raw.import_source,
             id: raw.id,
             device_id: raw.device_id,
             title: raw.title,
@@ -848,6 +859,7 @@ mod tests {
 
     fn chat(id: &str, device_id: &str) -> Chat {
         Chat {
+            import_source: None,
             id: id.into(),
             device_id: device_id.into(),
             title: Some("First chat".into()),

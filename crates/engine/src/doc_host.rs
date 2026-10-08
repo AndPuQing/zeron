@@ -5173,6 +5173,8 @@ impl DocHost {
                 message_id,
             } => {
                 let mut request = request.clone();
+                let harness = self.harness_for_request(chat_id, &request);
+                sessions.prepare_imported_run(chat_id, harness, &mut request)?;
                 // Queued-attachment refs (`pending://`) resolve to this
                 // host's absolute paths before anything persists or
                 // dispatches — the drain already gated on the bytes being
@@ -5355,6 +5357,7 @@ impl DocHost {
                         "orphaned input resolve failed");
                 }
                 let harness = self.harness_for_request(chat_id, &request);
+                sessions.prepare_imported_run(chat_id, harness, &mut request)?;
                 self.dispatch_with_source_context(sessions, chat_id, harness, request, None)
                     .await?;
                 Ok((
@@ -5419,6 +5422,7 @@ impl DocHost {
         issued_at: i64,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
+        sessions.validate_imported_chat(chat_id)?;
         // Explicit steering uses the run mailbox when the agent reads it
         // mid-turn. A turn-boundary agent would read it only after the turn,
         // so it waits in the queue, ahead of ordinary rows, and reaches the
@@ -5668,6 +5672,7 @@ impl DocHost {
         };
         let config = chat.config;
         Some(zeron_proto::RunRequest {
+            require_native_resume: false,
             mcp: None,
             prompt: prompt.to_string(),
             harness: config.as_ref().map(|c| c.harness),

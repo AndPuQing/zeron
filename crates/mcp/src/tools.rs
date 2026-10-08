@@ -795,6 +795,7 @@ impl Tools {
             // The row may not have folded into WatchChats yet; build the
             // chat locally from what we just wrote rather than re-reading.
             let chat = Chat {
+                import_source: None,
                 id: chat_id.clone(),
                 device_id: device_id.clone(),
                 title: args.title.clone(),
@@ -1074,6 +1075,7 @@ impl Tools {
                     .or_else(|| space.map(|s| s.path.clone()))
                     .unwrap_or_else(|| "~".into());
                 let request = RunRequest {
+                    require_native_resume: false,
                     mcp: None,
                     prompt: text,
                     harness: Some(harness),

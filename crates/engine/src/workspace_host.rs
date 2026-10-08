@@ -669,6 +669,10 @@ impl WorkspaceHost {
         Ok(self.read(|doc| doc.read_chats())?)
     }
 
+    pub fn chat_deleted(&self, chat_id: &str) -> bool {
+        self.read(|doc| doc.chat_deleted(chat_id))
+    }
+
     pub fn read_devices(&self) -> Result<Vec<Device>, EngineError> {
         Ok(self.read(|doc| doc.read_devices())?)
     }
@@ -952,6 +956,7 @@ impl WorkspaceHost {
         };
         self.mutate(|doc| {
             doc.upsert_chat(&Chat {
+                import_source: None,
                 id: chat_id.to_string(),
                 device_id: host_device.clone(),
                 title: None,
@@ -1179,6 +1184,10 @@ impl WorkspaceHost {
     /// Persist the snapshot now (shutdown path; bypasses the debounce).
     pub fn flush(&self) {
         self.inner.save_snapshot();
+    }
+
+    pub fn flush_checked(&self) -> Result<(), EngineError> {
+        self.inner.persist_snapshot().map(|_| ())
     }
 
     /// Shutdown: stamp our `lastSeenAt` (the only periodic-ish row write besides

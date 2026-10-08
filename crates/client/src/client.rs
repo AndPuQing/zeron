@@ -761,6 +761,7 @@ impl Client {
         };
         let now = Utc::now();
         let chat = Chat {
+            import_source: None,
             id: crate::new_id(),
             device_id,
             title: new.title.filter(|t| !t.trim().is_empty()),

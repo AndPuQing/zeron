@@ -138,6 +138,31 @@ pub trait Harness: Send + Sync {
     ) -> Result<Vec<SlashCommand>, HarnessError> {
         self.commands().await
     }
+
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        Err(saved_sessions::unsupported())
+    }
+
+    async fn saved_sessions(
+        &self,
+        _cursor: Option<&str>,
+    ) -> Result<saved_sessions::SavedSessionPage, HarnessError> {
+        Err(saved_sessions::unsupported())
+    }
+
+    async fn saved_session_history(
+        &self,
+        _session: &saved_sessions::SavedSession,
+    ) -> Result<saved_sessions::SavedSessionHistory, HarnessError> {
+        Err(saved_sessions::unsupported())
+    }
+
+    async fn copy_saved_session(
+        &self,
+        _session: &saved_sessions::SavedSession,
+    ) -> Result<saved_sessions::SavedSession, HarnessError> {
+        Err(saved_sessions::unsupported())
+    }
     /// Project-scoped skills; None means this provider does not advertise skills.
     async fn skills(
         &self,
@@ -196,6 +221,7 @@ mod model_context;
 pub mod opencode;
 pub mod pi;
 pub mod process;
+pub mod saved_sessions;
 mod scratch;
 pub mod shell_env;
 pub(crate) mod skills;

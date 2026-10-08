@@ -217,6 +217,124 @@ pub struct SessionsEngine {
 }
 
 impl SessionsEngine {
+    /// Imported conversations always resume their recorded native copy. This
+    /// check also runs before command prewrites and live-mailbox delivery.
+    pub(crate) fn prepare_imported_run(
+        &self,
+        chat_id: &str,
+        harness: HarnessId,
+        request: &mut RunRequest,
+    ) -> Result<(), EngineError> {
+        let Some(ws) = self.inner.workspace() else {
+            return Ok(());
+        };
+        let Some(chat) = ws.chat(chat_id)? else {
+            return Ok(());
+        };
+        let Some(source) = &chat.import_source else {
+            return Ok(());
+        };
+        let fail = |reason: &str| {
+            EngineError::Other(format!(
+                "The imported session cannot be continued: {reason}"
+            ))
+        };
+        if chat.device_id != self.inner.device_id || source.device_id != self.inner.device_id {
+            return Err(fail("send from the device that owns the native copy."));
+        }
+        if harness != source.harness
+            || chat
+                .config
+                .as_ref()
+                .is_none_or(|config| config.harness != source.harness)
+        {
+            return Err(fail("the provider differs from the imported copy."));
+        }
+        if request.worktree.is_some() {
+            return Err(fail(
+                "the native copy must use its original working directory.",
+            ));
+        }
+        if source.copied_native_id.is_empty()
+            || source.copied_native_id == source.original_native_id
+            || chat.harness_session_id.as_deref() != Some(source.copied_native_id.as_str())
+        {
+            return Err(fail("the native copy binding is missing or changed."));
+        }
+        let stored = chat
+            .harness_session_cwd
+            .as_deref()
+            .ok_or_else(|| fail("the original working directory binding is missing."))?;
+        let same_cwd = |path: &str| std::fs::canonicalize(path).ok();
+        let original = same_cwd(stored)
+            .filter(|path| path.is_dir())
+            .ok_or_else(|| fail("the original working directory is unavailable."))?;
+        if same_cwd(&request.cwd).as_ref() != Some(&original)
+            || chat.cwd.as_deref().and_then(same_cwd).as_ref() != Some(&original)
+        {
+            return Err(fail("the working directory changed."));
+        }
+        if !self
+            .inner
+            .registry
+            .descriptors()
+            .iter()
+            .any(|item| item.id == harness && item.installed && item.enabled != Some(false))
+        {
+            return Err(fail("the provider is not installed or enabled."));
+        }
+        if self
+            .inner
+            .registry
+            .resolve(harness)?
+            .saved_session_store_id()?
+            != source.store_id
+        {
+            return Err(fail("the provider history location changed."));
+        }
+        if request
+            .resume
+            .as_deref()
+            .is_some_and(|id| id != source.copied_native_id)
+            || lock(&self.inner.harness_sessions)
+                .get(chat_id)
+                .is_some_and(|known| known.session_id != source.copied_native_id)
+        {
+            return Err(fail("the requested native session differs from the copy."));
+        }
+        request.cwd = stored.to_owned();
+        request.resume = Some(source.copied_native_id.clone());
+        request.require_native_resume = true;
+        Ok(())
+    }
+
+    pub(crate) fn validate_imported_chat(&self, chat_id: &str) -> Result<(), EngineError> {
+        let Some(ws) = self.inner.workspace() else {
+            return Ok(());
+        };
+        let Some(chat) = ws.chat(chat_id)? else {
+            return Ok(());
+        };
+        let Some(source) = &chat.import_source else {
+            return Ok(());
+        };
+        let mut request = RunRequest {
+            prompt: String::new(),
+            cwd: chat.cwd.clone().unwrap_or_default(),
+            harness: Some(source.harness),
+            model: None,
+            reasoning: None,
+            model_options: Default::default(),
+            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            auto_approve: false,
+            attachments: Vec::new(),
+            resume: None,
+            require_native_resume: false,
+            worktree: None,
+            mcp: None,
+        };
+        self.prepare_imported_run(chat_id, source.harness, &mut request)
+    }
     pub fn new(
         device_id: String,
         journal: Arc<RunJournal>,
@@ -526,6 +644,7 @@ impl SessionsEngine {
         // host's home); expand it here, on the host, where the run spawns.
         request.cwd = crate::repos::expand_home(&request.cwd)
             .map_err(|error| EngineError::Other(error.to_string()))?;
+        self.prepare_imported_run(chat_id, harness_id, &mut request)?;
         // Native-only catalog entries have no portable file fallback. Reject
         // cross-harness delivery before recording or routing the user turn.
         zeron_proto::invocation::validate_harness_invocations(&request.prompt, harness_id)
@@ -813,6 +932,7 @@ impl SessionsEngine {
         message_id: Option<String>,
         issued_at: i64,
     ) -> Result<SteerOutcome, EngineError> {
+        self.validate_imported_chat(chat_id)?;
         let target = lock(&self.inner.runs)
             .get(chat_id)
             .filter(|h| h.steerable)
@@ -1045,6 +1165,7 @@ impl SessionsEngine {
                     .or_else(|| {
                         let (_, cwd) = sessions.inner.journal_harness_session(&chat_id)?;
                         Some(RunRequest {
+                            require_native_resume: false,
                             mcp: None,
                             prompt: String::new(),
                             harness: None,
@@ -1363,6 +1484,15 @@ impl Inner {
     /// engine restart (zeron sessions.ts:1039).
     fn remember_harness_session(&self, chat_id: &str, session_id: &str, cwd: &str) {
         if session_id.is_empty() {
+            return;
+        }
+        if self
+            .workspace()
+            .and_then(|ws| ws.chat(chat_id).ok().flatten())
+            .and_then(|chat| chat.import_source)
+            .is_some_and(|source| source.copied_native_id != session_id)
+        {
+            tracing::error!(chat = %chat_id, "refusing to replace an imported native copy binding");
             return;
         }
         lock(&self.harness_sessions).insert(
@@ -3406,6 +3536,7 @@ mod tests {
 
     fn request() -> RunRequest {
         RunRequest {
+            require_native_resume: false,
             mcp: None,
             prompt: "first".into(),
             harness: None,

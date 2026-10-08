@@ -5258,7 +5258,8 @@ impl Shell {
             format!("Sessions ({count})").into()
         };
         let chevron = self.sidebar_disclosure_chevron("sessions", open, theme);
-        let header = sidebar_disclosure_header(theme, None, label, None, chevron)
+        let action = self.render_session_import_action(theme, cx);
+        let header = sidebar_disclosure_header(theme, None, label, action, chevron)
             .id("sessions-toggle")
             .debug_selector(|| "sessions-toggle".into())
             .on_drag_move::<SidebarSessionDrag>(cx.listener(
@@ -6978,6 +6979,7 @@ mod tests {
 
     fn chat(id: &str) -> zeron_proto::Chat {
         zeron_proto::Chat {
+            import_source: None,
             id: id.into(),
             device_id: "device".into(),
             title: None,

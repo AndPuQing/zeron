@@ -42,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
     let (steer, steering) = mpsc::channel(64);
     let interrupt = CancellationToken::new();
     let request = RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt,
         harness: None,

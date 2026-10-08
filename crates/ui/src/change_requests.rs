@@ -386,6 +386,7 @@ mod tests {
 
     fn chat(id: &str, device: &str, cwd: Option<&str>, checkout: Option<&str>) -> Chat {
         Chat {
+            import_source: None,
             id: id.into(),
             device_id: device.into(),
             title: None,

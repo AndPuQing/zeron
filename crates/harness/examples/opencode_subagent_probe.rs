@@ -51,6 +51,7 @@ async fn main() {
             .into()
     });
     let request = RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt,
         harness: None,

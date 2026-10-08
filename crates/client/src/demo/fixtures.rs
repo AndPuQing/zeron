@@ -403,6 +403,7 @@ pub(crate) fn seed(
             _ => None,
         };
         let chat = Chat {
+            import_source: None,
             id: demo.id.into(),
             device_id: demo.device.into(),
             title: Some(demo.title.into()),

@@ -74,6 +74,10 @@ const MIGRATIONS: &[&str] = &[
     CREATE TABLE sync_job_clock (id INTEGER PRIMARY KEY CHECK(id=1), value INTEGER NOT NULL) STRICT;
     INSERT INTO sync_job_clock VALUES (1,0);",
     "ALTER TABLE chat_sync_jobs ADD COLUMN cursor TEXT NOT NULL DEFAULT '';",
+    "CREATE TABLE external_session_imports (
+        source_key TEXT PRIMARY KEY,
+        receipt TEXT NOT NULL
+    ) STRICT;",
 ];
 
 const STORE_BUSY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -109,6 +113,72 @@ pub struct DocsStore {
 }
 
 impl DocsStore {
+    /// Profile-local native-copy receipts, including interrupted imports.
+    pub fn external_session_import(&self, source_key: &str) -> Result<Option<String>, StoreError> {
+        store_blocking(|| {
+            Ok(self
+                .conn()
+                .query_row(
+                    "SELECT receipt FROM external_session_imports WHERE source_key=?1",
+                    [source_key],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
+    }
+
+    pub fn external_session_imports(&self) -> Result<Vec<String>, StoreError> {
+        store_blocking(|| {
+            let connection = self.conn();
+            let mut query = connection
+                .prepare("SELECT receipt FROM external_session_imports ORDER BY source_key")?;
+            Ok(query
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?)
+        })
+    }
+
+    pub fn save_external_session_import(
+        &self,
+        source_key: &str,
+        receipt: &str,
+    ) -> Result<(), StoreError> {
+        store_blocking(|| {
+            self.conn().execute(
+                "INSERT INTO external_session_imports(source_key,receipt) VALUES (?1,?2)
+                ON CONFLICT(source_key) DO UPDATE SET receipt=excluded.receipt",
+                params![source_key, receipt],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// A new imported lineage and its publication obligation become durable together.
+    pub fn save_external_session_import_snapshot(
+        &self,
+        source_key: &str,
+        receipt: &str,
+        chat_id: &str,
+        bytes: &[u8],
+        epoch: u32,
+    ) -> Result<(), StoreError> {
+        store_blocking(|| {
+            let mut connection = self.conn();
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO snapshots(doc_id,bytes,saved_at,cursor,epoch) VALUES (?1,?2,?3,0,?4)",
+                params![chat_id, bytes, now_ms(), epoch],
+            )?;
+            transaction.execute(
+                "INSERT INTO external_session_imports(source_key,receipt) VALUES (?1,?2)
+                ON CONFLICT(source_key) DO UPDATE SET receipt=excluded.receipt",
+                params![source_key, receipt],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })
+    }
+
     /// Open (creating directory, database, and schema as needed).
     pub fn open(data_dir: impl AsRef<Path>) -> Result<Self, StoreError> {
         let data_dir = data_dir.as_ref();
@@ -733,6 +803,56 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_snapshot_and_receipt_commit_together_and_never_replace_a_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = DocsStore::open(dir.path()).unwrap();
+        store
+            .save_external_session_import("source", "copy-recorded")
+            .unwrap();
+        store
+            .save_external_session_import_snapshot(
+                "source",
+                "publication-pending",
+                "import-chat",
+                b"original-lineage",
+                2,
+            )
+            .unwrap();
+        assert!(
+            store
+                .save_external_session_import_snapshot(
+                    "source",
+                    "must-not-commit",
+                    "import-chat",
+                    b"replacement",
+                    2
+                )
+                .is_err()
+        );
+        assert_eq!(
+            store.external_session_import("source").unwrap().as_deref(),
+            Some("publication-pending")
+        );
+        assert_eq!(
+            store.load_snapshot("import-chat").unwrap().as_deref(),
+            Some(b"original-lineage".as_slice())
+        );
+        drop(store);
+        let reopened = DocsStore::open(dir.path()).unwrap();
+        assert_eq!(
+            reopened
+                .external_session_import("source")
+                .unwrap()
+                .as_deref(),
+            Some("publication-pending")
+        );
+        assert_eq!(
+            reopened.load_snapshot_with_cursor("import-chat").unwrap(),
+            Some((b"original-lineage".to_vec(), 0, 2))
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn contended_connection_does_not_starve_a_two_worker_runtime() {

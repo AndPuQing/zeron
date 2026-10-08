@@ -34,6 +34,7 @@
 pub mod catalog;
 mod discovery;
 mod normalize;
+mod saved;
 mod wire;
 
 use std::path::PathBuf;
@@ -103,6 +104,7 @@ fn option_is_on(options: &serde_json::Map<String, Value>, key: &str) -> bool {
 /// it at a fake CLI with [`ClaudeHarness::with_executable`].
 pub struct ClaudeHarness {
     executable: Option<PathBuf>,
+    saved_home: Option<PathBuf>,
     /// Grace between the interrupt control request and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -116,6 +118,7 @@ impl Default for ClaudeHarness {
     fn default() -> Self {
         Self {
             executable: None,
+            saved_home: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             initialize: discovery::InitializeCache::default(),
@@ -133,6 +136,11 @@ impl ClaudeHarness {
     /// Use a fixed CLI binary instead of PATH/known-location resolution.
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
+        self
+    }
+
+    pub fn with_saved_session_home(mut self, path: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(path.into());
         self
     }
 
@@ -166,6 +174,9 @@ impl ClaudeHarness {
 
     fn build_command(&self, exe: &PathBuf, request: &RunRequest) -> Command {
         let mut cmd = Command::new(exe);
+        if let Some(root) = &self.saved_home {
+            cmd.env("CLAUDE_CONFIG_DIR", root);
+        }
         crate::compose_child_path(&mut cmd, exe);
         cmd.args([
             "--print",
@@ -502,12 +513,35 @@ impl Harness for ClaudeHarness {
         self.run_with_mode(request, controls, false).await
     }
 
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.saved_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.list_saved(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.read_saved(session).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.copy_saved(session).await
+    }
+
     async fn run_title(
         &self,
         mut request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         request.resume = None;
+        request.require_native_resume = false;
         request.worktree = None;
         request.attachments.clear();
         request.mcp = None;
@@ -525,6 +559,16 @@ impl ClaudeHarness {
         title_only: bool,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let exe = self.resolve_executable()?;
+        if request.require_native_resume {
+            let id = request
+                .resume
+                .as_deref()
+                .filter(|id| !id.is_empty())
+                .ok_or_else(|| {
+                    HarnessError::Protocol("The imported Claude copy binding is missing.".into())
+                })?;
+            self.check_resume(id, &request.cwd).await?;
+        }
         let mut cmd = self.build_command(&exe, &request);
         if title_only {
             cmd.args([
@@ -545,10 +589,12 @@ impl ClaudeHarness {
             cmd.args(["--mcp-config", &mcp_config_arg(mcp)]);
         }
         let normalizer = if let Some(session_id) = &request.resume {
-            let config = crate::model_context::root(
-                "CLAUDE_CONFIG_DIR",
-                crate::executable::home_or_current_dir().join(".claude"),
-            );
+            let config = self.saved_home.clone().unwrap_or_else(|| {
+                crate::model_context::root(
+                    "CLAUDE_CONFIG_DIR",
+                    crate::executable::home_or_current_dir().join(".claude"),
+                )
+            });
             Normalizer::for_resume(&config, session_id).await
         } else {
             Normalizer::new()
@@ -600,6 +646,10 @@ impl ClaudeHarness {
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             normalizer,
+            strict_resume: request
+                .require_native_resume
+                .then(|| request.resume.clone())
+                .flatten(),
             title_only,
             child,
             stdout_lines: BufReader::new(stdout).lines(),
@@ -725,6 +775,7 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Std
 
 struct Session {
     normalizer: Normalizer,
+    strict_resume: Option<String>,
     title_only: bool,
     child: Child,
     stdout_lines: tokio::io::Lines<BufReader<crate::process::ChildStdout>>,
@@ -743,6 +794,7 @@ struct Session {
 async fn run_session(session: Session) {
     let Session {
         normalizer: mut norm,
+        strict_resume,
         title_only,
         mut child,
         mut stdout_lines,
@@ -833,6 +885,15 @@ async fn run_session(session: Session) {
                         }
                     }
                     for ev in norm.normalize(frame, interrupted) {
+                        let actual_id = match &ev {
+                            AgentEvent::SessionStarted { session_id, .. } => Some(session_id.as_str()),
+                            AgentEvent::Done { session_id: Some(session_id), .. } => Some(session_id.as_str()),
+                            _ => None,
+                        };
+                        if strict_resume.as_deref().zip(actual_id).is_some_and(|(expected, actual)| expected != actual) {
+                            let _ = event_tx.send(Err(HarnessError::Protocol("Claude resumed a different session; the imported copy binding was retained.".into()))).await;
+                            break 'main;
+                        }
                         match &ev {
                             AgentEvent::ToolCall { id, .. } => {
                                 open_tools.insert(id.clone());

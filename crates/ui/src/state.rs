@@ -4025,6 +4025,7 @@ mod tests {
             .unwrap()
             .to_utc();
         Chat {
+            import_source: None,
             id: id.into(),
             device_id: "dev".into(),
             title: None,

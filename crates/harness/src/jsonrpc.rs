@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::HarnessError;
@@ -72,6 +72,23 @@ impl RpcClient {
         stdout: ChildStdout,
         observer: Option<StdoutObserver>,
     ) -> (Self, mpsc::Receiver<Incoming>) {
+        Self::with_frame_limit(stdin, stdout, observer, None)
+    }
+
+    pub(crate) fn bounded(
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        limit: usize,
+    ) -> (Self, mpsc::Receiver<Incoming>) {
+        Self::with_frame_limit(stdin, stdout, None, Some(limit))
+    }
+
+    fn with_frame_limit(
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        observer: Option<StdoutObserver>,
+        limit: Option<usize>,
+    ) -> (Self, mpsc::Receiver<Incoming>) {
         let (writer_tx, writer_rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(write_loop(stdin, writer_rx));
         let pending: Pending = Arc::default();
@@ -85,6 +102,7 @@ impl RpcClient {
             closed.clone(),
             observer,
             Arc::clone(&voice_router),
+            limit,
         ));
         (
             Self {
@@ -269,11 +287,36 @@ async fn read_loop(
     closed: Arc<AtomicBool>,
     observer: Option<StdoutObserver>,
     voice_router: Arc<Mutex<Option<VoiceRouter>>>,
+    limit: Option<usize>,
 ) {
-    let mut lines = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout);
     // A read error ends the loop like EOF: either way the child's stdout is
     // unusable, pending requests must fail, and the session loop must know.
-    while let Ok(Some(line)) = lines.next_line().await {
+    loop {
+        let mut bytes = Vec::new();
+        let read = match limit {
+            Some(limit) => {
+                (&mut reader)
+                    .take(limit as u64 + 1)
+                    .read_until(b'\n', &mut bytes)
+                    .await
+            }
+            None => reader.read_until(b'\n', &mut bytes).await,
+        };
+        if !matches!(read, Ok(count) if count > 0) {
+            break;
+        }
+        if limit.is_some_and(|limit| bytes.len() > limit) {
+            for (_, sender) in pending.lock().expect("pending lock").drain() {
+                let _ = sender.send(Err(
+                    "Saved history response exceeds the import frame limit.".into(),
+                ));
+            }
+            break;
+        }
+        let Ok(line) = std::str::from_utf8(&bytes) else {
+            continue;
+        };
         let line = line.trim();
         if let Some(url) =
             line.strip_prefix("Open the following link to authenticate the ACP server: ")

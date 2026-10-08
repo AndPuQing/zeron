@@ -203,6 +203,7 @@ fn fixture(dir: &Path) -> PathBuf {
 }
 fn request(cwd: &Path, prompt: &str, resume: Option<&str>) -> RunRequest {
     RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,

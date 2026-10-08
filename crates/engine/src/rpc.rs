@@ -63,7 +63,8 @@ use tokio::sync::watch;
 
 use zeron_doc::{MessagePart, SessionCommandPayload};
 use zeron_proto::{
-    ChatConfig, CreateWorktreeOutcome, EngineInfo, HarnessId, HarnessUpdatePolicy,
+    CancelExternalSessionImportParams, ChatConfig, CreateWorktreeOutcome, EngineInfo, HarnessId,
+    HarnessUpdatePolicy, ImportExternalSessionsParams, ListExternalSessionsParams,
     ProjectActionDraft, Space, ToolCall, WorkspaceScope,
 };
 use zeron_rpc::{LinkCache, RpcError, RpcReply, RpcService, methods, parse_params};
@@ -630,6 +631,7 @@ pub struct EngineRpc {
     updater: Option<zeron_update::Updater>,
     harness_updates: Option<crate::harness_updates::HarnessUpdateCoordinator>,
     local_import: Option<crate::local_import::LocalImporter>,
+    external_sessions: Option<crate::external_sessions::ExternalSessionImporter>,
     engine_info: EngineInfo,
 }
 
@@ -650,12 +652,15 @@ impl EngineRpc {
         agent_accounts: AgentAccounts,
         workspace_scope: WorkspaceScope,
     ) -> Self {
-        let engine_info = EngineInfo {
+        let mut engine_info = EngineInfo {
             device_id: doc_host.device_id().to_string(),
             workspace_scope,
             cursor_sdk_version: Some(zeron_harness::CursorHarness::sdk_version().into()),
             capabilities: zeron_proto::capabilities::current(),
         };
+        engine_info
+            .capabilities
+            .retain(|cap| cap != zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1);
         Self {
             voice: sessions.voice_manager(),
             sessions,
@@ -676,6 +681,7 @@ impl EngineRpc {
             updater: None,
             harness_updates: None,
             local_import: None,
+            external_sessions: None,
             engine_info,
         }
     }
@@ -715,6 +721,25 @@ impl EngineRpc {
     pub fn with_local_import(mut self, importer: crate::local_import::LocalImporter) -> Self {
         self.local_import = Some(importer);
         self
+    }
+
+    pub fn with_external_sessions(
+        mut self,
+        importer: crate::external_sessions::ExternalSessionImporter,
+    ) -> Self {
+        self.external_sessions = Some(importer);
+        self.engine_info
+            .capabilities
+            .push(zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1.into());
+        self
+    }
+
+    fn external_sessions(
+        &self,
+    ) -> Result<&crate::external_sessions::ExternalSessionImporter, RpcError> {
+        self.external_sessions
+            .as_ref()
+            .ok_or_else(|| RpcError::Failed("Session import is unavailable on this engine.".into()))
     }
 
     fn auth(&self) -> Result<&Auth, RpcError> {
@@ -1381,6 +1406,7 @@ fn forward_deadline(method: &str) -> std::time::Duration {
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         // Allow the adapter discovery budget plus relay and shutdown overhead.
         methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
+        methods::LIST_EXTERNAL_SESSIONS => Duration::from_secs(150),
         _ => Duration::from_secs(30),
     }
 }
@@ -1399,6 +1425,9 @@ fn forwardable(method: &str) -> bool {
     matches!(
         method,
         methods::FORK_SIDE_CHAT
+            | methods::LIST_EXTERNAL_SESSIONS
+            | methods::IMPORT_EXTERNAL_SESSIONS
+            | methods::CANCEL_EXTERNAL_SESSION_IMPORT
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
@@ -1500,6 +1529,7 @@ fn is_stream_method(method: &str) -> bool {
     matches!(
         method,
         methods::WATCH_DOC_MESSAGES
+            | methods::IMPORT_EXTERNAL_SESSIONS
             | methods::WATCH_QUEUE
             | methods::SUBSCRIBE_TERMINAL
             | methods::WATCH_CHECKOUT_DIFFS
@@ -2381,6 +2411,33 @@ impl RpcService for EngineRpc {
             }
             methods::LOCAL_DEVICE => {
                 RpcReply::value(&serde_json::json!({ "deviceId": self.doc_host.device_id() }))
+            }
+            methods::LIST_EXTERNAL_SESSIONS => {
+                let p: ListExternalSessionsParams = parse_params(params)?;
+                let result = self
+                    .external_sessions()?
+                    .list(p)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&result)
+            }
+            methods::IMPORT_EXTERNAL_SESSIONS => {
+                let p: ImportExternalSessionsParams = parse_params(params)?;
+                let mut rx = self
+                    .external_sessions()?
+                    .start(p)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                Ok(RpcReply::Stream(Box::pin(futures::stream::poll_fn(
+                    move |cx| {
+                        rx.poll_recv(cx)
+                            .map(|event| event.and_then(|event| serde_json::to_value(event).ok()))
+                    },
+                ))))
+            }
+            methods::CANCEL_EXTERNAL_SESSION_IMPORT => {
+                let p: CancelExternalSessionImportParams = parse_params(params)?;
+                self.external_sessions()?.cancel(&p.operation_id);
+                RpcReply::value(&serde_json::json!({ "ok": true }))
             }
             methods::LOCAL_IMPORT_STATUS => {
                 let importer = self.local_importer()?.clone();
@@ -4039,6 +4096,17 @@ mod tests {
         assert!(is_stream_method(methods::WATCH_HARNESS_UPDATES));
         assert!(forwardable(methods::CHECK_HARNESS_UPDATES));
         assert!(forwardable(methods::APPLY_HARNESS_UPDATE));
+        for method in [
+            methods::LIST_EXTERNAL_SESSIONS,
+            methods::IMPORT_EXTERNAL_SESSIONS,
+            methods::CANCEL_EXTERNAL_SESSION_IMPORT,
+        ] {
+            assert!(forwardable(method));
+            assert_eq!(
+                is_stream_method(method),
+                method == methods::IMPORT_EXTERNAL_SESSIONS
+            );
+        }
     }
 
     /// Every forwardable unary method gets a bounded reply deadline —
@@ -4053,6 +4121,10 @@ mod tests {
             );
         }
         use std::time::Duration;
+        assert_eq!(
+            forward_deadline(methods::LIST_EXTERNAL_SESSIONS),
+            Duration::from_secs(150)
+        );
         assert_eq!(
             forward_deadline(methods::CREATE_WORKTREE),
             Duration::from_secs(120)

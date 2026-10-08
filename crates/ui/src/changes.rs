@@ -6020,6 +6020,7 @@ rename to new_name.rs
 
     fn chat(checkout: Option<&str>, device: &str, cwd: Option<&str>) -> Chat {
         Chat {
+            import_source: None,
             id: "c1".into(),
             device_id: device.into(),
             title: None,
