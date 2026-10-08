@@ -208,6 +208,16 @@ impl CoreClient {
             .collect()
     }
 
+    /// The same search including side chats and agent-spawned child chats,
+    /// so mobile clients can find them across parents and group the results.
+    pub fn search_including_children(&self, query: String, limit: u32) -> Vec<SearchHit> {
+        self.client
+            .search_including_children(&query, limit as usize)
+            .iter()
+            .map(Into::into)
+            .collect()
+    }
+
     pub fn connectivity(&self) -> Connectivity {
         self.client.connectivity().into()
     }
@@ -217,6 +227,37 @@ impl CoreClient {
     /// Mint a chat row (born on chat2). Returns the new chat id.
     pub fn create_session(&self, new_session: NewSession) -> CoreResult<String> {
         Ok(self.client.create_session(new_session.try_into()?)?)
+    }
+
+    /// Mint an empty side chat under `parent_chat_id`, inheriting the
+    /// parent's project, host and provider config (the mobile sheet's "new
+    /// side chat"). Returns the new chat id, ready to open.
+    pub fn create_side_chat(
+        &self,
+        parent_chat_id: String,
+        title: Option<String>,
+    ) -> CoreResult<String> {
+        Ok(self
+            .client
+            .create_side_chat(&parent_chat_id, title.as_deref())?)
+    }
+
+    /// Fork a chat through its latest completed response into a side chat on
+    /// its owning host (`ForkSideChat`); `parentChatId` defaults to the
+    /// source. Returns the new chat id.
+    pub async fn fork_side_chat(
+        &self,
+        source_chat_id: String,
+        parent_chat_id: Option<String>,
+    ) -> CoreResult<String> {
+        let client = self.client.clone();
+        on_runtime(async move {
+            client
+                .fork_side_chat(&source_chat_id, parent_chat_id.as_deref())
+                .await
+        })
+        .await
+        .map(|chat| chat.id)
     }
 
     pub fn archive_session(&self, chat_id: String) -> CoreResult<()> {

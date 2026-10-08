@@ -12,6 +12,13 @@ final class AppModel {
         var sectionSessions: [String: [SessionRowVM]] = [:]
     }
 
+    /// Search hits split by where they live: the main list, or a chat's
+    /// own side chats (invisible to the front page, shown as a group).
+    struct SearchResults {
+        var sessions: [SessionRowVM] = []
+        var sideChats: [SessionRowVM] = []
+    }
+
     struct LiveCounts: Equatable {
         var working = 0
         var awaiting = 0
@@ -21,6 +28,9 @@ final class AppModel {
     private(set) var client: CoreClient?
     private(set) var frontPage = FrontPage()
     private(set) var archived: [SessionRowVM] = []
+    /// A side-chat fork is in flight (either entry point): blocks a second
+    /// request and lets the menus explain why.
+    private(set) var sideChatBusy = false
     private(set) var connectivity: Connectivity?
     /// Front-page sessions that are working / waiting on the user.
     private(set) var live = LiveCounts()
@@ -28,6 +38,7 @@ final class AppModel {
     private var rawProjects: [ProjectView] = []
     private var lastHosts: [HostOption] = []
     private var workspaceRevision: UInt64 = 0
+    private var lastWorkspaceRevision: UInt64 = 0
     private var observers: [UUID: () -> Void] = [:]
     private var sessionObservers: [String: [UUID: () -> Void]] = [:]
     private lazy var bridge = ListenerBridge(app: self)
@@ -226,6 +237,7 @@ final class AppModel {
         connectivity = nil
         live = LiveCounts()
         workspaceRevision = 0
+        lastWorkspaceRevision = 0
         lastDraft = NewSessionDraft()
         newSessionText = ""
         newSessionImages = []
@@ -348,8 +360,14 @@ final class AppModel {
         rows = all
         // Devices coming and going (Settings, host pickers) count as changes.
         let hosts = hostOptions
-        let changed = page != frontPage || archivedVMs != archived || counts != live || hosts != lastHosts
+        // Child chats never enter the page lists, so registry changes that
+        // touch only a side chat (archive, rename, status) would otherwise
+        // not notify the sheet or the branch button, which both read them
+        // live. The workspace revision covers every row.
+        let changed = page != frontPage || archivedVMs != archived || counts != live
+            || hosts != lastHosts || workspaceRevision != lastWorkspaceRevision
         lastHosts = hosts
+        lastWorkspaceRevision = workspaceRevision
         live = counts
         frontPage = page
         archived = archivedVMs
@@ -369,7 +387,9 @@ final class AppModel {
     static func vm(_ r: SessionRow) -> SessionRowVM {
         SessionRowVM(
             id: r.id,
-            title: r.title,
+            // Untitled children read "New session" from the row; name them
+            // for what they are in the sheet and search.
+            title: r.parentChatId != nil && !r.hasTitle ? "New side chat" : r.title,
             projectName: r.project?.name ?? r.deviceName ?? "No project",
             hasProject: r.project != nil,
             // Project-less sessions tone like the desktop's "home" tile.
@@ -404,10 +424,51 @@ final class AppModel {
         id == "archived" ? archived : frontPage.sectionSessions[id] ?? []
     }
 
-    func search(_ query: String) -> [SessionRowVM] {
+    /// A chat's side chats (forks and agent-spawned children), recency
+    /// order. They never list on the front page; the session's branch button
+    /// and search are their surfaces.
+    func children(of parentId: String) -> [SessionRowVM] {
+        (client?.childSessions(parentId: parentId) ?? []).filter { !$0.archived }.map(Self.vm)
+    }
+
+    /// Mint an empty side chat under `parentId` (the sheet's "+"), returning
+    /// the new chat id ready to open. Matches desktop's "New side chat".
+    func createSideChat(parentId: String) throws -> String {
+        guard let client else { throw CoreError.Closed }
+        return try client.createSideChat(parentChatId: parentId, title: nil)
+    }
+
+    /// Fork `sourceId` through its latest completed response (the sheet's
+    /// branch button), executed by its host. A side chat forks as a sibling
+    /// of itself, like desktop; returns the new chat id.
+    func forkSideChat(sourceId: String) async throws -> String {
+        guard let client else { throw CoreError.Closed }
+        guard !sideChatBusy else { throw CoreError.InvalidArgument(message: "A side chat is already being created.") }
+        sideChatBusy = true
+        defer { sideChatBusy = false }
+        let parent = row(sourceId)?.parentChatId ?? sourceId
+        return try await client.forkSideChat(sourceChatId: sourceId, parentChatId: parent)
+    }
+
+    /// Whether `chatId` has a completed response to fork through; same
+    /// boundary the host uses, so it stays true while a new turn runs.
+    func canFork(_ chatId: String) -> Bool {
+        guard let client, let handle = try? client.openSession(chatId: chatId) else { return false }
+        return handle.canFork()
+    }
+
+    func search(_ query: String) -> SearchResults {
         let q = query.trimmingCharacters(in: .whitespaces)
-        guard let client, !q.isEmpty else { return frontPage.sessions }
-        return client.search(query: q, limit: 60).map { Self.vm($0.session) }
+        guard let client, !q.isEmpty else { return SearchResults(sessions: frontPage.sessions) }
+        var out = SearchResults()
+        for hit in client.searchIncludingChildren(query: q, limit: 60) {
+            if hit.session.parentChatId == nil {
+                out.sessions.append(Self.vm(hit.session))
+            } else {
+                out.sideChats.append(Self.vm(hit.session))
+            }
+        }
+        return out
     }
 
 

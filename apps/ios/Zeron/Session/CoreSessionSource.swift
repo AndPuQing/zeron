@@ -5,6 +5,8 @@ import UIKit
 final class CoreSessionSource: SessionSource {
     private(set) var chrome = SessionChrome()
     var onChange: (() -> Void)?
+    var hydrated: Bool { handle.transcriptStatus().hydrated }
+    var canFork: Bool { handle.canFork() }
     private weak var app: AppModel?
     private let client: CoreClient
     private let handle: SessionHandle
@@ -41,9 +43,21 @@ final class CoreSessionSource: SessionSource {
         let row = app?.row(chatId)
         hostDevice = c.host.deviceId
         var next = SessionChrome()
-        next.title = c.title
+        // Untitled children read like the sheet and search rows: the row's
+        // "New session" placeholder would drop the side-chat context.
+        if let row, row.parentChatId != nil, !row.hasTitle {
+            next.title = "New side chat"
+        } else {
+            next.title = c.title
+        }
         let project = row?.project?.name ?? "No project"
-        next.subtitle = c.host.name.map { "\(project) @ \($0)" } ?? project
+        if let parentId = row?.parentChatId, let parent = app?.row(parentId) {
+            // A side chat orients by its parent: the subtitle taps through.
+            next.parentChatId = parentId
+            next.subtitle = "Side chat of \(parent.title)"
+        } else {
+            next.subtitle = c.host.name.map { "\(project) @ \($0)" } ?? project
+        }
         next.running = c.live.turnRunning
         next.canSteer = c.host.capabilities.midTurnSteering ?? false
         next.placeholder = "Message \(row?.harnessLabel ?? "the agent")"

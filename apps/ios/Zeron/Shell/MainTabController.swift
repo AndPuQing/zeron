@@ -219,6 +219,23 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate, A
         nav.popToRootViewController(animated: false)
         nav.pushViewController(session, animated: true)
     }
+
+    /// Push a side chat on the current stack so back returns to its parent;
+    /// an existing copy is revealed instead of pushed twice.
+    func openChildSession(_ chatId: String) {
+        if presentedViewController != nil { dismiss(animated: true) }
+        guard let tab = tabs.first(where: { $0.identifier == "sessions" }) else { return }
+        selectedTab = tab
+        guard let nav = tab.viewController as? UINavigationController else { return openSession(chatId) }
+        if let existing = nav.viewControllers.first(where: { ($0 as? SessionViewController)?.chatId == chatId }) {
+            nav.popToViewController(existing, animated: true)
+            return
+        }
+        guard let session = SessionViewController(app: app, chatId: chatId) else {
+            return showSessionOpenError()
+        }
+        nav.pushViewController(session, animated: true)
+    }
 }
 
 /// The capsule above the tab bar: a plus, "New session", and a live
