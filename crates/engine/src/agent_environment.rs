@@ -202,13 +202,14 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::{WRITE_DAC, WRITE_OWNER};
-        // tempfile's data handle lacks WRITE_DAC and WRITE_OWNER.
-        // Reopen this private, uniquely named file with the permission needed
-        // to set its owner and protect its DACL before writing any bytes.
+        use windows_sys::Win32::Storage::FileSystem::{READ_CONTROL, WRITE_DAC, WRITE_OWNER};
+        // tempfile's data handle lacks the security update rights.
+        // SetSecurityInfo also reads the existing descriptor while processing
+        // file DACL inheritance, so include READ_CONTROL in this handle.
+        // Protect the owner and DACL before writing any configuration bytes.
         let security_handle = std::fs::OpenOptions::new()
             .read(true)
-            .access_mode(WRITE_DAC | WRITE_OWNER)
+            .access_mode(READ_CONTROL | WRITE_DAC | WRITE_OWNER)
             .open(temporary.path())
             .map_err(|error| {
                 std::io::Error::new(

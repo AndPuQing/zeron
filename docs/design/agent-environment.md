@@ -390,10 +390,12 @@ Apple developer directory lacks the Metal compiler; desktop checks use the
 existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
 block tests are included in the Windows workflow and require that platform.
 Windows CI exposed access-denied errors during private persistence, including
-after reopening with WRITE_DAC. The final implementation requests WRITE_DAC
-and WRITE_OWNER, assigns the current token user as the file owner, and applies
-the protected owner-only DACL before writing configuration bytes. This avoids
-depending on group ownership under elevated Windows accounts. The platform
+after reopening with WRITE_DAC and WRITE_OWNER. Stage-specific errors narrowed
+the failure to SetSecurityInfo rather than opening the security handle. The
+implementation also requests READ_CONTROL so file ACL inheritance handling can
+inspect the existing descriptor. It assigns the current token user as the file
+owner and applies the protected owner-only DACL before writing configuration
+bytes, without depending on group ownership under elevated accounts. The platform
 test compares the actual owner SID as well as the DACL after initial save and
 replacement. Persistence errors now identify the failed stage without
 including configuration values. Three store tests passed again locally.
