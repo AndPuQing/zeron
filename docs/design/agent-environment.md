@@ -383,9 +383,14 @@ The Rust toolchain is operational after restoring its Z3 dependency. The local
 Apple developer directory lacks the Metal compiler; desktop checks use the
 existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
 block tests are included in the Windows workflow and require that platform.
-M1 Windows CI exposed an ACL handle-access failure: tempfile's data handle
-does not request WRITE_DAC. M2 reopens the uniquely named temporary file with
-WRITE_DAC before protecting its ACL and before writing any configuration.
+Windows CI exposed access-denied errors during private persistence, including
+after reopening with WRITE_DAC. The final implementation requests WRITE_DAC
+and WRITE_OWNER, assigns the current token user as the file owner, and applies
+the protected owner-only DACL before writing configuration bytes. This avoids
+depending on group ownership under elevated Windows accounts. The platform
+test compares the actual owner SID as well as the DACL after initial save and
+replacement. Persistence errors now identify the failed stage without
+including configuration values. Three store tests passed again locally.
 The API signatures have been checked against windows-sys 0.61.2 sources;
 execution evidence for the corrected implementation is tracked in the PR.
 No deployment, merge, release or generated mobile binding change is included.

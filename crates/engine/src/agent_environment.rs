@@ -202,19 +202,40 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
-        use windows_sys::Win32::Storage::FileSystem::WRITE_DAC;
-        // tempfile's data handle has read/write access but not WRITE_DAC.
+        use windows_sys::Win32::Storage::FileSystem::{WRITE_DAC, WRITE_OWNER};
+        // tempfile's data handle lacks WRITE_DAC and WRITE_OWNER.
         // Reopen this private, uniquely named file with the permission needed
-        // to protect its DACL, before writing any configuration bytes.
+        // to set its owner and protect its DACL before writing any bytes.
         let security_handle = std::fs::OpenOptions::new()
             .read(true)
-            .access_mode(WRITE_DAC)
-            .open(temporary.path())?;
+            .access_mode(WRITE_DAC | WRITE_OWNER)
+            .open(temporary.path())
+            .map_err(|error| {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("Opening private file security handle: {error}"),
+                )
+            })?;
         private_windows_file(&security_handle)?;
     }
-    temporary.write_all(bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
+    temporary.write_all(bytes).map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("Writing private configuration: {error}"),
+        )
+    })?;
+    temporary.as_file().sync_all().map_err(|error| {
+        std::io::Error::new(
+            error.kind(),
+            format!("Syncing private configuration: {error}"),
+        )
+    })?;
+    temporary.persist(path).map_err(|error| {
+        std::io::Error::new(
+            error.error.kind(),
+            format!("Replacing private configuration: {}", error.error),
+        )
+    })?;
     // A directory sync failure after rename must not report a failed save:
     // the file is already committed and in-memory state must match it.
     #[cfg(unix)]
@@ -222,6 +243,47 @@ fn write_private_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let _ = std::fs::File::open(directory).and_then(|file| file.sync_all());
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn current_windows_user() -> std::io::Result<Vec<usize>> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::{
+        Security::{GetTokenInformation, TOKEN_QUERY, TOKEN_USER, TokenUser},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    let mut token = std::ptr::null_mut();
+    // SAFETY: Windows returns an owned token handle. The query writes into an
+    // aligned, sufficiently large allocation that owns the returned SID bytes.
+    unsafe {
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let token = OwnedHandle::from_raw_handle(token);
+        let mut size = 0;
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut size,
+        );
+        if (size as usize) < std::mem::size_of::<TOKEN_USER>() {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut user = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+        if GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            user.as_mut_ptr().cast(),
+            size,
+            &mut size,
+        ) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(user)
+    }
 }
 
 #[cfg(windows)]
@@ -234,12 +296,13 @@ fn private_windows_file(file: &std::fs::File) -> std::io::Result<()> {
                 ConvertStringSecurityDescriptorToSecurityDescriptorW, SE_FILE_OBJECT,
                 SetSecurityInfo,
             },
-            DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl,
-            PROTECTED_DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION, GetSecurityDescriptorDacl, OWNER_SECURITY_INFORMATION,
+            PROTECTED_DACL_SECURITY_INFORMATION, TOKEN_USER,
         },
     };
     let sddl: Vec<u16> = "D:P(A;;FA;;;OW)\0".encode_utf16().collect();
     let mut descriptor = std::ptr::null_mut();
+    let user = current_windows_user()?;
     // SAFETY: Windows allocates the descriptor; the live file handle is owned
     // by the caller. The protected DACL grants access only to its owner.
     unsafe {
@@ -263,8 +326,12 @@ fn private_windows_file(file: &std::fs::File) -> std::io::Result<()> {
         let result = SetSecurityInfo(
             file.as_raw_handle(),
             SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
+            DACL_SECURITY_INFORMATION
+                | PROTECTED_DACL_SECURITY_INFORMATION
+                | OWNER_SECURITY_INFORMATION,
+            // Elevated Windows processes may otherwise create files owned by
+            // the Administrators group. OWNER_RIGHTS must refer to this user.
+            (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid,
             std::ptr::null_mut(),
             dacl,
             std::ptr::null_mut(),
@@ -272,7 +339,10 @@ fn private_windows_file(file: &std::fs::File) -> std::io::Result<()> {
         let error = (result != 0).then(|| std::io::Error::from_raw_os_error(result as i32));
         LocalFree(descriptor);
         if let Some(error) = error {
-            return Err(error);
+            return Err(std::io::Error::new(
+                error.kind(),
+                format!("Protecting private file owner and ACL: {error}"),
+            ));
         }
     }
     Ok(())
@@ -418,7 +488,7 @@ mod windows_tests {
                 ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo,
                 SE_FILE_OBJECT,
             },
-            DACL_SECURITY_INFORMATION,
+            DACL_SECURITY_INFORMATION, EqualSid, OWNER_SECURITY_INFORMATION, TOKEN_USER,
         },
     };
     #[test]
@@ -444,6 +514,8 @@ mod windows_tests {
             let mut descriptor = std::ptr::null_mut();
             let mut sddl = std::ptr::null_mut();
             let mut length = 0;
+            let mut owner = std::ptr::null_mut();
+            let user = current_windows_user().unwrap();
             // SAFETY: GetSecurityInfo allocates a live descriptor, converted
             // to another Windows allocation; both are freed after inspection.
             unsafe {
@@ -451,14 +523,19 @@ mod windows_tests {
                     GetSecurityInfo(
                         file.as_raw_handle(),
                         SE_FILE_OBJECT,
-                        DACL_SECURITY_INFORMATION,
-                        std::ptr::null_mut(),
+                        DACL_SECURITY_INFORMATION | OWNER_SECURITY_INFORMATION,
+                        &mut owner,
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),
                         std::ptr::null_mut(),
                         &mut descriptor
                     ),
                     0
+                );
+                assert_ne!(
+                    EqualSid(owner, (*(user.as_ptr().cast::<TOKEN_USER>())).User.Sid),
+                    0,
+                    "the file owner must be the current user, including elevated processes"
                 );
                 let converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
                     descriptor,
