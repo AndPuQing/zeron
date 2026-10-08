@@ -1,6 +1,6 @@
 # Per-provider agent environment configuration
 
-- Status: implementation in progress on the task branch; PR #4 is draft.
+- Status: implementation complete on the task branch; platform CI in progress; PR #4 is draft.
 - Date: 2026-10-08.
 - Branch: `feat/agent-environment`.
 - Baseline: `origin/dev` at `19f62c90`.
@@ -332,7 +332,7 @@ test artifacts committed to the repository.
 | M0 | `docs: design per-provider agent environment configuration` | Task branch, current baseline, this design, development workflow, documentation checks | Complete |
 | M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Complete locally; platform checks tracked in M4 |
 | M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | Complete locally; corrected Windows ACL requires CI |
-| M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | In progress |
+| M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | Complete locally |
 | M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | In progress |
 
 M1–M3 each include their tests and update this table/PR with actual commit IDs
@@ -362,10 +362,14 @@ provider/discovery/saved-session integrations 183 passed / 8 ignored. Selected
 engine integrations passed (device routing, subagents, profiles, queues,
 Pi/restart resume and session publication). Clippy passed for proto, RPC,
 harness, engine and UI libraries, with existing repository warnings. The M2
-commit ID is recorded at the next checkpoint.
+commit: `b077642d`.
 
-M3 desktop tests passed 1,594 tests with the native-font test filtered out;
-an additional connection/capability race correction is under final validation.
+M3 desktop tests passed 1,594 tests with the native-font test filtered out,
+including masked/multiline replacement, conflicts, lost acknowledgements,
+device replacement, delayed capability negotiation, reveal fencing and
+provider-specific completion invalidation. User documentation is in
+[agent-environment.md](../agent-environment.md). The M3 commit ID is recorded
+at the next checkpoint.
 No live provider account is used by these fixture checks.
 
 The Rust toolchain is operational after restoring its Z3 dependency. The local

@@ -21,6 +21,10 @@ macOS/Linux 数据放在 `~/.zerun`，Windows 放在 `%LOCALAPPDATA%\Zerun`；
 可用 `ZERUN_DATA_DIR` 自定义。默认本机通信端口为 27655（`ZERUN_IPC_PORT`），
 登录回调端口为 27642（`ZERUN_CALLBACK_PORT`）。
 
+在 **Settings → Providers** 展开 provider，即可为选定设备设置独立的
+**Environment variables**。保存后，当前任务继续使用原配置，新 agent 进程使用
+新配置。详见[环境变量设置说明](docs/agent-environment.md)。
+
 ## Android
 
 从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载

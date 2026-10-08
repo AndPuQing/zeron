@@ -22,6 +22,11 @@ coexist with Zeron: app data lives in `~/.zerun` on macOS/Linux and
 The default local IPC port is 27655 (`ZERUN_IPC_PORT`); the sign-in callback
 port is 27642 (`ZERUN_CALLBACK_PORT`).
 
+In **Settings → Providers**, expand a provider to configure its **Environment
+variables** for the selected device. Each provider has independent values;
+changes apply to new agent processes after active tasks finish. See the
+[environment settings guide](docs/agent-environment.md).
+
 ## Android
 
 Download `zerun-<version>-android.apk` from [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest).

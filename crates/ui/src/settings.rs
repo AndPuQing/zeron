@@ -21,6 +21,7 @@ pub mod appearance;
 pub mod archived;
 pub mod composer;
 pub mod devices;
+pub mod environment;
 pub mod files;
 pub mod harnesses;
 pub mod notifications;

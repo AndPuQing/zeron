@@ -86,6 +86,24 @@ pub fn bump_harness_catalog(cx: &mut App) {
     cx.default_global::<HarnessCatalogChanged>();
 }
 
+#[derive(Default)]
+pub struct HarnessEnvironmentChanged {
+    pub target: Option<String>,
+    pub harness: Option<HarnessId>,
+    pub generations: HashMap<(String, HarnessId), u64>,
+}
+impl gpui::Global for HarnessEnvironmentChanged {}
+pub fn bump_harness_environment(target: String, harness: HarnessId, cx: &mut App) {
+    let changed = cx.default_global::<HarnessEnvironmentChanged>();
+    let generation = changed
+        .generations
+        .entry((target.clone(), harness))
+        .or_default();
+    *generation = generation.wrapping_add(1);
+    changed.target = Some(target);
+    changed.harness = Some(harness);
+}
+
 // ---------------------------------------------------------------------------
 // Draft config (what the pickers accumulate)
 // ---------------------------------------------------------------------------
@@ -735,6 +753,7 @@ pub struct Pickers {
     _search_events: Subscription,
     _state_observe: Subscription,
     _catalog_observe: Subscription,
+    _environment_observe: Subscription,
 }
 
 impl Pickers {
@@ -850,7 +869,8 @@ impl Pickers {
                 } else {
                     this.harnesses = Loadable::Idle;
                 }
-                this.models.retain(|_, slot| matches!(slot, Loadable::Ready(_)));
+                this.models
+                    .retain(|_, slot| matches!(slot, Loadable::Ready(_)));
                 this.stale_models = this.models.keys().copied().collect();
                 this.revalidating.clear();
                 this.model_refresh_errors.clear();
@@ -862,9 +882,40 @@ impl Pickers {
         // force-refresh the cached catalog so the rail/chips follow without a
         // restart (stale rows stay visible while the reload runs).
         let catalog_observe = cx.observe_global::<HarnessCatalogChanged>(|this: &mut Self, cx| {
+            // Environment saves invalidate model rows as well as provider
+            // enablement. The separate notification below fences old loads.
             this.ensure_harnesses(true, cx);
             cx.notify();
         });
+        let environment_observe =
+            cx.observe_global::<HarnessEnvironmentChanged>(|this: &mut Self, cx| {
+                let changed = cx.global::<HarnessEnvironmentChanged>();
+                let Some(harness) = changed.harness else {
+                    return;
+                };
+                let Some(engine) = this.engine(cx) else {
+                    return;
+                };
+                let local = engine.engine_info().device_id.clone();
+                let target = changed.target.clone().unwrap_or_else(|| local.clone());
+                if this.space_target(cx).unwrap_or(local) != target {
+                    return;
+                }
+                this.target_generation = this.target_generation.wrapping_add(1);
+                this.load_task = None;
+                this.models
+                    .retain(|id, slot| *id != harness && matches!(slot, Loadable::Ready(_)));
+                this.revalidating.clear();
+                this.stale_models.remove(&harness);
+                this.model_refresh_errors.remove(&harness);
+                this.harnesses_revalidating = false;
+                if matches!(this.harnesses, Loadable::Loading) {
+                    this.harnesses = Loadable::Idle;
+                }
+                this.catalog_rev += 1;
+                this.ensure_models(harness, true, cx);
+                cx.notify();
+            });
         // Dev/testing knob: `ZERON_OPEN_PICKER=model|traits|repo|branch` boots
         // with that popover open — synthetic input can't reach the app on
         // headless compositors, so captures need a data-side path.
@@ -962,6 +1013,7 @@ impl Pickers {
             _search_events: search_events,
             _state_observe: state_observe,
             _catalog_observe: catalog_observe,
+            _environment_observe: environment_observe,
         }
     }
 
@@ -1148,8 +1200,8 @@ impl Pickers {
             return ModelName::Named(label.into());
         }
         // A list still from the previous device is loading for this one.
-        let catalog_loading = self.harnesses_stale
-            || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+        let catalog_loading =
+            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
         let models_loading = self.effective_harness(cx).is_some_and(|harness| {
             !matches!(
                 self.models.get(&harness),
@@ -6166,8 +6218,8 @@ impl Render for Pickers {
             }
         };
         // A list still from the previous device is loading for this one.
-        let catalog_loading = self.harnesses_stale
-            || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
+        let catalog_loading =
+            self.harnesses_stale || matches!(self.harnesses, Loadable::Idle | Loadable::Loading);
         // Harness unknown while the catalog resolves: the pixel-glyph loader
         // instead of guessing a brand mark.
         let chip_icon_loading = self.title.is_none()
@@ -7291,7 +7343,9 @@ mod tests {
                 Loadable::Ready(vec![bare_model("gpt", "GPT")]),
                 cx,
             );
-            pickers.models.insert(HarnessId::ClaudeCode, Loadable::Loading);
+            pickers
+                .models
+                .insert(HarnessId::ClaudeCode, Loadable::Loading);
         });
         state.update(cx, |state, cx| state.select_space(Some("b".into()), cx));
         cx.run_until_parked();
@@ -8782,7 +8836,10 @@ mod tests {
                 assert_eq!(picker.resolved(cx).model.as_deref(), Some("claude"));
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 2);
-                assert_eq!(picker.model_rows(cx)[picker.active].harness, HarnessId::ClaudeCode);
+                assert_eq!(
+                    picker.model_rows(cx)[picker.active].harness,
+                    HarnessId::ClaudeCode
+                );
             })
             .unwrap();
     }
@@ -8896,7 +8953,10 @@ mod tests {
                 picker.show_compact_models(cx);
                 assert_eq!(
                     picker.compact_groups(cx),
-                    vec![(Some(HarnessId::Codex), 0), (Some(HarnessId::ClaudeCode), 2)]
+                    vec![
+                        (Some(HarnessId::Codex), 0),
+                        (Some(HarnessId::ClaudeCode), 2)
+                    ]
                 );
                 picker.toggle_model_favorite(HarnessId::Codex, "gpt-a", cx);
                 assert_eq!(
@@ -8957,7 +9017,9 @@ mod tests {
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::Codex);
                 assert_eq!(picker.model_rows(cx)[1].harness, HarnessId::ClaudeCode);
                 // Searching must also find another provider's model.
-                picker.search.update(cx, |input, cx| input.set_text("Claude", cx));
+                picker
+                    .search
+                    .update(cx, |input, cx| input.set_text("Claude", cx));
                 assert_eq!(picker.model_rows_len(cx), 1);
                 assert_eq!(picker.model_rows(cx)[0].harness, HarnessId::ClaudeCode);
                 picker.activate_model_index(0, cx);
@@ -8987,14 +9049,13 @@ mod tests {
                 picker.show_compact_models(cx);
                 assert_eq!(picker.model_rows_len(cx), 1);
                 assert_eq!(picker.rail_descriptors(cx)[0].id, HarnessId::Codex);
-                picker.search.update(cx, |input, cx| input.set_text("Claude", cx));
+                picker
+                    .search
+                    .update(cx, |input, cx| input.set_text("Claude", cx));
                 assert_eq!(picker.model_rows_len(cx), 0);
                 picker.search.update(cx, |input, cx| input.set_text("", cx));
                 // A chat's provider is fixed: one tab, its own.
-                assert_eq!(
-                    picker.compact_groups(cx),
-                    vec![(Some(HarnessId::Codex), 0)]
-                );
+                assert_eq!(picker.compact_groups(cx), vec![(Some(HarnessId::Codex), 0)]);
                 picker.compact_model_list = false;
                 picker.focus_on_mount = true;
             })
