@@ -9338,6 +9338,7 @@ impl Composer {
                     .is_some();
                 let command = SessionCommandPayload::Run {
                     request: RunRequest {
+                        require_native_resume: false,
                         mcp: None,
                         prompt: content.clone(),
                         harness: resolved.harness,

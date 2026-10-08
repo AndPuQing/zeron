@@ -145,6 +145,9 @@ pub mod methods {
     pub const LOCAL_IMPORT_STATUS: &str = "LocalImportStatus";
     /// One-time local→synced profile import: run it (stream of progress items).
     pub const IMPORT_LOCAL_WORKSPACE: &str = "ImportLocalWorkspace";
+    pub const LIST_EXTERNAL_SESSIONS: &str = "ListExternalSessions";
+    pub const IMPORT_EXTERNAL_SESSIONS: &str = "ImportExternalSessions";
+    pub const CANCEL_EXTERNAL_SESSION_IMPORT: &str = "CancelExternalSessionImport";
     // Repos / worktrees / folders (ControlRpc, relay-forwardable).
     pub const LIST_REPOS: &str = "ListRepos";
     pub const ADD_REPO: &str = "AddRepo";

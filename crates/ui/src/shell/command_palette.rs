@@ -40,6 +40,7 @@ impl EnterPress {
 enum Entry {
     NewChat,
     NewProject,
+    ImportSessions,
     Settings,
     Theme(AppearanceMode),
     Chat(String),
@@ -50,6 +51,10 @@ impl Entry {
         match self {
             Self::NewChat => Some(("New chat", icons::PEN_NEW_SQUARE)),
             Self::NewProject => Some(("New project", icons::FOLDER)),
+            Self::ImportSessions => Some((
+                "Import existing sessions…",
+                icons::ARCHIVE_UP_MINIMALISTIC,
+            )),
             Self::Settings => Some(("Open settings", icons::SETTINGS)),
             Self::Theme(mode) => Some((
                 match mode {
@@ -93,6 +98,9 @@ impl Shell {
     }
 
     pub(super) fn toggle_command_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.session_import.dialog.is_some() {
+            return;
+        }
         if self.command_palette.is_some() {
             self.close_command_palette(window, cx);
             return;
@@ -139,6 +147,11 @@ impl Shell {
         };
         let query = palette.search.read(cx).text().trim().to_lowercase();
         let mut entries = actions_for(&query, Theme::of(cx).appearance.is_dark());
+        if self.session_import.is_available()
+            && matches_query(&query, "Import existing sessions Codex Claude Code")
+        {
+            entries.insert(2.min(entries.len()), Entry::ImportSessions);
+        }
         let state = self.state.read(cx);
         // Global history deliberately ignores the sidebar's project filter and
         // collapsed groups. Archived conversations remain searchable too.
@@ -207,6 +220,7 @@ impl Shell {
         match entry {
             Entry::NewChat => self.open_new_session(None, cx),
             Entry::NewProject => self.open_add_space(cx),
+            Entry::ImportSessions => self.open_session_import(window, cx),
             Entry::Settings => self.open_last_settings(cx),
             Entry::Theme(_) => unreachable!(),
             Entry::Chat(id) => self.open_chat(id, cx),

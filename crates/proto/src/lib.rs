@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod attachment_mentions;
 pub mod entities;
+pub mod external_sessions;
 pub mod file_mentions;
 pub mod identity;
 pub mod invocation;
@@ -18,6 +19,7 @@ pub mod workspace;
 
 pub use agent::*;
 pub use entities::*;
+pub use external_sessions::*;
 pub use preview::*;
 pub use sidebar_pins::*;
 pub use workspace::*;

@@ -22,6 +22,7 @@ pub mod chat2_host;
 mod chat_persistence;
 pub mod diff_sync;
 pub mod doc_host;
+pub mod external_sessions;
 mod fs_watch;
 pub mod harness_updates;
 mod http_error;
@@ -146,6 +147,7 @@ pub struct EngineCore {
     pub device_id: String,
     /// Local→synced profile import (account-scoped runtimes only).
     pub local_import: Option<local_import::LocalImporter>,
+    pub external_sessions: external_sessions::ExternalSessionImporter,
     workspace_scope: WorkspaceScope,
     /// Auth service (attached by [`Engine::run`]; a lazy dev-mode instance otherwise).
     auth: std::sync::Mutex<Option<Auth>>,
@@ -249,6 +251,15 @@ impl EngineCore {
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
         sessions.set_doc_host(doc_host.clone());
+        let external_sessions = external_sessions::ExternalSessionImporter::new(
+            store_for_import.clone(),
+            registry.clone(),
+            workspace.clone(),
+            doc_host.clone(),
+        );
+        if let Err(err) = external_sessions.recover_publications() {
+            tracing::error!(error = %err, "session import publication recovery failed");
+        }
         match sessions.recover_stale() {
             Ok(0) => {}
             Ok(recovered) => tracing::info!(recovered, "stale sessions recovered on boot"),
@@ -339,6 +350,7 @@ impl EngineCore {
             harness_updates,
             device_id,
             local_import,
+            external_sessions,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
             links: std::sync::Mutex::new(None),
@@ -471,6 +483,7 @@ impl EngineCore {
         )
         .with_auth(self.auth())
         .with_previews(self.previews.clone())
+        .with_external_sessions(self.external_sessions.clone())
         .with_harness_updates(self.harness_updates.clone());
         if let Some(links) = self.links() {
             rpc = rpc.with_links(links);
@@ -500,6 +513,7 @@ impl EngineCore {
     /// kill live PTYs, stamp our workspace `lastSeenAt`, and flush every open doc
     /// snapshot.
     pub async fn shutdown(&self) {
+        self.external_sessions.shutdown().await;
         self.previews.shutdown().await;
         self.harness_updates.shutdown().await;
         // A run interruption transitions its chat to Idle, and Idle normally

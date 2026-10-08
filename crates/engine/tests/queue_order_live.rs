@@ -119,6 +119,7 @@ impl Rig {
 
     fn request(&self, prompt: String) -> RunRequest {
         RunRequest {
+            require_native_resume: false,
             mcp: None,
             prompt,
             harness: Some(self.id),

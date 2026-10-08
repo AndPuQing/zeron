@@ -985,6 +985,15 @@ impl RegistryDoc {
         self.pending.iter().flat_map(|b| &b.ops)
     }
 
+    pub fn chat_deleted(&self, id: &str) -> bool {
+        overlay_including_deleted(
+            self.authoritative.get(KIND_CHATS).and_then(|m| m.get(id)),
+            self.pending_ops()
+                .filter(|op| op.kind == KIND_CHATS && op.id == id),
+        )
+        .is_some_and(|row| row.deleted)
+    }
+
     /// The row as this device should display it: authoritative + pending ops.
     fn overlay_row(&self, kind: &str, id: &str) -> Option<RegistryRow> {
         overlay(
@@ -1242,6 +1251,14 @@ impl RegistryDoc {
             ),
             ("spaceId", opt_str(chat.space_id.as_deref())),
             ("parentChatId", opt_str(chat.parent_chat_id.as_deref())),
+            (
+                "importSource",
+                chat.import_source
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?
+                    .unwrap_or(Value::Null),
+            ),
             ("lastSeenAt", opt_ms(chat.last_seen_at)),
             (
                 "roomGen",
@@ -1667,6 +1684,14 @@ impl RegistryDoc {
                     ),
                     ("spaceId", opt_str(chat.space_id.as_deref())),
                     ("parentChatId", opt_str(chat.parent_chat_id.as_deref())),
+                    (
+                        "importSource",
+                        chat.import_source
+                            .as_ref()
+                            .map(serde_json::to_value)
+                            .transpose()?
+                            .unwrap_or(Value::Null),
+                    ),
                     ("lastSeenAt", opt_ms(chat.last_seen_at)),
                     ("parentChatId", opt_str(chat.parent_chat_id.as_deref())),
                 ]),
@@ -1703,6 +1728,13 @@ fn overlay<'a>(
     base: Option<&RegistryRow>,
     ops: impl IntoIterator<Item = &'a RowOp>,
 ) -> Option<RegistryRow> {
+    overlay_including_deleted(base, ops).filter(|r| !r.deleted)
+}
+
+fn overlay_including_deleted<'a>(
+    base: Option<&RegistryRow>,
+    ops: impl IntoIterator<Item = &'a RowOp>,
+) -> Option<RegistryRow> {
     let mut row = base.cloned();
     for op in ops {
         let (next, _) = apply_op(row.as_ref(), op);
@@ -1710,7 +1742,7 @@ fn overlay<'a>(
             row = Some(next);
         }
     }
-    row.filter(|r| !r.deleted)
+    row
 }
 
 // ── field helpers ───────────────────────────────────────────────────────────

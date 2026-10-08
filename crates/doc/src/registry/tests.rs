@@ -252,6 +252,7 @@ fn device(id: &str, name: &str) -> Device {
 
 fn chat(id: &str, device_id: &str) -> Chat {
     Chat {
+        import_source: None,
         id: id.into(),
         device_id: device_id.into(),
         title: Some("First chat".into()),
@@ -1195,6 +1196,15 @@ fn migration_seeds_pending_upserts_that_lose_to_live_writes() {
     legacy_chat.space_id = Some("sp-1".into());
     legacy_chat.title = Some("migrated title".into());
     legacy_chat.last_message_at = Some(ts(400_000));
+    legacy_chat.import_source = Some(zeron_proto::SessionImportSource {
+        harness: HarnessId::Codex,
+        device_id: "dev-a".into(),
+        store_id: "provider-store".into(),
+        original_native_id: "original-session".into(),
+        copied_native_id: "copied-session".into(),
+        imported_at_ms: 400_000,
+        history_notice: Some("Attachments are retained in the native copy.".into()),
+    });
     legacy.upsert_chat(&legacy_chat).unwrap();
     legacy
         .upsert_session(&session("chat-1", "dev-a", SessionStatus::Idle))

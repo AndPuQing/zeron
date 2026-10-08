@@ -8,12 +8,17 @@ publish.workspace = true
 [features]
 voice-experimental = [] # Compatibility flag; native subscription voice uses Codex's packaged helper.
 project-palette-fixture = []
+session-import-fixture = ["project-palette-fixture", "gpui_platform/test-support"]
 compact-picker-fixture = ["gpui_platform/test-support"]
 
 browser-fixture = []
 windows-render-fixture = []
 appshots-fixture = ["gpui_platform/test-support"]
 resource-profile = ["gpui/bench", "gpui_platform/test-support"]
+
+[[example]]
+name = "session-import-fixture"
+required-features = ["session-import-fixture"]
 
 [[example]]
 name = "macos-resource-profile"

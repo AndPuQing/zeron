@@ -200,6 +200,7 @@ impl TitleGenerator {
         );
         for attempt in 0..=RETRY_DELAYS_MS.len() {
             let request = RunRequest {
+                require_native_resume: false,
                 mcp: None,
                 prompt: title_prompt.clone(),
                 harness: Some(harness_id),
@@ -369,6 +370,7 @@ mod tests {
             ],
         };
         let request = RunRequest {
+            require_native_resume: false,
             mcp: None,
             prompt: "Title only".into(),
             harness: None,

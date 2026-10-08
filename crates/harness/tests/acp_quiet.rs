@@ -41,6 +41,7 @@ fn fixture_path() -> PathBuf {
 
 fn request(prompt: &str) -> RunRequest {
     RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt: prompt.into(),
         harness: None,

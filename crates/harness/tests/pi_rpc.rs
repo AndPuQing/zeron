@@ -13,6 +13,7 @@ fn harness() -> PiHarness {
 }
 fn request(cwd: &std::path::Path, prompt: &str) -> RunRequest {
     RunRequest {
+        require_native_resume: false,
         prompt: prompt.into(),
         harness: None,
         model: None,

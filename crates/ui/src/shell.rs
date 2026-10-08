@@ -72,6 +72,7 @@ mod navigation_focus;
 #[cfg(test)]
 mod navigation_tests;
 mod project_icon;
+mod session_import;
 mod side_chats;
 mod sidebar_pins;
 mod sidebar_sections;
@@ -107,6 +108,7 @@ actions!(
         ToggleFiles,
         AddSpacePalette,
         ToggleCommandPalette,
+        ImportExistingSessions,
         OpenModelPicker,
         NewSession,
         OpenSettings,
@@ -2031,6 +2033,7 @@ pub struct Shell {
     /// The New project palette's collapsed-breadcrumbs (`…`) menu.
     project_crumb_menu: popover::Popup<()>,
     command_palette: Option<command_palette::CommandPalette>,
+    session_import: session_import::SessionImportUi,
     pending_workspace_command: Option<crate::composer::WorkspaceCommand>,
     /// The sidebar's space-filter dropdown.
     spaces_menu: popover::Popup<spaces::SpacesMenu>,
@@ -2477,6 +2480,7 @@ impl Shell {
             add_space: None,
             project_crumb_menu: popover::Popup::default(),
             command_palette: None,
+            session_import: session_import::SessionImportUi::new(cx),
             pending_workspace_command: None,
             spaces_menu: popover::Popup::default(),
             spaces_menu_bar: popover::MenuScrollbarState::default(),
@@ -2642,6 +2646,7 @@ impl Shell {
         }
         self.prune_file_explorers(cx);
         self.refresh_harness_update_watch(cx);
+        self.refresh_session_import(cx);
         if state.read(cx).engine().is_none() {
             self.side_chats.clear();
             self.side_chat_creating = false;
@@ -5614,6 +5619,7 @@ impl Shell {
     pub(super) fn overlay_owns_keyboard(&self, cx: &App) -> bool {
         self.command_palette.is_some()
             || self.voice.read(cx).stage_open
+            || self.session_import.owns_keyboard()
             || self.section_dialog.is_some()
             || self.section_menu.is_some()
             || self.add_space.is_some()
@@ -8421,7 +8427,9 @@ impl Shell {
                 .when_some(pinned_group, |el, group| el.child(group))
                 .children(custom_items)
                 .when(
-                    !regular_items.is_empty() || self.sidebar_session_transfer.is_some(),
+                    !regular_items.is_empty()
+                        || self.sidebar_session_transfer.is_some()
+                        || self.session_import.is_available(),
                     |el| {
                         el.child(
                             self.render_sessions_section(
@@ -8498,13 +8506,24 @@ impl Shell {
                 )
                 .into_any_element()
         } else {
-            div()
+            let empty = div()
                 .px(px(Theme::SPACE_SM))
                 .pb(px(Theme::SPACE_SM))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
-                .child(SharedString::from("No sessions yet"))
-                .into_any_element()
+                .child(SharedString::from("No sessions yet"));
+            if self.session_import.is_available() {
+                self.render_sessions_section(
+                    empty.h(px(32.0)).into_any_element(),
+                    32.0 + spaces::SIDEBAR_DISCLOSURE_BODY_INSET,
+                    0,
+                    false,
+                    theme,
+                    cx,
+                )
+            } else {
+                empty.into_any_element()
+            }
         };
 
         // The (filtered) Sessions list scrolls inside an EdgeFade scope —
@@ -9708,6 +9727,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.session_import.owns_keyboard() {
+            return;
+        }
         if event.keystroke.key == "escape" && self.voice.read(cx).stage_open {
             self.set_voice_stage_open(false, cx);
             cx.stop_propagation();
@@ -9779,7 +9801,7 @@ impl Shell {
 
         match resolve_shell_escape(
             &event.keystroke.key,
-            false,
+            self.session_import.owns_keyboard(),
             escape_stops_active_agent,
             self.route,
             selected_chat.as_deref(),
@@ -10058,6 +10080,13 @@ impl Shell {
 
         overlays.extend(self.render_space_overlays(viewport, window, cx));
         overlays.extend(self.render_section_overlays(viewport, window, cx));
+        if let Some(dialog) = self.session_import.dialog.as_ref() {
+            overlays.push(popover::modal(
+                "session-import-overlay",
+                viewport,
+                dialog.view.clone().into_any_element(),
+            ));
+        }
         if let Some(overlay) = self.render_command_palette(viewport, window, cx) {
             overlays.push(overlay);
         }
@@ -12889,12 +12918,15 @@ impl Render for Shell {
             // the terminal panel is only mounted on session routes). The
             // sidebar toggle stays live everywhere, as in the original.
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
-                if matches!(this.route, Route::Chat) {
+                if matches!(this.route, Route::Chat) && this.session_import.dialog.is_none() {
                     this.toggle_terminal(window, cx)
                 }
             }))
             .on_action(cx.listener(|this, _: &SaveFile, _, cx| {
-                if matches!(this.route, Route::Chat) && this.right_pane_open(cx) {
+                if matches!(this.route, Route::Chat)
+                    && this.right_pane_open(cx)
+                    && this.session_import.dialog.is_none()
+                {
                     let file = match this.resolved_right_active(cx) {
                         RightSurface::File(id) => this.file_surfaces.get(&id).cloned(),
                         _ => None,
@@ -12905,7 +12937,9 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| {
-                if !matches!(this.route, Route::Settings(_)) {
+                if !matches!(this.route, Route::Settings(_))
+                    && this.session_import.dialog.is_none()
+                {
                     this.toggle_sidebar(cx)
                 }
             }))
@@ -12914,10 +12948,18 @@ impl Render for Shell {
             }))
             // New session works from anywhere — `open_new_session` routes back
             // to chat itself, so Settings is not a dead spot.
-            .on_action(cx.listener(|this, _: &NewSession, _, cx| this.open_new_session(None, cx)))
+            .on_action(cx.listener(|this, _: &NewSession, _, cx| {
+                if this.session_import.dialog.is_none() {
+                    this.open_new_session(None, cx);
+                }
+            }))
             // Native Settings menu item and the platform convention (Cmd+, on
             // macOS, Ctrl+, elsewhere) toggle the modal from any section.
-            .on_action(cx.listener(|this, _: &OpenSettings, _, cx| this.toggle_settings(cx)))
+            .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
+                if this.session_import.dialog.is_none() {
+                    this.toggle_settings(cx);
+                }
+            }))
             .on_action(cx.listener(|this, _: &NextSession, window, cx| {
                 this.cycle_navigation(true, window, cx)
             }))
@@ -12925,7 +12967,7 @@ impl Render for Shell {
                 this.cycle_navigation(false, window, cx)
             }))
             .on_action(cx.listener(|this, _: &ToggleChanges, window, cx| {
-                if matches!(this.route, Route::Chat) {
+                if matches!(this.route, Route::Chat) && this.session_import.dialog.is_none() {
                     this.toggle_right_pane(cx);
                     if !this.right_pane_open(cx) {
                         // The hidden editor can retain a focus handle after unmounting.
@@ -12937,7 +12979,7 @@ impl Render for Shell {
             // The explorer's own toggle (the titlebar tree button): docks or
             // undocks the explorer portion without touching the surface host.
             .on_action(cx.listener(|this, _: &ToggleFiles, window, cx| {
-                if matches!(this.route, Route::Chat) {
+                if matches!(this.route, Route::Chat) && this.session_import.dialog.is_none() {
                     this.toggle_files_panel(window, cx);
                 }
             }))
@@ -12972,6 +13014,9 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &ToggleCommandPalette, window, cx| {
                 this.toggle_command_palette(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ImportExistingSessions, window, cx| {
+                this.open_session_import(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &OpenModelPicker, window, cx| {
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
                     let pickers = this.composer.read(cx).pickers().clone();
@@ -12979,7 +13024,8 @@ impl Render for Shell {
                 }
             }))
             .on_action(cx.listener(|this, _: &AddSpacePalette, _, cx| {
-                if matches!(this.route, Route::Settings(_)) {
+                if matches!(this.route, Route::Settings(_)) || this.session_import.dialog.is_some()
+                {
                     return;
                 }
                 if this.add_space.is_some() {
@@ -13369,6 +13415,7 @@ mod tests {
         source: Option<(&str, &str)>,
     ) -> zeron_proto::Chat {
         zeron_proto::Chat {
+            import_source: None,
             id: "chat".into(),
             device_id: "remote-device".into(),
             title: None,
@@ -15807,6 +15854,7 @@ mod exit_regressions {
                 shell.state.update(cx, |state, cx| {
                     state.apply_spaces(vec![space("mine", "local"), space("other", "remote")]);
                     state.apply_chats(vec![zeron_proto::Chat {
+                        import_source: None,
                         id: "elsewhere".into(),
                         device_id: "remote".into(),
                         title: None,
