@@ -14,13 +14,13 @@
   "name": "zerun-edge",
   "main": "src/index.ts",
   "compatibility_date": "2026-07-01",
-  "account_id": "fc5a16c75e508b812ee6edd119fd32ae",
+  "account_id": "808eccb28c4b8ff2386cb40c20704b22",
   "workers_dev": true,
   // Public hostname for this fork: one host serves the API, the `curl | sh`
   // installer at /install.sh, and release artifacts at /releases/*. The
   // landing page is not deployed in this fork.
   "routes": [
-    { "pattern": "zerun.puqing.work", "custom_domain": true }
+    { "pattern": "edge.550w.host", "custom_domain": true }
   ],
   // Serve src/install.sh as a string (the /install.sh route).
   "rules": [{ "type": "Text", "globs": ["**/*.sh"], "fallthrough": true }],

@@ -7,8 +7,8 @@ name: release
 #     scripts/package-windows.ps1
 #   - Android signed ARM64 APK (arm64-v8a)
 # then create a GitHub Release AND upload the client-fetched artifacts to the
-# `zerun-releases` R2 bucket (served at zerun.puqing.work/releases/* for
-# `curl -fsSL https://zerun.puqing.work/install.sh | sh`), bumping latest.txt.
+# `zerun-releases` R2 bucket (served at edge.550w.host/releases/* for
+# `curl -fsSL https://edge.550w.host/install.sh | sh`), bumping latest.txt.
 # R2 keeps the newest two releases: install.sh reads latest.txt and both
 # updaters build their file names from manifest.json's version, so older
 # releases are never downloaded — scripts/prune-r2-releases.sh deletes them
@@ -189,7 +189,7 @@ jobs:
       # `secrets` is not a valid context in step `if:` expressions — surface
       # the token through job env and gate on that instead.
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: fc5a16c75e508b812ee6edd119fd32ae
+      CLOUDFLARE_ACCOUNT_ID: 808eccb28c4b8ff2386cb40c20704b22
       SOURCE_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
       RELEASE_TAG: ${{ inputs.publish_tag || github.ref_name }}
       GH_TOKEN: ${{ github.token }}
@@ -267,7 +267,7 @@ jobs:
           body_path: release-notes.md
           generate_release_notes: false
           overwrite_files: true
-      - name: upload to R2 (zerun.puqing.work/releases/*)
+      - name: upload to R2 (edge.550w.host/releases/*)
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
           if [[ "${{ inputs.publish_run_id != '' }}" == true ]]; then

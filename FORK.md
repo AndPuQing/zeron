@@ -42,8 +42,8 @@ conflicts.
 | --- | --- |
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
-| Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `zerun.puqing.work`, account `fc5a16c75e508b812ee6edd119fd32ae` |
-| Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://zerun.puqing.work` |
+| Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22` |
+| Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |
 | Desktop isolation | Unix data `~/.zerun`, Windows data `%LOCALAPPDATA%\Zerun`, Linux service `zerun.service`, Windows installer AppId `94F099C7-A9D5-5A32-B951-50AE16E29A01`, IPC 27655, loopback callback 27642; overrides use `ZERUN_*` |
@@ -74,7 +74,7 @@ identifiers.
 Allowed redirect URIs for the fork's WorkOS staging application:
 
 - `zerun-dev://callback` — mobile/native sign-in.
-- `https://zerun.puqing.work/auth/cli/callback` — the paste-code flow used by
+- `https://edge.550w.host/auth/cli/callback` — the paste-code flow used by
   `zerun login`.
 - `http://127.0.0.1:*/callback` — desktop loopback sign-in. The default port
   is `27642`; `ZERUN_CALLBACK_PORT` can override it. WorkOS supports port

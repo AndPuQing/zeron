@@ -27,7 +27,7 @@ pub const EARLY_REFRESH_SECS: i64 = 60;
 
 /// Production endpoints (edge/wrangler.jsonc). Mobile always talks to prod —
 /// a stale override once broke sign-in in the worst ghost way.
-pub const PRODUCTION_EDGE_URL: &str = "https://zerun.puqing.work";
+pub const PRODUCTION_EDGE_URL: &str = "https://edge.550w.host";
 /// WorkOS client id for this fork's own `workos` environment. Keep in sync
 /// with `edge/wrangler.jsonc` and the iOS sign-in view.
 pub const WORKOS_CLIENT_ID: &str = "client_01M4AN0G973H42GQJY8RAAC0RS";

@@ -34,7 +34,7 @@ macOS/Linux 数据放在 `~/.zerun`，Windows 放在 `%LOCALAPPDATA%\Zerun`；
 适用于服务器等没有显示器的机器，比如在你合上笔记本之后继续跑 agent 的 VPS。仅支持 Linux：
 
 ```bash
-curl -fsSL https://zerun.puqing.work/install.sh | sh
+curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 

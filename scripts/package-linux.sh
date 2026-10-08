@@ -42,7 +42,7 @@ cat >"$STAGE/install.sh" <<'INSTALL'
 #!/usr/bin/env bash
 # Install Zerun for this user (no root needed), in the layout the in-app
 # updater manages: ~/.zerun/app/<version> behind a `current` symlink — the
-# same layout `curl -fsSL https://zerun.puqing.work/install.sh | sh` uses — with
+# same layout `curl -fsSL https://edge.550w.host/install.sh | sh` uses — with
 # ~/.local/bin/zerun and the desktop entry pointing through it.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

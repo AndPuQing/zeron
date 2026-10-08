@@ -35,7 +35,7 @@ See [Android setup and updates](apps/android/README.md).
 For servers and other machines without a display, such as a VPS that keeps agents running after you close your laptop. Linux only:
 
 ```bash
-curl -fsSL https://zerun.puqing.work/install.sh | sh
+curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 

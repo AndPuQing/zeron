@@ -77,9 +77,9 @@ enum DaemonCommand {
     Status,
 }
 
-/// Production edge (Cloudflare Worker + Durable Objects on the zerun.puqing.work zone).
+/// Production edge (Cloudflare Worker + Durable Objects on the edge.550w.host zone).
 /// `ZERON_EDGE_URL` overrides (local dev / self-hosting).
-const DEFAULT_EDGE_URL: &str = "https://zerun.puqing.work";
+const DEFAULT_EDGE_URL: &str = "https://edge.550w.host";
 
 /// Production WorkOS AuthKit client id — public knowledge (it appears in every
 /// authorize URL), so baking it in is safe. Overridden by `ZERON_WORKOS_CLIENT_ID`;

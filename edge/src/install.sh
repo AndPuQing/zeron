@@ -1,7 +1,7 @@
 #!/bin/sh
 # Zerun (native) headless installer.
 #
-#   curl -fsSL https://zerun.puqing.work/install.sh | sh
+#   curl -fsSL https://edge.550w.host/install.sh | sh
 #
 # Installs the native binary (requires the system ALSA runtime) to
 # ~/.zerun/app, puts `zerun` on PATH, adds a launcher entry and icon under
@@ -14,7 +14,7 @@
 # client-id configuration needed. Overrides (if any) go in ~/.zerun/env.
 set -eu
 
-BASE="${ZERUN_BASE_URL:-https://zerun.puqing.work}"
+BASE="${ZERUN_BASE_URL:-https://edge.550w.host}"
 
 # --- platform ---------------------------------------------------------------
 os="$(uname -s)"

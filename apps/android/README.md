@@ -112,7 +112,7 @@ The existing `release` workflow calls the same signed build and requires it
 to succeed before publication. On a `v<version>` tag matching `Cargo.toml`,
 it publishes the APK alongside the desktop artifacts to GitHub Release and
 the configured R2 download source at
-`https://zerun.puqing.work/releases/zerun-<version>-android.apk`. The shared
+`https://edge.550w.host/releases/zerun-<version>-android.apk`. The shared
 `manifest.json` includes the APK's SHA256; `latest.txt` is updated only after
 artifacts and the manifest are uploaded. A manual `release` run builds
 artifacts without publishing them.

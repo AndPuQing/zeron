@@ -21,7 +21,7 @@
 サーバーなど、ディスプレイのないマシン向けです。たとえば、ノートパソコンを閉じたあともエージェントを動かし続ける VPS に使えます。Linux のみ対応しています。
 
 ```bash
-curl -fsSL https://zerun.puqing.work/install.sh | sh
+curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 

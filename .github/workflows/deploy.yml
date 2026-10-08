@@ -5,7 +5,7 @@ name: deploy
 # gracefully until the CLOUDFLARE_API_TOKEN secret is configured (until then:
 # `npm -C edge run deploy` from a wrangler-authenticated machine).
 #
-# The token needs: Workers Scripts (edit), Workers Routes (edit) on zerun.puqing.work,
+# The token needs: Workers Scripts (edit), Workers Routes (edit) on edge.550w.host,
 # Workers R2 Storage (edit). Account id is pinned in edge/wrangler.jsonc.
 
 on:

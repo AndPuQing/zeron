@@ -21,7 +21,7 @@
 서버처럼 디스플레이가 없는 머신용입니다. 예를 들어 노트북을 닫은 뒤에도 에이전트를 계속 돌려 두는 VPS에 쓰면 됩니다. Linux만 지원합니다.
 
 ```bash
-curl -fsSL https://zerun.puqing.work/install.sh | sh
+curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 
