@@ -51,6 +51,7 @@ jobs:
 
   linux:
     if: inputs.publish_run_id == ''
+    name: linux (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
@@ -234,7 +235,12 @@ jobs:
           assert run['head_branch'] == os.environ['RELEASE_TAG'], 'Source build has a different tag'
           required = {'android / build', 'linux (ubuntu-22.04)', 'linux (ubuntu-22.04-arm)', 'macos', 'windows', 'cursor-compatibility / cursor-compatibility', 'cursor-compatibility / rust-tests'}
           builds = [job for job in jobs if job['name'] != 'publish']
-          assert required <= {job['name'] for job in builds}, 'Missing platform or test jobs'
+          build_names = {job['name'] for job in builds}
+          for job in builds:
+              if job['name'].startswith('linux ('):
+                  # Accept runs whose default matrix names include runtime parameters.
+                  build_names.add(job['name'].split(',')[0].rstrip(')') + ')')
+          assert required <= build_names, 'Missing platform or test jobs'
           assert all(job['conclusion'] == 'success' for job in builds), 'Source builds did not all pass'
           print('Source builds all passed and match the release tag')
           PY
