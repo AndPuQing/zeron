@@ -1,6 +1,6 @@
 # Per-provider agent environment configuration
 
-- Status: implementation complete on the task branch; platform CI in progress; PR #4 is draft.
+- Status: implementation complete; final platform validation and review status tracked in [PR #4](https://github.com/AndPuQing/zeron/pull/4).
 - Date: 2026-10-08.
 - Branch: `feat/agent-environment`.
 - Baseline: `origin/dev` at `19f62c90`.
@@ -333,7 +333,7 @@ test artifacts committed to the repository.
 | M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Complete locally; platform checks tracked in M4 |
 | M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | Complete locally; corrected Windows ACL requires CI |
 | M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | Complete locally |
-| M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | In progress |
+| M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | Local review complete; final platform results tracked in PR |
 
 M1–M3 each include their tests and update this table/PR with actual commit IDs
 and evidence. M4 adds a separate commit only when it introduces a meaningful
@@ -361,16 +361,23 @@ passed; new agent-environment subprocess integration 2 passed; existing
 provider/discovery/saved-session integrations 183 passed / 8 ignored. Selected
 engine integrations passed (device routing, subagents, profiles, queues,
 Pi/restart resume and session publication). Clippy passed for proto, RPC,
-harness, engine and UI libraries, with existing repository warnings. The M2
-commit: `b077642d`.
+harness, engine and UI libraries, with existing repository warnings. M2:
+`b077642d`.
 
 M3 desktop tests passed 1,594 tests with the native-font test filtered out,
 including masked/multiline replacement, conflicts, lost acknowledgements,
 device replacement, delayed capability negotiation, reveal fencing and
 provider-specific completion invalidation. User documentation is in
-[agent-environment.md](../agent-environment.md). The M3 commit ID is recorded
-at the next checkpoint.
+[agent-environment.md](../agent-environment.md). M3: `f3049511`.
 No live provider account is used by these fixture checks.
+
+M4 final review adds regressions for repeated/overlapping sensitive tokens
+and UTF-8 characters split across login reads. The partial-suffix redactor
+now preserves complete-match redaction, and login readers publish only
+complete UTF-8 sequences. Four environment/redaction tests and eight
+binding/runtime/login tests passed after this correction; affected core
+libraries passed Clippy again. The PR records the M4 commit and final CI
+results so documentation does not imply a platform result before it exists.
 
 The Rust toolchain is operational after restoring its Z3 dependency. The local
 Apple developer directory lacks the Metal compiler; desktop checks use the
@@ -380,5 +387,5 @@ M1 Windows CI exposed an ACL handle-access failure: tempfile's data handle
 does not request WRITE_DAC. M2 reopens the uniquely named temporary file with
 WRITE_DAC before protecting its ACL and before writing any configuration.
 The API signatures have been checked against windows-sys 0.61.2 sources;
-execution of the corrected implementation is still pending Windows CI.
+execution evidence for the corrected implementation is tracked in the PR.
 No deployment, merge, release or generated mobile binding change is included.

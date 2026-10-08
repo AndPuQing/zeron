@@ -3907,8 +3907,12 @@ fn wire_login_child_with_environment(
                 raw.extend_from_slice(&buf[..n]);
                 // Keep raw bytes per pipe so split UTF-8, overlapping secrets
                 // and interleaved stdout/stderr still redact correctly.
+                let complete = match std::str::from_utf8(&raw) {
+                    Err(error) if error.error_len().is_none() => &raw[..error.valid_up_to()],
+                    _ => &raw,
+                };
                 let mut pipes = lock(&redacted_pipes);
-                pipes[index] = environment.redact_streaming(&String::from_utf8_lossy(&raw));
+                pipes[index] = environment.redact_streaming(&String::from_utf8_lossy(complete));
                 *lock(&sink) = pipes.concat();
             }
         });
@@ -5209,7 +5213,7 @@ mod agent_environment_tests {
         let mut command = zeron_harness::process::Command::new("/bin/sh");
         command
             .arg("-c")
-            .arg("printf '%s' \"${API_KEY%token中文}\"; sleep 0.3; printf '%s' \"${API_KEY#private-login-}\"; exit 1")
+            .arg("printf '%s' \"${API_KEY%中文}\"; printf '\\344\\270'; sleep 0.3; printf '\\255\\346\\226\\207'; exit 1")
             .stdout(zeron_harness::process::Stdio::piped())
             .stderr(zeron_harness::process::Stdio::piped());
         environment.apply(&mut command);

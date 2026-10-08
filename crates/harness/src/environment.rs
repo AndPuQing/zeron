@@ -282,8 +282,9 @@ impl EnvironmentSnapshot {
     /// A live pipe may end in a partial secret until the next read arrives.
     /// Call on the complete raw buffer, never on previously redacted output.
     pub fn redact_streaming(&self, text: &str) -> String {
+        let values = self.sensitive_variants();
         let mut hidden_suffix = 0;
-        for value in self.sensitive_variants() {
+        for value in &values {
             for (end, _) in value.char_indices().rev() {
                 if end <= hidden_suffix || end > text.len() {
                     continue;
@@ -297,10 +298,24 @@ impl EnvironmentSnapshot {
         if hidden_suffix == 0 {
             self.redact(text)
         } else {
-            format!(
-                "{}[redacted]",
-                self.redact(&text[..text.len() - hidden_suffix])
-            )
+            // A partial suffix can overlap a complete value (for example a
+            // repeated token). Hide the entire overlapping match too, so
+            // cutting the suffix cannot expose its earlier bytes.
+            let mut cut = text.len() - hidden_suffix;
+            loop {
+                let previous = cut;
+                for value in &values {
+                    for (start, _) in text.match_indices(value.as_str()) {
+                        if start < cut && start + value.len() > cut {
+                            cut = start;
+                        }
+                    }
+                }
+                if cut == previous {
+                    break;
+                }
+            }
+            format!("{}[redacted]", self.redact(&text[..cut]))
         }
     }
 
@@ -410,6 +425,36 @@ mod tests {
         assert_eq!(
             snapshot.redact(r#"{\"error\":\"private-first-line\nprivate-second-line\"}"#),
             r#"{\"error\":\"[redacted]\"}"#
+        );
+    }
+
+    #[test]
+    fn streaming_diagnostics_do_not_expose_overlapping_complete_or_partial_tokens() {
+        let snapshot = EnvironmentSnapshot::default()
+            .patched(&[
+                EnvironmentChange::Set {
+                    name: "TOKEN".into(),
+                    value: "private-private".into(),
+                    sensitive: true,
+                },
+                EnvironmentChange::Set {
+                    name: "PREFIX".into(),
+                    value: "private-".into(),
+                    sensitive: true,
+                },
+            ])
+            .unwrap();
+        assert_eq!(
+            snapshot.redact_streaming("login: private-private"),
+            "login: [redacted]"
+        );
+        assert_eq!(
+            snapshot.redact_streaming("login: private-pri"),
+            "login: [redacted]"
+        );
+        assert_eq!(
+            snapshot.redact_streaming("login: private-private failed"),
+            "login: [redacted] failed"
         );
     }
 
