@@ -6,9 +6,14 @@ name: release
 #   - Windows per-user installer, portable zip, and updater exe (x86_64) via
 #     scripts/package-windows.ps1
 #   - Android signed ARM64 APK (arm64-v8a)
-# then create a GitHub Release AND upload everything to the
+# then create a GitHub Release AND upload the client-fetched artifacts to the
 # `zerun-releases` R2 bucket (served at zerun.puqing.work/releases/* for
 # `curl -fsSL https://zerun.puqing.work/install.sh | sh`), bumping latest.txt.
+# R2 keeps the newest two releases: install.sh reads latest.txt and both
+# updaters build their file names from manifest.json's version, so older
+# releases are never downloaded — scripts/prune-r2-releases.sh deletes them
+# after each publish. Manual downloads (dmg, portable zip, installer exe) stay
+# on GitHub Releases only.
 #
 # Trigger: push a tag `v<version>` matching the workspace version in
 # Cargo.toml (bump it in the same commit), or run manually via
@@ -272,9 +277,22 @@ jobs:
               npx wrangler@4 r2 object delete "zerun-releases/$stale" --remote || true
             done
           fi
-          for f in "$RUNNER_TEMP/zerun-release-assets"/*; do
-            test -f "$f" || { echo "Unexpected artifact directory: $f"; exit 1; }
-            npx wrangler@4 r2 object put "zerun-releases/$(basename "$f")" \
+          # Only the artifacts a client fetches from the edge: install.sh
+          # resolves the headless tarball from latest.txt, the desktop updater
+          # (crates/update) resolves its tarball / in-place Windows exe from
+          # manifest.json's version, and the Android updater does the same for
+          # the APK. The dmg, portable zip, installer exe and standalone
+          # .sha256 are manual-download only — README points at GitHub
+          # Releases — and would add ~130 MB per release of dead weight.
+          for name in \
+            "zerun-$VERSION-linux-x86_64.tar.gz" \
+            "zerun-$VERSION-linux-aarch64.tar.gz" \
+            "zerun-$VERSION-macos-arm64-app.tar.gz" \
+            "zerun-$VERSION-windows-x86_64.exe" \
+            "zerun-$VERSION-android.apk"; do
+            f="$RUNNER_TEMP/zerun-release-assets/$name"
+            test -f "$f" || { echo "missing artifact: $name"; exit 1; }
+            npx wrangler@4 r2 object put "zerun-releases/$name" \
               --file "$f" --remote
           done
           # manifest.json: version + per-artifact sha256 — the auto-updater
@@ -285,3 +303,12 @@ jobs:
           printf '%s' "$VERSION" > latest.txt
           npx wrangler@4 r2 object put zerun-releases/latest.txt \
             --file latest.txt --remote
+      - name: prune old releases from R2
+        if: env.CLOUDFLARE_API_TOKEN != ''
+        run: |
+          # A publication-recovery run checks out the tagged commit, which may
+          # predate this step. The upload above already succeeded at that point,
+          # so an absent script skips the prune instead of failing the release.
+          [[ -f scripts/prune-r2-releases.sh ]] \
+            || { echo 'prune script absent at this tag; skipping'; exit 0; }
+          scripts/prune-r2-releases.sh --apply --protect "$RELEASE_TAG"
