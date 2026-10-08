@@ -22,6 +22,7 @@ pub mod chat2_host;
 mod chat_persistence;
 pub mod diff_sync;
 pub mod doc_host;
+mod fs_watch;
 pub mod harness_updates;
 mod http_error;
 pub mod instance_lock;
@@ -242,6 +243,7 @@ impl EngineCore {
                 org_id: profile.org_id().to_string(),
                 user_id: profile.user_id().to_string(),
                 edge: edge.clone(),
+                local_only: matches!(profile.scope(), WorkspaceScope::Local),
             },
         )?;
         doc_host.set_workspace(workspace.clone());

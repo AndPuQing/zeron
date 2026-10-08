@@ -200,7 +200,11 @@ pub fn run_app(config: UiConfig) {
         app_update::AppUpdate::init(config.boot().edge_url, data_dir.clone(), cx);
         cx.register_url_scheme("zerun-dev").detach();
 
-        let state = cx.new(|_| state::AppState::new());
+        let state = cx.new(|cx| {
+            let mut state = state::AppState::new();
+            state.watch_clock_transitions(cx);
+            state
+        });
         let url_state = state.clone();
         cx.spawn(async move |cx| {
             while let Some(url) = url_rx.next().await {

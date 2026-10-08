@@ -2069,19 +2069,27 @@ impl RpcService for EngineRpc {
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
                 let p: ChatParams = parse_params(params)?;
-                if opening_tail {
-                    return Ok(RpcReply::Stream(
-                        opening_doc_messages_stream(self.doc_host.clone(), p.chat_id).await?,
-                    ));
-                }
-                let handle = self
-                    .doc_host
-                    .open(&p.chat_id)
-                    .map_err(|e| RpcError::Failed(e.to_string()))?;
-                Ok(RpcReply::Stream(doc_messages_stream(
-                    handle.watch_messages(),
-                    handle.doc_arc(),
-                )))
+                // An open transcript keeps its chat's checkout diff live (and
+                // discardable) even when the chat is archived; the guard lives
+                // exactly as long as the stream.
+                let interest = self.diff_sync.retain_chat(&p.chat_id);
+                let stream = if opening_tail {
+                    opening_doc_messages_stream(self.doc_host.clone(), p.chat_id).await?
+                } else {
+                    let handle = self
+                        .doc_host
+                        .open(&p.chat_id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?;
+                    doc_messages_stream(handle.watch_messages(), handle.doc_arc())
+                };
+                Ok(RpcReply::Stream(
+                    stream
+                        .map(move |frame| {
+                            let _held = &interest;
+                            frame
+                        })
+                        .boxed(),
+                ))
             }
             methods::WATCH_QUEUE => {
                 let p: ChatParams = parse_params(params)?;
@@ -2678,7 +2686,7 @@ impl RpcService for EngineRpc {
 
                     let snapshot = self
                         .diff_sync
-                        .discard_working_tree(&identity.id, &p.expected_checksum)
+                        .discard_working_tree(&identity, &p.expected_checksum)
                         .await
                         .map_err(|e| RpcError::Failed(e.to_string()))?;
                     RpcReply::value(&serde_json::json!({
