@@ -1434,6 +1434,9 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_TITLE_SETTINGS
             | methods::SET_TITLE_SETTINGS
             | methods::SET_HARNESS_ENABLED
+            | methods::GET_HARNESS_ENVIRONMENT
+            | methods::PATCH_HARNESS_ENVIRONMENT
+            | methods::REVEAL_HARNESS_ENVIRONMENT_VALUE
             | methods::LIST_MODELS
             | methods::LIST_SKILLS
             | methods::LIST_COMMANDS
@@ -1819,6 +1822,60 @@ impl RpcService for EngineRpc {
             methods::ENGINE_INFO => RpcReply::value(&self.engine_info),
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
+            methods::GET_HARNESS_ENVIRONMENT => {
+                let p: zeron_proto::HarnessEnvironmentParams = parse_params(params)?;
+                if !self
+                    .registry
+                    .descriptors()
+                    .iter()
+                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                {
+                    return Err(RpcError::BadParams("Unknown production provider".into()));
+                }
+                RpcReply::value(
+                    &self
+                        .registry
+                        .environment
+                        .metadata(p.harness)
+                        .map_err(RpcError::Failed)?,
+                )
+            }
+            methods::PATCH_HARNESS_ENVIRONMENT => {
+                let p: zeron_proto::PatchHarnessEnvironmentParams = parse_params(params)
+                    .map_err(|_| RpcError::BadParams("Invalid environment patch request".into()))?;
+                if !self
+                    .registry
+                    .descriptors()
+                    .iter()
+                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                {
+                    return Err(RpcError::BadParams("Unknown production provider".into()));
+                }
+                let registry = self.registry.clone();
+                let reply = tokio::task::spawn_blocking(move || registry.environment.patch(p))
+                    .await
+                    .map_err(|_| RpcError::Failed("Environment save task failed".into()))?
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&reply)
+            }
+            methods::REVEAL_HARNESS_ENVIRONMENT_VALUE => {
+                let p: zeron_proto::RevealHarnessEnvironmentParams = parse_params(params)?;
+                if !self
+                    .registry
+                    .descriptors()
+                    .iter()
+                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                {
+                    return Err(RpcError::BadParams("Unknown production provider".into()));
+                }
+                RpcReply::value(
+                    &self
+                        .registry
+                        .environment
+                        .reveal(p)
+                        .map_err(RpcError::Failed)?,
+                )
+            }
             methods::INSTALL_HARNESS => {
                 let p: ListModelsParams = parse_params(params)?;
                 let installing = self.registry.installs.begin(p.harness)?;
@@ -4070,6 +4127,14 @@ mod tests {
         assert!(!forwardable(methods::ENGINE_INFO));
         assert!(!forwardable(methods::ENGINE_READY));
         assert!(forwardable(methods::QUEUE_COMMAND));
+        for method in [
+            methods::GET_HARNESS_ENVIRONMENT,
+            methods::PATCH_HARNESS_ENVIRONMENT,
+            methods::REVEAL_HARNESS_ENVIRONMENT_VALUE,
+        ] {
+            assert!(forwardable(method));
+            assert!(!is_stream_method(method));
+        }
         assert!(forwardable(methods::SEARCH_FILES));
         assert!(forwardable(methods::SEARCH_GIT_HISTORY));
         assert!(forwardable(methods::FETCH_ALL));

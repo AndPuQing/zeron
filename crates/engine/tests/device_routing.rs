@@ -395,6 +395,78 @@ fn assert_public_change_request_payload(item: &serde_json::Value) {
 // ---------------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_environment_configuration_targets_only_the_execution_device() {
+    let (relay_url, _relay) = fake_device_room().await;
+    let dirs = tempfile::tempdir().unwrap();
+    let viewer = assemble(&dirs.path().join("viewer-env"), "viewer-env");
+    let host_dir = dirs.path().join("host-env");
+    std::fs::create_dir_all(&host_dir).unwrap();
+    std::fs::write(host_dir.join("device-id"), "host-env").unwrap();
+    let host = EngineCore::assemble(
+        &host_dir,
+        registry_for(HarnessId::Codex),
+        HarnessId::Codex,
+        None,
+    )
+    .unwrap();
+    let _host = host.start_host_relay(&relay_url);
+    let mut config = LinkCacheConfig::new(relay_url, Arc::new(StaticToken("test-user".into())));
+    config.probe_timeout = Duration::from_secs(5);
+    viewer.set_links(LinkCache::new(config));
+    let client = zeron_rpc::memory_client(viewer.rpc_service());
+    let target = serde_json::json!({"harness":"codex", "targetDeviceId":"host-env"});
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let metadata = loop {
+        match client
+            .call(methods::GET_HARNESS_ENVIRONMENT, target.clone())
+            .await
+        {
+            Ok(metadata) => break metadata,
+            Err(error) => {
+                assert!(tokio::time::Instant::now() < deadline, "{error}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
+    let request = serde_json::json!({"harness":"codex", "targetDeviceId":"host-env", "expectedRevision":metadata["revision"], "changes":[{"action":"set","name":"OPENAI_API_KEY","value":"remote-private-fixture","sensitive":true}]});
+    let saved = client
+        .call(methods::PATCH_HARNESS_ENVIRONMENT, request.clone())
+        .await
+        .unwrap();
+    assert_eq!(saved["conflict"], false);
+    assert!(!saved.to_string().contains("remote-private-fixture"));
+    assert_eq!(
+        client
+            .call(methods::PATCH_HARNESS_ENVIRONMENT, request)
+            .await
+            .unwrap()["conflict"],
+        true
+    );
+    assert!(
+        viewer
+            .registry
+            .environment
+            .snapshot(HarnessId::Codex)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert!(host_dir.join("agent-environment.json").exists());
+    assert!(
+        !dirs
+            .path()
+            .join("viewer-env/agent-environment.json")
+            .exists()
+    );
+    let reveal = client.call(methods::REVEAL_HARNESS_ENVIRONMENT_VALUE, serde_json::json!({"harness":"codex", "targetDeviceId":"host-env", "name":"OPENAI_API_KEY", "expectedRevision":saved["metadata"]["revision"]})).await.unwrap();
+    assert_eq!(reveal["value"], "remote-private-fixture");
+    let stale = client.call(methods::REVEAL_HARNESS_ENVIRONMENT_VALUE, serde_json::json!({"harness":"codex", "targetDeviceId":"host-env", "name":"OPENAI_API_KEY", "expectedRevision":metadata["revision"]})).await;
+    assert!(stale.is_err());
+    viewer.shutdown().await;
+    host.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn checkout_change_request_stream_matches_locally_and_through_device_routing() {
     let (relay_url, _relay) = fake_device_room().await;
     let dirs = tempfile::tempdir().expect("tempdir");

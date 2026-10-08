@@ -24,6 +24,8 @@ use zeron_proto::{
     UserInputAnswer, UserInputQuestion,
 };
 
+pub mod environment;
+
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {
     #[error("harness binary not found: {0}")]

@@ -1,6 +1,6 @@
 # Per-provider agent environment configuration
 
-- Status: proposed; design checkpoint only.
+- Status: implementation in progress on the task branch; PR #4 is draft.
 - Date: 2026-10-08.
 - Branch: `feat/agent-environment`.
 - Baseline: `origin/dev` at `19f62c90`.
@@ -161,11 +161,11 @@ reason; do not accept and then silently ignore them.
 For this first release, variables selecting identity/configuration roots
 (`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_*`, `CODEX_HOME`,
 `CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `GROK_HOME`, `HERMES_HOME`,
-`GEMINI_HOME`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and
+`GEMINI_HOME`, `HERMES_SHARED_AUTH_DIR`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and
 `OPENCODE_CONFIG_CONTENT`) are reserved. The current account manager, skill
 discovery, import readers, and context hashing resolve these from the engine
 environment; supporting per-provider roots requires changing those readers
-together. Provider executable selectors are also reserved and keep their
+together. Browser launch routing (`BROWSER`) and adapter-owned `PYTHONUNBUFFERED` are reserved as process controls. Provider executable selectors are also reserved and keep their
 existing application-level override mechanism.
 
 Network settings, provider credentials and ordinary feature flags remain
@@ -330,10 +330,10 @@ test artifacts committed to the repository.
 | Node | Deliverable / commit scope | Exit criteria | Status |
 | --- | --- | --- | --- |
 | M0 | `docs: design per-provider agent environment configuration` | Task branch, current baseline, this design, development workflow, documentation checks | Complete |
-| M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Pending |
-| M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | Pending |
-| M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | Pending |
-| M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | Pending |
+| M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Complete locally; platform checks tracked in M4 |
+| M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | In progress |
+| M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | In progress |
+| M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | In progress |
 
 M1–M3 each include their tests and update this table/PR with actual commit IDs
 and evidence. M4 adds a separate commit only when it introduces a meaningful
@@ -343,18 +343,17 @@ release tags as part of this feature task.
 
 ### Current validation state
 
-This checkpoint changes documentation only. Business code, wire types, runtime
-behavior, generated bindings and releases have not been changed.
+M0: `e1e9adcf`. M1 adds the validated wire types, acknowledged private store,
+CAS revisions and execution-device routing. Shared protocol tests (69), RPC
+unit tests (16), private store transaction tests and the new actual relay test
+have passed locally. The M1 commit ID is recorded at the next checkpoint.
 
-The repository inventory and relevant launch/store/settings code have been
-read. Workspace metadata parsed successfully during the preceding repository
-review. Local documentation links were checked. Staged whitespace and diff
-inspection are required before committing; their results are recorded in the
-draft PR alongside the actual M0 commit ID.
+M2 and M3 are under regression validation. Initial environment/runtime tests
+and both desktop editor tests pass; final suite evidence is recorded below
+when complete. No live provider account is used by these fixture checks.
 
-On this machine, the Homebrew `rustc` currently fails because the Z3 library
-referenced by LLVM is missing; no Rustup toolchain was found. The active Apple
-developer directory is Command Line Tools, with no full Xcode found in the
-standard application locations. Restore a usable Rust toolchain before M1
-build/test work. Xcode is needed only if later validation touches iOS. No
-implementation compilation or test result is claimed by this design.
+The Rust toolchain is operational after restoring its Z3 dependency. The local
+Apple developer directory lacks the Metal compiler; desktop checks use the
+existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
+block tests are included in the Windows workflow and require that platform.
+No deployment, merge, release or generated mobile binding change is included.

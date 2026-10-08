@@ -124,6 +124,7 @@ enum Slot {
 }
 
 pub struct HarnessRegistry {
+    pub environment: crate::agent_environment::EnvironmentStore,
     pub(crate) installs: crate::rpc::Installations,
     slots: Mutex<HashMap<HarnessId, Slot>>,
     order: Mutex<Vec<HarnessId>>,
@@ -212,6 +213,7 @@ impl HarnessRegistry {
     pub fn new() -> Self {
         let (update_generation, _) = tokio::sync::watch::channel(0);
         Self {
+            environment: Default::default(),
             installs: Default::default(),
             slots: Mutex::new(HashMap::new()),
             order: Mutex::new(Vec::new()),
