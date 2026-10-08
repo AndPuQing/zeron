@@ -60,8 +60,14 @@ jobs:
           # then refuses to load on Ubuntu 22.04 / Debian 12. 22.04 is the floor
           # because crates/ui links webkit2gtk-4.1, which older releases lack.
           - runner: ubuntu-22.04 # x86_64
+            ort_arch: x64
+            ort_sha256: a3e1b79d7bb1bf09696ce675f49e4064e6c81f6202b8225624fff0e93f8d6407
           - runner: ubuntu-22.04-arm # aarch64
+            ort_arch: aarch64
+            ort_sha256: e15ff8b5d85afe6c144d97c6fd432254bf76a219daaf17658087d6ecb3e8f0bb
     runs-on: ${{ matrix.runner }}
+    env:
+      ORT_VERSION: 1.28.0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: gpui system deps
@@ -75,6 +81,20 @@ jobs:
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Compatible ONNX Runtime
+        env:
+          ORT_ARCH: ${{ matrix.ort_arch }}
+          ORT_SHA256: ${{ matrix.ort_sha256 }}
+        run: |
+          # The official shared libraries support glibc 2.27; the default
+          # static distribution requires newer glibc and libstdc++ symbols.
+          asset="onnxruntime-linux-$ORT_ARCH-$ORT_VERSION.tgz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$asset" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v$ORT_VERSION/$asset"
+          echo "$ORT_SHA256  $RUNNER_TEMP/$asset" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$asset" -C "$RUNNER_TEMP"
+          echo "ORT_LIB_LOCATION=$RUNNER_TEMP/onnxruntime-linux-$ORT_ARCH-$ORT_VERSION/lib" >> "$GITHUB_ENV"
+          echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
       - name: package
         run: scripts/package-linux.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

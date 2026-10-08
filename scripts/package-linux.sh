@@ -7,6 +7,7 @@
 #
 # Usage: scripts/package-linux.sh
 # Env:   PROFILE=debug for a fast unoptimized package (CI smoke); default release.
+#        ORT_PREFER_DYNAMIC_LINK=1 / ORT_LIB_LOCATION bundle a shared runtime.
 
 set -euo pipefail
 
@@ -20,7 +21,21 @@ STAGE="$OUT_DIR/zerun-$VERSION-linux-$ARCH"
 TARBALL="$STAGE.tar.gz"
 
 cd "$ROOT"
-if [[ "$PROFILE" == "release" ]]; then
+if [[ "${ORT_PREFER_DYNAMIC_LINK:-}" == "1" ]]; then
+  [[ -d "${ORT_LIB_LOCATION:-}" ]] \
+    || { echo 'ORT_LIB_LOCATION must point to the shared runtime library directory' >&2; exit 1; }
+  build_args=(--locked -p zeron --bin zerun)
+  [[ "$PROFILE" != "release" ]] || build_args+=(--release)
+  # Resolve the bundled runtime beside the executable, including after an
+  # update switches to a new version directory. Apply only to this binary so
+  # dependencies can keep their cached builds.
+  cargo rustc "${build_args[@]}" -- -C 'link-arg=-Wl,-rpath,$ORIGIN/lib'
+  if [[ "$PROFILE" == "release" ]]; then
+    BIN="$ROOT/target/release/zerun"
+  else
+    BIN="$ROOT/target/debug/zerun"
+  fi
+elif [[ "$PROFILE" == "release" ]]; then
   cargo build --release --locked -p zeron
   BIN="$ROOT/target/release/zerun"
 else
@@ -37,6 +52,17 @@ install -m 644 "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"
 mkdir -p "$STAGE/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$STAGE/licenses/fonts/"
 cp "$ROOT/crates/voice/NOTICE.md" "$STAGE/licenses/parakeet-v3.txt"
+if [[ "${ORT_PREFER_DYNAMIC_LINK:-}" == "1" ]]; then
+  mkdir -p "$STAGE/lib"
+  cp -a "$ORT_LIB_LOCATION"/libonnxruntime*.so* "$STAGE/lib/"
+  runtime_root="$(dirname "$ORT_LIB_LOCATION")"
+  install -m 644 "$runtime_root/LICENSE" "$STAGE/licenses/onnxruntime.txt"
+  install -m 644 "$runtime_root/ThirdPartyNotices.txt" "$STAGE/licenses/onnxruntime-third-party.txt"
+fi
+
+# Check the packaged layout on the release runner before publishing, without
+# relying on any build-time library search path.
+env -u LD_LIBRARY_PATH "$STAGE/zerun" --version
 
 cat >"$STAGE/install.sh" <<'INSTALL'
 #!/usr/bin/env bash
