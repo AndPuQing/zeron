@@ -45,8 +45,9 @@ shape, so dsh's model select parsed to nothing: the picker came up empty and
 `validate_config_model_selection` hard-failed every run. `select_choices()`
 (`crates/harness/src/acp/mod.rs`) now flattens groups at every consumer — the
 effort-ladder derivation, `model_select`, `trait_from_config_option`,
-`validate_config_model_selection`, and `config_option_sets`. Any grouped ACP
-agent would have hit this, not just dsh.
+`validate_config_model_selection`, `config_option_sets`, and
+`effort_variant_id` (the effort-in-model-id run path). Any grouped ACP agent
+would have hit this, not just dsh.
 
 ## Mapping
 

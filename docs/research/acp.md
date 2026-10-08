@@ -233,7 +233,7 @@ dsh exposed a gap in the shared client: its model select uses ACP
 `SessionConfigSelectGroup` entries (provider-grouped options), which the
 previous flat-shape parsing dropped — the picker came up empty and every run
 failed `validate_config_model_selection`. `select_choices()` now flattens
-groups at all five consumers. Model values are raw provider-scoped JSON tuples
+groups at all six consumers. Model values are raw provider-scoped JSON tuples
 (`"[\"deepseek-official\",\"deepseek-v4-pro\"]"`), persisted verbatim and
 round-tripped by exact match; the reasoning select is a flat
 `off/low/high/max` ladder (`off` ↔ `ReasoningLevel::Minimal`). The fake

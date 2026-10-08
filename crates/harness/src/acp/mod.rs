@@ -3529,17 +3529,14 @@ fn effort_variant_id(
                 .iter()
                 .find(|o| o.get("category").and_then(Value::as_str) == Some("model"))
         })
-        .and_then(|o| o.get("options").and_then(Value::as_array))
-        .map(|choices| {
-            choices
-                .iter()
-                .filter_map(|c| {
-                    let id = c.get("value").and_then(Value::as_str)?;
-                    Some((id, c.get("name").and_then(Value::as_str).unwrap_or(id)))
-                })
-                .collect()
+        .map(select_choices)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|c| {
+            let id = c.get("value").and_then(Value::as_str)?;
+            Some((id, c.get("name").and_then(Value::as_str).unwrap_or(id)))
         })
-        .unwrap_or_default();
+        .collect();
     if choices.iter().any(|(id, _)| *id == model) {
         return model.to_owned();
     }
@@ -6553,6 +6550,57 @@ mod tests {
             "gemini-legacy"
         );
         assert_eq!(id("unknown-model", None), "unknown-model");
+    }
+
+    /// A grouped model select (ACP `SessionConfigSelectGroup`, dsh-style) has
+    /// to flatten here too: the variant ids live inside the groups, so the old
+    /// flat read saw no choices and silently sent the BASE id — the run-time
+    /// twin of the empty-picker bug the other consumers had.
+    #[test]
+    fn effort_variant_id_flattens_grouped_model_options() {
+        let grouped = json!({
+            "configOptions": [{
+                "id": "model",
+                "category": "model",
+                "type": "select",
+                "options": [
+                    {
+                        "group": "flash",
+                        "name": "Flash",
+                        "options": [
+                            {"value": "gemini-3.7-flash-high", "name": "Gemini 3.7 Flash (High)"},
+                            {"value": "gemini-3.7-flash-medium", "name": "Gemini 3.7 Flash (Medium)"},
+                            {"value": "gemini-3.7-flash-low", "name": "Gemini 3.7 Flash (Low)"},
+                        ],
+                    },
+                    {
+                        "group": "pro",
+                        "name": "Pro",
+                        "options": [
+                            {"value": "gemini-pro-agent", "name": "Gemini 3.1 Pro (High)"},
+                            {"value": "gemini-3.1-pro-low", "name": "Gemini 3.1 Pro (Low)"},
+                        ],
+                    },
+                ]
+            }]
+        });
+        assert_eq!(
+            effort_variant_id(&grouped, "gemini-3.1-pro", Some(ReasoningLevel::High)),
+            "gemini-pro-agent"
+        );
+        assert_eq!(
+            effort_variant_id(&grouped, "gemini-3.1-pro", Some(ReasoningLevel::Low)),
+            "gemini-3.1-pro-low"
+        );
+        assert_eq!(
+            effort_variant_id(&grouped, "gemini-3.7-flash", Some(ReasoningLevel::Medium)),
+            "gemini-3.7-flash-medium"
+        );
+        // An id the groups already advertise passes through untouched.
+        assert_eq!(
+            effort_variant_id(&grouped, "gemini-pro-agent", Some(ReasoningLevel::Low)),
+            "gemini-pro-agent"
+        );
     }
 
     #[test]
