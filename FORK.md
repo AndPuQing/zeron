@@ -19,35 +19,19 @@ Remotes:
 
 ## Syncing upstream
 
-`dev` is not rebased or merged wholesale onto upstream. Upstream feature work
-is cherry-picked in as needed:
+Select changes individually rather than merging the entire source branch.
+Fetch it read-only, then apply the needed commits:
 
 ```sh
 git fetch --no-tags upstream main
-git cherry-pick -x <commit>...   # one feature or PR at a time
+git cherry-pick <commit>...
 ```
 
-`-x` records the upstream commit in the message. Resolve conflicts inside the
-pick when the fix belongs to that feature, or with a small follow-up commit.
-`dev` history is not rewritten, and published tags never move.
+Write commit messages around this repository's resulting behavior. Do not add
+cross-repository issue or pull request references, source commit trailers, or
+author mentions. Push changes only to `origin`.
 
-`main` is refreshed by hand only when a pristine upstream reference is useful:
-
-```sh
-git push origin upstream/main:main
-```
-
-Never mirror upstream tags into the fork: a tag marks the tree that was
-actually released.
-
-To land an upstream PR before upstream merges it:
-
-```sh
-git fetch upstream pull/<number>/head:pr-<number>
-git cherry-pick -x pr-<number>
-```
-
-Cherry-pick a range when the PR mixes unrelated commits.
+Never mirror source tags into this fork: a tag marks the tree actually released.
 
 ## Deliberate divergence
 
@@ -61,7 +45,8 @@ conflicts.
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `zerun.puqing.work`, account `fc5a16c75e508b812ee6edd119fd32ae` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://zerun.puqing.work` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
-| Branding | display name `Zerun`; bundles `work.puqing.zerun[.ios]`; binary/product names stay `zeron` for now |
+| Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |
+| Desktop isolation | Unix data `~/.zerun`, Windows data `%LOCALAPPDATA%\Zerun`, Linux service `zerun.service`, Windows installer AppId `94F099C7-A9D5-5A32-B951-50AE16E29A01`, IPC 27655, loopback callback 27642; overrides use `ZERUN_*` |
 | Android | app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
@@ -90,7 +75,7 @@ Allowed redirect URIs for the fork's WorkOS staging application:
 
 - `zerun-dev://callback` — mobile/native sign-in.
 - `https://zerun.puqing.work/auth/cli/callback` — the paste-code flow used by
-  `zeron login`.
+  `zerun login`.
 - `http://127.0.0.1:*/callback` — desktop loopback sign-in. The default port
-  is `27641`; `ZERON_CALLBACK_PORT` can override it. WorkOS supports port
+  is `27642`; `ZERUN_CALLBACK_PORT` can override it. WorkOS supports port
   wildcards for loopback addresses.

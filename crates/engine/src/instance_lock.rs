@@ -78,7 +78,7 @@ impl InstanceLock {
                         let holder = holder.trim();
                         return Err(EngineError::Other(format!(
                             "another zeron engine is already running on {} (pid {}); \
-                             stop it or use a different data dir (ZERON_DATA_DIR)",
+                             stop it or use a different data dir (ZERUN_DATA_DIR)",
                             data_dir.display(),
                             if holder.is_empty() { "unknown" } else { holder },
                         )));
@@ -122,7 +122,7 @@ impl InstanceLock {
 
     /// Best-effort liveness probe: the pid stamped by the engine currently holding
     /// this data dir's lock, `None` when no engine is running (or the platform
-    /// cannot test a lock without taking it). Used by `zeron status` and the
+    /// cannot test a lock without taking it). Used by `zerun status` and the
     /// login/logout guards; a single non-blocking try — no retry budget — so a
     /// starting engine's transient fork-window artifacts read as "running", which
     /// is the safe direction for those callers.
@@ -183,7 +183,7 @@ impl InstanceLock {
 fn already_running_error(data_dir: &Path, holder: &str) -> EngineError {
     EngineError::Other(format!(
         "another zeron engine is already running on {} (pid {}); \
-         stop it or use a different data dir (ZERON_DATA_DIR)",
+         stop it or use a different data dir (ZERUN_DATA_DIR)",
         data_dir.display(),
         if holder.is_empty() { "unknown" } else { holder },
     ))

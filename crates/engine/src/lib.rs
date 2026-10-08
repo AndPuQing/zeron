@@ -106,7 +106,7 @@ pub(crate) fn new_id() -> String {
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    /// Data directory (default `~/.zeron`, dev `~/.zeron-dev`).
+    /// Data directory (default `~/.zerun`, dev `~/.zerun-dev`).
     pub data_dir: PathBuf,
     /// Edge base URL.
     pub edge_url: String,
@@ -629,12 +629,7 @@ impl Engine {
         {
             auth_config.workos_api_base = base;
         }
-        auth_config.callback_port = Some(
-            std::env::var("ZERON_CALLBACK_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(27641),
-        );
+        auth_config.callback_port = Some(zeron_proto::identity::callback_port());
         if let Some(token) = &config.edge_token {
             auth_config.dev_user_id = token.clone();
         }
@@ -892,7 +887,7 @@ impl Engine {
             .ok_or_else(|| EngineError::Other("synced workspace profile is not ready".into()))?;
 
         let runtime = Self::assemble_runtime(&config, auth, profile).await?;
-        // The desktop app or `zeron update` may install a newer binary under
+        // The desktop app or `zerun update` may install a newer binary under
         // a running service; restart into it once no run or terminal is live.
         if let Some(updater) = runtime.core().updater() {
             updater.restart_when_superseded();

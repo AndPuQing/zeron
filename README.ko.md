@@ -1,18 +1,18 @@
-# Zeron
+# Zerun
 
 코딩 에이전트(Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi, Antigravity)를 기본적으로 로컬에서 관리하고, 필요하면 여러 기기 간 동기화도 사용할 수 있습니다.
 
 *[English](README.md) | [简体中文](README.zh-CN.md) | 한국어 | [日本語](README.ja.md)*
 
-![Zeron 데스크톱 앱](docs/media/readme/app-screenshot.jpg)
+![Zerun 데스크톱 앱](docs/media/readme/app-screenshot.jpg)
 
 ## 데스크톱 앱
 
 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest)에서 플랫폼에 맞는 최신 버전을 내려받으세요.
 
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`의 압축을 풀고 안에 있는 `install.sh` 실행
+- **macOS** — `zerun-<version>-macos-arm64.dmg`
+- **Windows** — `zerun-<version>-windows-x86_64-setup.exe`
+- **Linux** — `zerun-<version>-linux-<arch>.tar.gz`의 압축을 풀고 안에 있는 `install.sh` 실행
 
 계정이나 네트워크 연결이 필요 없으며, 세션은 사용 중인 기기에 저장됩니다. 앱은 자동으로 업데이트됩니다.
 
@@ -22,15 +22,15 @@
 
 ```bash
 curl -fsSL https://zerun.puqing.work/install.sh | sh
-zeron status
+zerun status
 ```
 
 설치 스크립트는 엔진을 백그라운드 서비스로 실행하며, 재부팅 후에도 자동으로 다시 시작됩니다.
 
 ```bash
-zeron status      # 로컬/동기화 모드와 엔진 상태 확인
-zeron update      # 최신 버전으로 업데이트
-zeron daemon start|stop|restart|status
+zerun status      # 로컬/동기화 모드와 엔진 상태 확인
+zerun update      # 최신 버전으로 업데이트
+zerun daemon start|stop|restart|status
 ```
 
 ## 여러 기기 간 동기화 (선택)
@@ -38,9 +38,9 @@ zeron daemon start|stop|restart|status
 로그인하면 한 기기에서 에이전트를 시작하고 다른 기기에서 이어서 보거나 조작할 수 있습니다.
 
 ```bash
-zeron daemon stop
-zeron login        # 로컬 전용 모드로 돌아가려면 zeron logout
-zeron daemon start
+zerun daemon stop
+zerun login        # 로컬 전용 모드로 돌아가려면 zerun logout
+zerun daemon start
 ```
 
 같은 계정에 로그인한 기기끼리는 서로의 워크스페이스 파일을 읽고 쓸 수 있으므로, 신뢰하는 기기에서만 로그인하세요. 기존 로컬 세션은 업로드되지 않습니다.

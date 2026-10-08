@@ -91,7 +91,7 @@ impl Drop for WatchPreparation {
 /// Everything needed to reach (or start) an engine.
 #[derive(Debug, Clone)]
 pub struct EngineBootConfig {
-    /// Data directory for the embedded engine (`~/.zeron`).
+    /// Data directory for the embedded engine (`~/.zerun`).
     pub data_dir: PathBuf,
     /// Localhost IPC port to probe / serve.
     pub ipc_port: u16,
@@ -507,7 +507,7 @@ impl EngineHandle {
                 }
             },
             // Something is on the port but it is not an engine (or it is
-            // wedged). Fall through and embed: a stranger holding 27654
+            // wedged). Fall through and embed: a stranger holding 27655
             // should cost other viewports, not this window.
             Err(err) => {
                 tracing::warn!(%url, error = %err, "not an engine; embedding instead");

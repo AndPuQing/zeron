@@ -28,7 +28,7 @@ async fn silent_npm_enoent_death_surfaces_decoded_error() {
 
     // SAFETY: single-test binary — nothing else reads env concurrently.
     unsafe {
-        std::env::set_var("ZERON_ADAPTERS_DIR", dir.path().join("adapters"));
+        std::env::set_var("ZERUN_ADAPTERS_DIR", dir.path().join("adapters"));
         std::env::set_var("ZERON_NO_LOGIN_SHELL", "1");
         std::env::set_var("PATH", &bin);
         std::env::set_var("HOME", dir.path());

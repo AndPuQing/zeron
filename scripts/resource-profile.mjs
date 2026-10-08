@@ -47,7 +47,7 @@ const server = createServer();
 await new Promise(r => server.listen(0, '127.0.0.1', r));
 const port = server.address().port;
 await new Promise(r => server.close(r));
-const env = { ...process.env, ZERON_IPC_PORT: String(port), ZERON_DATA_DIR: `${output}/engine`,
+const env = { ...process.env, ZERUN_IPC_PORT: String(port), ZERUN_DATA_DIR: `${output}/engine`,
   ZERON_HARNESS: harness, ZERON_FRAME_STATS: process.env.ZERON_FRAME_STATS ?? '1', RUST_LOG: 'warn',
   ZERON_MOCK_CHARS: '24', ZERON_MOCK_DELAY_MS: '20' };
 delete env.ZERON_EDGE_TOKEN;
@@ -163,7 +163,7 @@ try {
   } });
   ws.send(JSON.stringify({ id, method: 'WatchDocMessages', params: { chatId } }));
   const locator = createHash('sha256').update(`Local\0device:${deviceId}`).digest('hex').slice(0, 16);
-  const ui = start([`zerun-dev://open/chat/${chatId}?workspace=${locator}`], 'ui', { ZERON_DATA_DIR: `${output}/ui` });
+  const ui = start([`zerun-dev://open/chat/${chatId}?workspace=${locator}`], 'ui', { ZERUN_DATA_DIR: `${output}/ui` });
   writeFileSync(`${output}/pids.json`, JSON.stringify({engine: engine.pid, ui: ui.pid}));
   // Native windows activate themselves. Let the initial layout/splash settle.
   if (macOS) {
@@ -175,8 +175,8 @@ try {
   // window can consume no rendering CPU for the entire workload).
   if (!macOS && process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
     await sleep(2000);
-    const windows = execFileSync('xdotool', ['search', '--class', '^zeron$'], { encoding: 'utf8' }).trim().split('\n');
-    if (windows.length !== 1) throw Error('Use a dedicated X display with exactly one Zeron window');
+    const windows = execFileSync('xdotool', ['search', '--class', '^zerun$'], { encoding: 'utf8' }).trim().split('\n');
+    if (windows.length !== 1) throw Error('Use a dedicated X display with exactly one Zerun window');
     execFileSync('xdotool', ['windowraise', windows[0], 'windowsize', windows[0], '1280', '800', 'windowfocus', windows[0]]);
   }
   sampler = setInterval(() => {

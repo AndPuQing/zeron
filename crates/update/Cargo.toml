@@ -6,6 +6,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+zeron-proto.workspace = true
+plist.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 reqwest.workspace = true

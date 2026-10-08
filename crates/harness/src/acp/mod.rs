@@ -2463,7 +2463,7 @@ fn initialize_params(harness: HarnessId) -> Value {
         "protocolVersion": 1,
         "clientInfo": {
             "name": "zeron",
-            "title": "Zeron",
+            "title": "Zerun",
             "version": env!("CARGO_PKG_VERSION"),
         },
         // Declined: agents fall back to their own fs/terminal access, which
@@ -5169,7 +5169,7 @@ mod tests {
     }
 
     /// runs in a child process, since installs resolve through the
-    /// process-wide `ZERON_ADAPTERS_DIR`.
+    /// process-wide `ZERUN_ADAPTERS_DIR`.
     #[cfg(any(unix, windows))]
     #[test]
     fn antigravity_launches_the_newest_trusted_install_and_prunes_the_rest() {
@@ -5181,7 +5181,7 @@ mod tests {
                     "acp::tests::antigravity_launches_the_newest_trusted_install_and_prunes_the_rest",
                     "--nocapture",
                 ])
-                .env("ZERON_ADAPTERS_DIR", root.path())
+                .env("ZERUN_ADAPTERS_DIR", root.path())
                 .env("ZERON_TEST_AGY_ADAPTERS", root.path())
                 .env("PATH", root.path().join("bin"))
                 .env("ZERON_NO_LOGIN_SHELL", "1")
@@ -5288,7 +5288,7 @@ mod tests {
     }
 
     /// downloads google's real archive (~110 MB). run with
-    /// `ZERON_TEST_AGY_LIVE_SIGNED=1 ZERON_ADAPTERS_DIR=<empty dir>`.
+    /// `ZERON_TEST_AGY_LIVE_SIGNED=1 ZERUN_ADAPTERS_DIR=<empty dir>`.
     #[tokio::test]
     async fn antigravity_live_release_is_refused_when_it_misreports_its_version() {
         if std::env::var_os("ZERON_TEST_AGY_LIVE_SIGNED").is_none() {
@@ -6084,7 +6084,7 @@ mod mcp_injection_tests {
             name: "zeron".into(),
             command: "/opt/zeron/zeron".into(),
             args: vec!["mcp".into()],
-            env: [("ZERON_IPC_PORT".to_owned(), "27654".to_owned())]
+            env: [("ZERUN_IPC_PORT".to_owned(), "27655".to_owned())]
                 .into_iter()
                 .collect(),
         };
@@ -6095,7 +6095,7 @@ mod mcp_injection_tests {
                 "name": "zeron",
                 "command": "/opt/zeron/zeron",
                 "args": ["mcp"],
-                "env": [{ "name": "ZERON_IPC_PORT", "value": "27654" }],
+                "env": [{ "name": "ZERUN_IPC_PORT", "value": "27655" }],
             })]
         );
     }

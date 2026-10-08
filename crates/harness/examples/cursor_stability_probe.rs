@@ -1,5 +1,5 @@
 //! Opt-in live test. Uses real Cursor quota in a disposable workspace.
-//! ZERON_CURSOR_STATE_DIR=$(mktemp -d) cargo run -p zeron-harness --example cursor_stability_probe -- sessions 20
+//! ZERUN_CURSOR_STATE_DIR=$(mktemp -d) cargo run -p zeron-harness --example cursor_stability_probe -- sessions 20
 //! cargo run -p zeron-harness --example cursor_stability_probe -- models 1000
 use futures::StreamExt;
 use std::{
@@ -85,7 +85,7 @@ async fn turn(
                         "drop" => break,
                         "kill" => {
                             let root = PathBuf::from(
-                                std::env::var_os("ZERON_CURSOR_STATE_DIR")
+                                std::env::var_os("ZERUN_CURSOR_STATE_DIR")
                                     .expect("isolated state root required"),
                             );
                             let dir =
@@ -528,18 +528,18 @@ async fn main() {
             serde_json::json!({"requests": count+1+usize::from(mode == "outage"), "models":baseline.len(), "elapsedMs":start.elapsed().as_millis(), "failures":0})
         );
     } else if mode == "history" {
-        assert!(std::env::var_os("ZERON_CURSOR_STATE_DIR").is_some());
+        assert!(std::env::var_os("ZERUN_CURSOR_STATE_DIR").is_some());
         history(&harness, count).await;
     } else if mode == "burst" || mode == "cancel-burst" {
-        assert!(std::env::var_os("ZERON_CURSOR_STATE_DIR").is_some());
+        assert!(std::env::var_os("ZERUN_CURSOR_STATE_DIR").is_some());
         burst(&harness, count, mode == "cancel-burst").await;
     } else if mode == "parked" {
-        assert!(std::env::var_os("ZERON_CURSOR_STATE_DIR").is_some());
+        assert!(std::env::var_os("ZERUN_CURSOR_STATE_DIR").is_some());
         parked(&harness, count).await;
     } else if mode == "sessions" {
         assert!(
-            std::env::var_os("ZERON_CURSOR_STATE_DIR").is_some(),
-            "set an isolated ZERON_CURSOR_STATE_DIR"
+            std::env::var_os("ZERUN_CURSOR_STATE_DIR").is_some(),
+            "set an isolated ZERUN_CURSOR_STATE_DIR"
         );
         let workspace = tempfile::tempdir().unwrap();
         let cwd = workspace.path().to_str().unwrap();

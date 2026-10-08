@@ -1,20 +1,25 @@
-# Zeron
+# Zerun
 
 在本地管理你的编码 agent（Claude Code、Codex、Cursor、Devin、Grok、Hermes、Pi、Antigravity），也可以打开多设备同步。
 
 *[English](README.md) | 简体中文 | [한국어](README.ko.md) | [日本語](README.ja.md)*
 
-![Zeron 桌面应用](docs/media/readme/app-screenshot.jpg)
+![Zerun 桌面应用](docs/media/readme/app-screenshot.jpg)
 
 ## 桌面应用
 
 从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载对应平台的最新版本：
 
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`，解压后运行里面的 `install.sh`
+- **macOS** — `zerun-<version>-macos-arm64.dmg`
+- **Windows** — `zerun-<version>-windows-x86_64-setup.exe`
+- **Linux** — `zerun-<version>-linux-<arch>.tar.gz`，解压后运行里面的 `install.sh`
 
 不用账号，也不用联网，会话就存在这台设备上。应用会自动更新。
+
+桌面应用和安装入口统一叫 **Zerun**，命令为 `zerun`，可以与 Zeron 同时安装。
+macOS/Linux 数据放在 `~/.zerun`，Windows 放在 `%LOCALAPPDATA%\Zerun`；
+可用 `ZERUN_DATA_DIR` 自定义。默认本机通信端口为 27655（`ZERUN_IPC_PORT`），
+登录回调端口为 27642（`ZERUN_CALLBACK_PORT`）。
 
 ## Android
 
@@ -30,15 +35,15 @@
 
 ```bash
 curl -fsSL https://zerun.puqing.work/install.sh | sh
-zeron status
+zerun status
 ```
 
 安装脚本会把引擎作为后台服务拉起来，重启之后也会自己回来。
 
 ```bash
-zeron status      # 查看本地/同步模式和引擎状态
-zeron update      # 更新到最新版本
-zeron daemon start|stop|restart|status
+zerun status      # 查看本地/同步模式和引擎状态
+zerun update      # 更新到最新版本
+zerun daemon start|stop|restart|status
 ```
 
 ## 多设备同步（可选）
@@ -46,9 +51,9 @@ zeron daemon start|stop|restart|status
 登录后，可以在一台设备上起 agent，换另一台设备接着看、接着操作：
 
 ```bash
-zeron daemon stop
-zeron login        # 或者 zeron logout 切回纯本地模式
-zeron daemon start
+zerun daemon stop
+zerun login        # 或者 zerun logout 切回纯本地模式
+zerun daemon start
 ```
 
 登录同一账号的设备可以读写彼此工作区里的文件，所以只登录你信任的设备。已有的本地会话不会被上传。

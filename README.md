@@ -1,20 +1,26 @@
-# Zeron
+# Zerun
 
 Control your coding agents (Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi, Antigravity) locally by default, with optional multi-device sync.
 
 *English | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md)*
 
-![Zeron desktop app](docs/media/readme/app-screenshot.jpg)
+![Zerun desktop app](docs/media/readme/app-screenshot.jpg)
 
 ## Desktop app
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest):
 
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz`, then run its `install.sh`
+- **macOS** — `zerun-<version>-macos-arm64.dmg`
+- **Windows** — `zerun-<version>-windows-x86_64-setup.exe`
+- **Linux** — `zerun-<version>-linux-<arch>.tar.gz`, then run its `install.sh`
 
 No account or network connection is needed; sessions stay on your device. The app updates itself.
+
+Desktop installs use the name **Zerun** and the `zerun` executable. They can
+coexist with Zeron: app data lives in `~/.zerun` on macOS/Linux and
+`%LOCALAPPDATA%\Zerun` on Windows. `ZERUN_DATA_DIR` overrides this location.
+The default local IPC port is 27655 (`ZERUN_IPC_PORT`); the sign-in callback
+port is 27642 (`ZERUN_CALLBACK_PORT`).
 
 ## Android
 
@@ -30,15 +36,15 @@ For servers and other machines without a display, such as a VPS that keeps agent
 
 ```bash
 curl -fsSL https://zerun.puqing.work/install.sh | sh
-zeron status
+zerun status
 ```
 
 The installer starts the engine as a background service that survives reboots.
 
 ```bash
-zeron status      # local/synced mode and engine status
-zeron update      # update to the latest release
-zeron daemon start|stop|restart|status
+zerun status      # local/synced mode and engine status
+zerun update      # update to the latest release
+zerun daemon start|stop|restart|status
 ```
 
 ## Multi-device sync (optional)
@@ -46,9 +52,9 @@ zeron daemon start|stop|restart|status
 Sign in to start an agent on one device and follow or drive it from another:
 
 ```bash
-zeron daemon stop
-zeron login        # or: zeron logout to return to local-only
-zeron daemon start
+zerun daemon stop
+zerun login        # or: zerun logout to return to local-only
+zerun daemon start
 ```
 
 Devices signed in to the same account can read and write each other's workspace files, so only sign in devices you trust. Existing local sessions are never uploaded.

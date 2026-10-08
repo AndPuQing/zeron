@@ -7,9 +7,9 @@
     <key>CFBundleDisplayName</key>
     <string>Zerun Dev</string>
     <key>CFBundleExecutable</key>
-    <string>zeron</string>
+    <string>zerun</string>
     <key>CFBundleIconFile</key>
-    <string>zeron.icns</string>
+    <string>zerun.icns</string>
     <key>CFBundleIdentifier</key>
     <string>work.puqing.zerun.dev</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -29,9 +29,9 @@
          the same isolated development instance. -->
     <key>LSEnvironment</key>
     <dict>
-        <key>ZERON_DATA_DIR</key>
+        <key>ZERUN_DATA_DIR</key>
         <string>__DATA_DIR__</string>
-        <key>ZERON_IPC_PORT</key>
+        <key>ZERUN_IPC_PORT</key>
         <string>__IPC_PORT__</string>
     </dict>
     <key>NSMicrophoneUsageDescription</key>

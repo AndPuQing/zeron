@@ -3750,7 +3750,7 @@ mod tests {
                     "--nocapture",
                 ])
                 .env("ZERON_INSTALL_RPC_TEST", "1")
-                .env("ZERON_ADAPTERS_DIR", root.path())
+                .env("ZERUN_ADAPTERS_DIR", root.path())
                 .output()
                 .await
                 .unwrap();

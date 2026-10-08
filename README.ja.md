@@ -1,18 +1,18 @@
-# Zeron
+# Zerun
 
 コーディングエージェント（Claude Code、Codex、Cursor、Devin、Grok、Hermes、Pi、Antigravity）をデフォルトではローカルで管理し、必要に応じて複数デバイス間で同期することもできます。
 
 *[English](README.md) | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | 日本語*
 
-![Zeron デスクトップアプリ](docs/media/readme/app-screenshot.jpg)
+![Zerun デスクトップアプリ](docs/media/readme/app-screenshot.jpg)
 
 ## デスクトップアプリ
 
 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) から、お使いのプラットフォーム向けの最新版をダウンロードしてください。
 
-- **macOS** — `zeron-<version>-macos-arm64.dmg`
-- **Windows** — `zeron-<version>-windows-x86_64-setup.exe`
-- **Linux** — `zeron-<version>-linux-<arch>.tar.gz` を展開し、中の `install.sh` を実行
+- **macOS** — `zerun-<version>-macos-arm64.dmg`
+- **Windows** — `zerun-<version>-windows-x86_64-setup.exe`
+- **Linux** — `zerun-<version>-linux-<arch>.tar.gz` を展開し、中の `install.sh` を実行
 
 アカウントもネットワーク接続も不要で、セッションはお使いのデバイスに保存されます。アプリは自動でアップデートされます。
 
@@ -22,15 +22,15 @@
 
 ```bash
 curl -fsSL https://zerun.puqing.work/install.sh | sh
-zeron status
+zerun status
 ```
 
 インストーラーはエンジンをバックグラウンドサービスとして起動し、再起動後も自動的に立ち上がります。
 
 ```bash
-zeron status      # ローカル/同期モードとエンジンの状態を確認
-zeron update      # 最新版にアップデート
-zeron daemon start|stop|restart|status
+zerun status      # ローカル/同期モードとエンジンの状態を確認
+zerun update      # 最新版にアップデート
+zerun daemon start|stop|restart|status
 ```
 
 ## 複数デバイス間の同期（任意）
@@ -38,9 +38,9 @@ zeron daemon start|stop|restart|status
 サインインすると、あるデバイスで起動したエージェントを別のデバイスから確認したり操作したりできます。
 
 ```bash
-zeron daemon stop
-zeron login        # ローカル専用モードに戻すには zeron logout
-zeron daemon start
+zerun daemon stop
+zerun login        # ローカル専用モードに戻すには zerun logout
+zerun daemon start
 ```
 
 同じアカウントにサインインしたデバイスは、互いのワークスペースのファイルを読み書きできます。信頼できるデバイスでのみサインインしてください。既存のローカルセッションがアップロードされることはありません。

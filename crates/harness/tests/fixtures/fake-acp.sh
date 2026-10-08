@@ -113,7 +113,7 @@ case "$promptline" in
   has "$line" '"command":"/path with spaces/zeron"' || exit 1
   has "$line" '"args":["mcp"]' || exit 1
   has "$line" '"name":"ZERON_CHAT_ID","value":"origin-chat"' || exit 1
-  has "$line" '"name":"ZERON_IPC_PORT","value":"27699"' || exit 1
+  has "$line" '"name":"ZERUN_IPC_PORT","value":"27699"' || exit 1
   update '{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"mcp configured"}}'
   emit "{\"id\":$pid,\"result\":{\"stopReason\":\"end_turn\"}}"
   ;;

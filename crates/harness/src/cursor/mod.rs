@@ -16,7 +16,7 @@
 //! Revalidate the shim against the typings on every bump.
 //!
 //! - The shim is materialized into the SDK's managed npm install
-//!   (`~/.zeron/adapters/…`, [`crate::adapter_install::ensure_installed_shim`])
+//!   (`~/.zerun/adapters/…`, [`crate::adapter_install::ensure_installed_shim`])
 //!   and spawned as `node <shim>`.
 //! - Done = the SDK run's terminal result (`turn` frame off `run.wait()` /
 //!   `turn-ended`) — a crisp turn end by construction.
@@ -308,7 +308,7 @@ impl Harness for CursorHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(&args);
         if lease.is_some() {
-            cmd.env("ZERON_CURSOR_STATE_DIR", state::state_root());
+            cmd.env("ZERUN_CURSOR_STATE_DIR", state::state_root());
         }
         crate::compose_child_path(&mut cmd, &exe);
         if !request.cwd.is_empty() {

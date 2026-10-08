@@ -7,6 +7,7 @@ pub mod agent;
 pub mod attachment_mentions;
 pub mod entities;
 pub mod file_mentions;
+pub mod identity;
 pub mod invocation;
 pub mod motion;
 pub mod preview;

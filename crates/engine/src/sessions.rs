@@ -1320,7 +1320,7 @@ impl Inner {
         lock(&self.doc_host).clone()
     }
 
-    /// Zeron's own MCP server for a run of `chat_id`: this binary's `zeron
+    /// Zerun's own MCP server for a run of `chat_id`: this binary's `zerun
     /// mcp` subcommand, dialing the engine's IPC port and stamped with the
     /// originating chat + device so the agent's side chats link back here.
     /// None when the engine serves no port or its executable is unknown.
@@ -1335,7 +1335,7 @@ impl Inner {
             command,
             args: vec!["mcp".into()],
             env: [
-                ("ZERON_IPC_PORT".to_owned(), port.to_string()),
+                ("ZERUN_IPC_PORT".to_owned(), port.to_string()),
                 ("ZERON_CHAT_ID".to_owned(), chat_id.to_owned()),
                 ("ZERON_DEVICE_ID".to_owned(), self.device_id.clone()),
             ]

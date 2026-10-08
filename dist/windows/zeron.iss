@@ -6,10 +6,10 @@
 ;
 ; Installs into %LOCALAPPDATA%\Programs\Zerun without elevation, like VS
 ; Code's user setup: the directory stays writable by its user, so the in-app
-; updater (crates/update/src/windows.rs) can replace zeron.exe in place. The
-; staged directory already carries zeron-update.json, which marks the install
+; updater (crates/update/src/windows.rs) can replace zerun.exe in place. The
+; staged directory already carries zerun-update.json, which marks the install
 ; as update-managed. Re-running a newer installer upgrades in place; user data
-; lives in %LOCALAPPDATA%\Zeron and is never touched here.
+; lives in %LOCALAPPDATA%\Zerun and is never touched here.
 
 #ifndef AppVersion
   #error AppVersion must be defined (/DAppVersion=x.y.z)
@@ -34,7 +34,7 @@
 ; Never change AppId: it identifies the installation across upgrades, and
 ; crates/update/src/windows.rs refreshes DisplayVersion under this key after
 ; in-app updates.
-AppId={{AD5DEC34-E254-467B-8F24-8127EBAF4DA6}
+AppId={{94F099C7-A9D5-5A32-B951-50AE16E29A01}
 AppName=Zerun
 AppVersion={#AppVersion}
 AppVerName=Zerun {#AppVersion}
@@ -52,9 +52,9 @@ ArchitecturesAllowed={#ArchAllowed}
 ArchitecturesInstallIn64BitMode={#ArchAllowed}
 MinVersion=10.0
 OutputDir={#OutputDir}
-OutputBaseFilename=zeron-{#AppVersion}-windows-{#Arch}-setup
+OutputBaseFilename=zerun-{#AppVersion}-windows-{#Arch}-setup
 SetupIconFile=zeron.ico
-UninstallDisplayIcon={app}\zeron.exe
+UninstallDisplayIcon={app}\zerun.exe
 UninstallDisplayName=Zerun
 WizardStyle=modern
 Compression=lzma2/max
@@ -68,28 +68,28 @@ RestartApplications=no
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "{#PackageDir}\zeron.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PackageDir}\zeron-update.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDir}\zerun.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDir}\zerun-update.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Zerun"; Filename: "{app}\zeron.exe"
-Name: "{autodesktop}\Zerun"; Filename: "{app}\zeron.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Zerun"; Filename: "{app}\zerun.exe"
+Name: "{autodesktop}\Zerun"; Filename: "{app}\zerun.exe"; Tasks: desktopicon
 
 [Registry]
 ; zerun-dev:// conversation links — registered here and in macOS Info.plist.
 Root: HKCU; Subkey: "Software\Classes\zerun-dev"; ValueType: string; ValueName: ""; ValueData: "URL:Zerun"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\zerun-dev"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
-Root: HKCU; Subkey: "Software\Classes\zerun-dev\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zeron.exe"",0"
-Root: HKCU; Subkey: "Software\Classes\zerun-dev\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zeron.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\zerun-dev\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\zerun.exe"",0"
+Root: HKCU; Subkey: "Software\Classes\zerun-dev\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\zerun.exe"" ""%1"""
 
 [Run]
-Filename: "{app}\zeron.exe"; Description: "{cm:LaunchProgram,Zerun}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\zerun.exe"; Description: "{cm:LaunchProgram,Zerun}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 ; Leftovers of in-app updates (crates/update/src/windows.rs).
-Type: files; Name: "{app}\zeron.exe.old"
-Type: files; Name: "{app}\.zeron-update-incoming.exe"
-Type: filesandordirs; Name: "{app}\.zeron-update-*"
+Type: files; Name: "{app}\zerun.exe.old"
+Type: files; Name: "{app}\.zerun-update-incoming.exe"
+Type: filesandordirs; Name: "{app}\.zerun-update-*"

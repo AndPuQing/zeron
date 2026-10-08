@@ -163,7 +163,7 @@ impl SessionFixture {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
         let mut child = tokio::process::Command::new("node")
             .arg(self.dir.path().join("shim.mjs"))
-            .env("ZERON_CURSOR_STATE_DIR", self.dir.path().join("state"))
+            .env("ZERUN_CURSOR_STATE_DIR", self.dir.path().join("state"))
             .env(
                 "ZERON_CURSOR_NATIVE_STEER_ONLY",
                 if native_only { "1" } else { "0" },
@@ -318,7 +318,7 @@ async fn engine_death_does_not_leave_an_orphan_owning_the_conversation() {
     let mut engine = tokio::process::Command::new("node")
         .arg(parent)
         .arg(fixture.dir.path().join("shim.mjs"))
-        .env("ZERON_CURSOR_STATE_DIR", fixture.dir.path().join("state"))
+        .env("ZERUN_CURSOR_STATE_DIR", fixture.dir.path().join("state"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -531,7 +531,7 @@ async fn mcp_injection_reaches_sdk_on_create_and_resume_with_fresh_identity() {
                 resume,
                 serde_json::json!({
                     "name": "zeron", "command": "/path with spaces/zeron", "args": ["mcp"],
-                    "env": {"ZERON_CHAT_ID": chat, "ZERON_IPC_PORT": "27699"},
+                    "env": {"ZERON_CHAT_ID": chat, "ZERUN_IPC_PORT": "27699"},
                 }),
             )
             .await;
@@ -554,7 +554,7 @@ async fn mcp_injection_reaches_sdk_on_create_and_resume_with_fresh_identity() {
         );
         assert_eq!(options["mcpServers"]["zeron"]["env"]["ZERON_CHAT_ID"], chat);
         assert_eq!(
-            options["mcpServers"]["zeron"]["env"]["ZERON_IPC_PORT"],
+            options["mcpServers"]["zeron"]["env"]["ZERUN_IPC_PORT"],
             "27699"
         );
         // Never "project"/"all": the SDK skips MCP approvals, so a repo's

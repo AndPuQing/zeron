@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template for Zeron.app/Contents/Info.plist — see dist/README.md for the
+<!-- Template for Zerun.app/Contents/Info.plist — see dist/README.md for the
      bundling steps. Replace __VERSION__ before packaging. -->
 <plist version="1.0">
 <dict>
@@ -9,9 +9,9 @@
     <key>CFBundleDisplayName</key>
     <string>Zerun</string>
     <key>CFBundleExecutable</key>
-    <string>zeron</string>
+    <string>zerun</string>
     <key>CFBundleIconFile</key>
-    <string>zeron.icns</string>
+    <string>zerun.icns</string>
     <key>CFBundleIdentifier</key>
     <string>work.puqing.zerun</string>
     <key>CFBundleInfoDictionaryVersion</key>

@@ -2097,7 +2097,7 @@ fn antigravity_detection_and_missing_server_never_install() {
             .env("HOME", dir.path())
             .env("PATH", &bin)
             .env("SHELL", "/nonexistent-shell")
-            .env("ZERON_ADAPTERS_DIR", &adapters)
+            .env("ZERUN_ADAPTERS_DIR", &adapters)
             .env("ZERON_TEST_DETECTION", scenario)
             .env_remove("ANTIGRAVITY_ACP_EXECUTABLE");
         if scenario == "override" {
@@ -2154,7 +2154,7 @@ async fn antigravity_detection_subprocess() {
         harness.run(request("hello"), ctl).await,
         Err(HarnessError::NotInstalled(_))
     ));
-    let adapters = PathBuf::from(std::env::var_os("ZERON_ADAPTERS_DIR").unwrap());
+    let adapters = PathBuf::from(std::env::var_os("ZERUN_ADAPTERS_DIR").unwrap());
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
         std::fs::read_dir(adapters)
@@ -2184,7 +2184,7 @@ async fn mcp_injection_all_acp_harnesses_new_resume_and_fallback() {
                 args: vec!["mcp".into()],
                 env: [
                     ("ZERON_CHAT_ID".into(), "origin-chat".into()),
-                    ("ZERON_IPC_PORT".into(), "27699".into()),
+                    ("ZERUN_IPC_PORT".into(), "27699".into()),
                 ]
                 .into(),
             });

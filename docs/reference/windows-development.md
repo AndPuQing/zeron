@@ -2,17 +2,17 @@
 
 Windows supports native x64 and ARM64 source builds, a per-user installer,
 and portable release ZIPs. The installer (`dist/windows/zeron.iss`, Inno
-Setup 6) installs into `%LOCALAPPDATA%\Programs\Zeron` without elevation,
-registers the Start menu entry, the `zeron://` link handler, and the Settings →
-Apps uninstall entry. Both release packages carry `zeron-update.json` beside
-`zeron.exe`, which lets the app replace its executable in place from GitHub
+Setup 6) installs into `%LOCALAPPDATA%\Programs\Zerun` without elevation,
+registers the Start menu entry, the `zerun-dev://` link handler, and the Settings →
+Apps uninstall entry. Both release packages carry `zerun-update.json` beside
+`zerun.exe`, which lets the app replace its executable in place from GitHub
 releases; keep it there for portable copies. Artifact names use Rust's
 architecture token (`x86_64` or `aarch64`) so the updater can find the matching
 executable; published releases currently include x64 only. Background services
 are not supported yet.
 
 `scripts/package-windows.ps1` builds the portable ZIP, the updater payload
-`.exe`, and `zeron-<version>-windows-<arch>-setup.exe` (Inno Setup 6 required:
+`.exe`, and `zerun-<version>-windows-<arch>-setup.exe` (Inno Setup 6 required:
 `winget install JRSoftware.InnoSetup`). `scripts/test-windows-installer.ps1`
 installs, inspects, and uninstalls the setup silently; it touches the current
 user's registration, so it only runs in CI or with `-Force`.
@@ -36,9 +36,9 @@ set `GPUI_FXC_PATH` to the Windows SDK's `fxc.exe`.
 
 | Setting | Behavior |
 | --- | --- |
-| Application data | `%LOCALAPPDATA%\Zeron`, falling back to `%USERPROFILE%\AppData\Local\Zeron`. Override with `ZERON_DATA_DIR`. |
-| Managed adapters | `ZERON_ADAPTERS_DIR`, then `ZERON_DATA_DIR/adapters`, then the default application's `adapters` directory. |
-| Provider credentials | Keep their provider-owned locations; changing Zeron's data root does not migrate them. |
+| Application data | `%LOCALAPPDATA%\Zerun`, falling back to `%USERPROFILE%\AppData\Local\Zerun`. Override with `ZERUN_DATA_DIR`. |
+| Managed adapters | `ZERUN_ADAPTERS_DIR`, then `ZERUN_DATA_DIR/adapters`, then the default application's `adapters` directory. |
+| Provider credentials | Keep their provider-owned locations; changing Zerun's data root does not migrate them. |
 | `CODEX_EXECUTABLE` | Executable override. `.exe` (and `.com`) launch directly; `.cmd`/`.bat` shims launch through a wrapped `cmd.exe` with literal, individually escaped arguments. The override must exist on disk. |
 
 ACP, Claude, Codex, and opencode search PATH and known native installation
@@ -65,11 +65,9 @@ terminates processes detached inside that job (including `start` children).
 
 Frosted window chrome uses native Acrylic and requires Windows **Settings >
 Personalization > Colors > Transparency effects**. Content cards and popovers
-remain opaque because in-app backdrop blur is not supported. The pinned
-[Zui DirectX fix](https://github.com/zeronsh/zui/pull/7) supplies the renderer
-layout and edge-fade corrections.
+remain opaque because in-app backdrop blur is not supported. The renderer includes native layout and edge-fade corrections.
 
-When Windows disables **Animation effects**, Zeron's **Reduce motion: System**
+When Windows disables **Animation effects**, Zerun's **Reduce motion: System**
 setting skips transitions and gives activity grids a gentle 2.4-second brightness
 pulse. **Reduce motion: On** keeps those indicators still; **Off** restores the
 usual travelling wave. **Pause animations in background** also pauses activity

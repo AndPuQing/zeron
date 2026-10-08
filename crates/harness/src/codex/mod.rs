@@ -227,7 +227,7 @@ impl CodexHarness {
                     json!({
                         "clientInfo": {
                             "name": "zeron-native",
-                            "title": "Zeron",
+                            "title": "Zerun",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
                         "capabilities": { "experimentalApi": true },
@@ -281,7 +281,7 @@ impl CodexHarness {
                     json!({
                         "clientInfo": {
                             "name": "zeron-native",
-                            "title": "Zeron",
+                            "title": "Zerun",
                             "version": env!("CARGO_PKG_VERSION"),
                         },
                         "capabilities": { "experimentalApi": true },
@@ -1081,7 +1081,7 @@ async fn run_session(session: Session) {
                 json!({
                     "clientInfo": {
                         "name": "zeron-native",
-                        "title": "Zeron",
+                        "title": "Zerun",
                         "version": env!("CARGO_PKG_VERSION"),
                     },
                     "capabilities": { "experimentalApi": true },

@@ -1,5 +1,5 @@
 //! Opt-in production engine + Cursor SDK checks. Uses real account quota.
-//! ZERON_CURSOR_STATE_DIR=$(mktemp -d) cargo test -p zeron-engine --test cursor_live -- --ignored --nocapture --test-threads=1
+//! ZERUN_CURSOR_STATE_DIR=$(mktemp -d) cargo test -p zeron-engine --test cursor_live -- --ignored --nocapture --test-threads=1
 use std::{sync::Arc, time::Duration};
 use zeron_doc::{
     MessagePart, MessageRole, MessageStatus, SessionCommandPayload, SessionMessageEntry,
@@ -11,7 +11,7 @@ use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
 const CHAT: &str = "cursor-live-audit";
 fn setup(path: &std::path::Path) -> EngineCore {
     assert!(
-        std::env::var_os("ZERON_CURSOR_STATE_DIR").is_some(),
+        std::env::var_os("ZERUN_CURSOR_STATE_DIR").is_some(),
         "use isolated Cursor state"
     );
     let registry = HarnessRegistry::new();

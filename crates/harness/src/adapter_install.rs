@@ -4,9 +4,9 @@
 //! user's npm state in the hot path: a cold cache meant a multi-minute
 //! download while the chat showed "Working", and a broken one meant npm dying
 //! before the adapter ever ran — silently, with an errno-encoded exit code
-//! (254 = ENOENT, the zeronsh/comet#95 crash) that surfaced as an opaque
+//! (254 = ENOENT) that surfaced as an opaque
 //! "harness protocol error". Instead, pinned adapter packages are installed
-//! ONCE into a zeron-owned prefix (`~/.zeron/adapters/<pkg>/<version>` on
+//! ONCE into a zeron-owned prefix (`~/.zerun/adapters/<pkg>/<version>` on
 //! Unix, the local app-data directory on Windows), with its own npm cache
 //! beside it, so a root-owned or read-only user cache cannot break us. Every
 //! subsequent launch spawns `node <entry>` directly — no npm anywhere near a
@@ -62,10 +62,10 @@ impl NpmPin {
 pub(crate) const OK_MARKER: &str = ".zeron-install-ok";
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Managed adapter storage. `$ZERON_ADAPTERS_DIR` wins, followed by
-/// `$ZERON_DATA_DIR/adapters`. Windows defaults to
-/// `%LOCALAPPDATA%/Zeron/adapters` (or `%USERPROFILE%/AppData/Local/...`);
-/// Unix keeps `~/.zeron/adapters`.
+/// Managed adapter storage. `$ZERUN_ADAPTERS_DIR` wins, followed by
+/// `$ZERUN_DATA_DIR/adapters`. Windows defaults to
+/// `%LOCALAPPDATA%/Zerun/adapters` (or `%USERPROFILE%/AppData/Local/...`);
+/// Unix keeps `~/.zerun/adapters`.
 pub(crate) fn adapters_root() -> Option<PathBuf> {
     adapters_root_with(
         &|key| std::env::var_os(key),
@@ -82,26 +82,18 @@ fn adapters_root_with(
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-    if let Some(dir) = value("ZERON_ADAPTERS_DIR") {
+    if let Some(dir) = value("ZERUN_ADAPTERS_DIR") {
         return Some(dir);
     }
-    if let Some(dir) = value("ZERON_DATA_DIR") {
+    if let Some(dir) = value("ZERUN_DATA_DIR") {
         return Some(dir.join("adapters"));
     }
-    if platform == crate::executable::Platform::Windows {
-        value("LOCALAPPDATA")
-            .map(|dir| dir.join("Zeron").join("adapters"))
-            .or_else(|| {
-                value("USERPROFILE").map(|home| {
-                    home.join("AppData")
-                        .join("Local")
-                        .join("Zeron")
-                        .join("adapters")
-                })
-            })
+    let os = if platform == crate::executable::Platform::Windows {
+        "windows"
     } else {
-        value("HOME").map(|home| home.join(".zeron").join("adapters"))
-    }
+        "linux"
+    };
+    zeron_proto::identity::resolve_data_dir(os, |name| env(name)).map(|root| root.join("adapters"))
 }
 
 fn install_dir_in(root: &Path, pin: &NpmPin) -> PathBuf {
@@ -700,8 +692,8 @@ mod tests {
         assert_eq!(
             adapters_root_with(
                 &env(&[
-                    ("ZERON_ADAPTERS_DIR", explicit.clone().into_os_string()),
-                    ("ZERON_DATA_DIR", data.clone().into_os_string()),
+                    ("ZERUN_ADAPTERS_DIR", explicit.clone().into_os_string()),
+                    ("ZERUN_DATA_DIR", data.clone().into_os_string()),
                     ("LOCALAPPDATA", local.clone().into_os_string()),
                 ]),
                 crate::executable::Platform::Windows,
@@ -710,7 +702,7 @@ mod tests {
         );
         assert_eq!(
             adapters_root_with(
-                &env(&[("ZERON_DATA_DIR", data.clone().into_os_string())]),
+                &env(&[("ZERUN_DATA_DIR", data.clone().into_os_string())]),
                 crate::executable::Platform::Windows,
             ),
             Some(data.join("adapters"))
@@ -720,7 +712,7 @@ mod tests {
                 &env(&[("LOCALAPPDATA", local.clone().into_os_string())]),
                 crate::executable::Platform::Windows,
             ),
-            Some(local.join("Zeron").join("adapters"))
+            Some(local.join("Zerun").join("adapters"))
         );
         assert_eq!(
             adapters_root_with(
@@ -731,7 +723,7 @@ mod tests {
                 profile
                     .join("AppData")
                     .join("Local")
-                    .join("Zeron")
+                    .join("Zerun")
                     .join("adapters")
             )
         );
