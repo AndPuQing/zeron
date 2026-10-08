@@ -55,8 +55,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04 # x86_64
-          - runner: ubuntu-24.04-arm # aarch64
+          # Pinned to the oldest supported baseline (glibc 2.35): building on a
+          # newer runner bakes in newer GLIBC_2.x symbol versions and the binary
+          # then refuses to load on Ubuntu 22.04 / Debian 12. 22.04 is the floor
+          # because crates/ui links webkit2gtk-4.1, which older releases lack.
+          - runner: ubuntu-22.04 # x86_64
+          - runner: ubuntu-22.04-arm # aarch64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -208,7 +212,7 @@ jobs:
           assert run['event'] == 'push' and run['path'] == '.github/workflows/release.yml', 'Not a tagged release build'
           assert run['head_sha'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'Tag does not match the source build'
           assert run['head_branch'] == os.environ['RELEASE_TAG'], 'Source build has a different tag'
-          required = {'android / build', 'linux (ubuntu-24.04)', 'linux (ubuntu-24.04-arm)', 'macos', 'windows', 'cursor-compatibility / cursor-compatibility', 'cursor-compatibility / rust-tests'}
+          required = {'android / build', 'linux (ubuntu-22.04)', 'linux (ubuntu-22.04-arm)', 'macos', 'windows', 'cursor-compatibility / cursor-compatibility', 'cursor-compatibility / rust-tests'}
           builds = [job for job in jobs if job['name'] != 'publish']
           assert required <= {job['name'] for job in builds}, 'Missing platform or test jobs'
           assert all(job['conclusion'] == 'success' for job in builds), 'Source builds did not all pass'
