@@ -2710,6 +2710,9 @@ impl RpcService for EngineRpc {
                         return Err(RpcError::Failed("checkoutId does not match cwd".into()));
                     }
                     let root = identity.root.as_path();
+                    // A turn's base tree lives in the snapshot's own object
+                    // store, so the snapshot rides along with its sha.
+                    let mut turn_snapshot = None;
                     let (snapshot, base, target) = match p.mode.as_str() {
                         "branch" => {
                             let base_ref = p
@@ -2761,7 +2764,9 @@ impl RpcService for EngineRpc {
                             ))
                             .await
                             .map_err(|error| RpcError::Failed(error.to_string()))?;
-                            (snapshot, turn.tree, None)
+                            let base = turn.tree.tree().to_string();
+                            turn_snapshot = Some(turn.tree);
+                            (snapshot, base, None)
                         }
                         _ => {
                             let base = Box::pin(crate::diff_sync::working_diff_base(root))
@@ -2797,6 +2802,7 @@ impl RpcService for EngineRpc {
                     let pair = Box::pin(crate::diff_sync::read_diff_file_text_at(
                         root,
                         &base,
+                        turn_snapshot.as_ref(),
                         target.as_deref(),
                         file,
                     ))
@@ -2811,14 +2817,17 @@ impl RpcService for EngineRpc {
                             ))
                             .await
                         }
-                        "turn" => {
-                            Box::pin(crate::diff_sync::capture_turn_diff(
-                                &self.repos,
-                                root,
-                                &base,
-                            ))
-                            .await
-                        }
+                        "turn" => match turn_snapshot.as_ref() {
+                            Some(turn) => {
+                                Box::pin(crate::diff_sync::capture_turn_diff(
+                                    &self.repos,
+                                    root,
+                                    turn,
+                                ))
+                                .await
+                            }
+                            None => Err(crate::EngineError::Other("no turn recorded".into())),
+                        },
                         "commit" => {
                             let sha = p
                                 .commit_sha
