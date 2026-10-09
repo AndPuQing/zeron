@@ -39,6 +39,7 @@ async fn observe(harness: AcpHarness, value: &str) {
     );
     let (steer, steering) = tokio::sync::mpsc::channel(4);
     let controls = RunControls {
+        turn: Default::default(),
         realtime: None,
         execution_lease: None,
         steering,
@@ -123,6 +124,7 @@ async fn native_runs_and_model_probes_receive_their_provider_binding() {
     async fn run(harness: &dyn Harness, root: &Path, prompt: &str) {
         let (steer, steering) = tokio::sync::mpsc::channel(4);
         let controls = RunControls {
+            turn: Default::default(),
             realtime: None,
             execution_lease: None,
             steering,

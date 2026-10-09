@@ -124,6 +124,7 @@ impl Suite {
             auto_approve: true,
             attachments: vec![],
             worktree: None,
+            require_native_resume: false,
             resume: None,
         }
     }
@@ -1188,6 +1189,7 @@ fn restart_request(name: &str, cwd: &str, prompt: &str) -> RunRequest {
         auto_approve: true,
         attachments: vec![],
         worktree: None,
+        require_native_resume: false,
         resume: None,
     }
 }

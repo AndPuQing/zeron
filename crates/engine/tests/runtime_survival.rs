@@ -243,6 +243,7 @@ fn request(prompt: &str) -> RunRequest {
         auto_approve: false,
         attachments: Vec::new(),
         worktree: None,
+        require_native_resume: false,
         resume: None,
     }
 }

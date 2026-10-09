@@ -110,6 +110,7 @@ fn run(
         auto_approve: true,
         attachments: vec![],
         worktree: None,
+        require_native_resume: false,
         resume: None,
     }
 }

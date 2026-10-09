@@ -296,6 +296,7 @@ async fn claude_strict_resume_rejects_missing_copies_and_a_different_native_id()
         (
             steer,
             RunControls {
+                turn: Default::default(),
                 realtime: None,
                 execution_lease: None,
                 request_input: Box::new(|_| tokio::sync::oneshot::channel().1),
@@ -465,6 +466,7 @@ mod codex {
             let (root, harness) = fixture(options);
             let (_steer, rx) = tokio::sync::mpsc::channel(1);
             let controls = RunControls {
+                turn: Default::default(),
                 realtime: None,
                 execution_lease: None,
                 request_input: Box::new(|_| tokio::sync::oneshot::channel().1),
