@@ -1,14 +1,15 @@
 //! Ephemeral, device-addressed environment editor. Values never enter UI settings.
 use crate::{
+    popover,
     settings::widgets::{self, ActionTone},
     state::{AppState, EngineHandle},
     theme::Theme,
 };
 use gpui::{
-    AnyElement, Context, Entity, IntoElement, KeyDownEvent, Render, Subscription, Task, Window,
-    div, prelude::*, px,
+    AnyElement, Context, Entity, Focusable, IntoElement, KeyDownEvent, Render, Subscription, Task,
+    Window, div, prelude::*, px,
 };
-use gpui_base::input::{Input, InputState, Textarea, TextareaState};
+use gpui_base::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use zeron_proto::{
     EnvironmentAction, EnvironmentChange, EnvironmentEntryMetadata, HarnessEnvironmentMetadata,
     HarnessId, PatchHarnessEnvironmentReply, RevealedEnvironmentValue,
@@ -26,8 +27,10 @@ struct Row {
     id: u64,
     original: Option<EnvironmentEntryMetadata>,
     name: Option<Entity<InputState>>,
+    name_subscription: Option<Subscription>,
     value: Option<Entity<InputState>>,
     multiline: Option<Entity<TextareaState>>,
+    value_subscription: Option<Subscription>,
     action: DraftAction,
     sensitive: bool,
     revealed: Option<String>,
@@ -64,13 +67,15 @@ enum Action {
     Save,
     Cancel,
     Add,
-    Replace,
+    Edit,
     Unset,
     Delete,
+    Undo,
     Reveal,
     Hide,
     Sensitive,
     Multiline,
+    Singleline,
 }
 
 pub struct EnvironmentEditor {
@@ -88,6 +93,9 @@ pub struct EnvironmentEditor {
     error: Option<String>,
     task: Option<Task<()>>,
     reveal_task: Option<Task<()>>,
+    editing: Option<u64>,
+    row_menu: popover::Popup<u64>,
+    page_menu: popover::Popup<()>,
     _observe: Subscription,
 }
 
@@ -135,6 +143,9 @@ impl EnvironmentEditor {
             error: None,
             task: None,
             reveal_task: None,
+            editing: None,
+            row_menu: popover::Popup::default(),
+            page_menu: popover::Popup::default(),
             _observe: observe,
         };
         editor.load(false, cx);
@@ -177,11 +188,23 @@ impl EnvironmentEditor {
     fn install_metadata(&mut self, metadata: HarnessEnvironmentMetadata, preserve: bool) {
         if !preserve {
             self.rows.clear();
+            self.editing = None;
         } else {
             self.rows.retain(|row| row.action != DraftAction::Keep);
         }
         for row in &mut self.rows {
             row.revealed = None;
+            if let Some(original) = &mut row.original
+                && let Some(current) = metadata
+                    .entries
+                    .iter()
+                    .find(|entry| entry.name == original.name)
+            {
+                // A conflict/reload gives drafts a new undo baseline. The
+                // draft inputs and action stay local, but undo must restore
+                // the metadata that is current after the refresh.
+                *original = current.clone();
+            }
         }
         for entry in &metadata.entries {
             if self.rows.iter().any(|row| {
@@ -197,8 +220,10 @@ impl EnvironmentEditor {
                 id,
                 original: Some(entry.clone()),
                 name: None,
+                name_subscription: None,
                 value: None,
                 multiline: None,
+                value_subscription: None,
                 action: DraftAction::Keep,
                 sensitive: entry.sensitive,
                 revealed: None,
@@ -333,6 +358,11 @@ impl EnvironmentEditor {
         };
         let revision = metadata.revision.clone();
         let Ok(changes) = self.changes(cx) else {
+            self.editing = self
+                .rows
+                .iter()
+                .find(|row| row.error.is_some())
+                .map(|row| row.id);
             cx.notify();
             return;
         };
@@ -435,8 +465,170 @@ impl EnvironmentEditor {
         }));
     }
 
+    fn dirty(&self) -> bool {
+        self.rows.iter().any(|row| row.action != DraftAction::Keep)
+    }
+
+    fn close_row_menu(&mut self, cx: &mut Context<Self>) {
+        if self.row_menu.begin_close() {
+            popover::reap_popup(cx, |editor: &mut Self| &mut editor.row_menu);
+        }
+        cx.notify();
+    }
+
+    fn close_page_menu(&mut self, cx: &mut Context<Self>) {
+        if self.page_menu.begin_close() {
+            popover::reap_popup(cx, |editor: &mut Self| &mut editor.page_menu);
+        }
+        cx.notify();
+    }
+
+    fn mutation_disabled(&self) -> bool {
+        self.loading || self.saving || self.uncertain
+    }
+
+    fn subscribe_input(&mut self, id: u64, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        let subscription = cx.subscribe(input, move |editor, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                editor.input_changed(id, &input, cx);
+            }
+        });
+        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+            if row.name.as_ref().is_some_and(|active| active == input) {
+                row.name_subscription = Some(subscription);
+            } else if row.value.as_ref().is_some_and(|active| active == input) {
+                row.value_subscription = Some(subscription);
+            }
+        }
+    }
+
+    fn subscribe_textarea(
+        &mut self,
+        id: u64,
+        input: &Entity<TextareaState>,
+        cx: &mut Context<Self>,
+    ) {
+        let subscription = cx.subscribe(input, move |editor, input, event: &InputEvent, cx| {
+            if matches!(event, InputEvent::Change) {
+                editor.textarea_changed(id, &input, cx);
+            }
+        });
+        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id)
+            && row.multiline.as_ref().is_some_and(|active| active == input)
+        {
+            row.value_subscription = Some(subscription);
+        }
+    }
+
+    fn input_changed(&mut self, id: u64, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+            return;
+        };
+        if !row.name.as_ref().is_some_and(|active| active == input)
+            && !row.value.as_ref().is_some_and(|active| active == input)
+        {
+            return;
+        }
+        if row.original.is_some() && row.action != DraftAction::Set {
+            row.action = DraftAction::Set;
+            row.revealed = None;
+            row.error = None;
+        }
+        cx.notify();
+    }
+
+    fn textarea_changed(&mut self, id: u64, input: &Entity<TextareaState>, cx: &mut Context<Self>) {
+        let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
+            return;
+        };
+        if !row.multiline.as_ref().is_some_and(|active| active == input) {
+            return;
+        }
+        if row.original.is_some() && row.action != DraftAction::Set {
+            row.action = DraftAction::Set;
+            row.revealed = None;
+            row.error = None;
+        }
+        cx.notify();
+    }
+
+    fn undo(&mut self, id: u64, cx: &mut Context<Self>) {
+        let Some(index) = self.rows.iter().position(|row| row.id == id) else {
+            return;
+        };
+        let name = self.rows[index].name(cx);
+        let current = self
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.entries.iter().find(|entry| entry.name == name))
+            .cloned();
+        if let Some(entry) = current {
+            let row = &mut self.rows[index];
+            row.original = Some(entry.clone());
+            row.name = None;
+            row.name_subscription = None;
+            row.value = None;
+            row.multiline = None;
+            row.value_subscription = None;
+            row.action = DraftAction::Keep;
+            row.sensitive = entry.sensitive;
+            row.revealed = None;
+            row.error = None;
+        } else {
+            // Delete drafts and brand-new rows have no current metadata entry
+            // to restore. Dropping the draft is the only lossless undo.
+            self.rows.remove(index);
+        }
+        if self.editing == Some(id) {
+            self.editing = None;
+        }
+    }
+
+    fn begin_edit(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing == Some(id) {
+            // Closing the local form never changes the draft representation.
+            // In particular, keep a textarea with its line breaks intact.
+            self.editing = None;
+            return;
+        }
+        let needs_replacement = self
+            .rows
+            .iter()
+            .find(|row| row.id == id)
+            .is_some_and(|row| row.action != DraftAction::Set);
+        if needs_replacement {
+            let value = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Replacement value")
+                    .masked(true)
+            });
+            if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+                row.value_subscription = None;
+                row.value = Some(value);
+                row.multiline = None;
+                row.revealed = None;
+                row.error = None;
+            }
+            if let Some(input) = self
+                .rows
+                .iter()
+                .find(|row| row.id == id)
+                .and_then(|row| row.value.as_ref())
+                .cloned()
+            {
+                self.subscribe_input(id, &input, cx);
+            }
+        }
+        self.editing = Some(id);
+    }
+
     fn perform(&mut self, action: Action, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.saving || self.loading {
+        if self.loading || self.saving {
+            return;
+        }
+        self.close_row_menu(cx);
+        self.close_page_menu(cx);
+        if self.uncertain && !matches!(action, Action::Reload | Action::Cancel) {
             return;
         }
         match action {
@@ -445,6 +637,7 @@ impl EnvironmentEditor {
             Action::Cancel => {
                 self.generation = self.generation.wrapping_add(1);
                 self.reveal_task = None;
+                self.editing = None;
                 self.error = None;
                 if self.uncertain {
                     self.load(false, cx);
@@ -452,6 +645,7 @@ impl EnvironmentEditor {
                     self.install_metadata(metadata, false);
                 }
             }
+            Action::Edit => self.begin_edit(id, window, cx),
             Action::Reveal => self.reveal(id, cx),
             Action::Hide => {
                 self.reveal_task = None;
@@ -463,59 +657,111 @@ impl EnvironmentEditor {
             Action::Add => {
                 let id = self.next_id;
                 self.next_id += 1;
+                let name = cx.new(|cx| InputState::new(window, cx).placeholder("VARIABLE_NAME"));
+                let value = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Literal value (empty is allowed)")
+                        .masked(true)
+                });
                 self.rows.push(Row {
                     id,
                     original: None,
-                    name: Some(
-                        cx.new(|cx| InputState::new(window, cx).placeholder("VARIABLE_NAME")),
-                    ),
-                    value: Some(cx.new(|cx| {
-                        InputState::new(window, cx)
-                            .placeholder("Literal value (empty is allowed)")
-                            .masked(true)
-                    })),
+                    name: Some(name.clone()),
+                    name_subscription: None,
+                    value: Some(value.clone()),
                     multiline: None,
+                    value_subscription: None,
                     action: DraftAction::Set,
                     sensitive: true,
                     revealed: None,
                     error: None,
                 });
+                self.subscribe_input(id, &name, cx);
+                self.subscribe_input(id, &value, cx);
+                self.editing = Some(id);
             }
-            _ => {
+            Action::Unset => {
                 if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-                    row.revealed = None;
-                    match action {
-                        Action::Replace => {
-                            row.action = DraftAction::Set;
-                            row.value = Some(cx.new(|cx| {
-                                InputState::new(window, cx)
-                                    .placeholder("Replacement value")
-                                    .masked(true)
-                            }));
-                            row.multiline = None;
-                        }
-                        Action::Unset => row.action = DraftAction::Unset,
-                        Action::Delete => {
-                            if row.original.is_none() {
-                                self.rows.retain(|row| row.id != id);
-                            } else {
-                                row.action = DraftAction::Delete;
-                            }
-                        }
-                        Action::Hide => {}
-                        Action::Sensitive => row.sensitive = !row.sensitive,
-                        Action::Multiline => {
-                            let value = row.value(cx);
-                            row.multiline = Some(cx.new(|cx| {
-                                TextareaState::new(window, cx)
-                                    .default_value(value)
-                                    .auto_grow(2, 5)
-                            }));
-                            row.value = None;
-                        }
-                        _ => {}
+                    if row.original.is_none() {
+                        self.rows.retain(|row| row.id != id);
+                    } else {
+                        row.value_subscription = None;
+                        row.action = DraftAction::Unset;
+                        row.value = None;
+                        row.multiline = None;
+                        row.revealed = None;
+                        self.editing = None;
                     }
                 }
+            }
+            Action::Delete => {
+                if self
+                    .rows
+                    .iter()
+                    .find(|row| row.id == id)
+                    .is_some_and(|row| row.original.is_none())
+                {
+                    self.rows.retain(|row| row.id != id);
+                } else if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+                    row.value_subscription = None;
+                    row.action = DraftAction::Delete;
+                    row.value = None;
+                    row.multiline = None;
+                    row.revealed = None;
+                    self.editing = None;
+                }
+            }
+            Action::Undo => self.undo(id, cx),
+            Action::Sensitive => {
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+                    if row.action == DraftAction::Set {
+                        row.sensitive = !row.sensitive;
+                    }
+                }
+            }
+            Action::Multiline => {
+                let value = self
+                    .rows
+                    .iter()
+                    .find(|row| row.id == id)
+                    .map(|row| row.value(cx))
+                    .unwrap_or_default();
+                let multiline = cx.new(|cx| {
+                    TextareaState::new(window, cx)
+                        .default_value(value)
+                        .auto_grow(2, 5)
+                });
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+                    row.value_subscription = None;
+                    row.multiline = Some(multiline.clone());
+                    row.value = None;
+                }
+                self.subscribe_textarea(id, &multiline, cx);
+            }
+            Action::Singleline => {
+                let value = self
+                    .rows
+                    .iter()
+                    .find(|row| row.id == id)
+                    .and_then(|row| row.multiline.as_ref())
+                    .map(|input| input.read(cx).value().to_string());
+                let Some(value) = value else {
+                    return;
+                };
+                if value.contains('\n') {
+                    return;
+                }
+                let singleline = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .default_value(value)
+                        .masked(true)
+                });
+                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
+                    row.value_subscription = None;
+                    row.value = Some(singleline.clone());
+                    row.multiline = None;
+                }
+                self.subscribe_input(id, &singleline, cx);
             }
         }
         cx.notify();
@@ -528,25 +774,134 @@ impl EnvironmentEditor {
         label: &'static str,
         action: Action,
         id: u64,
+        tone: ActionTone,
+        disabled: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        widgets::action_button(theme, ActionTone::Quiet)
+        let mut button = widgets::action_button(theme, tone)
             .id((key, id))
             .role(gpui::Role::Button)
             .aria_label(label)
-            .tab_index(0)
-            .child(label)
-            .on_click(
-                cx.listener(move |editor, _, window, cx| editor.perform(action, id, window, cx)),
-            )
-            .on_key_down(
-                cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
-                    if !event.is_held && matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        editor.perform(action, id, window, cx);
-                        cx.stop_propagation();
-                    }
-                }),
-            )
+            .tab_index(if disabled { -1 } else { 0 })
+            .when(disabled, |button| button.opacity(0.42))
+            .child(label);
+        if !disabled {
+            button =
+                button
+                    .on_click(cx.listener(move |editor, _, window, cx| {
+                        editor.perform(action, id, window, cx)
+                    }))
+                    .on_key_down(
+                        cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                            if event.keystroke.key == "escape" {
+                                editor.close_row_menu(cx);
+                                editor.close_page_menu(cx);
+                                cx.stop_propagation();
+                            } else if !event.is_held
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                editor.perform(action, id, window, cx);
+                                cx.stop_propagation();
+                            }
+                        }),
+                    );
+        }
+        button
+    }
+
+    fn menu_item(
+        &self,
+        theme: &Theme,
+        key: &'static str,
+        label: &'static str,
+        action: Action,
+        id: u64,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mut item = popover::menu_row(theme, false, key)
+            .id((key, id))
+            .role(gpui::Role::MenuItem)
+            .aria_label(label)
+            .tab_index(if disabled { -1 } else { 0 })
+            .when(disabled, |item| item.opacity(0.42))
+            .child(label);
+        if !disabled {
+            item = item
+                .on_click(cx.listener(move |editor, _, window, cx| {
+                    editor.perform(action, id, window, cx);
+                    cx.stop_propagation();
+                }))
+                .on_key_down(
+                    cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "escape" {
+                            editor.close_row_menu(cx);
+                            editor.close_page_menu(cx);
+                            cx.stop_propagation();
+                        } else if !event.is_held
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            editor.perform(action, id, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+                );
+        }
+        item
+    }
+
+    fn switch_control(
+        &self,
+        theme: &Theme,
+        id: u64,
+        enabled: bool,
+        disabled: bool,
+        needs_replacement: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let mut control = div()
+            .id(("environment-sensitive", id))
+            .w(px(widgets::SWITCH_WIDTH))
+            .h(px(40.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .role(gpui::Role::Switch)
+            .aria_label("Sensitive diagnostics redaction")
+            .aria_toggled(if enabled {
+                gpui::Toggled::True
+            } else {
+                gpui::Toggled::False
+            })
+            .tab_index(if disabled { -1 } else { 0 })
+            .when(disabled, |control| control.opacity(0.42))
+            .tooltip(widgets::text_tooltip(if needs_replacement {
+                "Enter a replacement value before changing diagnostic redaction."
+            } else {
+                "Controls diagnostic redaction only; it never reveals the value."
+            }))
+            .child(widgets::toggle_switch(
+                theme,
+                enabled,
+                format!("environment-sensitive-{id}"),
+            ));
+        if !disabled {
+            control = control
+                .on_click(cx.listener(move |editor, _, window, cx| {
+                    editor.perform(Action::Sensitive, id, window, cx)
+                }))
+                .on_key_down(
+                    cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
+                        if !event.is_held
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            editor.perform(Action::Sensitive, id, window, cx);
+                            cx.stop_propagation();
+                        }
+                    }),
+                );
+        }
+        control
     }
 }
 
@@ -565,15 +920,27 @@ impl Render for EnvironmentEditor {
             }
         }
         let theme = Theme::of(cx).for_settings_surface();
-        let device = self.target.as_deref().unwrap_or("This device");
+        let mutation_disabled = self.mutation_disabled();
         let mut content = div()
             .flex()
             .flex_col()
             .gap(px(8.0))
-            .child(widgets::section_label(
-                &theme,
-                format!("Environment variables · {device}"),
-            ));
+            .on_key_down(cx.listener(|editor, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    let mut closed = false;
+                    if editor.row_menu.is_open() {
+                        editor.close_row_menu(cx);
+                        closed = true;
+                    }
+                    if editor.page_menu.is_open() {
+                        editor.close_page_menu(cx);
+                        closed = true;
+                    }
+                    if closed {
+                        cx.stop_propagation();
+                    }
+                }
+            }));
         if !self.supported(cx) {
             return content
                 .child(
@@ -584,7 +951,140 @@ impl Render for EnvironmentEditor {
                 )
                 .into_any_element();
         }
-        content = content.child(div().text_sm().text_color(theme.text_muted).child("Saved changes apply to new agent processes. Active tasks continue with their current settings. Credential overrides may take precedence over saved CLI accounts."));
+
+        let page_menu_open = self.page_menu.get().is_some();
+        let mut reload = widgets::action_button(&theme, ActionTone::Quiet)
+            .id("environment-actions")
+            .w(px(32.0))
+            .px_0()
+            .justify_center()
+            .when(page_menu_open, |button| button.bg(theme.glass_hover()))
+            .when(readonly, |button| button.opacity(0.42))
+            .role(gpui::Role::Button)
+            .aria_label("Environment actions")
+            .aria_expanded(page_menu_open)
+            .tab_index(if readonly { -1 } else { 0 })
+            .tooltip(widgets::text_tooltip("Environment actions"))
+            .child(
+                crate::icons::icon(crate::icons::MORE_HORIZONTAL)
+                    .size(px(16.0))
+                    .text_color(theme.text_muted),
+            );
+        if !readonly {
+            reload = reload
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|editor, _, _, _| editor.page_menu.note_trigger_press()),
+                )
+                .on_click(cx.listener(|editor, _, window, cx| {
+                    cx.stop_propagation();
+                    if editor.page_menu.take_press_was_open() {
+                        editor.close_page_menu(cx);
+                    } else {
+                        editor.close_row_menu(cx);
+                        editor.page_menu.open(());
+                        cx.notify();
+                    }
+                    let _ = window;
+                }))
+                .on_key_down(cx.listener(|editor, event: &KeyDownEvent, _, cx| {
+                    if event.keystroke.key == "escape" {
+                        editor.close_page_menu(cx);
+                        cx.stop_propagation();
+                    } else if !event.is_held
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        if editor.page_menu.is_open() {
+                            editor.close_page_menu(cx);
+                        } else {
+                            editor.close_row_menu(cx);
+                            editor.page_menu.open(());
+                            cx.notify();
+                        }
+                        cx.stop_propagation();
+                    }
+                }));
+        }
+        if page_menu_open {
+            let popup = Theme::of(cx).for_popup();
+            let menu = popover::popover_card(&popup)
+                .w(px(190.0))
+                .flex()
+                .flex_col()
+                .on_mouse_down_out(cx.listener(|editor, _, _, cx| editor.close_page_menu(cx)))
+                .child(self.menu_item(
+                    &popup,
+                    "environment-reload",
+                    "Reload status",
+                    Action::Reload,
+                    0,
+                    readonly,
+                    cx,
+                ))
+                .into_any_element();
+            reload = reload.relative().child(popover::anchored_menu_below_end(
+                "environment-actions-menu",
+                menu,
+                self.page_menu.closing_since(),
+            ));
+        }
+
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_start()
+            .justify_between()
+            .gap(px(16.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .child(widgets::section_label(&theme, "Environment variables"))
+                    .child(
+                        div()
+                            .px(px(8.0))
+                            .text_size(crate::typography::ui_rems(13.0))
+                            .text_color(theme.text_muted)
+                            .child("Applies to new sessions."),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .id("environment-precedence")
+                            .size(px(28.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .tooltip(widgets::text_tooltip(
+                                "Credential overrides may take precedence over saved provider accounts.",
+                            ))
+                            .child(
+                                crate::icons::icon(crate::icons::INFO_CIRCLE)
+                                    .size(px(15.0))
+                                    .text_color(theme.text_muted),
+                            ),
+                    )
+                    .child(self.button(
+                        &theme,
+                        "environment-add",
+                        "Add variable",
+                        Action::Add,
+                        0,
+                        ActionTone::Outlined,
+                        mutation_disabled,
+                        cx,
+                    ))
+                    .child(reload),
+            );
+        content = content.child(header);
         if let Some(metadata) = &self.metadata
             && !metadata.previous_environment_sessions.is_empty()
         {
@@ -599,63 +1099,181 @@ impl Render for EnvironmentEditor {
             content = content.child(widgets::error_strip(&theme, error.clone()));
         }
         if self.loading {
-            content = content.child("Loading environment settings…");
+            content = content.child(
+                div()
+                    .text_sm()
+                    .text_color(theme.text_muted)
+                    .child("Loading environment settings…"),
+            );
         }
-        for row in &self.rows {
+
+        let mut rows_card = widgets::section_card(&theme).mt_0();
+        if self.rows.is_empty() && !self.loading {
+            rows_card = rows_card.child(
+                div()
+                    .mx(px(16.0))
+                    .py(px(16.0))
+                    .text_sm()
+                    .text_color(theme.text_muted)
+                    .child("No environment overrides."),
+            );
+        }
+        for (index, row) in self.rows.iter().enumerate() {
             let id = row.id;
-            let name: AnyElement = match &row.name {
-                Some(input) => div()
-                    .min_w(px(160.0))
-                    .flex_1()
-                    .child(Input::new(input))
-                    .into_any_element(),
-                None => div()
-                    .font_weight(gpui::FontWeight::MEDIUM)
-                    .child(row.name(cx))
-                    .into_any_element(),
+            let editing = self.editing == Some(id);
+            let name = row.name(cx);
+            let display_name = if name.is_empty() {
+                "New variable".to_owned()
+            } else {
+                name.clone()
             };
-            let mut card = div()
-                .id(("environment-row", id))
-                .flex()
-                .flex_col()
-                .gap(px(5.0))
-                .p(px(8.0))
-                .rounded(px(8.0))
-                .bg(theme.input_glass_bg())
-                .child(name);
-            let actions = div()
+            let set = row
+                .original
+                .as_ref()
+                .is_some_and(|entry| entry.action == EnvironmentAction::Set);
+            let summary = match row.action {
+                DraftAction::Keep => {
+                    if set {
+                        row.revealed
+                            .clone()
+                            .unwrap_or_else(|| "Set · ••••••••".to_owned())
+                    } else {
+                        "Unset".to_owned()
+                    }
+                }
+                DraftAction::Set => {
+                    let lines = row.value(cx).lines().count().max(1);
+                    if row.multiline.is_some() {
+                        format!("Draft value · {lines} lines")
+                    } else {
+                        "Draft value · ••••••••".to_owned()
+                    }
+                }
+                DraftAction::Unset => "Unset · draft".to_owned(),
+                DraftAction::Delete => "Restore inheritance · draft".to_owned(),
+            };
+
+            let name_summary = div()
+                .flex_1()
+                .min_w_0()
                 .flex()
                 .flex_row()
-                .flex_wrap()
                 .items_center()
-                .gap(px(4.0));
-            let actions = match row.action {
-                DraftAction::Keep => {
-                    let set = row
-                        .original
-                        .as_ref()
-                        .is_some_and(|entry| entry.action == EnvironmentAction::Set);
-                    card = card.child(div().text_sm().text_color(theme.text_muted).child(
-                        row.revealed.clone().unwrap_or_else(|| {
-                            if set {
-                                "••••••••".into()
-                            } else {
-                                "Removed from child environment".into()
-                            }
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(13.0))
+                        .line_height(crate::typography::ui_rems(17.0))
+                        .font_family(theme.font_mono.clone())
+                        .text_color(theme.text)
+                        .child(display_name.clone()),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(190.0))
+                        .min_w_0()
+                        .truncate()
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(if row.action == DraftAction::Keep {
+                            theme.text_muted
+                        } else {
+                            theme.warning_muted
+                        })
+                        .child(summary),
+                );
+
+            let has_newlines = row
+                .multiline
+                .as_ref()
+                .is_some_and(|input| input.read(cx).value().contains('\n'));
+            let edit_disabled = mutation_disabled;
+            let edit = self.button(
+                &theme,
+                "environment-edit",
+                if editing { "Done" } else { "Edit" },
+                Action::Edit,
+                id,
+                ActionTone::Quiet,
+                edit_disabled,
+                cx,
+            );
+
+            let menu_open = self.row_menu.get() == Some(&id);
+            let mut more = widgets::action_button(&theme, ActionTone::Quiet)
+                .id(("environment-more", id))
+                .w(px(28.0))
+                .px_0()
+                .justify_center()
+                .when(menu_open, |button| button.bg(theme.glass_hover()))
+                .when(mutation_disabled, |button| button.opacity(0.42))
+                .role(gpui::Role::Button)
+                .aria_label(format!("Actions for {display_name}"))
+                .aria_expanded(menu_open)
+                .tab_index(if mutation_disabled { -1 } else { 0 })
+                .tooltip(widgets::text_tooltip("Variable actions"))
+                .child(
+                    crate::icons::icon(crate::icons::MORE_HORIZONTAL)
+                        .size(px(16.0))
+                        .text_color(theme.text_muted),
+                );
+            if !mutation_disabled {
+                let trigger_id = id;
+                more = more
+                    .on_mouse_down(
+                        gpui::MouseButton::Left,
+                        cx.listener(move |editor, _, _, _| {
+                            editor
+                                .row_menu
+                                .note_trigger_press_matching(|open| *open == trigger_id);
                         }),
-                    ));
-                    actions
-                        .child(self.button(
-                            &theme,
-                            "environment-replace",
-                            "Replace",
-                            Action::Replace,
-                            id,
-                            cx,
-                        ))
-                        .when(set, |actions| {
-                            actions.child(self.button(
-                                &theme,
+                    )
+                    .on_click(cx.listener(move |editor, _, _, cx| {
+                        cx.stop_propagation();
+                        if editor.row_menu.take_press_was_open() {
+                            editor.close_row_menu(cx);
+                        } else {
+                            editor.close_page_menu(cx);
+                            editor.row_menu.open(trigger_id);
+                            cx.notify();
+                        }
+                    }))
+                    .on_key_down(cx.listener(move |editor, event: &KeyDownEvent, _, cx| {
+                        if event.keystroke.key == "escape" {
+                            editor.close_row_menu(cx);
+                            cx.stop_propagation();
+                        } else if !event.is_held
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            if editor.row_menu.is_open()
+                                && editor.row_menu.get() == Some(&trigger_id)
+                            {
+                                editor.close_row_menu(cx);
+                            } else {
+                                editor.close_page_menu(cx);
+                                editor.row_menu.open(trigger_id);
+                                cx.notify();
+                            }
+                            cx.stop_propagation();
+                        }
+                    }));
+            }
+
+            if menu_open {
+                let popup = Theme::of(cx).for_popup();
+                let mut menu = popover::popover_card(&popup)
+                    .w(px(222.0))
+                    .flex()
+                    .flex_col()
+                    .on_mouse_down_out(cx.listener(|editor, _, _, cx| editor.close_row_menu(cx)));
+                match row.action {
+                    DraftAction::Keep => {
+                        if set {
+                            menu = menu.child(self.menu_item(
+                                &popup,
                                 "environment-show",
                                 if row.revealed.is_some() {
                                     "Hide value"
@@ -668,157 +1286,305 @@ impl Render for EnvironmentEditor {
                                     Action::Reveal
                                 },
                                 id,
+                                mutation_disabled,
                                 cx,
-                            ))
-                        })
-                        .child(self.button(
-                            &theme,
-                            "environment-unset",
-                            "Remove from child",
-                            Action::Unset,
-                            id,
-                            cx,
-                        ))
-                        .child(self.button(
-                            &theme,
+                            ));
+                            menu = menu.child(self.menu_item(
+                                &popup,
+                                "environment-unset",
+                                "Unset in child",
+                                Action::Unset,
+                                id,
+                                mutation_disabled,
+                                cx,
+                            ));
+                        } else {
+                            menu = menu.child(self.menu_item(
+                                &popup,
+                                "environment-set",
+                                "Set value",
+                                Action::Edit,
+                                id,
+                                mutation_disabled,
+                                cx,
+                            ));
+                        }
+                        menu = menu.child(self.menu_item(
+                            &popup,
                             "environment-delete",
                             "Restore inheritance",
                             Action::Delete,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
-                }
-                DraftAction::Set => {
-                    if let Some(input) = &row.multiline {
-                        card = card.child(Textarea::new(input)).child(
-                            div()
-                                .text_sm()
-                                .text_color(theme.text_muted)
-                                .child("Multiline values are visible while editing."),
-                        );
-                    } else if let Some(input) = &row.value {
-                        card = card.child(Input::new(input));
+                        ));
                     }
-                    actions
-                        .child(self.button(
-                            &theme,
-                            "environment-sensitive",
-                            if row.sensitive {
-                                "Sensitive: on"
-                            } else {
-                                "Sensitive: off"
-                            },
-                            Action::Sensitive,
+                    DraftAction::Set => {
+                        menu = menu.child(self.menu_item(
+                            &popup,
+                            "environment-undo",
+                            "Undo changes",
+                            Action::Undo,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
-                        .when(row.multiline.is_none(), |actions| {
-                            actions.child(self.button(
-                                &theme,
-                                "environment-multiline",
-                                "Edit multiline (visible)",
-                                Action::Multiline,
-                                id,
-                                cx,
-                            ))
-                        })
-                        .child(self.button(
-                            &theme,
+                        ));
+                        menu = menu.child(self.menu_item(
+                            &popup,
                             "environment-unset",
-                            "Remove from child",
+                            "Unset in child",
                             Action::Unset,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
-                        .child(self.button(
-                            &theme,
+                        ));
+                        menu = menu.child(self.menu_item(
+                            &popup,
                             "environment-delete",
                             if row.original.is_some() {
                                 "Restore inheritance"
                             } else {
-                                "Remove row"
+                                "Remove draft"
                             },
                             Action::Delete,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
-                }
-                DraftAction::Unset | DraftAction::Delete => {
-                    card = card.child(div().text_sm().text_color(theme.text_muted).child(
-                        if row.action == DraftAction::Unset {
-                            "Will be removed from child environment"
-                        } else {
-                            "Will inherit the host default"
-                        },
-                    ));
-                    actions
-                        .child(self.button(
-                            &theme,
-                            "environment-replace",
+                        ));
+                    }
+                    DraftAction::Unset | DraftAction::Delete => {
+                        menu = menu.child(self.menu_item(
+                            &popup,
+                            "environment-set",
                             "Set value",
-                            Action::Replace,
+                            Action::Edit,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
-                        .child(self.button(
-                            &theme,
-                            "environment-delete",
-                            "Restore inheritance",
-                            Action::Delete,
+                        ));
+                        menu = menu.child(self.menu_item(
+                            &popup,
+                            "environment-undo",
+                            "Undo changes",
+                            Action::Undo,
                             id,
+                            mutation_disabled,
                             cx,
-                        ))
+                        ));
+                    }
                 }
-            };
-            card = card.child(actions);
+                more = more.relative().child(popover::anchored_menu_below_end(
+                    format!("environment-row-menu-{id}"),
+                    menu.into_any_element(),
+                    self.row_menu.closing_since(),
+                ));
+            }
+
+            let top = div()
+                .w_full()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(name_summary)
+                .child(edit)
+                .child(more);
+            let mut row_element = widgets::card_row(&theme, index == 0)
+                .id(("environment-row", id))
+                .min_h(px(44.0))
+                .py(px(6.0))
+                .flex_col()
+                .items_stretch()
+                .gap(px(8.0));
+            if editing {
+                let input_shell = |field: AnyElement, focus: gpui::FocusHandle| {
+                    div()
+                        .flex()
+                        .w_full()
+                        .min_h(px(32.0))
+                        .px(px(8.0))
+                        .py(px(6.0))
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.input_glass_bg())
+                        .track_focus(&focus)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .child(field)
+                        .into_any_element()
+                };
+                let name_field: AnyElement = match &row.name {
+                    Some(input) => input_shell(
+                        Input::new(input).into_any_element(),
+                        input.read(cx).focus_handle(cx),
+                    ),
+                    None => div()
+                        .text_sm()
+                        .text_color(theme.text)
+                        .child(display_name.clone())
+                        .into_any_element(),
+                };
+                let value_field: AnyElement = match (&row.value, &row.multiline) {
+                    (_, Some(input)) => input_shell(
+                        Textarea::new(input).into_any_element(),
+                        input.read(cx).focus_handle(cx),
+                    ),
+                    (Some(input), None) => input_shell(
+                        Input::new(input).into_any_element(),
+                        input.read(cx).focus_handle(cx),
+                    ),
+                    (None, None) => div().into_any_element(),
+                };
+                let multiline_disabled =
+                    mutation_disabled || (row.multiline.is_some() && has_newlines);
+                let multiline_tooltip = if row.multiline.is_some() {
+                    if has_newlines {
+                        "Cannot use single line while the value contains line breaks."
+                    } else {
+                        "Return to a single-line editor."
+                    }
+                } else {
+                    "Multiline values are visible while editing."
+                };
+                let form = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.0))
+                    .border_t_1()
+                    .border_color(widgets::row_divider(&theme))
+                    .pt(px(10.0))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(widgets::field_label(&theme, "Name"))
+                            .child(name_field),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(widgets::field_label(&theme, "Value"))
+                            .child(value_field),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .flex_wrap()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(widgets::field_label(&theme, "Sensitive"))
+                                    .child(self.switch_control(
+                                        &theme,
+                                        id,
+                                        row.sensitive,
+                                        mutation_disabled || row.action != DraftAction::Set,
+                                        row.action != DraftAction::Set,
+                                        cx,
+                                    )),
+                            )
+                            .child(
+                                self.button(
+                                    &theme,
+                                    "environment-multiline",
+                                    if row.multiline.is_some() {
+                                        "Use single line"
+                                    } else {
+                                        "Use multiline"
+                                    },
+                                    if row.multiline.is_some() {
+                                        Action::Singleline
+                                    } else {
+                                        Action::Multiline
+                                    },
+                                    id,
+                                    ActionTone::Quiet,
+                                    multiline_disabled,
+                                    cx,
+                                )
+                                .tooltip(widgets::text_tooltip(multiline_tooltip)),
+                            ),
+                    );
+                row_element = row_element.child(top).child(form);
+            } else {
+                row_element = row_element.child(top);
+            }
             if let Some(error) = &row.error {
-                card = card.child(
+                row_element = row_element.child(
                     div()
                         .text_sm()
                         .text_color(theme.danger)
                         .child(error.clone()),
                 );
             }
-            content = content.child(card);
+            rows_card = rows_card.child(row_element);
         }
-        let buttons = div()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(px(4.0))
-            .child(self.button(
-                &theme,
-                "environment-add",
-                "Add variable",
-                Action::Add,
-                0,
-                cx,
-            ))
-            .child(self.button(
-                &theme,
-                "environment-save",
-                if self.saving { "Saving…" } else { "Save" },
-                Action::Save,
-                0,
-                cx,
-            ))
-            .child(self.button(
-                &theme,
-                "environment-cancel",
-                "Cancel draft",
-                Action::Cancel,
-                0,
-                cx,
-            ))
-            .child(self.button(
-                &theme,
-                "environment-reload",
-                "Reload status",
-                Action::Reload,
-                0,
-                cx,
-            ));
-        content.child(buttons).into_any_element()
+        content = content.child(rows_card);
+        if self.dirty() {
+            let save_disabled =
+                readonly || self.uncertain || self.metadata.is_none() || !self.dirty();
+            let discard_disabled = readonly || !self.dirty();
+            content = content.child(
+                div()
+                    .mt(px(2.0))
+                    .pt(px(10.0))
+                    .border_t_1()
+                    .border_color(widgets::row_divider(&theme))
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.text_muted)
+                            .child(if self.saving {
+                                "Saving changes…"
+                            } else if self.uncertain {
+                                "Reload before saving again."
+                            } else {
+                                "Unsaved changes"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap(px(4.0))
+                            .child(self.button(
+                                &theme,
+                                "environment-discard",
+                                "Discard",
+                                Action::Cancel,
+                                0,
+                                ActionTone::Quiet,
+                                discard_disabled,
+                                cx,
+                            ))
+                            .child(self.button(
+                                &theme,
+                                "environment-save",
+                                if self.saving { "Saving…" } else { "Save" },
+                                Action::Save,
+                                0,
+                                ActionTone::Solid,
+                                save_disabled,
+                                cx,
+                            )),
+                    ),
+            );
+        }
+        content.into_any_element()
     }
 }
 
@@ -941,12 +1707,12 @@ mod tests {
             None,
         );
         settle(&runtime, cx);
-        window
+        let multiline = window
             .update(cx, |editor, window, cx| {
                 assert_eq!(editor.rows[0].revealed.as_deref(), Some("private-revealed"));
                 editor.perform(Action::Hide, editor.rows[0].id, window, cx);
                 assert!(editor.rows[0].revealed.is_none());
-                editor.perform(Action::Replace, editor.rows[0].id, window, cx);
+                editor.perform(Action::Edit, editor.rows[0].id, window, cx);
                 assert!(
                     editor.rows[0]
                         .value
@@ -957,16 +1723,18 @@ mod tests {
                         .is_masked()
                 );
                 editor.perform(Action::Multiline, editor.rows[0].id, window, cx);
-                editor.rows[0]
-                    .multiline
-                    .as_ref()
-                    .unwrap()
-                    .update(cx, |input, cx| {
-                        input.set_value("  中文\n$HOME `literal`  ", window, cx)
-                    });
-                editor.save(cx);
+                editor.rows[0].multiline.clone().unwrap()
             })
             .unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                multiline.update(cx, |input, cx| {
+                    input.replace_all("  中文\n$HOME `literal`  ", window, cx)
+                });
+            })
+            .unwrap();
+        settle(&runtime, cx);
+        window.update(cx, |editor, _, cx| editor.save(cx)).unwrap();
         settle(&runtime, cx);
         let save = request(&mut wire);
         assert_eq!(
@@ -1125,5 +1893,87 @@ mod tests {
                 assert!(!editor.current(0, &handle, cx));
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn edit_done_does_not_stage_an_empty_replacement(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (handle, mut wire) = connection();
+        let (_state, window) = setup(cx, handle);
+        settle(&runtime, cx);
+        let get = request(&mut wire);
+        reply(
+            &wire,
+            get.id,
+            Some(serde_json::to_value(metadata("one")).unwrap()),
+            None,
+        );
+        settle(&runtime, cx);
+
+        window
+            .update(cx, |editor, window, cx| {
+                let id = editor.rows[0].id;
+                editor.begin_edit(id, window, cx);
+                assert!(matches!(editor.rows[0].action, DraftAction::Keep));
+                assert!(!editor.dirty());
+                editor.begin_edit(id, window, cx);
+                assert!(matches!(editor.rows[0].action, DraftAction::Keep));
+                assert!(!editor.dirty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn input_change_stages_replacement_for_save(cx: &mut TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (handle, mut wire) = connection();
+        let (_state, window) = setup(cx, handle);
+        settle(&runtime, cx);
+        let get = request(&mut wire);
+        reply(
+            &wire,
+            get.id,
+            Some(serde_json::to_value(metadata("one")).unwrap()),
+            None,
+        );
+        settle(&runtime, cx);
+
+        let input = window
+            .update(cx, |editor, window, cx| {
+                let id = editor.rows[0].id;
+                editor.begin_edit(id, window, cx);
+                editor.rows[0].value.clone().unwrap()
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                input.update(cx, |input, cx| {
+                    input.replace_all("replacement-value", window, cx)
+                });
+            })
+            .unwrap();
+        settle(&runtime, cx);
+        window
+            .update(cx, |editor, _, _| {
+                assert!(matches!(editor.rows[0].action, DraftAction::Set));
+            })
+            .unwrap();
+        window.update(cx, |editor, _, cx| editor.save(cx)).unwrap();
+        settle(&runtime, cx);
+        let save = request(&mut wire);
+        assert_eq!(
+            save.method.as_deref(),
+            Some(methods::PATCH_HARNESS_ENVIRONMENT)
+        );
+        assert_eq!(save.params["changes"][0]["name"], "API_KEY");
+        assert_eq!(save.params["changes"][0]["value"], "replacement-value");
     }
 }
