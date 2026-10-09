@@ -55,6 +55,7 @@ pub mod project_actions;
 pub mod queue;
 pub mod rail;
 mod roll_text;
+pub mod running_pill;
 pub mod session_import;
 pub mod settings;
 pub mod shell;

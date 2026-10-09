@@ -1525,6 +1525,7 @@ impl RegistryDoc {
             ("lastCompletedTurn", json!(session.last_completed_turn)),
             ("startedAt", opt_ms(session.started_at)),
             ("updatedAt", json!(session.updated_at.timestamp_millis())),
+            ("runningSubagents", json!(session.running_subagents)),
         ]);
         self.write(KIND_SESSIONS, &session.chat_id.clone(), OpKind::Upsert, set);
         Ok(())
@@ -1710,6 +1711,7 @@ impl RegistryDoc {
                     ("lastCompletedTurn", json!(session.last_completed_turn)),
                     ("startedAt", opt_ms(session.started_at)),
                     ("updatedAt", json!(session.updated_at.timestamp_millis())),
+                    ("runningSubagents", json!(session.running_subagents)),
                 ]),
             );
         }
