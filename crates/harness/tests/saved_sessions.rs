@@ -177,6 +177,7 @@ async fn claude_rejects_busy_torn_records_changed_root_and_oversized_sources() {
         .unwrap()
         .sessions
         .remove(0);
+    assert!(source.running);
     assert!(
         harness
             .copy_saved_session(&source)
@@ -211,6 +212,130 @@ async fn claude_rejects_busy_torn_records_changed_root_and_oversized_sources() {
             .unwrap_err()
             .to_string()
             .contains("limit")
+    );
+}
+
+fn local_command(parent: &str, ids: [&str; 3], name: &str, output: &str) -> Vec<Value> {
+    let mut caveat = user(
+        Some(parent),
+        ids[0],
+        json!("<local-command-caveat>Caveat: run directly in Claude Code.</local-command-caveat>"),
+    );
+    caveat["isMeta"] = true.into();
+    vec![
+        caveat,
+        user(
+            Some(ids[0]),
+            ids[1],
+            json!(format!(
+                "<command-name>/{name}</command-name>\n<command-message>{name}</command-message>\n<command-args></command-args>"
+            )),
+        ),
+        user(
+            Some(ids[1]),
+            ids[2],
+            json!(format!(
+                "<local-command-stdout>{output}</local-command-stdout>"
+            )),
+        ),
+    ]
+}
+
+async fn copy_error(records: Vec<Value>) -> Option<String> {
+    let (_root, harness, _path) = claude_fixture(records);
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let error = harness
+        .copy_saved_session(&source)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    // Discovery flags exactly the sessions the import boundary rejects.
+    assert_eq!(source.running, error.is_some());
+    error
+}
+
+#[tokio::test]
+async fn claude_copies_idle_sessions_that_end_with_local_commands() {
+    let boundary = "33333333-1111-2222-3333-444444444444";
+    let ids = [
+        "44444444-1111-2222-3333-444444444444",
+        "55555555-1111-2222-3333-444444444444",
+        "66666666-1111-2222-3333-444444444444",
+    ];
+    let mut records = vec![
+        user(None, USER, json!("request")),
+        assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+    ];
+    records.extend(local_command(ASSISTANT, ids, "fork", "Forked"));
+    assert_eq!(copy_error(records).await, None);
+
+    let mut summary = user(Some(boundary), USER, json!("compact summary"));
+    summary["isCompactSummary"] = true.into();
+    let compacted = vec![
+        json!({"type":"system","subtype":"compact_boundary","uuid":boundary,"parentUuid":null,"sessionId":SOURCE,"cwd":"/项目/a worktree"}),
+        summary,
+    ];
+    let mut records = compacted.clone();
+    records.extend(local_command(USER, ids, "compact", "Compacted"));
+    assert_eq!(copy_error(records).await, None);
+
+    // An automatic compaction mid-turn leaves no command output behind.
+    assert!(
+        copy_error(compacted)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
+    );
+
+    // A prompt command without local output may still be running.
+    let mut records = vec![
+        user(None, USER, json!("request")),
+        assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+    ];
+    records.extend(
+        local_command(ASSISTANT, ids, "review", "")
+            .into_iter()
+            .take(2),
+    );
+    assert!(
+        copy_error(records)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
+    );
+
+    // Meta records injected mid-turn do not hide an unfinished tool call.
+    let mut skill = user(
+        Some(ids[0]),
+        ids[1],
+        json!([{"type":"text","text":"Base directory for this skill"}]),
+    );
+    skill["isMeta"] = true.into();
+    let records = vec![
+        user(None, USER, json!("request")),
+        assistant(
+            USER,
+            ASSISTANT,
+            json!([{"type":"tool_use","id":"tool-1","name":"Skill","input":{}}]),
+            "tool_use",
+        ),
+        user(
+            Some(ASSISTANT),
+            ids[0],
+            json!([{"type":"tool_result","tool_use_id":"tool-1","content":"loaded"}]),
+        ),
+        skill,
+    ];
+    assert!(
+        copy_error(records)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
     );
 }
 
@@ -436,6 +561,36 @@ mod codex {
         let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
         assert!(calls.contains("lastTurnId"));
         assert!(!calls.contains("turn/start"));
+    }
+
+    #[tokio::test]
+    async fn codex_marks_running_threads_and_never_forks_them() {
+        // An unloaded app-server reports a turn running elsewhere as
+        // interrupted without completedAt; thread/fork rejects it.
+        let (root, harness) = fixture(json!({"turns":[
+            {"id":"turn-0","status":"interrupted","completedAt":null,"items":[]}]}));
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert!(source.running);
+        let error = harness.copy_saved_session(&source).await.unwrap_err();
+        assert!(error.to_string().contains("still running"), "{error}");
+        let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
+        assert!(!calls.contains("thread/fork"));
+
+        let (_root, harness) = fixture(json!({"turns":[
+            {"id":"turn-0","status":"interrupted","completedAt":5,"items":[]}]}));
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert!(!source.running);
+        assert!(harness.copy_saved_session(&source).await.is_ok());
     }
 
     #[tokio::test]

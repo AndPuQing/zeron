@@ -27,6 +27,7 @@ impl Provider {
             updated_at_ms: 2000,
             model: None,
             locator: None,
+            running: false,
         }
     }
 }

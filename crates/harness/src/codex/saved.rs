@@ -116,6 +116,14 @@ impl CodexHarness {
                     || thread["source"].as_str().is_some_and(|source| source.starts_with("subAgent")) { continue; }
                 if let Some(session) = metadata(thread, &identity) { sessions.push(session); }
             }
+            for session in &mut sessions {
+                // Best effort: the import re-checks the boundary before forking.
+                if let Ok(page) = client.request("thread/turns/list", json!({
+                    "threadId": session.native_id, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"
+                })).await {
+                    session.running = page["data"][0].is_object() && !turn_finished(&page["data"][0]);
+                }
+            }
             let next = response["nextCursor"].as_str().map(str::to_owned);
             if next.is_some() && (next == cursor.cursor || data.is_empty()) {
                 return Err(protocol("Codex did not advance the session cursor."));
@@ -194,21 +202,18 @@ impl CodexHarness {
             if last.and_then(|turn| turn["id"].as_str()).is_none_or(str::is_empty) {
                 return Err(protocol("The Codex session has no completed conversation to copy."));
             }
-            if let Some(last) = last {
-                let complete = match last["status"].as_str() {
-                    Some("completed" | "interrupted" | "failed" | "aborted") => true,
-                    None => last["completedAt"].as_i64().is_some_and(|time| time > 0),
-                    _ => false,
-                };
-                if !complete { return Err(protocol("Finish or stop the source Codex turn before importing.")); }
-            }
+            if last.is_some_and(|turn| !turn_finished(turn)) { return Err(running()); }
             let mut params = json!({"threadId": session.native_id, "cwd": session.cwd,
                 "excludeTurns": true, "deferGoalContinuation": true});
             if let Some(id) = last.and_then(|turn| turn["id"].as_str()) { params["lastTurnId"] = id.into(); }
-            let response = client.request("thread/fork", params).await?;
+            // The turn can start between the check and the fork.
+            let response = client.request("thread/fork", params).await.map_err(|error| {
+                if error.to_string().contains("in-progress turn") { running() } else { error }
+            })?;
             let id = response["thread"]["id"].as_str().filter(|id| !id.is_empty() && *id != session.native_id)
                 .ok_or_else(|| protocol("Codex did not create an independent native session copy."))?;
             session.native_id = id.to_owned();
+            session.running = false;
             Ok(session)
         }).await
     }
@@ -235,7 +240,20 @@ fn metadata(thread: &Value, identity: &str) -> Option<SavedSession> {
         updated_at_ms: thread["updatedAt"].as_i64()?.checked_mul(1000)?,
         model: thread["model"].as_str().map(str::to_owned),
         locator: None,
+        running: false,
     })
+}
+
+/// A thread that is not loaded in this app-server reports a turn still running
+/// in another process as `interrupted` without `completedAt`, while
+/// `thread/fork` rejects it as in progress.
+fn turn_finished(turn: &Value) -> bool {
+    let completed_at = turn["completedAt"].as_i64().is_some_and(|time| time > 0);
+    match turn["status"].as_str() {
+        Some("completed" | "failed" | "aborted") => true,
+        Some("interrupted") | None => completed_at,
+        _ => false,
+    }
 }
 
 fn time_ms(value: &Value) -> Option<i64> {

@@ -165,6 +165,7 @@ impl ClaudeHarness {
             Ok(SavedSession {
                 native_id: new_id,
                 locator: Some(destination),
+                running: false,
                 ..session
             })
         })
@@ -256,6 +257,7 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
     Read::by_ref(&mut file)
         .take(SAMPLE)
         .read_to_end(&mut samples)?;
+    let mut head = samples.len();
     if size > SAMPLE {
         // Do not join a partial head record to the first complete tail record.
         samples.truncate(
@@ -264,6 +266,7 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
                 .rposition(|b| *b == b'\n')
                 .map_or(0, |i| i + 1),
         );
+        head = samples.len();
         let mut tail = Vec::new();
         file.seek(SeekFrom::Start(size.saturating_sub(SAMPLE)))?;
         file.take(SAMPLE).read_to_end(&mut tail)?;
@@ -282,7 +285,15 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
     let mut model = None;
     let mut prompt = None;
     let mut main = false;
-    for line in samples.split(|b| *b == b'\n') {
+    // Records from the tail sample (or the whole small file) decide whether
+    // the newest turn is still running; head records cannot.
+    let mut recent = Vec::new();
+    let (first_sample, last_sample) = samples.split_at(head);
+    let lines = first_sample
+        .split(|b| *b == b'\n')
+        .map(|line| (size <= SAMPLE, line))
+        .chain(last_sample.split(|b| *b == b'\n').map(|line| (true, line)));
+    for (is_recent, line) in lines {
         let Ok(record) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
@@ -320,6 +331,9 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
                 prompt = message_text(&record["message"]["content"]);
             }
         }
+        if is_recent {
+            recent.push(record);
+        }
     }
     if !main {
         return Ok(None);
@@ -344,6 +358,7 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
         updated_at_ms: last.unwrap_or(fallback),
         model,
         locator: Some(path.to_owned()),
+        running: turn_finished(&recent) == Some(false),
     }))
 }
 
@@ -419,13 +434,69 @@ fn check_cwd(records: &[Value], expected: &str) -> Result<(), HarnessError> {
     Ok(())
 }
 
+/// Local slash-command and `!` bash records are written as user records but are
+/// not conversation turns. Only their printed output proves the CLI was idle; a
+/// bare `<command-name>` may be a prompt command whose turn is still running.
+fn local_command(record: &Value) -> Option<bool> {
+    if record["type"] != "user" {
+        return None;
+    }
+    if record["isMeta"] == true {
+        return Some(false);
+    }
+    let text = message_text(&record["message"]["content"])?;
+    let text = text.trim_start();
+    if [
+        "<local-command-stdout>",
+        "<local-command-stderr>",
+        "<bash-stdout>",
+        "<bash-stderr>",
+    ]
+    .iter()
+    .any(|tag| text.starts_with(tag))
+    {
+        Some(true)
+    } else if text.starts_with("<command-name>") || text.starts_with("<bash-input>") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 fn completed_boundary(records: &[Value]) -> Result<usize, HarnessError> {
-    let (index, last) = records
+    match turn_finished(records) {
+        None => Err(protocol("The Claude session has no conversation to copy.")),
+        Some(false) => Err(running()),
+        Some(true) => Ok(records.len() - 1),
+    }
+}
+
+/// Whether the newest conversation turn reached a native boundary; `None`
+/// when the records contain no conversation.
+fn turn_finished(records: &[Value]) -> Option<bool> {
+    let mut turns = records
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, r)| main_record(r) && matches!(r["type"].as_str(), Some("assistant" | "user")))
-        .ok_or_else(|| protocol("The Claude session has no conversation to copy."))?;
+        .filter(|(_, r)| main_record(r) && matches!(r["type"].as_str(), Some("assistant" | "user")))
+        .peekable();
+    // Skip a trailing local-command block only when its newest real record is
+    // printed output, then judge the conversation record before it.
+    let mut compacted = false;
+    if turns
+        .clone()
+        .find(|(_, r)| r["isMeta"] != true)
+        .is_some_and(|(_, r)| local_command(r) == Some(true))
+    {
+        while let Some((_, r)) = turns.next_if(|(_, r)| local_command(r).is_some()) {
+            compacted |= message_text(&r["message"]["content"])
+                .is_some_and(|s| s.trim_start().starts_with("<command-name>/compact<"));
+        }
+    }
+    let (index, last) = turns.next()?;
+    // A manual /compact ends idle on its summary; an automatic one mid-turn
+    // leaves no command output behind and stays rejected.
+    let compacted = compacted && last["isCompactSummary"] == true;
     let end_turn = last["type"] == "assistant"
         && matches!(
             last["message"]["stop_reason"].as_str(),
@@ -437,12 +508,7 @@ fn completed_boundary(records: &[Value]) -> Result<usize, HarnessError> {
     let duration = records[index + 1..]
         .iter()
         .any(|r| main_record(r) && r["type"] == "system" && r["subtype"] == "turn_duration");
-    if !end_turn && !interrupted && !duration {
-        return Err(protocol(
-            "Finish or stop the source Claude turn before importing; no completed boundary was found.",
-        ));
-    }
-    Ok(records.len() - 1)
+    Some(end_turn || interrupted || duration || compacted)
 }
 
 fn message_text(content: &Value) -> Option<String> {

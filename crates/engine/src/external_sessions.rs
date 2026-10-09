@@ -269,6 +269,7 @@ impl ExternalSessionImporter {
                             updated_at_ms: session.updated_at_ms,
                             already_managed_chat_id,
                             unavailable_reason,
+                            running: session.running,
                         });
                         let mut sources = self
                             .inner

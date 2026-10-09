@@ -32,6 +32,9 @@ pub struct ExternalSessionEntry {
     pub already_managed_chat_id: Option<String>,
     #[serde(default)]
     pub unavailable_reason: Option<String>,
+    /// The source's latest turn was still running when it was listed.
+    #[serde(default)]
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
