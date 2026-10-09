@@ -23,32 +23,26 @@ git fetch --no-tags origin dev
 git switch --no-track -c feat/<task-name> origin/dev
 ```
 
-If a network request fails or stalls, retry that request through the local
-`http://127.0.0.1:7897` proxy and verify its result. For Git, use a per-command
-`-c http.proxy=http://127.0.0.1:7897` override.
-
 Rebase an unpublished task branch when updating its baseline. Once a branch
 is shared, preserve its history; merge `origin/dev` into it if needed. Do not
 force-push, move release tags, or rewrite shared commits as routine cleanup.
 
-## Design and checkpoints
+## Design and commits
 
 For a feature spanning multiple layers, first write a design under
 `docs/design/`. Include behavior, ownership, storage, interfaces, compatibility,
 failure handling, and acceptance criteria. Mark proposals as proposed rather
 than implying they are implemented.
 
-Track a small number of checkpoints in that design or the PR description.
-Each checkpoint records:
-
-- Its concrete deliverable and acceptance criteria.
-- Status: pending, in progress, complete, or blocked.
-- Relevant commit IDs once implemented.
-- Validation performed, results, and any checks still pending.
+Keep design documents focused on behavior, architecture, and maintenance.
+Update them to describe the implemented behavior as the feature changes.
+Record task progress, commit references, validation results, and pending
+checks in the PR description or delivery reply rather than committing work
+logs or acceptance reports.
 
 Commit complete, reviewable units of work. Include a change's meaningful tests
-with its implementation. A checkpoint does not need a Git tag; tags identify
-actual releases and follow the existing release process.
+with its implementation. Git tags identify releases and follow the existing
+release process.
 
 Use descriptive commits, normally `feat:`, `fix:`, `docs:`, `refactor:`,
 `test:`, `build:`, or `chore:`. Stage explicit paths and inspect the staged
@@ -69,7 +63,7 @@ record real-provider checks separately from fixture results.
 - Mobile: shared Rust tests and affected platform tests; regenerate committed
   Swift UniFFI bindings when required by [FORK.md](FORK.md).
 
-For a documentation-only checkpoint, inspect the diff, validate local links,
+For a documentation-only change, inspect the diff, validate local links,
 and run `git diff --check`. Do not report a build, test, deployment, or live
 acceptance result that was not performed. Record missing tooling or failed
 checks explicitly, and resolve relevant failures before marking an
@@ -80,7 +74,7 @@ implementation ready for review.
 Open a draft PR for work that is intentionally still in design or implementation.
 Use `dev` as the base and the task branch as the head. Keep the description
 current as scope changes; describe the final behavior, implementation decisions
-needed for review, validation, and outstanding checkpoints.
+needed for review, validation, and outstanding work.
 
 When the requested implementation and relevant checks are complete, mark the
 PR ready for review. Opening a PR does not authorize merging it, deploying it,

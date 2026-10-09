@@ -1,72 +1,51 @@
-# Per-provider agent environment configuration
+# Provider environment configuration
 
-## Problem and scope
+Provider environment settings are scoped to one execution device and provider.
+The desktop Providers page selects the owning device and edits its settings,
+including for disabled providers. Mobile clients can run agents on configured
+hosts. Settings are shared across the host's workspace profiles; project and
+conversation overrides are outside this feature.
 
-Agent processes currently inherit the engine's environment, with a few
-provider-specific and process-ownership adjustments. Users cannot persist
-different overrides for each provider through Providers settings. Configuring
-one engine-wide proxy or API key therefore cannot express different provider
-connections on the same device.
+The configured drivers are Claude Code, Codex, Cursor, Devin, Grok, Hermes,
+Antigravity, OpenCode and Pi. Each driver keeps its existing process and
+protocol implementation. Mock is test infrastructure.
 
-The scope is one configuration per **execution device and provider**.
-The desktop Providers page manages it, including through its existing target
-device selector. Headless hosts use the same store and may be configured from
-another trusted desktop. Agent execution remains cross-platform.
+For editor instructions, see the [user guide](../agent-environment.md).
 
-This feature covers all registered production providers, with
-actual ACP launches as required acceptance cases. The current protocol mix is:
+## Editor and value semantics
 
-| Provider | Current process/protocol |
+The editor uses single-line name/value inputs and compact saved rows. Existing
+values are absent from the listing and appear masked. Edit opens a blank
+replacement input; changing it stages a replacement. Done closes the form
+without saving. Save and Discard appear when changes are pending.
+
+The row menu exposes Show value, Hide value, Unset in child and Restore
+inheritance as applicable. The section menu contains Reload status.
+
+| Operation | Result in a new child process |
 | --- | --- |
-| Devin, Grok, Hermes, Antigravity | ACP over stdio |
-| Claude Code | Native stream-json |
-| Codex | Native app-server JSON-RPC |
-| Cursor | Pinned SDK through the Node shim |
-| OpenCode | Native HTTP/SSE server |
-| Pi | Native JSONL RPC |
+| Set a value | Replace the inherited value with the literal string |
+| Set an empty string | Keep the variable with an empty value |
+| Unset in child | Remove the variable even if the engine inherited it |
+| Restore inheritance | Delete the override and use the normal child environment |
 
-No provider is converted to ACP for this feature. Mock remains test
-infrastructure. The first delivery exposes desktop editing; mobile may use
-configured hosts without adding mobile settings or changing UniFFI exports.
-Project-specific and conversation-specific overrides are separate future work.
+Values are literal UTF-8 strings. There is no shell expansion, command
+substitution, `.env` sourcing or repository-file import. The storage/RPC value
+format preserves whitespace and line breaks; the desktop editor provides only
+a single-line input. Provider output and diagnostics are not filtered by
+matching configured values.
 
-## User behavior
+Drafts and revealed values live in the open editor, not persistent UI settings.
+Closing provider details or changing devices replaces the editor and clears
+both. Hide value, reloading metadata or replacing the engine connection also
+clears revealed values. A connection failure or concurrent-save conflict keeps
+the open editor's draft. A connection generation check rejects stale replies.
 
-Each provider's expanded Settings card adds an **Environment variables**
-section. Its heading identifies the selected device. The editor supports:
+## Store and validation
 
-- Add or replace a named value using single-line inputs.
-- Remove a variable from the child environment explicitly.
-- Delete an override to return to the inherited default.
-- Save or discard a draft, with validation attached to the affected row.
-
-An empty string is a valid value; it is different from removing the variable.
-Values are literal UTF-8 strings. There is no shell execution, `$VAR` expansion,
-command substitution, `.env` sourcing, or automatic repository-file import.
-
-Existing values are masked and are not fetched with the listing. Replacing a
-value requires entering the replacement. An explicit **Show value** action
-may fetch one selected value and displays it only until the editor closes,
-the target device changes, or its engine connection is replaced. The editor
-does not copy values automatically or put them in persistent UI drafts.
-
-Save reports persistence failure or a concurrent-edit conflict. It does not
-claim success before the host commits the configuration. Changing devices
-while a request is pending cannot install that response into the new device's
-editor. An unavailable host preserves the draft and exposes retry.
-
-The section explains that saved changes apply to newly started agent
-processes. It identifies sessions still using an earlier configuration.
-Saving never interrupts a turn, discards queued messages, or ends a voice call.
-
-## Ownership and storage
-
-The owning engine stores `agent-environment.json` under its device data root,
-alongside provider enablement. The file is independent of `harness-prefs.json`:
-that existing file has best-effort persistence and is not suitable for the
-acknowledged, private writes required here.
-
-Persisted shape, with illustrative values only:
+[EnvironmentStore](../../crates/engine/src/agent_environment.rs) loads
+`agent-environment.json` from the owning engine's application data directory.
+The file is separate from `harness-prefs.json` and contains plaintext JSON:
 
 ```json
 {
@@ -77,7 +56,7 @@ Persisted shape, with illustrative values only:
       "entries": {
         "HTTPS_PROXY": {
           "action": "set",
-          "value": "http://127.0.0.1:7897"
+          "value": "http://proxy.example:8080"
         },
         "EXAMPLE_TOKEN": {
           "action": "unset"
@@ -88,224 +67,118 @@ Persisted shape, with illustrative values only:
 }
 ```
 
-The configuration is device-local, shared by that device's workspace profiles
-like provider installation and credentials. It does not enter the registry,
-session documents, durable commands, journals, attachment storage, Edge, or
-version control. Sign-in, sign-out, or workspace imports do not copy it.
+The file is device-local and is excluded from conversation and workspace sync.
+Configured values are not added to `RunRequest`, `ChatConfig` or queued-message
+records. The editor sends values in patches and fetches a saved value only
+through an explicit reveal request.
 
-Writes validate a candidate under a serialized writer, persist a complete
-same-directory temporary file, sync it, and atomically replace the destination
-before publishing the new in-memory snapshot. Unix permissions are `0600`
-from temporary-file creation; Windows uses an owner-restricted ACL on the
-private file and its replacements. The store follows the repository's
-private-file credential persistence approach; the JSON is not encrypted.
+A store mutex serializes revision checks and writes. A changed candidate is
+validated, written to a same-directory temporary file, synced and atomically
+renamed before the in-memory snapshot is published. Unix files use mode `0600`;
+Windows files receive an owner-restricted ACL before configuration bytes are
+written. A failed write leaves the committed in-memory snapshot unchanged.
 
-Missing files mean no overrides. Existing malformed files, unsupported schema
-versions, or failed reads produce an explicit configuration error, preserve
-the original bytes, and block affected launches rather than silently using
-different credentials. Store failures do not invalidate the last committed
-in-memory state. Engine boot and unrelated UI remain available for diagnosis.
+A missing file means no overrides. Malformed, oversized or unreadable files,
+unsupported schema versions and invalid entries produce a configuration error
+without rewriting the file. Provider resolution and environment settings RPCs
+report that error. The file is read during engine initialization; after repairing
+it, restart the owning engine. Reload status refreshes RPC metadata, not the
+file on disk.
 
-Each changed provider receives a fresh opaque revision token. A no-op save
-does not change it. Clearing all entries retains the revision to prevent stale
-editors from confusing a cleared configuration with an untouched one. The
-file is engine-managed; direct edits are not the management interface.
+Every changed provider gets a fresh opaque revision token. A no-op patch keeps
+its revision. Removing all entries retains a revision so an old editor cannot
+mistake cleared settings for an untouched provider.
 
-## Validation and precedence
-
-Limits, enforced by the engine as well as the editor:
+The engine validates the complete candidate configuration. The editor checks
+names and individual values before sending a patch. Limits come from
+[the shared environment module](../../crates/harness/src/environment.rs):
 
 | Item | Rule |
 | --- | --- |
 | Name | `[A-Za-z_][A-Za-z0-9_]*`, at most 128 bytes |
-| Value | UTF-8, no NUL; at most 16 KiB per value |
+| Value | UTF-8, no NUL, at most 16 KiB |
 | Entries | At most 64 per provider |
-| Encoded override payload | At most 64 KiB per provider |
-| Duplicate keys | Reject within one mutation |
-| Unix name comparison | Case-sensitive |
-| Windows name comparison | Case-insensitive, matching native command preparation |
+| JSON-encoded entries | At most 64 KiB per provider |
+| Patch changes | At most 128, with no duplicate names |
+| Name comparison | Case-sensitive on Unix; case-insensitive on Windows |
 
-Names are rejected rather than trimmed or silently renamed. Values retain
-whitespace and newlines. Native Windows launch additionally validates the
-complete inherited-plus-overridden environment against its platform limit;
-an oversized environment produces a readable error before spawning.
+Names are rejected rather than trimmed or renamed. Reserved names are checked
+case-insensitively on every platform. They include identity/configuration roots
+such as `HOME`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `XDG_*` and OpenCode
+configuration selectors, plus `ZERON_*`, `ZERUN_*`, executable selectors,
+temporary-directory controls, nested-agent markers and provider-owned server
+controls. The shared validator is the complete policy; rejected saves report
+the variable name or validation reason. Windows also validates the complete
+child environment against its 32767 UTF-16-unit limit before spawning.
 
-Process construction follows this order:
+## RPC and remote ownership
 
-1. Resolve the executable through the existing engine policy.
-2. Inherit the existing child environment and compose the login-shell PATH.
-3. Apply this provider's `set` and `unset` entries to the command object.
-4. Apply provider/engine-owned launch controls and nested-agent marker removal.
+The [RPC records](../../crates/proto/src/agent_environment.rs) use capability
+`harness-environment-v1`. All three methods accept `harness` and optional
+`targetDeviceId` and use the existing authenticated device routing:
 
-`PATH` is an explicit replacement when configured, applied after composition.
-It does not change engine executable detection. No implementation mutates the
-engine's global environment with `std::env::set_var` or a shell wrapper.
-
-The editor receives a documented reserved-name policy. Engine routing
-(`ZERON_*`, `ZERUN_*`), nested-agent markers, managed scratch locations,
-provider server credentials, and other engine-owned controls cannot be
-overridden or removed. Reject them at save time, with the variable name and
-reason; do not accept and then silently ignore them.
-
-For this first release, variables selecting identity/configuration roots
-(`HOME`, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, `XDG_*`, `CODEX_HOME`,
-`CLAUDE_CONFIG_DIR`, `PI_CODING_AGENT_DIR`, `GROK_HOME`, `HERMES_HOME`,
-`GEMINI_HOME`, `HERMES_SHARED_AUTH_DIR`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR`, and
-`OPENCODE_CONFIG_CONTENT`) are reserved. The current account manager, skill
-discovery, import readers, and context hashing resolve these from the engine
-environment; supporting per-provider roots requires changing those readers
-together. Browser launch routing (`BROWSER`) and adapter-owned `PYTHONUNBUFFERED` are reserved as process controls. Provider executable selectors are also reserved and keep their
-existing application-level override mechanism.
-
-Network settings, provider credentials and ordinary feature flags remain
-configurable. This feature does not transform provider diagnostics or output
-by matching configured values.
-
-Credential overrides may take precedence over a provider's saved CLI login.
-The editor states that relationship. Existing saved-account usage meters must
-not claim to measure an environment-selected API account without evidence from
-that provider; preserve their explicit saved-account identity.
-
-## Engine and harness integration
-
-Add an `EnvironmentStore` owned by the engine and a platform-neutral validated
-environment type in `zeron-harness`. RPC records and capability identifiers
-belong in `zeron-proto`. Secret values stay in ephemeral host-side objects;
-do not add them to the serializable `RunRequest` or `ChatConfig`.
-
-The registry retains provider factories after first resolution and binds a
-resolved harness to one immutable environment snapshot/revision. Repeated
-operations reuse the current instance. Active operations retain their old
-instance; obsolete instances are released when their consumers finish. Fixed
-fixture harnesses continue to work, and production providers receive the
-snapshot through their constructors or an equivalent explicit launch context.
-
-Apply the snapshot at every provider-owned process boundary:
-
-- Coding runs, safe native resume and title generation.
-- Model/command/skill probes that launch the provider, including Devin's
-  separate `models list` path.
-- Provider-owned authentication subprocesses, using the same device settings.
-
-Authentication launches in `AgentAccounts` must capture the binding too; they
-currently construct some provider commands independently of the registry.
-
-Installation, npm adapter acquisition, CLI update checks/installers, terminal
-shells, preview discovery, the engine's HTTP clients, and voice media helpers
-retain their existing environments. Codex's agent/app-server process receives
-its configured environment, including when it hosts a voice session; the
-client's media helper keeps its deliberate environment allowlist.
-
-Adapter-specific launch controls still go through the existing command and
-process-ownership abstractions. Preserve process-group/Job Object cleanup,
-stdio isolation, cancellation, browser callback routing and scratch cleanup.
-
-## Configuration changes and persistent sessions
-
-Every operation captures one immutable binding before it starts. Its probes,
-process and cache context use that binding throughout.
-Saving concurrently cannot produce a mixed environment.
-
-Add the opaque environment revision to the engine's runtime compatibility
-identity and catalog/cache identity. Do not hash or log raw configured values
-to expose that identity. A newly configured provider cannot reuse models,
-command initialization, cooldown state or a background discovery result from
-an earlier revision. A stale discovery response cannot overwrite the new
-revision's cache or UI catalog.
-
-For persistent coding processes:
-
-- A working turn, awaiting-input turn, active subagent and voice owner retain
-  their original environment. Explicit steering and input answers target that
-  existing process and keep its configuration.
-- A subsequent ordinary send requiring the latest environment waits for a
-  safe turn boundary. It must not fall into the current configuration-mismatch
-  path that interrupts the live run.
-- When the runtime can safely retire, its next turn starts a process with the
-  latest revision and the existing provider-native resume policy. If it cannot
-  retire safely, retain the queued send and its status rather than losing it.
-- An ordinary queued message captures the current environment at actual
-  dispatch, not when it was typed. Only the revision/status may appear in
-  local runtime diagnostics; secret values never enter the queue.
-
-The configuration save path never waits for all active runs to end and never
-holds a shared execution lease while waiting for an exclusive update lease.
-Retirement continues using the existing session/update-coordination rules.
-
-### Implementation touchpoints
-
-| Area | Existing code / planned addition |
-| --- | --- |
-| Shared RPC contracts | `crates/proto/src/workspace.rs`, new environment records module |
-| Private configuration | New `crates/engine/src/agent_environment.rs`, assembled in `engine/src/lib.rs` |
-| Routing and configured factories | `engine/src/rpc.rs`, `engine/src/registry.rs`, `rpc/src/lib.rs` |
-| Process policy and snapshots | New `harness/src/environment.rs`, existing command/process ownership helpers |
-| Provider launch and authentication | `harness/src/acp/` and native drivers, `engine/src/agent_accounts.rs` |
-| Runtime and cached discovery | `engine/src/sessions.rs`, `engine/src/model_catalogs.rs`, `harness/src/model_context.rs` and provider caches |
-| Desktop editor | New `ui/src/settings/environment.rs`, mounted by `settings/harnesses.rs` |
-
-Use these modules to keep the feature out of the already large shell and
-composer files.
-
-## RPC and compatibility
-
-Add capability `harness-environment-v1` to `EngineInfo` and device capability
-metadata. The three methods below support `targetDeviceId` and are added to
-the existing forwardable-method list. They use the current authenticated
-device trust boundary, with no Edge persistence or room-protocol change.
-
-| Method | Request | Reply |
+| Method | Additional request fields | Reply |
 | --- | --- | --- |
-| `GetHarnessEnvironment` | `harness`, optional target | Revision, entry names/actions, validation policy; no values |
-| `PatchHarnessEnvironment` | `harness`, `expectedRevision`, ordered changes, optional target | Committed metadata and revision; no values |
-| `RevealHarnessEnvironmentValue` | `harness`, `name`, `expectedRevision`, optional target | One value after explicit user action; revision |
+| `GetHarnessEnvironment` | None | Revision, names/actions, limits and sessions using previous settings; no values |
+| `PatchHarnessEnvironment` | `expectedRevision`, `changes` | `conflict` and current metadata; no values |
+| `RevealHarnessEnvironmentValue` | `name`, `expectedRevision` | One value and its revision |
 
-Patch operations are `set(name, value)`, `unset(name)`, and
-`delete(name)`. Validate the complete resulting configuration and apply the
-patch atomically. Compare revisions under the store writer lock. A conflict
-returns current metadata while preserving the editor's draft.
+Patch changes have actions `set`, `unset` or `delete`. Set includes `name` and
+`value`; unset and delete include `name`. A revision conflict returns fresh
+metadata without applying the patch. The editor preserves its draft against
+that metadata for review and explicit retry.
 
-An unacknowledged save is not replayed automatically: refetch the owning
-host's metadata and let the user explicitly retry. Remote failure cannot fall
-back to writing this device's store. A removed or changed provider revision
-invalidates an in-flight reveal. Older hosts display an unavailable settings
-section and keep existing launching behavior; version numbers alone do not
-imply support.
+A failed save reply requires Reload status before another save. The editor
+does not automatically replay an unacknowledged write. A reveal with an old
+revision fails; stale responses cannot install values in a replacement editor
+or engine connection. An unavailable remote device never falls back to the
+local store. Hosts without the capability show an unavailable settings section.
 
-## Acceptance and verification
+## Process injection and session updates
 
-The feature is complete only after verifying the behavior below with isolated
-profiles and subprocess fixtures:
+[HarnessRegistry](../../crates/engine/src/registry.rs) retains provider factories
+and caches each configured harness by environment revision. Resolving after a
+save creates a harness with the new immutable snapshot. Operations already
+holding an older harness keep their captured settings.
 
-1. Two providers on one engine receive different values under concurrent
-   launches; another provider, the parent process and another engine do not.
-2. Real child-process observations distinguish set, empty value, unset, and
-   deletion/restored inheritance, including Unicode values and metacharacters.
-3. ACP coding launches and model discovery agree, including Devin's separate
-   probe. Covered native drivers behave consistently with their own probes.
-4. Saved settings survive restart; a failed atomic write, invalid existing
-   file, concurrent edit or unsupported schema does not silently change them.
-5. Remote reads/writes affect only the targeted device. Older hosts, offline
-   targets, stale responses and lost acknowledgements have defined UI states.
-6. A save during an active turn does not interrupt it. Explicit steering uses
-   its old binding; the next safe process uses the new binding. Pending sends,
-   input answers, native resume, subagents and voice ownership remain intact.
-7. Changing configuration invalidates model/command caches and fences older
-   background results; configured values do not appear in listing metadata.
-8. Unix permissions and Windows ACL/environment rules are exercised on their
-   respective platforms. Job Object/process-group cancellation still cleans
-   up fixture descendants.
-9. The settings editor is usable by keyboard, masks values, preserves unsaved
-   changes on failure, and clears transient revealed values when dismissed.
+Drivers apply that snapshot to their command objects after inherited/login-shell
+PATH composition and before engine-owned launch controls. A configured PATH
+replaces the child's composed PATH; CLI discovery keeps the engine's executable
+lookup policy. Injection does not mutate the engine's global environment.
 
-Unit tests cover validation, store transactions, revisions and command
-application. Integration tests observe child output and actual device relay
-routing; runtime tests cover the turn-boundary race. GPUI fixtures cover the
-editor and device switching. Tests are added with the relevant implementation
-commits rather than only mirroring helper methods.
+Provider runs, native resume, title generation, provider discovery subprocesses
+and provider CLI login subprocesses receive the snapshot. Credential variables
+may take precedence over a saved CLI account; account usage meters continue to
+describe that saved account. Installers, CLI update processes, terminal shells,
+preview discovery, application-owned HTTP clients and voice media helpers keep
+their existing environments.
 
-Required checks include the affected proto, harness, engine, RPC and UI suites;
-the existing core CI and platform workflows provide regression coverage.
-Live-provider checks, if run, record provider version, chosen model, isolated
-profile and result separately. Credentials and private transcripts are never
-test artifacts committed to the repository.
+The revision partitions provider model/cache context and runtime compatibility.
+Catalog publication rejects stale discovery results. Desktop model pickers and
+composer completion contexts are invalidated for the owning device/provider
+when the editor observes a committed revision change.
+
+[Session dispatch](../../crates/engine/src/sessions.rs) keeps a working turn,
+awaiting-input turn, subagents, accepted steering and active voice on their
+captured environment. For a session still using an earlier revision, an ordinary
+send stays queued until that runtime can retire safely: the turn is complete,
+subagents and voice are inactive, and accepted steering has been handled. The
+next runtime captures the latest revision and follows the provider's existing
+resume policy. Saving neither interrupts a turn nor waits for other sessions.
+
+## Maintenance
+
+Keep provider launch and probe paths using the same immutable snapshot when
+adding a subprocess. Include provider-owned authentication launches in
+[AgentAccounts](../../crates/engine/src/agent_accounts.rs). Keep reserved names
+aligned with engine-owned controls and any readers that resolve identity roots.
+
+Relevant tests live beside the store, shared validator, registry, sessions and
+[desktop editor](../../crates/ui/src/settings/environment.rs). Subprocess
+injection cases are in
+[agent_environment.rs](../../crates/harness/tests/agent_environment.rs), and
+execution-device routing cases are in
+[device_routing.rs](../../crates/engine/tests/device_routing.rs). Use isolated
+profiles and synthetic values for regression checks. Report validation results
+in the PR or delivery reply; keep credentials, private transcripts and operation
+logs out of public test artifacts.
