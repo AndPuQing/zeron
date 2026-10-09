@@ -184,9 +184,10 @@ impl TitleGenerator {
             None => cheapest_model(
                 &tokio::time::timeout(
                     std::time::Duration::from_secs(10),
-                    self.inner
-                        .registry
-                        .discover_models_with_lease(harness_id, execution_lease.clone()),
+                    crate::registry::HarnessRegistry::discover_models_bound(
+                        harness.clone(),
+                        execution_lease.clone(),
+                    ),
                 )
                 .await
                 .ok()?

@@ -75,6 +75,7 @@ struct HarnessSessionRef {
 /// must replace the runtime and resume its harness-native session instead.
 #[derive(Debug, Clone, PartialEq)]
 struct RuntimeConfig {
+    environment_revision: String,
     harness_id: HarnessId,
     model: Option<String>,
     reasoning: Option<zeron_proto::ReasoningLevel>,
@@ -88,6 +89,7 @@ struct RuntimeConfig {
 impl RuntimeConfig {
     fn from_request(harness_id: HarnessId, request: &RunRequest) -> Self {
         Self {
+            environment_revision: zeron_harness::environment::INITIAL_REVISION.into(),
             harness_id,
             model: request.model.clone(),
             reasoning: request.reasoning,
@@ -100,7 +102,9 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        request.attachments.is_empty() && self == &Self::from_request(harness_id, request)
+        let mut candidate = Self::from_request(harness_id, request);
+        candidate.environment_revision = self.environment_revision.clone();
+        request.attachments.is_empty() && self == &candidate
     }
 }
 
@@ -493,10 +497,29 @@ impl SessionsEngine {
     /// Whether an accepted agent update gates the chat's live run, so a new
     /// prompt waits in the queue rather than joining that run's transcript.
     pub fn live_run_update_pending(&self, chat_id: &str) -> bool {
-        let harness = lock(&self.inner.runs)
-            .get(chat_id)
-            .map(|h| h.runtime_config.harness_id);
-        harness.is_some_and(|harness| self.inner.registry.update_pending(harness))
+        let binding = lock(&self.inner.runs).get(chat_id).map(|h| {
+            (
+                h.runtime_config.harness_id,
+                h.runtime_config.environment_revision.clone(),
+            )
+        });
+        binding.is_some_and(|(harness, revision)| {
+            self.inner.registry.update_pending(harness)
+                || self.inner.registry.environment_changed(harness, &revision)
+        })
+    }
+
+    pub fn previous_environment_sessions(&self, harness: HarnessId, revision: &str) -> Vec<String> {
+        let mut ids: Vec<_> = lock(&self.inner.runs)
+            .iter()
+            .filter(|(_, run)| {
+                run.runtime_config.harness_id == harness
+                    && run.runtime_config.environment_revision != revision
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.sort();
+        ids
     }
 
     /// The chat's live run accepts steering into its mailbox.
@@ -649,6 +672,33 @@ impl SessionsEngine {
         // cross-harness delivery before recording or routing the user turn.
         zeron_proto::invocation::validate_harness_invocations(&request.prompt, harness_id)
             .map_err(EngineError::Other)?;
+        // Subscribe before checking to avoid losing a completion between the
+        // check and wait. Ordinary sends retain their durable queue ownership
+        // while an older environment is still serving a turn/subagent/voice.
+        let mut statuses = self.watch_sessions();
+        loop {
+            let binding = lock(&self.inner.runs).get(chat_id).map(|run| {
+                (
+                    run.runtime_config.harness_id,
+                    run.runtime_config.environment_revision.clone(),
+                    run.run_id.clone(),
+                )
+            });
+            let Some((id, revision, existing_run_id)) = binding else {
+                break;
+            };
+            if id != harness_id || !self.inner.registry.environment_changed(id, &revision) {
+                break;
+            }
+            if idle {
+                return Ok(existing_run_id);
+            }
+            statuses.changed().await.map_err(|_| {
+                EngineError::Other(
+                    "Session engine stopped while waiting for updated environment".into(),
+                )
+            })?;
+        }
         let routed = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
                 h.run_id.clone(),
@@ -657,9 +707,21 @@ impl SessionsEngine {
                 h.steer_tx.clone(),
                 h.routed_steers.clone(),
                 h.fork_history_sent.clone(),
+                h.runtime_config.environment_revision.clone(),
+                h.interrupt_token.clone(),
             )
         });
-        if let Some((run_id, steerable, same_runtime, steer_tx, ledger, history_sent)) = routed {
+        if let Some((
+            run_id,
+            steerable,
+            same_runtime,
+            steer_tx,
+            ledger,
+            history_sent,
+            revision,
+            interrupt,
+        )) = routed
+        {
             if idle {
                 return if same_runtime && harness_id == HarnessId::Codex {
                     Ok(run_id)
@@ -693,15 +755,25 @@ impl SessionsEngine {
                     self.inner
                         .registry
                         .while_update_clear(harness_id, || {
-                            let mut pending = lock(&ledger);
-                            pending.push_back(RoutedSteer {
-                                prompt: request.prompt.clone(),
-                                message_id: user_id.clone(),
-                                fork_history: bootstrap.is_some(),
-                            });
-                            permit.send(message);
+                            self.inner
+                                .registry
+                                .environment
+                                .while_current(harness_id, &revision, || {
+                                    let mut pending = lock(&ledger);
+                                    if interrupt.is_cancelled() {
+                                        return false;
+                                    }
+                                    pending.push_back(RoutedSteer {
+                                        prompt: request.prompt.clone(),
+                                        message_id: user_id.clone(),
+                                        fork_history: bootstrap.is_some(),
+                                    });
+                                    permit.send(message);
+                                    true
+                                })
+                                .unwrap_or(false)
                         })
-                        .is_some()
+                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -741,6 +813,15 @@ impl SessionsEngine {
                 // Keep the already-written doc entry's id for the fresh run
                 // below (write_user_message dedupes by id).
                 message_id = Some(user_id);
+            }
+            if self
+                .inner
+                .registry
+                .environment_changed(harness_id, &revision)
+            {
+                return self
+                    .dispatch_with(chat_id, harness_id, request, message_id, startup_retry)
+                    .await;
             }
             if !same_runtime {
                 tracing::debug!(
@@ -829,7 +910,11 @@ impl SessionsEngine {
                 voice_active: voice_active.clone(),
                 run_id: run_id.clone(),
                 steerable: harness.supports_steering(),
-                runtime_config: RuntimeConfig::from_request(harness_id, &request),
+                runtime_config: {
+                    let mut config = RuntimeConfig::from_request(harness_id, &request);
+                    config.environment_revision = harness.environment().revision.clone();
+                    config
+                },
                 steer_tx,
                 interrupt_token,
                 cancel: cancel_tx,
@@ -943,9 +1028,10 @@ impl SessionsEngine {
                     h.steer_tx.clone(),
                     h.routed_steers.clone(),
                     h.fork_history_sent.clone(),
+                    h.interrupt_token.clone(),
                 )
             });
-        let Some((run_id, harness_id, steer_tx, ledger, history_sent)) = target else {
+        let Some((run_id, harness_id, steer_tx, ledger, history_sent, interrupt)) = target else {
             return Ok(SteerOutcome::NotSteerable);
         };
         zeron_proto::invocation::validate_harness_invocations(prompt, harness_id)
@@ -972,15 +1058,22 @@ impl SessionsEngine {
             // The update marker is checked in the same critical section, so an
             // accepted update releases the reserved slot instead.
             let mut pending = lock(&ledger);
+            if interrupt.is_cancelled() {
+                return false;
+            }
             pending.push_back(RoutedSteer {
                 prompt: prompt.to_string(),
                 message_id: user_id.clone(),
                 fork_history: bootstrap.is_some(),
             });
             permit.send(message);
+            true
         });
         if accepted.is_none() {
             return Ok(SteerOutcome::DeferredByUpdate);
+        }
+        if accepted == Some(false) {
+            return Ok(SteerOutcome::NotSteerable);
         }
         let handle = self.doc_handle(chat_id)?;
         handle.write_user_message(&user_id, prompt, issued_at.min(now_ms()))?;
@@ -2079,6 +2172,8 @@ async fn drive_run(
     let device_id = inner.device_id.clone();
     // Captured for post-run auto-titling (the request moves into the harness).
     let harness_id = harness.id();
+    let environment = harness.environment();
+    let mut environment_changes = inner.registry.environment.subscribe_changes();
     let user_prompt = request.prompt.clone();
     let run_cwd = request.cwd.clone();
     if request.resume.is_none() {
@@ -2387,6 +2482,7 @@ async fn drive_run(
                     inner.touch_session(&chat_id);
                     continue;
                 }
+                _ = environment_changes.changed() => { continue; }
                 // A hang-up restarts the idle window, however long the call.
                 _ = resume_state.voice_active.ended.notified() => {
                     if idle_since.is_some() {
@@ -2399,14 +2495,17 @@ async fn drive_run(
                 // already durable, so retire the parked process cleanly and let
                 // the queued exclusive lease proceed.
                 _ = tokio::time::sleep_until(tokio::time::Instant::now()),
-                    if idle_since.is_some() && !resume_state.voice_active.live() && inner.registry.update_pending(harness_id) =>
+                    if idle_since.is_some() && subagents.is_empty() && !resume_state.voice_active.live()
+                        && !inner.has_pending_steers(&chat_id, &run_id)
+                        && (inner.registry.update_pending(harness_id) || inner.registry.environment_changed(harness_id, &environment.revision)) =>
                 {
-                    if let Some(token) = lock(&inner.runs)
+                    if let Some(handle) = lock(&inner.runs)
                         .get(&chat_id)
                         .filter(|h| h.run_id == run_id)
-                        .map(|h| h.interrupt_token.clone())
                     {
-                        token.cancel();
+                        let pending = lock(&handle.routed_steers);
+                        if !pending.is_empty() { continue; }
+                        handle.interrupt_token.cancel();
                     }
                     break SessionStatus::Idle;
                 }
@@ -2449,7 +2548,7 @@ async fn drive_run(
                     // the turn was already finalized, so the run ends clean
                     // instead of stamping a completed session Errored.
                     Some(Err(err)) if idle_since.is_some() => {
-                        tracing::warn!(chat = %chat_id, error = %err, "parked session child died; ending clean");
+                        tracing::warn!(chat = %chat_id, error = %err.to_string(), "parked session child died; ending clean");
                         break SessionStatus::Idle;
                     }
                     Some(Err(err)) => AgentEvent::Done {
@@ -3534,7 +3633,7 @@ mod tests {
         );
     }
 
-    fn request() -> RunRequest {
+    pub(super) fn request() -> RunRequest {
         RunRequest {
             require_native_resume: false,
             mcp: None,
@@ -3895,5 +3994,380 @@ mod tests {
         })
         .unwrap();
         core.sessions.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod agent_environment_tests {
+    use super::*;
+    use zeron_harness::HarnessError;
+    use zeron_harness::environment::EnvironmentSnapshot;
+    use zeron_proto::{EnvironmentChange, PatchHarnessEnvironmentParams};
+
+    struct Started {
+        request: RunRequest,
+        controls: RunControls,
+        feed: mpsc::UnboundedSender<AgentEvent>,
+        revision: String,
+    }
+    struct BoundHarness {
+        environment: Arc<EnvironmentSnapshot>,
+        starts: mpsc::UnboundedSender<Started>,
+    }
+    #[async_trait::async_trait]
+    impl Harness for BoundHarness {
+        fn id(&self) -> HarnessId {
+            HarnessId::Codex
+        }
+        fn display_name(&self) -> &str {
+            "Bound fixture"
+        }
+        fn supports_steering(&self) -> bool {
+            true
+        }
+        fn steering_mode(&self) -> zeron_proto::SteeringMode {
+            zeron_proto::SteeringMode::StepBoundary
+        }
+        fn reasoning_levels(&self) -> &[zeron_proto::ReasoningLevel] {
+            &[]
+        }
+        fn environment(&self) -> Arc<EnvironmentSnapshot> {
+            self.environment.clone()
+        }
+        async fn models(&self) -> Result<Vec<zeron_proto::Model>, HarnessError> {
+            Ok(vec![])
+        }
+        async fn run(
+            &self,
+            request: RunRequest,
+            controls: RunControls,
+        ) -> Result<
+            futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+            HarnessError,
+        > {
+            let (feed, mut events) = mpsc::unbounded_channel();
+            feed.send(AgentEvent::SessionStarted {
+                harness: HarnessId::Codex,
+                model: "fixture".into(),
+                tools: vec![],
+                cwd: request.cwd.clone(),
+                session_id: "native-environment-session".into(),
+                assistant_message_id: new_id(),
+            })
+            .unwrap();
+            feed.send(AgentEvent::TextDelta {
+                text: "Started".into(),
+            })
+            .unwrap();
+            self.starts
+                .send(Started {
+                    request,
+                    controls,
+                    feed,
+                    revision: self.environment.revision.clone(),
+                })
+                .unwrap_or_else(|_| panic!("test receiver closed"));
+            Ok(futures::stream::poll_fn(move |cx| events.poll_recv(cx).map(|e| e.map(Ok))).boxed())
+        }
+    }
+    fn patch(registry: &HarnessRegistry, value: &str) -> String {
+        let revision = registry
+            .environment
+            .metadata(HarnessId::Codex)
+            .unwrap()
+            .revision;
+        registry
+            .environment
+            .patch(PatchHarnessEnvironmentParams {
+                harness: HarnessId::Codex,
+                expected_revision: revision,
+                target_device_id: None,
+                changes: vec![EnvironmentChange::Set {
+                    name: "API_KEY".into(),
+                    value: value.into(),
+                }],
+            })
+            .unwrap()
+            .metadata
+            .revision
+    }
+    fn done() -> AgentEvent {
+        AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: None,
+        }
+    }
+    async fn eventually(mut predicate: impl FnMut() -> bool) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !predicate() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("runtime transition timed out");
+    }
+    async fn transition_case(owner: &str) {
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        let (starts, mut started) = mpsc::unbounded_channel();
+        registry.register_configured(
+            crate::registry::HarnessDescriptor {
+                id: HarnessId::Codex,
+                name: "Bound fixture".into(),
+                installed: true,
+                can_install: false,
+                enabled: Some(true),
+                supports_steering: true,
+                steering_mode: zeron_proto::SteeringMode::StepBoundary,
+                reasoning_levels: vec![],
+            },
+            Box::new(|| true),
+            Box::new(move |environment| {
+                Ok(Arc::new(BoundHarness {
+                    environment,
+                    starts: starts.clone(),
+                }))
+            }),
+        );
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(temp.path()).unwrap(),
+            registry.clone(),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
+        let sessions = core.sessions.clone();
+        let chat = "environment-transition";
+        core.workspace
+            .create_chat(chat, None, Some(&core.device_id), None, None)
+            .unwrap();
+        sessions
+            .dispatch(
+                chat,
+                HarnessId::Codex,
+                super::tests::request(),
+                Some("first-user".into()),
+            )
+            .await
+            .unwrap();
+        let mut first = started.recv().await.unwrap();
+        eventually(|| sessions.inner.resume_for(chat, "/tmp").is_some()).await;
+        let voice = if owner == "voice" {
+            Some(
+                lock(&sessions.inner.runs)
+                    .get(chat)
+                    .unwrap()
+                    .voice_active
+                    .clone()
+                    .call(),
+            )
+        } else {
+            None
+        };
+        if owner == "subagent" {
+            first
+                .feed
+                .send(AgentEvent::Subagent {
+                    parent_tool_use_id: "background-tool".into(),
+                    event: Box::new(AgentEvent::TextDelta {
+                        text: "Background".into(),
+                    }),
+                })
+                .unwrap();
+        }
+        let input = if owner == "input" {
+            Some((first.controls.request_input)(vec![UserInputQuestion {
+                id: "choice".into(),
+                header: "Choice".into(),
+                question: "Continue?".into(),
+                options: vec!["Yes".into()],
+                multi_select: false,
+                prefill: None,
+                multiline: false,
+            }]))
+        } else {
+            None
+        };
+        if input.is_some() {
+            eventually(|| {
+                sessions
+                    .session_status(chat)
+                    .is_some_and(|status| status.status == SessionStatus::AwaitingInput)
+            })
+            .await;
+        }
+        let changed = patch(&registry, "replacement-secret");
+        assert_ne!(first.revision, changed);
+        assert!(
+            !first.controls.interrupt.is_cancelled(),
+            "save must not interrupt working turn"
+        );
+        assert_eq!(
+            sessions.previous_environment_sessions(HarnessId::Codex, &changed),
+            vec![chat.to_string()]
+        );
+        if let Some(input) = input {
+            let request_id = {
+                let runs = lock(&sessions.inner.runs);
+                let pending = lock(&runs.get(chat).unwrap().pending_inputs);
+                pending.keys().next().unwrap().clone()
+            };
+            let answers = vec![UserInputAnswer {
+                question_id: "choice".into(),
+                labels: vec!["Yes".into()],
+            }];
+            assert!(
+                sessions
+                    .respond_input(chat, &request_id, answers.clone())
+                    .unwrap()
+            );
+            assert_eq!(input.await.unwrap(), answers);
+        }
+        assert_eq!(
+            sessions
+                .steer(chat, "explicit steer", Some("steer-user".into()))
+                .await
+                .unwrap(),
+            SteerOutcome::Accepted
+        );
+        let message = first.controls.steering.recv().await.unwrap();
+        assert_eq!(message.prompt, "explicit steer");
+        if owner != "pending" {
+            first
+                .feed
+                .send(AgentEvent::Steered {
+                    assistant_message_id: None,
+                    next_assistant_message_id: Some(new_id()),
+                })
+                .unwrap();
+            eventually(|| {
+                let run_id = lock(&sessions.inner.runs).get(chat).unwrap().run_id.clone();
+                !sessions.inner.has_pending_steers(chat, &run_id)
+            })
+            .await;
+        }
+        let next_sessions = sessions.clone();
+        let pending = tokio::spawn(async move {
+            let mut request = super::tests::request();
+            request.prompt = "ordinary next send".into();
+            next_sessions
+                .dispatch(chat, HarnessId::Codex, request, Some("next-user".into()))
+                .await
+                .unwrap()
+        });
+        tokio::task::yield_now().await;
+        assert!(!pending.is_finished());
+        assert!(!first.controls.interrupt.is_cancelled());
+        first.feed.send(done()).unwrap();
+        let retirement_owner = matches!(owner, "voice" | "subagent" | "pending");
+        if retirement_owner {
+            eventually(|| {
+                if owner == "pending" {
+                    sessions
+                        .inner
+                        .journal
+                        .replay(chat, 0)
+                        .unwrap()
+                        .iter()
+                        .any(|(_, event)| matches!(event, AgentEvent::Done { .. }))
+                } else {
+                    sessions
+                        .session_status(chat)
+                        .is_some_and(|status| status.status == SessionStatus::Idle)
+                }
+            })
+            .await;
+            assert!(
+                !first.controls.interrupt.is_cancelled(),
+                "live owner keeps its binding"
+            );
+            assert!(!pending.is_finished(), "ordinary send remains pending");
+            if owner == "subagent" {
+                first
+                    .feed
+                    .send(AgentEvent::Subagent {
+                        parent_tool_use_id: "background-tool".into(),
+                        event: Box::new(done()),
+                    })
+                    .unwrap();
+            }
+        }
+        // A queued ordinary send captures the most recent committed binding.
+        let latest = if retirement_owner {
+            patch(&registry, "latest-secret")
+        } else {
+            changed
+        };
+        if owner == "pending" {
+            first
+                .feed
+                .send(AgentEvent::Steered {
+                    assistant_message_id: None,
+                    next_assistant_message_id: Some(new_id()),
+                })
+                .unwrap();
+            first
+                .feed
+                .send(AgentEvent::TextDelta {
+                    text: "Accepted steer completed".into(),
+                })
+                .unwrap();
+            first.feed.send(done()).unwrap();
+        }
+        drop(voice);
+        tokio::time::timeout(std::time::Duration::from_secs(5), pending)
+            .await
+            .unwrap()
+            .unwrap();
+        let second = tokio::time::timeout(std::time::Duration::from_secs(5), started.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.revision, latest);
+        assert_eq!(
+            second.request.resume.as_deref(),
+            Some("native-environment-session")
+        );
+        assert_eq!(second.request.prompt, "ordinary next send");
+        assert!(first.controls.interrupt.is_cancelled());
+        second.feed.send(done()).unwrap();
+        sessions.shutdown().await;
+        let entries = core
+            .doc_host
+            .open(chat)
+            .unwrap()
+            .doc()
+            .read_entries()
+            .unwrap();
+        for id in ["first-user", "steer-user", "next-user"] {
+            assert_eq!(
+                entries.iter().filter(|entry| entry.id == id).count(),
+                1,
+                "message {id} lost or duplicated"
+            );
+        }
+    }
+    #[tokio::test]
+    async fn saved_environment_waits_for_turn_and_preserves_explicit_steering_and_resume() {
+        transition_case("none").await;
+    }
+    #[tokio::test]
+    async fn saved_environment_waits_for_voice_owner_without_losing_next_send() {
+        transition_case("voice").await;
+    }
+    #[tokio::test]
+    async fn saved_environment_waits_for_subagent_owner_without_losing_next_send() {
+        transition_case("subagent").await;
+    }
+
+    #[tokio::test]
+    async fn saved_environment_preserves_answers_on_the_original_input_binding() {
+        transition_case("input").await;
+    }
+    #[tokio::test]
+    async fn saved_environment_does_not_retire_an_accepted_unconfirmed_steer() {
+        transition_case("pending").await;
     }
 }

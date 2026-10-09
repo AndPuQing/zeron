@@ -89,6 +89,7 @@ fn cursor_cli_paths() -> Vec<PathBuf> {
 /// The Cursor harness. Construct with [`CursorHarness::new`]; tests point it
 /// at a fake shim process with [`CursorHarness::with_executable`].
 pub struct CursorHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     /// Test seam: run this program AS the shim instead of node+managed SDK.
     executable: Option<PathBuf>,
     interrupt_grace: Duration,
@@ -100,6 +101,7 @@ pub struct CursorHarness {
 impl Default for CursorHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
@@ -109,6 +111,15 @@ impl Default for CursorHarness {
 }
 
 impl CursorHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     /// The SDK selected by this engine, not the viewer or installed native CLI.
     pub fn sdk_version() -> &'static str {
         if std::env::var_os("CURSOR_SDK_SHIM_EXECUTABLE").is_some() {
@@ -139,6 +150,7 @@ impl CursorHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(&args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         cmd.arg("models")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -220,6 +232,10 @@ pub async fn login_command(store_path: &std::path::Path) -> Result<Command, Harn
 
 #[async_trait]
 impl Harness for CursorHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Cursor
     }
@@ -265,6 +281,7 @@ impl Harness for CursorHarness {
         let binary = binary.canonicalize().unwrap_or(binary);
         let mut hash = Sha256::new();
         hash.update(catalog::credential_context()?);
+        hash.update(self.environment.revision.as_bytes());
         hash.update(binary.as_os_str().as_encoded_bytes());
         hash.update(Self::sdk_version().as_bytes());
         if let Ok(metadata) = binary.metadata() {
@@ -311,6 +328,7 @@ impl Harness for CursorHarness {
             cmd.env("ZERUN_CURSOR_STATE_DIR", state::state_root());
         }
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }

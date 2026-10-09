@@ -50,6 +50,7 @@ impl CodexHarness {
         let exe = self.resolve_executable()?;
         let mut command = Command::new(&exe);
         crate::compose_child_path(&mut command, &exe);
+        self.environment.apply(&mut command);
         command
             .arg("app-server")
             .env("CODEX_HOME", self.saved_root()?)

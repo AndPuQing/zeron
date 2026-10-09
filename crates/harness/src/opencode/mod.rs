@@ -219,6 +219,7 @@ fn free_localhost_port() -> Option<u16> {
 // ---------------------------------------------------------------------------
 
 pub struct OpencodeHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     executable: Option<PathBuf>,
     /// Test seam: an already-running server (no spawn, no auth unless given).
     base_url: Option<String>,
@@ -235,6 +236,7 @@ pub struct OpencodeHarness {
 impl Default for OpencodeHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             base_url: None,
             interrupt_grace: Duration::from_secs(2),
@@ -248,6 +250,15 @@ impl Default for OpencodeHarness {
 }
 
 impl OpencodeHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -288,7 +299,14 @@ impl OpencodeHarness {
             return Ok(Server::attached(base.clone()));
         }
         let exe = self.resolve_executable()?;
-        Server::spawn(&exe, cwd, self.startup_timeout, mcp).await
+        Server::spawn_with_environment(
+            &exe,
+            cwd,
+            self.startup_timeout,
+            mcp,
+            self.environment.clone(),
+        )
+        .await
     }
 
     /// One short-lived server answers both discovery calls. Also primes the
@@ -339,6 +357,10 @@ impl OpencodeHarness {
 
 #[async_trait]
 impl Harness for OpencodeHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Opencode
     }
@@ -382,7 +404,8 @@ impl Harness for OpencodeHarness {
         } else {
             self.resolve_executable()?
         };
-        crate::model_context::context(self.id(), &binary, &[]).map(Some)
+        crate::model_context::context(self.id(), &binary, &[])
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     async fn model_catalog(&self, force: bool) -> Result<crate::ModelCatalog, HarnessError> {
         self.model_context()?.unwrap().log();
@@ -590,11 +613,22 @@ impl Server {
     /// Spawn `opencode serve` on a free loopback port with a per-run Basic
     /// password, and wait for a generation-bearing health answer (which
     /// also resolves [`Protocol`]).
+    #[cfg(test)]
     async fn spawn(
         exe: &std::path::Path,
         cwd: Option<&str>,
         startup: Duration,
         mcp: Option<&zeron_proto::McpServer>,
+    ) -> Result<Self, HarnessError> {
+        Self::spawn_with_environment(exe, cwd, startup, mcp, Default::default()).await
+    }
+
+    async fn spawn_with_environment(
+        exe: &std::path::Path,
+        cwd: Option<&str>,
+        startup: Duration,
+        mcp: Option<&zeron_proto::McpServer>,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     ) -> Result<Self, HarnessError> {
         let port = free_localhost_port().ok_or_else(|| {
             HarnessError::Protocol("no free localhost port for opencode serve".into())
@@ -637,6 +671,7 @@ impl Server {
             }
         }
         crate::compose_child_path(&mut cmd, exe);
+        environment.apply(&mut cmd);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -4544,5 +4579,56 @@ if (process.argv.includes('--version')) {{
             }
             mcp.env.insert("ZERON_CHAT_ID".into(), "first".into());
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod agent_environment_tests {
+    use super::*;
+    use std::sync::Arc;
+    #[tokio::test]
+    async fn owned_server_observes_literal_environment_values() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let exe = root.path().join("opencode");
+        std::fs::write(&exe, r#"#!/usr/bin/env node
+const http = require('node:http');
+const port = Number(process.argv[process.argv.indexOf('--port') + 1]);
+http.createServer((req, res) => {
+  res.setHeader('content-type', 'application/json');
+  if (req.url === '/global/health') { res.end(JSON.stringify({version:'1.18.31'})); return; }
+  if (req.url === '/environment') { res.end(JSON.stringify({value:process.env.AGENT_ENV_TEST, empty:process.env.AGENT_ENV_EMPTY, password:!!process.env.OPENCODE_SERVER_PASSWORD})); return; }
+  res.statusCode = 500; res.end('request failed: ' + process.env.AGENT_ENV_TEST);
+}).listen(port, '127.0.0.1');
+"#).unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let environment = Arc::new(
+            crate::environment::EnvironmentSnapshot::default()
+                .patched(&[
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "AGENT_ENV_TEST".into(),
+                        value: "fixture-value $HOME".into(),
+                    },
+                    zeron_proto::EnvironmentChange::Set {
+                        name: "AGENT_ENV_EMPTY".into(),
+                        value: String::new(),
+                    },
+                ])
+                .unwrap(),
+        );
+        let mut server = Server::spawn_with_environment(
+            &exe,
+            root.path().to_str(),
+            Duration::from_secs(5),
+            None,
+            environment,
+        )
+        .await
+        .unwrap();
+        let report = server.get_json("/environment", None).await.unwrap();
+        assert_eq!(report["value"], "fixture-value $HOME");
+        assert_eq!(report["empty"], "");
+        assert_eq!(report["password"], true);
+        server.shutdown(Duration::from_millis(100)).await;
     }
 }

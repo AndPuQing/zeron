@@ -15,6 +15,7 @@ pub mod capabilities {
         "message-queue-clean-attachment-text-v1";
     pub const MESSAGE_QUEUE_EDIT_LEASE_V1: &str = "message-queue-edit-lease-v1";
     pub const HARNESS_UPDATES_V1: &str = "harness-updates-v1";
+    pub const HARNESS_ENVIRONMENT_V1: &str = "harness-environment-v1";
     pub const EXTERNAL_SESSION_IMPORT_V1: &str = "external-session-import-v1";
 
     pub const CURRENT: &[&str] = &[
@@ -25,6 +26,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_CLEAN_ATTACHMENT_TEXT_V1,
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         HARNESS_UPDATES_V1,
+        HARNESS_ENVIRONMENT_V1,
         crate::voice::remote::CAPABILITY,
         EXTERNAL_SESSION_IMPORT_V1,
     ];
@@ -107,6 +109,7 @@ mod tests {
                     "message-queue-clean-attachment-text-v1",
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
+                    "harness-environment-v1",
                     "voice-client-media-v1",
                     "external-session-import-v1"
                 ],

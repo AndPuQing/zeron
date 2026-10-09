@@ -103,6 +103,7 @@ fn option_is_on(options: &serde_json::Map<String, Value>, key: &str) -> bool {
 /// The Claude Code harness. Construct with [`ClaudeHarness::new`]; tests point
 /// it at a fake CLI with [`ClaudeHarness::with_executable`].
 pub struct ClaudeHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     executable: Option<PathBuf>,
     saved_home: Option<PathBuf>,
     /// Grace between the interrupt control request and SIGTERM.
@@ -117,6 +118,7 @@ pub struct ClaudeHarness {
 impl Default for ClaudeHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             executable: None,
             saved_home: None,
             interrupt_grace: Duration::from_secs(2),
@@ -129,6 +131,15 @@ impl Default for ClaudeHarness {
 }
 
 impl ClaudeHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -178,6 +189,7 @@ impl ClaudeHarness {
             cmd.env("CLAUDE_CONFIG_DIR", root);
         }
         crate::compose_child_path(&mut cmd, exe);
+        self.environment.apply(&mut cmd);
         cmd.args([
             "--print",
             "--input-format",
@@ -282,6 +294,7 @@ impl ClaudeHarness {
             cmd.current_dir(cwd);
         }
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         cmd.args([
             "--print",
             "--input-format",
@@ -388,6 +401,10 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
 
 #[async_trait]
 impl Harness for ClaudeHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::ClaudeCode
     }
@@ -425,7 +442,8 @@ impl Harness for ClaudeHarness {
 
     /// Credential and executable identity scopes both initialize and catalog caches.
     fn model_context(&self) -> Result<Option<crate::ModelContext>, HarnessError> {
-        crate::model_context::context(self.id(), &self.resolve_executable()?, &[]).map(Some)
+        crate::model_context::context(self.id(), &self.resolve_executable()?, &[])
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     fn fallback_models(&self) -> Vec<Model> {
         catalog::configured_models()

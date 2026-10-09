@@ -23,6 +23,13 @@ fn main() {
         std::process::exit(99);
     });
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|arg| arg == "models") {
+        println!(
+            "{}",
+            json!({"families":[{"family_label":std::env::var("AGENT_ENV_TEST").unwrap_or_else(|_| "Environment".into()),"variants":[{"model_uid":"environment-model","label":std::env::var("AGENT_ENV_TEST").unwrap_or_default()}]}]})
+        );
+        return;
+    }
     if args.get(1).is_some_and(|arg| arg == "--launch-report") {
         println!(
             "{}",
@@ -97,7 +104,11 @@ fn main() {
             "initialize" => emit(json!({"jsonrpc":"2.0","id":id,"result":{
                 "protocolVersion":1,"agentCapabilities":{"loadSession":true}
             }})),
-            "session/new" => emit(json!({"jsonrpc":"2.0","id":id,"result":{"sessionId":session}})),
+            "session/new" => emit(
+                json!({"jsonrpc":"2.0","id":id,"result":{"sessionId":session,
+                    "models":{"currentModelId":"environment-model","availableModels":[{"modelId":"environment-model","name":std::env::var("AGENT_ENV_TEST").unwrap_or_else(|_| "Environment".into())}]}
+                }}),
+            ),
             "session/load" => {
                 session = message["params"]["sessionId"].as_str().unwrap().to_string();
                 emit(json!({"jsonrpc":"2.0","id":id,"result":{}}));
@@ -121,6 +132,11 @@ fn main() {
                         "pid":std::process::id(), "prompt":prompt, "descendants":descendants,
                         "cwd":std::env::current_dir().unwrap(),
                         "argv":std::env::args().skip(1).collect::<Vec<_>>()
+                        ,"environment": {
+                            "value":std::env::var("AGENT_ENV_TEST").ok(),
+                            "empty":std::env::var("AGENT_ENV_EMPTY").ok(),
+                            "path":std::env::var("PATH").ok()
+                        }
                     })
                     .to_string(),
                 );

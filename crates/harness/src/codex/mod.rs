@@ -132,6 +132,7 @@ pub fn login_command(codex_home: &std::path::Path) -> Result<Command, HarnessErr
 /// The Codex harness. Construct with [`CodexHarness::new`]; tests point it at a
 /// fake app server with [`CodexHarness::with_executable`].
 pub struct CodexHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     models_cache: crate::catalog::Catalog,
     executable: Option<PathBuf>,
     saved_home: Option<PathBuf>,
@@ -144,6 +145,7 @@ pub struct CodexHarness {
 impl Default for CodexHarness {
     fn default() -> Self {
         Self {
+            environment: Default::default(),
             models_cache: crate::catalog::Catalog::default(),
             executable: None,
             saved_home: None,
@@ -154,6 +156,15 @@ impl Default for CodexHarness {
 }
 
 impl CodexHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -211,6 +222,7 @@ impl CodexHarness {
             cmd.current_dir(cwd);
         }
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -229,6 +241,7 @@ impl CodexHarness {
         // The receiver must stay alive for the client's reader loop; agent →
         // client traffic during the probe is ignored.
         let (client, _incoming) = RpcClient::new(stdin, stdout);
+
         let discovery = async {
             client
                 .request(
@@ -267,6 +280,7 @@ impl CodexHarness {
         let mut cmd = Command::new(&exe);
         cmd.arg("app-server");
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -283,6 +297,7 @@ impl CodexHarness {
             return Err(HarnessError::Protocol("codex child has no stdio".into()));
         };
         let (client, _incoming) = RpcClient::new(stdin, stdout);
+
         let discovery = async {
             client
                 .request(
@@ -585,6 +600,10 @@ fn parse_skills(result: &Value) -> Vec<zeron_proto::invocation::Skill> {
 
 #[async_trait]
 impl Harness for CodexHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Codex
     }
@@ -646,7 +665,8 @@ impl Harness for CodexHarness {
     /// discovery call is unavailable and no last-good catalog exists. Explicit
     /// picker refreshes bypass cooldowns while overlapping callers coalesce.
     fn model_context(&self) -> Result<Option<crate::ModelContext>, HarnessError> {
-        crate::model_context::context(self.id(), &self.resolve_executable()?, &[]).map(Some)
+        crate::model_context::context(self.id(), &self.resolve_executable()?, &[])
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     fn fallback_models(&self) -> Vec<Model> {
         static_models()
@@ -782,6 +802,7 @@ impl CodexHarness {
             cmd.env("CODEX_HOME", root);
         }
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         if !request.cwd.is_empty() {
             cmd.current_dir(&request.cwd);
         }
@@ -818,6 +839,7 @@ impl CodexHarness {
         }
 
         let (client, incoming) = RpcClient::new(stdin, stdout);
+
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             title_only,

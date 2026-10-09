@@ -1225,6 +1225,7 @@ enum Launch {
 /// The ACP harness. Construct with [`AcpHarness::grok`]; tests point it at a
 /// fake agent with [`AcpHarness::with_executable`].
 pub struct AcpHarness {
+    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     spec: AcpAgentSpec,
     executable: Option<PathBuf>,
     /// Override of the agent's on-disk sessions root (grok's
@@ -1250,8 +1251,18 @@ pub struct AcpHarness {
 }
 
 impl AcpHarness {
+    /// Bind a fresh harness instance to one immutable provider configuration.
+    pub fn with_environment(
+        mut self,
+        environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
+    ) -> Self {
+        self.environment = environment;
+        self
+    }
+
     fn with_spec(spec: AcpAgentSpec) -> Self {
         Self {
+            environment: Default::default(),
             spec,
             executable: None,
             sessions_root: None,
@@ -1376,6 +1387,7 @@ impl AcpHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(home) = std::env::var_os("HOME") {
             cmd.current_dir(home);
@@ -1652,6 +1664,7 @@ impl AcpHarness {
         let mut cmd = Command::new(&exe);
         cmd.args(launch_args).args(args);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         Ok(cmd)
     }
 
@@ -1694,6 +1707,7 @@ impl AcpHarness {
         cmd.args(extra_args);
         child::configure(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
+        self.environment.apply(&mut cmd);
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
             cmd.current_dir(cwd);
@@ -2133,6 +2147,10 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
 
 #[async_trait]
 impl Harness for AcpHarness {
+    fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
+        self.environment.clone()
+    }
+
     fn id(&self) -> HarnessId {
         self.spec.id
     }
@@ -2225,7 +2243,8 @@ impl Harness for AcpHarness {
         } else {
             vec![]
         };
-        crate::model_context::context(self.id(), &binary, &extra).map(Some)
+        crate::model_context::context(self.id(), &binary, &extra)
+            .map(|context| Some(self.environment.partition_context(context)))
     }
     fn fallback_models(&self) -> Vec<Model> {
         (self.spec.models)()
@@ -2241,7 +2260,11 @@ impl Harness for AcpHarness {
                     if self.id() == HarnessId::Devin {
                         let (exe, _) = self.resolve_program(false).await?;
                         self.devin_models
-                            .refresh(&exe, self.model_discovery_timeout)
+                            .refresh_with_environment(
+                                &exe,
+                                self.model_discovery_timeout,
+                                &self.environment,
+                            )
                             .await
                     } else {
                         self.discover_models().await
@@ -2345,11 +2368,12 @@ impl Harness for AcpHarness {
                 let (exe, _) = self.resolve_program(false).await?;
                 let selection = self
                     .devin_models
-                    .selection(
+                    .selection_with_environment(
                         &exe,
                         self.model_discovery_timeout,
                         model,
                         &request.model_options,
+                        &self.environment,
                     )
                     .await;
                 if selection.is_none() && model == devin_models::FUSION {

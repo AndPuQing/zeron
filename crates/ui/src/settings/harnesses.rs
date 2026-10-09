@@ -187,6 +187,7 @@ pub struct HarnessesPage {
     /// The expanded provider's Accounts section — one page, retargeted as
     /// providers expand, so every provider shares the same sign-in flow.
     accounts_page: Option<Entity<AccountsPage>>,
+    environment_editor: Option<Entity<crate::settings::environment::EnvironmentEditor>>,
     update_task: Option<Task<()>>,
     update_action_task: Option<Task<()>>,
 }
@@ -209,6 +210,7 @@ impl HarnessesPage {
 
             expanded_harness: None,
             accounts_page: None,
+            environment_editor: None,
             update_task: None,
             update_action_task: None,
         };
@@ -220,14 +222,20 @@ impl HarnessesPage {
         if !self.harnesses.ready().is_some_and(|items| {
             items
                 .iter()
-                .any(|item| item.id == harness && descriptor_enabled(item))
+                .any(|item| item.id == harness && item.id != HarnessId::Mock)
         }) {
             return;
         }
         if self.expanded_harness == Some(harness) {
             self.expanded_harness = None;
+            self.environment_editor = None;
         } else {
             self.expanded_harness = Some(harness);
+            let state = self.state.clone();
+            let target = self.target_device.clone();
+            self.environment_editor = Some(cx.new(|cx| {
+                crate::settings::environment::EnvironmentEditor::new(state, target, harness, cx)
+            }));
             if accounts::signs_in(harness) {
                 if let Some(accounts) = &self.accounts_page {
                     accounts.update(cx, |page, cx| page.set_embedded_harness(harness, cx));
@@ -264,6 +272,7 @@ impl HarnessesPage {
             .gap(px(20.0))
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
+            .children(self.environment_editor.clone())
             .when_some(accounts, |details, accounts| details.child(accounts));
         if motion::reduced_motion(cx) {
             content.into_any_element()
@@ -394,6 +403,13 @@ impl HarnessesPage {
         self.install_task = None;
         self.policy_selects.clear();
         self.target_device = target;
+        self.environment_editor = self.expanded_harness.map(|harness| {
+            let state = self.state.clone();
+            let target = self.target_device.clone();
+            cx.new(|cx| {
+                crate::settings::environment::EnvironmentEditor::new(state, target, harness, cx)
+            })
+        });
         if let Some(accounts) = &self.accounts_page {
             accounts.update(cx, |page, cx| {
                 page.set_target_device(self.target_device.clone(), cx)
@@ -888,7 +904,7 @@ impl HarnessesPage {
                             .size(px(16.0))
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     );
-                let expanded = enabled && self.expanded_harness == Some(harness);
+                let expanded = self.expanded_harness == Some(harness);
                 // The row's one update action sits inside the trigger, before
                 // the chevron, so it appearing never moves the chevron; the
                 // update policy lives in the expanded details.
@@ -959,7 +975,7 @@ impl HarnessesPage {
                             .flex_row()
                             .items_center()
                             .gap(px(12.0))
-                            .when(enabled, |el| {
+                            .when(harness != HarnessId::Mock, |el| {
                                 el.role(gpui::Role::Button)
                                     .aria_label(format!("{} preferences", descriptor.name))
                                     .aria_expanded(expanded)
@@ -999,7 +1015,7 @@ impl HarnessesPage {
                                     }),
                             )
                             .children(update_action)
-                            .when(enabled, |el| {
+                            .when(harness != HarnessId::Mock, |el| {
                                 el.child(
                                     crate::icons::icon(if expanded {
                                         crate::icons::ALT_ARROW_DOWN
@@ -1239,6 +1255,49 @@ impl Render for HarnessesPage {
 
 #[cfg(test)]
 mod tests {
+    #[gpui::test]
+    fn disabled_provider_editor_is_replaced_when_the_device_changes(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let directory = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            crate::settings::init(Default::default(), directory.path(), cx);
+            gpui_base::init(cx);
+            cx.set_global(crate::theme::Theme::default());
+        });
+        let window = cx.add_window(|_, cx| {
+            let state = cx.new(|_| crate::state::AppState::new());
+            super::HarnessesPage::new(state, cx)
+        });
+        let old = window
+            .update(cx, |page, _, cx| {
+                page.harnesses =
+                    super::Loadable::Ready(vec![zeron_engine::registry::HarnessDescriptor {
+                        id: zeron_proto::HarnessId::Codex,
+                        name: "Codex".into(),
+                        installed: true,
+                        can_install: false,
+                        enabled: Some(false),
+                        supports_steering: true,
+                        steering_mode: zeron_proto::SteeringMode::StepBoundary,
+                        reasoning_levels: vec![],
+                    }]);
+                page.toggle_agent_details(zeron_proto::HarnessId::Codex, cx);
+                let old = page.environment_editor.as_ref().unwrap().downgrade();
+                let id = page.environment_editor.as_ref().unwrap().entity_id();
+                page.set_target_device(Some("remote-device".into()), cx);
+                assert_ne!(page.environment_editor.as_ref().unwrap().entity_id(), id);
+                old
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
+            .unwrap();
+        cx.run_until_parked();
+        assert!(
+            old.upgrade().is_none(),
+            "dismissal drops transient value state after GPUI releases entities"
+        );
+    }
+
     #[gpui::test]
     fn expanded_agent_preferences_render_inside_the_agent_row(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext;

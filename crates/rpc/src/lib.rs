@@ -50,6 +50,9 @@ pub mod methods {
     pub const GET_TITLE_SETTINGS: &str = "GetTitleSettings";
     pub const SET_TITLE_SETTINGS: &str = "SetTitleSettings";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
+    pub const GET_HARNESS_ENVIRONMENT: &str = "GetHarnessEnvironment";
+    pub const PATCH_HARNESS_ENVIRONMENT: &str = "PatchHarnessEnvironment";
+    pub const REVEAL_HARNESS_ENVIRONMENT_VALUE: &str = "RevealHarnessEnvironmentValue";
     pub const LIST_MODELS: &str = "ListModels";
     pub const LIST_SKILLS: &str = "ListSkills";
     pub const LIST_COMMANDS: &str = "ListCommands";

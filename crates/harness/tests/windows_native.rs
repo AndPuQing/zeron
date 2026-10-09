@@ -670,3 +670,23 @@ async fn batch_executable_path_rejects_percent_expansion() {
         std::io::ErrorKind::InvalidInput
     );
 }
+
+#[test]
+fn oversized_effective_environment_fails_before_spawn() {
+    let mut command =
+        zeron_harness::process::Command::new(env!("CARGO_BIN_EXE_harness-native-fixture"));
+    let snapshot = zeron_harness::environment::EnvironmentSnapshot::default()
+        .patched(
+            &(0..3)
+                .map(|index| zeron_proto::EnvironmentChange::Set {
+                    name: format!("AGENT_ENV_{index}"),
+                    value: "x".repeat(12_000),
+                })
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    snapshot.apply(&mut command);
+    let error = command.spawn().unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(error.to_string().contains("32767"));
+}

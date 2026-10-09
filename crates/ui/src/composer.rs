@@ -6264,6 +6264,31 @@ impl Composer {
             this.on_input_edited(cx);
         })
         .detach();
+        cx.observe_global::<crate::pickers::HarnessEnvironmentChanged>(|this, cx| {
+            let changed = cx.global::<crate::pickers::HarnessEnvironmentChanged>();
+            let params = this.catalog_params(cx);
+            let target = params["targetDeviceId"]
+                .as_str()
+                .map(str::to_owned)
+                .or_else(|| {
+                    this.state
+                        .read(cx)
+                        .engine()
+                        .map(|engine| engine.engine_info().device_id.clone())
+                });
+            if changed.target != target
+                || changed.harness != this.pickers.read(cx).resolved(cx).harness
+            {
+                return;
+            }
+            this.slash_task = None;
+            this.slash.request = this.slash.request.wrapping_add(1);
+            this.slash.loading = false;
+            this.slash_cache.clear();
+            this.on_input_edited(cx);
+            cx.notify();
+        })
+        .detach();
         let dictation_events = cx.subscribe(&input, |this: &mut Self, _, event, cx| match event {
             DictationInputEvent::Press => this.press_dictation(HoldSource::Key, cx),
             DictationInputEvent::Release => this.release_dictation(HoldSource::Key, cx),
@@ -7408,8 +7433,21 @@ impl Composer {
         let online = target
             .as_deref()
             .is_none_or(|device| state.device_online(device, chrono::Utc::now()));
+        let target = target.or_else(|| {
+            state
+                .engine()
+                .map(|engine| engine.engine_info().device_id.clone())
+        });
+        let environment_generation = target
+            .zip(self.pickers.read(cx).resolved(cx).harness)
+            .and_then(|key| {
+                cx.try_global::<crate::pickers::HarnessEnvironmentChanged>()
+                    .and_then(|changed| changed.generations.get(&key))
+            })
+            .copied()
+            .unwrap_or(0);
         format!(
-            "{engine:?}:{:?}:{:?}:{online}",
+            "{engine:?}:{:?}:{:?}:{online}:{environment_generation}",
             state.connection, state.connectivity.state
         )
     }
@@ -14141,6 +14179,56 @@ mod tests {
             });
             names[kind] = expected;
         }
+    }
+
+    #[gpui::test]
+    fn environment_save_invalidates_only_the_owning_provider_completion_context(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _guard = runtime.enter();
+        let (directory, _window) = composer_focus_window(cx);
+        crate::settings::composer::ComposerDefaults {
+            harness: Some(HarnessId::Codex),
+            ..Default::default()
+        }
+        .save(directory.path())
+        .unwrap();
+        let (out, _requests) = tokio::sync::mpsc::channel(64);
+        let (_replies, inbound) = tokio::sync::mpsc::channel(64);
+        let state = cx.new(|_| AppState::new());
+        state.update(cx, |state, _| {
+            state.data_dir = Some(directory.path().to_path_buf());
+            state.selected_device = Some("local".into());
+            state.set_test_engine(crate::state::EngineHandle::from_test_client(
+                zeron_rpc::RpcClient::new(out, inbound),
+            ));
+        });
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        let (context, request) = composer.read_with(cx, |composer, cx| {
+            (
+                composer.completion_connection_context(cx),
+                composer.slash.request,
+            )
+        });
+        cx.update(|cx| {
+            crate::pickers::bump_harness_environment("other-device".into(), HarnessId::Codex, cx)
+        });
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, cx| {
+            assert_eq!(composer.completion_connection_context(cx), context)
+        });
+        cx.update(|cx| {
+            crate::pickers::bump_harness_environment("local".into(), HarnessId::Codex, cx)
+        });
+        cx.run_until_parked();
+        composer.read_with(cx, |composer, cx| {
+            assert_ne!(composer.completion_connection_context(cx), context);
+            assert!(composer.slash.request > request);
+        });
     }
 
     #[gpui::test]
