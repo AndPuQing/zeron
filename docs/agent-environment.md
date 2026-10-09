@@ -24,8 +24,8 @@ Credential variables can take precedence over a provider's saved CLI account.
 The account usage section continues to describe that saved account.
 
 Values are literal strings: `$HOME`, backticks and shell expressions are not
-expanded. **Use multiline** preserves line breaks and shows the replacement
-while editing. Single-line inputs and saved values otherwise remain hidden.
+expanded. Enter values in the single-line input. Inputs and saved values
+remain hidden unless you explicitly show a saved value.
 Environment configuration does not filter configured values out of provider
 output or diagnostics.
 

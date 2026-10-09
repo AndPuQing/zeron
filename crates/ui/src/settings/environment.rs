@@ -9,7 +9,7 @@ use gpui::{
     AnyElement, Context, Entity, Focusable, IntoElement, KeyDownEvent, Render, Subscription, Task,
     Window, div, prelude::*, px,
 };
-use gpui_base::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_base::input::{Input, InputEvent, InputState};
 use zeron_proto::{
     EnvironmentAction, EnvironmentChange, EnvironmentEntryMetadata, HarnessEnvironmentMetadata,
     HarnessId, PatchHarnessEnvironmentReply, RevealedEnvironmentValue,
@@ -29,7 +29,6 @@ struct Row {
     name: Option<Entity<InputState>>,
     name_subscription: Option<Subscription>,
     value: Option<Entity<InputState>>,
-    multiline: Option<Entity<TextareaState>>,
     value_subscription: Option<Subscription>,
     action: DraftAction,
     revealed: Option<String>,
@@ -48,14 +47,9 @@ impl Row {
             })
     }
     fn value(&self, cx: &gpui::App) -> String {
-        self.multiline
+        self.value
             .as_ref()
             .map(|input| input.read(cx).value().to_string())
-            .or_else(|| {
-                self.value
-                    .as_ref()
-                    .map(|input| input.read(cx).value().to_string())
-            })
             .unwrap_or_default()
     }
 }
@@ -72,8 +66,6 @@ enum Action {
     Undo,
     Reveal,
     Hide,
-    Multiline,
-    Singleline,
 }
 
 pub struct EnvironmentEditor {
@@ -220,7 +212,6 @@ impl EnvironmentEditor {
                 name: None,
                 name_subscription: None,
                 value: None,
-                multiline: None,
                 value_subscription: None,
                 action: DraftAction::Keep,
                 revealed: None,
@@ -495,24 +486,6 @@ impl EnvironmentEditor {
         }
     }
 
-    fn subscribe_textarea(
-        &mut self,
-        id: u64,
-        input: &Entity<TextareaState>,
-        cx: &mut Context<Self>,
-    ) {
-        let subscription = cx.subscribe(input, move |editor, input, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                editor.textarea_changed(id, &input, cx);
-            }
-        });
-        if let Some(row) = self.rows.iter_mut().find(|row| row.id == id)
-            && row.multiline.as_ref().is_some_and(|active| active == input)
-        {
-            row.value_subscription = Some(subscription);
-        }
-    }
-
     fn input_changed(&mut self, id: u64, input: &Entity<InputState>, cx: &mut Context<Self>) {
         let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
             return;
@@ -520,21 +493,6 @@ impl EnvironmentEditor {
         if !row.name.as_ref().is_some_and(|active| active == input)
             && !row.value.as_ref().is_some_and(|active| active == input)
         {
-            return;
-        }
-        if row.original.is_some() && row.action != DraftAction::Set {
-            row.action = DraftAction::Set;
-            row.revealed = None;
-            row.error = None;
-        }
-        cx.notify();
-    }
-
-    fn textarea_changed(&mut self, id: u64, input: &Entity<TextareaState>, cx: &mut Context<Self>) {
-        let Some(row) = self.rows.iter_mut().find(|row| row.id == id) else {
-            return;
-        };
-        if !row.multiline.as_ref().is_some_and(|active| active == input) {
             return;
         }
         if row.original.is_some() && row.action != DraftAction::Set {
@@ -561,7 +519,6 @@ impl EnvironmentEditor {
             row.name = None;
             row.name_subscription = None;
             row.value = None;
-            row.multiline = None;
             row.value_subscription = None;
             row.action = DraftAction::Keep;
             row.revealed = None;
@@ -579,7 +536,6 @@ impl EnvironmentEditor {
     fn begin_edit(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing == Some(id) {
             // Closing the local form never changes the draft representation.
-            // In particular, keep a textarea with its line breaks intact.
             self.editing = None;
             return;
         }
@@ -597,7 +553,6 @@ impl EnvironmentEditor {
             if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
                 row.value_subscription = None;
                 row.value = Some(value);
-                row.multiline = None;
                 row.revealed = None;
                 row.error = None;
             }
@@ -661,7 +616,6 @@ impl EnvironmentEditor {
                     name: Some(name.clone()),
                     name_subscription: None,
                     value: Some(value.clone()),
-                    multiline: None,
                     value_subscription: None,
                     action: DraftAction::Set,
                     revealed: None,
@@ -679,7 +633,6 @@ impl EnvironmentEditor {
                         row.value_subscription = None;
                         row.action = DraftAction::Unset;
                         row.value = None;
-                        row.multiline = None;
                         row.revealed = None;
                         self.editing = None;
                     }
@@ -697,56 +650,11 @@ impl EnvironmentEditor {
                     row.value_subscription = None;
                     row.action = DraftAction::Delete;
                     row.value = None;
-                    row.multiline = None;
                     row.revealed = None;
                     self.editing = None;
                 }
             }
             Action::Undo => self.undo(id, cx),
-            Action::Multiline => {
-                let value = self
-                    .rows
-                    .iter()
-                    .find(|row| row.id == id)
-                    .map(|row| row.value(cx))
-                    .unwrap_or_default();
-                let multiline = cx.new(|cx| {
-                    TextareaState::new(window, cx)
-                        .default_value(value)
-                        .auto_grow(2, 5)
-                });
-                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-                    row.value_subscription = None;
-                    row.multiline = Some(multiline.clone());
-                    row.value = None;
-                }
-                self.subscribe_textarea(id, &multiline, cx);
-            }
-            Action::Singleline => {
-                let value = self
-                    .rows
-                    .iter()
-                    .find(|row| row.id == id)
-                    .and_then(|row| row.multiline.as_ref())
-                    .map(|input| input.read(cx).value().to_string());
-                let Some(value) = value else {
-                    return;
-                };
-                if value.contains('\n') {
-                    return;
-                }
-                let singleline = cx.new(|cx| {
-                    InputState::new(window, cx)
-                        .default_value(value)
-                        .masked(true)
-                });
-                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-                    row.value_subscription = None;
-                    row.value = Some(singleline.clone());
-                    row.multiline = None;
-                }
-                self.subscribe_input(id, &singleline, cx);
-            }
         }
         cx.notify();
     }
@@ -843,9 +751,6 @@ impl Render for EnvironmentEditor {
                 .into_iter()
                 .flatten()
             {
-                input.update(cx, |input, cx| input.set_readonly(readonly, cx));
-            }
-            if let Some(input) = &row.multiline {
                 input.update(cx, |input, cx| input.set_readonly(readonly, cx));
             }
         }
@@ -1071,14 +976,7 @@ impl Render for EnvironmentEditor {
                         "Unset".to_owned()
                     }
                 }
-                DraftAction::Set => {
-                    let lines = row.value(cx).lines().count().max(1);
-                    if row.multiline.is_some() {
-                        format!("Draft value · {lines} lines")
-                    } else {
-                        "Draft value · ••••••••".to_owned()
-                    }
-                }
+                DraftAction::Set => "Draft value · ••••••••".to_owned(),
                 DraftAction::Unset => "Unset · draft".to_owned(),
                 DraftAction::Delete => "Restore inheritance · draft".to_owned(),
             };
@@ -1116,10 +1014,6 @@ impl Render for EnvironmentEditor {
                         .child(summary),
                 );
 
-            let has_newlines = row
-                .multiline
-                .as_ref()
-                .is_some_and(|input| input.read(cx).value().contains('\n'));
             let edit_disabled = mutation_disabled;
             let edit = self.button(
                 &theme,
@@ -1354,27 +1248,12 @@ impl Render for EnvironmentEditor {
                         .child(display_name.clone())
                         .into_any_element(),
                 };
-                let value_field: AnyElement = match (&row.value, &row.multiline) {
-                    (_, Some(input)) => input_shell(
-                        Textarea::new(input).into_any_element(),
-                        input.read(cx).focus_handle(cx),
-                    ),
-                    (Some(input), None) => input_shell(
+                let value_field: AnyElement = match &row.value {
+                    Some(input) => input_shell(
                         Input::new(input).into_any_element(),
                         input.read(cx).focus_handle(cx),
                     ),
-                    (None, None) => div().into_any_element(),
-                };
-                let multiline_disabled =
-                    mutation_disabled || (row.multiline.is_some() && has_newlines);
-                let multiline_tooltip = if row.multiline.is_some() {
-                    if has_newlines {
-                        "Cannot use single line while the value contains line breaks."
-                    } else {
-                        "Return to a single-line editor."
-                    }
-                } else {
-                    "Multiline values are visible while editing."
+                    None => div().into_any_element(),
                 };
                 let form = div()
                     .w_full()
@@ -1399,35 +1278,6 @@ impl Render for EnvironmentEditor {
                             .gap(px(4.0))
                             .child(widgets::field_label(&theme, "Value"))
                             .child(value_field),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .flex_wrap()
-                            .gap(px(12.0))
-                            .child(
-                                self.button(
-                                    &theme,
-                                    "environment-multiline",
-                                    if row.multiline.is_some() {
-                                        "Use single line"
-                                    } else {
-                                        "Use multiline"
-                                    },
-                                    if row.multiline.is_some() {
-                                        Action::Singleline
-                                    } else {
-                                        Action::Multiline
-                                    },
-                                    id,
-                                    ActionTone::Quiet,
-                                    multiline_disabled,
-                                    cx,
-                                )
-                                .tooltip(widgets::text_tooltip(multiline_tooltip)),
-                            ),
                     );
                 row_element = row_element.child(top).child(form);
             } else {
@@ -1621,7 +1471,7 @@ mod tests {
             None,
         );
         settle(&runtime, cx);
-        let multiline = window
+        let input = window
             .update(cx, |editor, window, cx| {
                 assert_eq!(editor.rows[0].revealed.as_deref(), Some("private-revealed"));
                 editor.perform(Action::Hide, editor.rows[0].id, window, cx);
@@ -1636,14 +1486,13 @@ mod tests {
                         .presentation()
                         .is_masked()
                 );
-                editor.perform(Action::Multiline, editor.rows[0].id, window, cx);
-                editor.rows[0].multiline.clone().unwrap()
+                editor.rows[0].value.clone().unwrap()
             })
             .unwrap();
         window
             .update(cx, |_, window, cx| {
-                multiline.update(cx, |input, cx| {
-                    input.replace_all("  中文\n$HOME `literal`  ", window, cx)
+                input.update(cx, |input, cx| {
+                    input.replace_all("  中文 $HOME `literal`  ", window, cx)
                 });
             })
             .unwrap();
@@ -1653,7 +1502,7 @@ mod tests {
         let save = request(&mut wire);
         assert_eq!(
             save.params["changes"][0]["value"],
-            "  中文\n$HOME `literal`  "
+            "  中文 $HOME `literal`  "
         );
         reply(
             &wire,
@@ -1664,7 +1513,7 @@ mod tests {
         settle(&runtime, cx);
         window
             .update(cx, |editor, _, cx| {
-                assert_eq!(editor.rows[0].value(cx), "  中文\n$HOME `literal`  ");
+                assert_eq!(editor.rows[0].value(cx), "  中文 $HOME `literal`  ");
                 assert_eq!(editor.metadata.as_ref().unwrap().revision, "two");
                 assert_eq!(
                     cx.global::<crate::pickers::HarnessEnvironmentChanged>()
@@ -1735,7 +1584,6 @@ mod tests {
             .update(cx, |editor, _, _| {
                 assert!(editor.rows.iter().all(|row| row.action == DraftAction::Keep
                     && row.value.is_none()
-                    && row.multiline.is_none()
                     && row.revealed.is_none()));
             })
             .unwrap();

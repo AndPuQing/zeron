@@ -35,7 +35,7 @@ Project-specific and conversation-specific overrides are separate future work.
 Each provider's expanded Settings card adds an **Environment variables**
 section. Its heading identifies the selected device. The editor supports:
 
-- Add or replace a named value.
+- Add or replace a named value using single-line inputs.
 - Remove a variable from the child environment explicitly.
 - Delete an override to return to the inherited default.
 - Save or discard a draft, with validation attached to the affected row.
