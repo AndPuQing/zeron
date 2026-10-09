@@ -1688,7 +1688,6 @@ impl AgentAccounts {
         completion: SpawnedCompletion,
         scan_url: fn(&str) -> Option<String>,
         requester: Option<&str>,
-        environment: Arc<zeron_harness::environment::EnvironmentSnapshot>,
     ) -> Result<AgentLoginStart, EngineError> {
         command
             .stdin(zeron_harness::process::Stdio::null())
@@ -1708,7 +1707,7 @@ impl AgentAccounts {
                 ));
             }
         };
-        let (child, output, exit) = wire_login_child_with_environment(child, environment);
+        let (child, output, exit) = wire_login_child(child);
         lock(&self.inner.flows).insert(
             login_id.clone(),
             LoginFlow::Spawned {
@@ -1788,7 +1787,6 @@ impl AgentAccounts {
             SpawnedCompletion::CredentialFile,
             scan_openai_url,
             requester,
-            environment,
         )
         .await
     }
@@ -1890,7 +1888,6 @@ impl AgentAccounts {
             SpawnedCompletion::CredentialFile,
             scan_cursor_url,
             None,
-            environment,
         )
         .await
     }
@@ -3871,12 +3868,8 @@ type LoginChildHandles = (
 /// (the URL can land on either stream), and a monitor polls `try_wait` so the
 /// child is reaped without owning it — the cancel path needs concurrent kill
 /// access.
-fn wire_login_child_with_environment(
-    mut child: zeron_harness::process::Child,
-    environment: Arc<zeron_harness::environment::EnvironmentSnapshot>,
-) -> LoginChildHandles {
+fn wire_login_child(mut child: zeron_harness::process::Child) -> LoginChildHandles {
     let output = Arc::new(Mutex::new(String::new()));
-    let redacted_pipes = Arc::new(Mutex::new([String::new(), String::new()]));
     for pipe in [
         child
             .stdout
@@ -3888,32 +3881,18 @@ fn wire_login_child_with_environment(
             .map(|s| Box::new(s) as Box<dyn tokio::io::AsyncRead + Send + Unpin>),
     ]
     .into_iter()
-    .enumerate()
-    .filter_map(|(index, pipe)| pipe.map(|pipe| (index, pipe)))
+    .flatten()
     {
-        let (index, pipe) = pipe;
         let sink = output.clone();
-        let environment = environment.clone();
-        let redacted_pipes = redacted_pipes.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             let mut pipe = pipe;
             let mut buf = [0u8; 4096];
-            let mut raw = Vec::new();
             while let Ok(n) = pipe.read(&mut buf).await {
                 if n == 0 {
                     break;
                 }
-                raw.extend_from_slice(&buf[..n]);
-                // Keep raw bytes per pipe so split UTF-8, overlapping secrets
-                // and interleaved stdout/stderr still redact correctly.
-                let complete = match std::str::from_utf8(&raw) {
-                    Err(error) if error.error_len().is_none() => &raw[..error.valid_up_to()],
-                    _ => &raw,
-                };
-                let mut pipes = lock(&redacted_pipes);
-                pipes[index] = environment.redact_streaming(&String::from_utf8_lossy(complete));
-                *lock(&sink) = pipes.concat();
+                lock(&sink).push_str(&String::from_utf8_lossy(&buf[..n]));
             }
         });
     }
@@ -5193,46 +5172,23 @@ mod login_tests {
 mod agent_environment_tests {
     use super::*;
     #[tokio::test]
-    async fn login_child_uses_the_captured_binding_and_redacts_accumulated_output() {
-        let environment = Arc::new(
-            zeron_harness::environment::EnvironmentSnapshot::default()
-                .patched(&[
-                    zeron_proto::EnvironmentChange::Set {
-                        name: "API_KEY".into(),
-                        value: "private-login-token中文".into(),
-                        sensitive: true,
-                    },
-                    zeron_proto::EnvironmentChange::Set {
-                        name: "API_PREFIX".into(),
-                        value: "private-".into(),
-                        sensitive: true,
-                    },
-                ])
-                .unwrap(),
-        );
+    async fn login_child_receives_literal_environment_values() {
+        let environment = zeron_harness::environment::EnvironmentSnapshot::default()
+            .patched(&[zeron_proto::EnvironmentChange::Set {
+                name: "AGENT_LOGIN_FIXTURE".into(),
+                value: "fixture $HOME".into(),
+            }])
+            .unwrap();
         let mut command = zeron_harness::process::Command::new("/bin/sh");
         command
-            .arg("-c")
-            .arg("printf '%s' \"${API_KEY%中文}\"; printf '\\344\\270'; sleep 0.3; printf '\\255\\346\\226\\207'; exit 1")
+            .args(["-c", "printf '%s' \"$AGENT_LOGIN_FIXTURE\"; exit 1"])
             .stdout(zeron_harness::process::Stdio::piped())
             .stderr(zeron_harness::process::Stdio::piped());
         environment.apply(&mut command);
-        let (_child, output, exit) =
-            wire_login_child_with_environment(command.spawn().unwrap(), environment);
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while lock(&output).is_empty() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .unwrap();
-        assert!(
-            !lock(&output).contains("private-login-"),
-            "partial secrets stay hidden while login is running"
-        );
+        let (_child, output, exit) = wire_login_child(command.spawn().unwrap());
         tokio::time::timeout(Duration::from_secs(5), async {
             loop {
-                if lock(&exit).is_some() && lock(&output).contains("[redacted]") {
+                if lock(&exit).is_some() && *lock(&output) == "fixture $HOME" {
                     break;
                 }
                 tokio::task::yield_now().await;
@@ -5240,8 +5196,6 @@ mod agent_environment_tests {
         })
         .await
         .unwrap();
-        assert!(!lock(&output).contains("token中文"));
-        assert_eq!(&*lock(&output), "[redacted]");
         assert_eq!(*lock(&exit), Some(Some(1)));
     }
 }

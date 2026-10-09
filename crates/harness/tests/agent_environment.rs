@@ -13,17 +13,14 @@ fn environment(value: &str) -> Arc<EnvironmentSnapshot> {
                 EnvironmentChange::Set {
                     name: "AGENT_ENV_TEST".into(),
                     value: value.into(),
-                    sensitive: true,
                 },
                 EnvironmentChange::Set {
                     name: "AGENT_ENV_EMPTY".into(),
                     value: String::new(),
-                    sensitive: true,
                 },
                 EnvironmentChange::Set {
                     name: "PATH".into(),
                     value: "literal-path".into(),
-                    sensitive: false,
                 },
             ])
             .unwrap(),
@@ -171,12 +168,10 @@ async fn native_runs_and_model_probes_receive_their_provider_binding() {
                 EnvironmentChange::Set {
                     name: "AGENT_ENV_TEST".into(),
                     value: value.clone(),
-                    sensitive: true,
                 },
                 EnvironmentChange::Set {
                     name: "AGENT_ENV_EMPTY".into(),
                     value: String::new(),
-                    sensitive: true,
                 },
             ])
             .unwrap();

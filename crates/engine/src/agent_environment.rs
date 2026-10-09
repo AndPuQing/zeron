@@ -360,7 +360,6 @@ mod tests {
             changes: vec![EnvironmentChange::Set {
                 name: "API_KEY".into(),
                 value: value.into(),
-                sensitive: true,
             }],
             target_device_id: None,
         }
@@ -507,7 +506,6 @@ mod windows_tests {
                     changes: vec![zeron_proto::EnvironmentChange::Set {
                         name: "API_KEY".into(),
                         value: value.into(),
-                        sensitive: true,
                     }],
                 })
                 .unwrap();

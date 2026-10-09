@@ -194,7 +194,6 @@ impl CursorHarness {
         tokio::time::timeout(Duration::from_secs(15), run)
             .await
             .map_err(|_| HarnessError::Protocol("cursor models probe timed out".into()))?
-            .map_err(|error| self.environment.redact_error(error))
     }
 
     /// (program, args) for the shim process: the test override, or node
@@ -355,12 +354,10 @@ impl Harness for CursorHarness {
             .ok_or_else(|| HarnessError::Protocol("cursor shim has no stdout".into()))?;
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
-            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::cursor", "stderr: {line}");
                     tail.push(&line);
                 }
@@ -385,7 +382,6 @@ impl Harness for CursorHarness {
 
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
-            environment: self.environment.clone(),
             lease,
             child,
             stdout_lines: BufReader::new(stdout).lines(),
@@ -506,7 +502,6 @@ async fn stdin_writer(mut stdin: ChildStdin, mut rx: mpsc::UnboundedReceiver<Str
 }
 
 struct Session {
-    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     lease: Option<state::Lease>,
     child: Child,
     stdout_lines: tokio::io::Lines<BufReader<crate::process::ChildStdout>>,
@@ -526,7 +521,6 @@ fn new_message_id() -> String {
 
 async fn run_session(session: Session) {
     let Session {
-        environment,
         lease: _lease,
         mut child,
         mut stdout_lines,
@@ -634,7 +628,7 @@ async fn run_session(session: Session) {
                             {
                                 tracing::warn!(target: "zeron_harness::cursor",
                                     session_id = ?session_id,
-                                    error = ?frame.get("error").or_else(|| frame.get("message")).map(|value| environment.redact(&value.to_string())),
+                                    error = ?frame.get("error").or_else(|| frame.get("message")),
                                     "Cursor SDK run failed");
                             }
                             for ev in map_shim_frame(&frame, interrupted) {

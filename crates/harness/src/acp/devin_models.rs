@@ -169,11 +169,10 @@ impl Catalog {
             return Err(HarnessError::Protocol(format!(
                 "Devin models list failed ({}): {}",
                 status,
-                environment.redact(String::from_utf8_lossy(&err).trim())
+                String::from_utf8_lossy(&err).trim()
             )));
         }
-        let (models, groups) =
-            parse_catalog(&out).map_err(|error| environment.redact_error(error))?;
+        let (models, groups) = parse_catalog(&out)?;
         *latest = Some((Instant::now(), models.clone(), groups));
         Ok(models)
     }

@@ -681,7 +681,6 @@ fn oversized_effective_environment_fails_before_spawn() {
                 .map(|index| zeron_proto::EnvironmentChange::Set {
                     name: format!("AGENT_ENV_{index}"),
                     value: "x".repeat(12_000),
-                    sensitive: true,
                 })
                 .collect::<Vec<_>>(),
         )

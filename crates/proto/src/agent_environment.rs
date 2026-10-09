@@ -14,7 +14,6 @@ pub enum EnvironmentAction {
 pub struct EnvironmentEntryMetadata {
     pub name: String,
     pub action: EnvironmentAction,
-    pub sensitive: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,25 +44,12 @@ pub struct HarnessEnvironmentParams {
     pub target_device_id: Option<String>,
 }
 
-fn sensitive_default() -> bool {
-    true
-}
-
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase")]
 pub enum EnvironmentChange {
-    Set {
-        name: String,
-        value: String,
-        #[serde(default = "sensitive_default")]
-        sensitive: bool,
-    },
-    Unset {
-        name: String,
-    },
-    Delete {
-        name: String,
-    },
+    Set { name: String, value: String },
+    Unset { name: String },
+    Delete { name: String },
 }
 impl EnvironmentChange {
     pub fn name(&self) -> &str {
@@ -75,14 +61,10 @@ impl EnvironmentChange {
 impl std::fmt::Debug for EnvironmentChange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Set {
-                name, sensitive, ..
-            } => f
+            Self::Set { name, .. } => f
                 .debug_struct("Set")
                 .field("name", name)
-                .field("value", &"[redacted]")
-                .field("sensitive", sensitive)
-                .finish(),
+                .finish_non_exhaustive(),
             Self::Unset { name } => f.debug_tuple("Unset").field(name).finish(),
             Self::Delete { name } => f.debug_tuple("Delete").field(name).finish(),
         }
@@ -127,8 +109,7 @@ impl std::fmt::Debug for RevealedEnvironmentValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RevealedEnvironmentValue")
             .field("revision", &self.revision)
-            .field("value", &"[redacted]")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -136,20 +117,17 @@ impl std::fmt::Debug for RevealedEnvironmentValue {
 mod tests {
     use super::*;
     #[test]
-    fn wire_operations_distinguish_empty_unset_and_delete_and_redact_debug() {
-        let set: EnvironmentChange = serde_json::from_value(
-            serde_json::json!({"action":"set","name":"API_KEY","value":"secret"}),
-        )
-        .unwrap();
+    fn wire_operations_distinguish_empty_unset_and_delete() {
+        let set: EnvironmentChange =
+            serde_json::from_value(serde_json::json!({"action":"set","name":"API_KEY","value":""}))
+                .unwrap();
         assert_eq!(
             set,
             EnvironmentChange::Set {
                 name: "API_KEY".into(),
-                value: "secret".into(),
-                sensitive: true
+                value: "".into(),
             }
         );
-        assert!(!format!("{set:?}").contains("secret"));
         for action in ["unset", "delete"] {
             let operation: EnvironmentChange =
                 serde_json::from_value(serde_json::json!({"action":action,"name":"API_KEY"}))

@@ -1308,19 +1308,14 @@ impl AcpHarness {
         let (_scratch, mut child, _stderr, sign_in_prompted) =
             self.spawn_agent(home.as_deref(), false, &[], None).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
-                stdin,
-                stdout,
-                self.spec.id,
-                &sign_in_prompted,
-                self.environment.clone(),
-            ),
+            (Some(stdin), Some(stdout)) => {
+                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
+            }
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
             }
         };
-        let client = client.redact_errors(self.environment.clone());
         let flow = async {
             client
                 .request("initialize", initialize_params(self.spec.id))
@@ -1424,18 +1419,16 @@ impl AcpHarness {
         let on_progress = std::sync::Arc::new(on_progress);
         let announced = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Some(stderr) = child.stderr.take() {
-            let environment = self.environment.clone();
             let on_progress = on_progress.clone();
             let announced = announced.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let diagnostic = environment.redact(&line);
                     // Sign-in output carries authorize urls and device codes.
                     tracing::debug!(
                         target: "zeron_harness::acp",
                         "sign-in stderr: {}",
-                        crate::redact::redact_output(&diagnostic)
+                        crate::redact::redact_output(&line)
                     );
                     if let Some(url) = sign_in_url(&line).filter(|url| accept_url(url))
                         && !announced.swap(true, std::sync::atomic::Ordering::AcqRel)
@@ -1751,14 +1744,12 @@ impl AcpHarness {
         let stderr_tail = crate::StderrTail::default();
         let sign_in_prompted = CancellationToken::new();
         if let Some(stderr) = child.stderr.take() {
-            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             let prompted = sign_in_prompted.clone();
             let harness = self.spec.id;
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::acp", "stderr: {line}");
                     tail.push(&line);
                     if is_sign_in_prompt(harness, &line) {
@@ -1784,13 +1775,9 @@ impl AcpHarness {
             .spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], None)
             .await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
-                stdin,
-                stdout,
-                self.spec.id,
-                &sign_in_prompted,
-                self.environment.clone(),
-            ),
+            (Some(stdin), Some(stdout)) => {
+                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
+            }
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
@@ -1859,13 +1846,9 @@ impl AcpHarness {
         let (_scratch, mut child, stderr_tail, sign_in_prompted) =
             self.spawn_agent(None, false, &[], None).await?;
         let (client, _incoming) = match (child.stdin.take(), child.stdout.take()) {
-            (Some(stdin), Some(stdout)) => client_with_sign_in_prompt(
-                stdin,
-                stdout,
-                self.spec.id,
-                &sign_in_prompted,
-                self.environment.clone(),
-            ),
+            (Some(stdin), Some(stdout)) => {
+                client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
+            }
             _ => {
                 child.shutdown(self.kill_grace).await;
                 return Err(HarnessError::Protocol("agent child has no stdio".into()));
@@ -2377,13 +2360,8 @@ impl Harness for AcpHarness {
             .stdout
             .take()
             .ok_or_else(|| HarnessError::Protocol("agent child has no stdout".into()))?;
-        let (client, incoming) = client_with_sign_in_prompt(
-            stdin,
-            stdout,
-            self.spec.id,
-            &sign_in_prompted,
-            self.environment.clone(),
-        );
+        let (client, incoming) =
+            client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted);
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         let devin_selection = match request.model.as_deref() {
             Some(model) if self.spec.id == HarnessId::Devin => {
@@ -3150,16 +3128,12 @@ fn client_with_sign_in_prompt(
     stdout: ChildStdout,
     harness: HarnessId,
     sign_in_prompted: &CancellationToken,
-    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
 ) -> (RpcClient, mpsc::Receiver<Incoming>) {
     if harness != HarnessId::Antigravity {
-        let (client, incoming) = RpcClient::new(stdin, stdout);
-        return (client.redact_errors(environment), incoming);
+        return RpcClient::new(stdin, stdout);
     }
     let prompted = sign_in_prompted.clone();
-    let (client, incoming) =
-        RpcClient::with_stdout_observer(stdin, stdout, Some(Box::new(move |_| prompted.cancel())));
-    (client.redact_errors(environment), incoming)
+    RpcClient::with_stdout_observer(stdin, stdout, Some(Box::new(move |_| prompted.cancel())))
 }
 
 async fn unless_sign_in_prompted<T>(

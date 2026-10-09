@@ -161,10 +161,9 @@ impl PiHarness {
         let tail = crate::StderrTail::default();
         let mut lines = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
         let stderr = tail.clone();
-        let environment = self.environment.clone();
         let stderr_task = tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
-                stderr.push(&environment.redact(&line));
+                stderr.push(&line);
             }
             stderr.close();
         });
@@ -173,7 +172,6 @@ impl PiHarness {
             child.stdout.take().expect("piped stdout"),
         );
         Ok(Process {
-            environment: self.environment.clone(),
             child,
             _scratch: scratch,
             transport,
@@ -185,7 +183,6 @@ impl PiHarness {
     }
 }
 struct Process {
-    environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     child: Child,
     _scratch: Option<crate::scratch::ScratchDir>,
     transport: rpc::Transport,
@@ -229,7 +226,7 @@ impl Process {
         loop {
             let frame = self.next().await?;
             if frame["type"] == "response" && frame["id"] == id {
-                return response_data(frame).map_err(|error| self.environment.redact_error(error));
+                return response_data(frame);
             }
             if frame["type"] == "extension_ui_request" {
                 self.dialogs.request(self.transport.client.clone(), &frame);

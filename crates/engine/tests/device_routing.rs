@@ -428,7 +428,7 @@ async fn agent_environment_configuration_targets_only_the_execution_device() {
             }
         }
     };
-    let request = serde_json::json!({"harness":"codex", "targetDeviceId":"host-env", "expectedRevision":metadata["revision"], "changes":[{"action":"set","name":"OPENAI_API_KEY","value":"remote-private-fixture","sensitive":true}]});
+    let request = serde_json::json!({"harness":"codex", "targetDeviceId":"host-env", "expectedRevision":metadata["revision"], "changes":[{"action":"set","name":"OPENAI_API_KEY","value":"remote-private-fixture"}]});
     let saved = client
         .call(methods::PATCH_HARNESS_ENVIRONMENT, request.clone())
         .await

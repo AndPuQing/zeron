@@ -349,7 +349,7 @@ impl ClaudeHarness {
                         .get("error")
                         .and_then(Value::as_str)
                         .unwrap_or("initialize control request failed");
-                    return Err(HarnessError::Protocol(self.environment.redact(msg)));
+                    return Err(HarnessError::Protocol(msg.into()));
                 }
                 return Ok(response);
             }
@@ -635,12 +635,10 @@ impl ClaudeHarness {
             .ok_or_else(|| HarnessError::Protocol("claude child has no stdout".into()))?;
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
-            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::claude", "stderr: {line}");
                     tail.push(&line);
                 }

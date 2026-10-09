@@ -1,11 +1,5 @@
 # Per-provider agent environment configuration
 
-- Status: implementation complete; final platform validation and review status tracked in [PR #4](https://github.com/AndPuQing/zeron/pull/4).
-- Date: 2026-10-08.
-- Branch: `feat/agent-environment`.
-- Baseline: `origin/dev` at `19f62c90`.
-- Workflow: [CONTRIBUTING.md](../../CONTRIBUTING.md).
-
 ## Problem and scope
 
 Agent processes currently inherit the engine's environment, with a few
@@ -14,12 +8,12 @@ different overrides for each provider through Providers settings. Configuring
 one engine-wide proxy or API key therefore cannot express different provider
 connections on the same device.
 
-The proposed scope is one configuration per **execution device and provider**.
+The scope is one configuration per **execution device and provider**.
 The desktop Providers page manages it, including through its existing target
 device selector. Headless hosts use the same store and may be configured from
 another trusted desktop. Agent execution remains cross-platform.
 
-The proposed first release covers all registered production providers, with
+This feature covers all registered production providers, with
 actual ACP launches as required acceptance cases. The current protocol mix is:
 
 | Provider | Current process/protocol |
@@ -44,7 +38,7 @@ section. Its heading identifies the selected device. The editor supports:
 - Add or replace a named value.
 - Remove a variable from the child environment explicitly.
 - Delete an override to return to the inherited default.
-- Save or cancel a draft, with validation attached to the affected row.
+- Save or discard a draft, with validation attached to the affected row.
 
 An empty string is a valid value; it is different from removing the variable.
 Values are literal UTF-8 strings. There is no shell execution, `$VAR` expansion,
@@ -55,10 +49,6 @@ value requires entering the replacement. An explicit **Show value** action
 may fetch one selected value and displays it only until the editor closes,
 the target device changes, or its engine connection is replaced. The editor
 does not copy values automatically or put them in persistent UI drafts.
-
-A row can mark its value sensitive; new value rows default to sensitive.
-This flag controls diagnostic redaction. Masking and private storage apply
-to every value, including ordinary endpoint and feature-flag values.
 
 Save reports persistence failure or a concurrent-edit conflict. It does not
 claim success before the host commits the configuration. Changing devices
@@ -76,7 +66,7 @@ alongside provider enablement. The file is independent of `harness-prefs.json`:
 that existing file has best-effort persistence and is not suitable for the
 acknowledged, private writes required here.
 
-Suggested persisted shape, with illustrative values only:
+Persisted shape, with illustrative values only:
 
 ```json
 {
@@ -87,8 +77,7 @@ Suggested persisted shape, with illustrative values only:
       "entries": {
         "HTTPS_PROXY": {
           "action": "set",
-          "value": "http://127.0.0.1:7897",
-          "sensitive": false
+          "value": "http://127.0.0.1:7897"
         },
         "EXAMPLE_TOKEN": {
           "action": "unset"
@@ -124,7 +113,7 @@ file is engine-managed; direct edits are not the management interface.
 
 ## Validation and precedence
 
-Proposed first-release limits, enforced by the engine as well as the editor:
+Limits, enforced by the engine as well as the editor:
 
 | Item | Rule |
 | --- | --- |
@@ -169,11 +158,8 @@ together. Browser launch routing (`BROWSER`) and adapter-owned `PYTHONUNBUFFERED
 existing application-level override mechanism.
 
 Network settings, provider credentials and ordinary feature flags remain
-configurable. Known sensitive values are removed from spawn diagnostics,
-stderr diagnostics, cache errors and login errors before logging or reporting
-them. Do not derive ordinary `Debug` or emit raw RPC parameters for secret
-payloads. This is a diagnostic boundary, not a change to agent-authored
-conversation content or the tools the agent may execute.
+configurable. This feature does not transform provider diagnostics or output
+by matching configured values.
 
 Credential overrides may take precedence over a provider's saved CLI login.
 The editor states that relationship. Existing saved-account usage meters must
@@ -217,7 +203,7 @@ stdio isolation, cancellation, browser callback routing and scratch cleanup.
 ## Configuration changes and persistent sessions
 
 Every operation captures one immutable binding before it starts. Its probes,
-process, diagnostic redactor and cache context use that binding throughout.
+process and cache context use that binding throughout.
 Saving concurrently cannot produce a mixed environment.
 
 Add the opaque environment revision to the engine's runtime compatibility
@@ -259,8 +245,7 @@ Retirement continues using the existing session/update-coordination rules.
 | Desktop editor | New `ui/src/settings/environment.rs`, mounted by `settings/harnesses.rs` |
 
 Use these modules to keep the feature out of the already large shell and
-composer files. Any new secret-bearing object has a deliberately redacted
-diagnostic representation.
+composer files.
 
 ## RPC and compatibility
 
@@ -271,11 +256,11 @@ device trust boundary, with no Edge persistence or room-protocol change.
 
 | Method | Request | Reply |
 | --- | --- | --- |
-| `GetHarnessEnvironment` | `harness`, optional target | Revision, entry names/actions/sensitive flags, configured-value markers, validation policy; no values |
+| `GetHarnessEnvironment` | `harness`, optional target | Revision, entry names/actions, validation policy; no values |
 | `PatchHarnessEnvironment` | `harness`, `expectedRevision`, ordered changes, optional target | Committed metadata and revision; no values |
 | `RevealHarnessEnvironmentValue` | `harness`, `name`, `expectedRevision`, optional target | One value after explicit user action; revision |
 
-Patch operations are `set(name, value, sensitive)`, `unset(name)`, and
+Patch operations are `set(name, value)`, `unset(name)`, and
 `delete(name)`. Validate the complete resulting configuration and apply the
 patch atomically. Compare revisions under the store writer lock. A conflict
 returns current metadata while preserving the editor's draft.
@@ -306,7 +291,7 @@ profiles and subprocess fixtures:
    its old binding; the next safe process uses the new binding. Pending sends,
    input answers, native resume, subagents and voice ownership remain intact.
 7. Changing configuration invalidates model/command caches and fences older
-   background results; no secrets appear in metadata, errors or diagnostic logs.
+   background results; configured values do not appear in listing metadata.
 8. Unix permissions and Windows ACL/environment rules are exercised on their
    respective platforms. Job Object/process-group cancellation still cleans
    up fixture descendants.
@@ -324,81 +309,3 @@ the existing core CI and platform workflows provide regression coverage.
 Live-provider checks, if run, record provider version, chosen model, isolated
 profile and result separately. Credentials and private transcripts are never
 test artifacts committed to the repository.
-
-## Delivery checkpoints
-
-| Node | Deliverable / commit scope | Exit criteria | Status |
-| --- | --- | --- | --- |
-| M0 | `docs: design per-provider agent environment configuration` | Task branch, current baseline, this design, development workflow, documentation checks | Complete |
-| M1 | `feat: persist and route per-provider environment settings` | Validated types, private atomic store, revisioned RPC, capability negotiation, persistence/device-routing tests | Complete locally; platform checks tracked in M4 |
-| M2 | `feat: apply provider environments at agent launch boundaries` | All in-scope launch paths, immutable bindings, cache invalidation, safe runtime transitions, subprocess/race tests | Complete locally; corrected Windows ACL requires CI |
-| M3 | `feat: edit provider environments in desktop settings` | Device-aware editor, validation/conflicts/reveal handling, accessible GPUI fixture and UI tests | Complete locally |
-| M4 | Regression validation and final PR preparation | Relevant local checks and CI pass; platform evidence and limitations recorded; PR description updated and marked ready | Local review complete; final platform results tracked in PR |
-
-M1–M3 each include their tests and update this table/PR with actual commit IDs
-and evidence. M4 adds a separate commit only when it introduces a meaningful
-regression test or fixes a discovered issue. Keep the PR draft until the
-requested implementation and validation are complete. Do not merge or create
-release tags as part of this feature task.
-
-### Current validation state
-
-M0: `e1e9adcf`. M1: `901121cf`. The validated wire types, acknowledged private
-store, CAS revisions and execution-device routing are implemented. Shared
-protocol tests (69), RPC unit tests (16), private store transaction tests and
-the actual relay test have passed locally.
-
-M2 implements immutable provider bindings across all nine production drivers,
-discovery, title generation and provider-owned login subprocesses. Runtime
-tests preserve active turns, accepted steering, input answers, native resume,
-subagents and voice ownership while the next ordinary send waits for the
-latest configuration. Diagnostic redaction covers multiline/escaped values,
-partial login reads and HTTP errors before truncation. The existing OpenCode
-HTTP timeout test now resumes the clock before awaiting real socket cleanup.
-
-Local M2 checks: engine library 446 passed / 2 ignored; harness library 326
-passed; new agent-environment subprocess integration 2 passed; existing
-provider/discovery/saved-session integrations 183 passed / 8 ignored. Selected
-engine integrations passed (device routing, subagents, profiles, queues,
-Pi/restart resume and session publication). Clippy passed for proto, RPC,
-harness, engine and UI libraries, with existing repository warnings. M2:
-`b077642d`.
-
-M3 desktop tests passed 1,594 tests with the native-font test filtered out,
-including masked/multiline replacement, conflicts, lost acknowledgements,
-device replacement, delayed capability negotiation, reveal fencing and
-provider-specific completion invalidation. User documentation is in
-[agent-environment.md](../agent-environment.md). M3: `f3049511`.
-No live provider account is used by these fixture checks.
-
-M4 final review adds regressions for repeated/overlapping sensitive tokens
-and UTF-8 characters split across login reads. The partial-suffix redactor
-now preserves complete-match redaction, and login readers publish only
-complete UTF-8 sequences. Four environment/redaction tests and eight
-binding/runtime/login tests passed after this correction; affected core
-libraries passed Clippy again. The PR records the M4 commit and final CI
-results so documentation does not imply a platform result before it exists.
-
-Final editor review also refreshes provider catalogs when conflict replies or
-lost-acknowledgement recovery reveal a newer committed revision. The existing
-RPC editor fixture verifies both cases; all 1,594 desktop tests passed again
-with the same native-font exclusion. Windows ownership hardening is in
-`ce6cb8c4`; the PR tracks the final editor correction and platform results.
-
-The Rust toolchain is operational after restoring its Z3 dependency. The local
-Apple developer directory lacks the Metal compiler; desktop checks use the
-existing `gpui_platform/runtime_shaders` feature. Windows ACL and environment
-block tests are included in the Windows workflow and require that platform.
-Windows CI exposed access-denied errors during private persistence, including
-after reopening with WRITE_DAC and WRITE_OWNER. Stage-specific errors narrowed
-the failure to SetSecurityInfo rather than opening the security handle. The
-implementation also requests READ_CONTROL so file ACL inheritance handling can
-inspect the existing descriptor. It assigns the current token user as the file
-owner and applies the protected owner-only DACL before writing configuration
-bytes, without depending on group ownership under elevated accounts. The platform
-test compares the actual owner SID as well as the DACL after initial save and
-replacement. Persistence errors now identify the failed stage without
-including configuration values. Three store tests passed again locally.
-The API signatures have been checked against windows-sys 0.61.2 sources;
-execution evidence for the corrected implementation is tracked in the PR.
-No deployment, merge, release or generated mobile binding change is included.

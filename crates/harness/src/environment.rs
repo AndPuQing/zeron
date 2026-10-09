@@ -15,17 +15,13 @@ pub const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
 pub enum EnvironmentEntry {
-    Set { value: String, sensitive: bool },
+    Set { value: String },
     Unset,
 }
 impl std::fmt::Debug for EnvironmentEntry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Set { sensitive, .. } => f
-                .debug_struct("Set")
-                .field("value", &"[redacted]")
-                .field("sensitive", sensitive)
-                .finish(),
+            Self::Set { .. } => f.debug_struct("Set").finish_non_exhaustive(),
             Self::Unset => f.write_str("Unset"),
         }
     }
@@ -131,16 +127,13 @@ impl EnvironmentSnapshot {
                 .entries
                 .iter()
                 .map(|(name, entry)| {
-                    let (action, sensitive) = match entry {
-                        EnvironmentEntry::Set { sensitive, .. } => {
-                            (EnvironmentAction::Set, *sensitive)
-                        }
-                        EnvironmentEntry::Unset => (EnvironmentAction::Unset, false),
+                    let action = match entry {
+                        EnvironmentEntry::Set { .. } => EnvironmentAction::Set,
+                        EnvironmentEntry::Unset => EnvironmentAction::Unset,
                     };
                     EnvironmentEntryMetadata {
                         name: name.clone(),
                         action,
-                        sensitive,
                     }
                 })
                 .collect(),
@@ -202,14 +195,11 @@ impl EnvironmentSnapshot {
                 .entries
                 .retain(|existing, _| normalized_name(existing) != normalized);
             match change {
-                EnvironmentChange::Set {
-                    value, sensitive, ..
-                } => {
+                EnvironmentChange::Set { value, .. } => {
                     candidate.entries.insert(
                         name.into(),
                         EnvironmentEntry::Set {
                             value: value.clone(),
-                            sensitive: *sensitive,
                         },
                     );
                 }
@@ -239,86 +229,6 @@ impl EnvironmentSnapshot {
         }
     }
 
-    fn sensitive_variants(&self) -> Vec<String> {
-        let mut values: Vec<String> = self
-            .entries
-            .values()
-            .filter_map(|entry| match entry {
-                EnvironmentEntry::Set {
-                    value,
-                    sensitive: true,
-                } if !value.is_empty() => Some(value),
-                _ => None,
-            })
-            .flat_map(|value| {
-                // Stderr is consumed line by line, and JSON-RPC diagnostics
-                // may contain escaped strings. Protect both representations.
-                let mut variants = vec![value.clone()];
-                variants.extend(
-                    value
-                        .lines()
-                        .filter(|line| !line.is_empty())
-                        .map(str::to_owned),
-                );
-                if let Ok(encoded) = serde_json::to_string(value) {
-                    variants.push(encoded[1..encoded.len() - 1].to_owned());
-                }
-                variants
-            })
-            .collect();
-        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
-        values.dedup();
-        values
-    }
-
-    pub fn redact(&self, text: &str) -> String {
-        let mut result = text.to_owned();
-        for value in self.sensitive_variants() {
-            result = result.replace(&value, "[redacted]");
-        }
-        result
-    }
-
-    /// A live pipe may end in a partial secret until the next read arrives.
-    /// Call on the complete raw buffer, never on previously redacted output.
-    pub fn redact_streaming(&self, text: &str) -> String {
-        let values = self.sensitive_variants();
-        let mut hidden_suffix = 0;
-        for value in &values {
-            for (end, _) in value.char_indices().rev() {
-                if end <= hidden_suffix || end > text.len() {
-                    continue;
-                }
-                if text.ends_with(&value[..end]) {
-                    hidden_suffix = end;
-                    break;
-                }
-            }
-        }
-        if hidden_suffix == 0 {
-            self.redact(text)
-        } else {
-            // A partial suffix can overlap a complete value (for example a
-            // repeated token). Hide the entire overlapping match too, so
-            // cutting the suffix cannot expose its earlier bytes.
-            let mut cut = text.len() - hidden_suffix;
-            loop {
-                let previous = cut;
-                for value in &values {
-                    for (start, _) in text.match_indices(value.as_str()) {
-                        if start < cut && start + value.len() > cut {
-                            cut = start;
-                        }
-                    }
-                }
-                if cut == previous {
-                    break;
-                }
-            }
-            format!("{}[redacted]", self.redact(&text[..cut]))
-        }
-    }
-
     pub fn partition_context(&self, mut context: crate::ModelContext) -> crate::ModelContext {
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
@@ -327,25 +237,6 @@ impl EnvironmentSnapshot {
         hash.update(self.revision.as_bytes());
         context.hash = format!("{:x}", hash.finalize());
         context
-    }
-
-    pub fn redact_error(&self, error: crate::HarnessError) -> crate::HarnessError {
-        match error {
-            crate::HarnessError::Protocol(message) => {
-                crate::HarnessError::Protocol(self.redact(&message))
-            }
-            crate::HarnessError::Install(message) => {
-                crate::HarnessError::Install(self.redact(&message))
-            }
-            crate::HarnessError::NotInstalled(message) => {
-                crate::HarnessError::NotInstalled(self.redact(&message))
-            }
-            crate::HarnessError::Discovery(mut failure) => {
-                failure.message = self.redact(&failure.message);
-                crate::HarnessError::Discovery(failure)
-            }
-            other => other,
-        }
     }
 }
 
@@ -360,15 +251,10 @@ mod tests {
             .patched(&[EnvironmentChange::Set {
                 name: "EXAMPLE".into(),
                 value: value.into(),
-                sensitive: true,
             }])
             .unwrap();
         assert!(original.entries.is_empty());
         assert!(!format!("{changed:?}").contains("echo hello"));
-        assert_eq!(
-            changed.redact(&format!("error: {value}")),
-            "error: [redacted]"
-        );
         assert!(
             !serde_json::to_string(&changed.metadata())
                 .unwrap()
@@ -391,7 +277,6 @@ mod tests {
                 .patched(&[EnvironmentChange::Set {
                     name: "A".into(),
                     value: "\0".into(),
-                    sensitive: true
                 }])
                 .is_err()
         );
@@ -402,59 +287,6 @@ mod tests {
                     EnvironmentChange::Delete { name: "A".into() }
                 ])
                 .is_err()
-        );
-    }
-
-    #[test]
-    fn multiline_and_json_escaped_diagnostics_hide_sensitive_values() {
-        let snapshot = EnvironmentSnapshot::default()
-            .patched(&[EnvironmentChange::Set {
-                name: "CERTIFICATE".into(),
-                value: "private-first-line\nprivate-second-line".into(),
-                sensitive: true,
-            }])
-            .unwrap();
-        assert_eq!(
-            snapshot.redact("stderr: private-first-line"),
-            "stderr: [redacted]"
-        );
-        assert_eq!(
-            snapshot.redact("stderr: private-second-line"),
-            "stderr: [redacted]"
-        );
-        assert_eq!(
-            snapshot.redact(r#"{\"error\":\"private-first-line\nprivate-second-line\"}"#),
-            r#"{\"error\":\"[redacted]\"}"#
-        );
-    }
-
-    #[test]
-    fn streaming_diagnostics_do_not_expose_overlapping_complete_or_partial_tokens() {
-        let snapshot = EnvironmentSnapshot::default()
-            .patched(&[
-                EnvironmentChange::Set {
-                    name: "TOKEN".into(),
-                    value: "private-private".into(),
-                    sensitive: true,
-                },
-                EnvironmentChange::Set {
-                    name: "PREFIX".into(),
-                    value: "private-".into(),
-                    sensitive: true,
-                },
-            ])
-            .unwrap();
-        assert_eq!(
-            snapshot.redact_streaming("login: private-private"),
-            "login: [redacted]"
-        );
-        assert_eq!(
-            snapshot.redact_streaming("login: private-pri"),
-            "login: [redacted]"
-        );
-        assert_eq!(
-            snapshot.redact_streaming("login: private-private failed"),
-            "login: [redacted] failed"
         );
     }
 
@@ -481,12 +313,10 @@ mod tests {
                 EnvironmentChange::Set {
                     name: "ENV_PROVIDER_FIXTURE".into(),
                     value: "one $HOME".into(),
-                    sensitive: true,
                 },
                 EnvironmentChange::Set {
                     name: "ENV_EMPTY_FIXTURE".into(),
                     value: "".into(),
-                    sensitive: true,
                 },
                 EnvironmentChange::Unset {
                     name: "ENV_INHERITED_FIXTURE".into(),
@@ -497,7 +327,6 @@ mod tests {
             .patched(&[EnvironmentChange::Set {
                 name: "ENV_PROVIDER_FIXTURE".into(),
                 value: "two".into(),
-                sensitive: false,
             }])
             .unwrap();
         let (a, b) = tokio::join!(observe(one.clone()), observe(two));

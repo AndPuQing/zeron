@@ -241,7 +241,7 @@ impl CodexHarness {
         // The receiver must stay alive for the client's reader loop; agent →
         // client traffic during the probe is ignored.
         let (client, _incoming) = RpcClient::new(stdin, stdout);
-        let client = client.redact_errors(self.environment.clone());
+
         let discovery = async {
             client
                 .request(
@@ -297,7 +297,7 @@ impl CodexHarness {
             return Err(HarnessError::Protocol("codex child has no stdio".into()));
         };
         let (client, _incoming) = RpcClient::new(stdin, stdout);
-        let client = client.redact_errors(self.environment.clone());
+
         let discovery = async {
             client
                 .request(
@@ -828,12 +828,10 @@ impl CodexHarness {
             .ok_or_else(|| HarnessError::Protocol("codex child has no stdout".into()))?;
         let stderr_tail = crate::StderrTail::default();
         if let Some(stderr) = child.stderr.take() {
-            let environment = self.environment.clone();
             let tail = stderr_tail.clone();
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    let line = environment.redact(&line);
                     tracing::debug!(target: "zeron_harness::codex", "stderr: {line}");
                     tail.push(&line);
                 }
@@ -841,7 +839,7 @@ impl CodexHarness {
         }
 
         let (client, incoming) = RpcClient::new(stdin, stdout);
-        let client = client.redact_errors(self.environment.clone());
+
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             title_only,

@@ -2156,20 +2156,6 @@ fn cursor_unstarted_history(
     ))
 }
 
-fn redact_event_diagnostics(
-    event: &mut AgentEvent,
-    environment: &zeron_harness::environment::EnvironmentSnapshot,
-) {
-    match event {
-        AgentEvent::Error { message, .. } => *message = environment.redact(message),
-        AgentEvent::Done {
-            error: Some(error), ..
-        } => *error = environment.redact(error),
-        AgentEvent::Subagent { event, .. } => redact_event_diagnostics(event, environment),
-        _ => {}
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn drive_run(
     inner: Arc<Inner>,
@@ -2287,7 +2273,7 @@ async fn drive_run(
     let mut stream = match started {
         Ok(stream) => stream,
         Err(err) => {
-            let message = environment.redact(&err.to_string());
+            let message = err.to_string();
             tracing::warn!(chat = %chat_id, harness = ?harness_id, error = %message, "run failed to start");
             // The journal alone is live-only: without an entry the transcript
             // shows "Run failed" with no reason (an OpenCode server that never
@@ -2562,13 +2548,13 @@ async fn drive_run(
                     // the turn was already finalized, so the run ends clean
                     // instead of stamping a completed session Errored.
                     Some(Err(err)) if idle_since.is_some() => {
-                        tracing::warn!(chat = %chat_id, error = %environment.redact(&err.to_string()), "parked session child died; ending clean");
+                        tracing::warn!(chat = %chat_id, error = %err.to_string(), "parked session child died; ending clean");
                         break SessionStatus::Idle;
                     }
                     Some(Err(err)) => AgentEvent::Done {
                         status: DoneStatus::Errored,
                         result: None,
-                        error: Some(environment.redact(&err.to_string())),
+                        error: Some(err.to_string()),
                         session_id: None,
                     },
                     None if interrupted => AgentEvent::Done {
@@ -2685,9 +2671,6 @@ async fn drive_run(
             };
             event
         };
-
-        let mut event = event;
-        redact_event_diagnostics(&mut event, &environment);
 
         // ── subagent routing ───────────────────────────────────────────
         // Tagged events NEVER fold into the parent transcript: they stream
@@ -4102,7 +4085,6 @@ mod agent_environment_tests {
                 changes: vec![EnvironmentChange::Set {
                     name: "API_KEY".into(),
                     value: value.into(),
-                    sensitive: true,
                 }],
             })
             .unwrap()
@@ -4387,34 +4369,5 @@ mod agent_environment_tests {
     #[tokio::test]
     async fn saved_environment_does_not_retire_an_accepted_unconfirmed_steer() {
         transition_case("pending").await;
-    }
-
-    #[test]
-    fn diagnostics_redact_nested_errors_but_preserve_agent_text() {
-        let environment = EnvironmentSnapshot::default()
-            .patched(&[EnvironmentChange::Set {
-                name: "API_KEY".into(),
-                value: "private-token".into(),
-                sensitive: true,
-            }])
-            .unwrap();
-        let mut event = AgentEvent::Subagent {
-            parent_tool_use_id: "sub".into(),
-            event: Box::new(AgentEvent::Error {
-                message: "failure private-token".into(),
-            }),
-        };
-        redact_event_diagnostics(&mut event, &environment);
-        assert!(!format!("{event:?}").contains("private-token"));
-        let mut text = AgentEvent::TextDelta {
-            text: "agent said private-token".into(),
-        };
-        redact_event_diagnostics(&mut text, &environment);
-        assert_eq!(
-            text,
-            AgentEvent::TextDelta {
-                text: "agent said private-token".into()
-            }
-        );
     }
 }

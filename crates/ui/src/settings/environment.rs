@@ -32,7 +32,6 @@ struct Row {
     multiline: Option<Entity<TextareaState>>,
     value_subscription: Option<Subscription>,
     action: DraftAction,
-    sensitive: bool,
     revealed: Option<String>,
     error: Option<String>,
 }
@@ -73,7 +72,6 @@ enum Action {
     Undo,
     Reveal,
     Hide,
-    Sensitive,
     Multiline,
     Singleline,
 }
@@ -225,7 +223,6 @@ impl EnvironmentEditor {
                 multiline: None,
                 value_subscription: None,
                 action: DraftAction::Keep,
-                sensitive: entry.sensitive,
                 revealed: None,
                 error: None,
             });
@@ -334,11 +331,7 @@ impl EnvironmentEditor {
                         valid = false;
                         continue;
                     }
-                    EnvironmentChange::Set {
-                        name,
-                        value,
-                        sensitive: row.sensitive,
-                    }
+                    EnvironmentChange::Set { name, value }
                 }
                 DraftAction::Unset => EnvironmentChange::Unset { name },
                 DraftAction::Delete => EnvironmentChange::Delete { name },
@@ -571,7 +564,6 @@ impl EnvironmentEditor {
             row.multiline = None;
             row.value_subscription = None;
             row.action = DraftAction::Keep;
-            row.sensitive = entry.sensitive;
             row.revealed = None;
             row.error = None;
         } else {
@@ -672,7 +664,6 @@ impl EnvironmentEditor {
                     multiline: None,
                     value_subscription: None,
                     action: DraftAction::Set,
-                    sensitive: true,
                     revealed: None,
                     error: None,
                 });
@@ -712,13 +703,6 @@ impl EnvironmentEditor {
                 }
             }
             Action::Undo => self.undo(id, cx),
-            Action::Sensitive => {
-                if let Some(row) = self.rows.iter_mut().find(|row| row.id == id) {
-                    if row.action == DraftAction::Set {
-                        row.sensitive = !row.sensitive;
-                    }
-                }
-            }
             Action::Multiline => {
                 let value = self
                     .rows
@@ -848,60 +832,6 @@ impl EnvironmentEditor {
                 );
         }
         item
-    }
-
-    fn switch_control(
-        &self,
-        theme: &Theme,
-        id: u64,
-        enabled: bool,
-        disabled: bool,
-        needs_replacement: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let mut control = div()
-            .id(("environment-sensitive", id))
-            .w(px(widgets::SWITCH_WIDTH))
-            .h(px(40.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .role(gpui::Role::Switch)
-            .aria_label("Sensitive diagnostics redaction")
-            .aria_toggled(if enabled {
-                gpui::Toggled::True
-            } else {
-                gpui::Toggled::False
-            })
-            .tab_index(if disabled { -1 } else { 0 })
-            .when(disabled, |control| control.opacity(0.42))
-            .tooltip(widgets::text_tooltip(if needs_replacement {
-                "Enter a replacement value before changing diagnostic redaction."
-            } else {
-                "Controls diagnostic redaction only; it never reveals the value."
-            }))
-            .child(widgets::toggle_switch(
-                theme,
-                enabled,
-                format!("environment-sensitive-{id}"),
-            ));
-        if !disabled {
-            control = control
-                .on_click(cx.listener(move |editor, _, window, cx| {
-                    editor.perform(Action::Sensitive, id, window, cx)
-                }))
-                .on_key_down(
-                    cx.listener(move |editor, event: &KeyDownEvent, window, cx| {
-                        if !event.is_held
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            editor.perform(Action::Sensitive, id, window, cx);
-                            cx.stop_propagation();
-                        }
-                    }),
-                );
-        }
-        control
     }
 }
 
@@ -1478,21 +1408,6 @@ impl Render for EnvironmentEditor {
                             .flex_wrap()
                             .gap(px(12.0))
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(widgets::field_label(&theme, "Sensitive"))
-                                    .child(self.switch_control(
-                                        &theme,
-                                        id,
-                                        row.sensitive,
-                                        mutation_disabled || row.action != DraftAction::Set,
-                                        row.action != DraftAction::Set,
-                                        cx,
-                                    )),
-                            )
-                            .child(
                                 self.button(
                                     &theme,
                                     "environment-multiline",
@@ -1642,7 +1557,6 @@ mod tests {
         metadata.entries = vec![EnvironmentEntryMetadata {
             name: "API_KEY".into(),
             action: EnvironmentAction::Set,
-            sensitive: true,
         }];
         metadata
     }

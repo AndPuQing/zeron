@@ -1669,7 +1669,6 @@ mod agent_environment_tests {
                     changes: vec![EnvironmentChange::Set {
                         name: "API_KEY".into(),
                         value: format!("secret-{skills}"),
-                        sensitive: true,
                     }],
                 })
                 .unwrap();
