@@ -11,7 +11,9 @@ project-palette-fixture = []
 session-import-fixture = ["project-palette-fixture", "gpui_platform/test-support"]
 compact-picker-fixture = ["gpui_platform/test-support"]
 
-browser-fixture = []
+# Native captures explicitly present the freshly drawn scene, including when
+# a nested Wayland compositor has stopped requesting idle frames.
+browser-fixture = ["gpui/bench"]
 windows-render-fixture = []
 appshots-fixture = ["gpui_platform/test-support"]
 resource-profile = ["gpui/bench", "gpui_platform/test-support"]
