@@ -31,8 +31,11 @@ pub mod wallpaper;
 pub mod wallpaper_colors;
 pub mod widgets;
 
-/// Sidebar drag-resize bounds (px).
-pub const SIDEBAR_MIN: f32 = 224.0;
+/// Sidebar drag-resize bounds (px). The minimum keeps the sidebar options
+/// button inside the sidebar beside the titlebar controls: 88 (past the
+/// traffic lights) + 82 (toggle, back, forward) + 32 (new session) + 8 gap
+/// + 24 (options) + 8 inset.
+pub const SIDEBAR_MIN: f32 = 242.0;
 pub const SIDEBAR_MAX: f32 = 400.0;
 pub const SIDEBAR_DEFAULT: f32 = 256.0;
 

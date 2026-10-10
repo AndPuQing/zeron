@@ -14051,6 +14051,20 @@ mod tests {
     }
 
     #[test]
+    fn narrowest_sidebar_keeps_its_options_button_beside_the_titlebar_controls() {
+        for is_macos in [true, false] {
+            let cluster_end = cluster_buttons_start(is_macos, false, 0)
+                + CLUSTER_BUTTONS_WIDTH
+                + TITLEBAR_ACTION_SLOT_WIDTH;
+            let options_right = cluster_end + TITLEBAR_GROUP_GAP + 24.0;
+            assert!(
+                options_right + Theme::SPACE_SM <= SIDEBAR_MIN,
+                "options button ends at {options_right} in a {SIDEBAR_MIN} sidebar"
+            );
+        }
+    }
+
+    #[test]
     fn sidebar_drag_nudges_each_edge_once_until_rearmed() {
         let min = sidebar_drag_sample(SIDEBAR_MIN, None, false);
         assert_eq!(min.width, SIDEBAR_MIN);
