@@ -62,9 +62,10 @@ impl ClaudeHarness {
             }
             let end = (offset + 50).min(files.len());
             let identity = store_id(HarnessId::ClaudeCode, &root);
+            let live = live_sessions(&root);
             let mut sessions = Vec::new();
             for path in &files[offset..end] {
-                if let Some(session) = metadata(path, &identity)? {
+                if let Some(session) = metadata(path, &identity, live.as_ref())? {
                     sessions.push(session);
                 }
             }
@@ -124,20 +125,25 @@ impl ClaudeHarness {
         session: &SavedSession,
     ) -> Result<SavedSession, HarnessError> {
         let path = self.locate(session)?;
+        let root = self.saved_root()?;
         let session = session.clone();
         tokio::task::spawn_blocking(move || {
             let records = read_records(&path)?;
             check_cwd(&records, &session.cwd)?;
-            let boundary = completed_boundary(&records)?;
+            match (
+                owner_busy(live_sessions(&root).as_ref(), &session.native_id),
+                turn_finished(&records),
+            ) {
+                (_, None) => {
+                    return Err(protocol("The Claude session has no conversation to copy."));
+                }
+                (Some(true), _) | (None, Some(false)) => return Err(running()),
+                _ => {}
+            }
             // Reject oversized display history before creating any native file.
-            normalize_history(&records[..=boundary], &session)?.check_budget()?;
+            normalize_history(&records, &session)?.check_budget()?;
             let new_id = uuid();
-            let fork = fork_records(
-                &records[..=boundary],
-                &session.native_id,
-                &new_id,
-                &session.title,
-            )?;
+            let fork = fork_records(&records, &session.native_id, &new_id, &session.title)?;
             let destination = path.with_file_name(format!("{new_id}.jsonl"));
             let mut options = OpenOptions::new();
             options.write(true).create_new(true);
@@ -189,7 +195,7 @@ impl ClaudeHarness {
                 .ok_or_else(|| {
                     protocol("The imported Claude copy is missing from the provider history store.")
                 })?;
-            let session = metadata(&path, "")?
+            let session = metadata(&path, "", None)?
                 .ok_or_else(|| protocol("The imported Claude copy contains no conversation."))?;
             if session.cwd != cwd {
                 return Err(protocol(
@@ -249,7 +255,11 @@ fn inventory(root: &Path) -> Result<Vec<PathBuf>, HarnessError> {
     Ok(files)
 }
 
-fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, HarnessError> {
+fn metadata(
+    path: &Path,
+    identity: &str,
+    live: Option<&HashMap<String, Option<bool>>>,
+) -> Result<Option<SavedSession>, HarnessError> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
     const SAMPLE: u64 = 256 * 1024;
@@ -358,8 +368,74 @@ fn metadata(path: &Path, identity: &str) -> Result<Option<SavedSession>, Harness
         updated_at_ms: last.unwrap_or(fallback),
         model,
         locator: Some(path.to_owned()),
-        running: turn_finished(&recent) == Some(false),
+        running: owner_busy(live, native_id)
+            .unwrap_or_else(|| turn_finished(&recent) == Some(false)),
     }))
+}
+
+/// Claude Code registers each live CLI as `<root>/sessions/<pid>.json` with
+/// its current session and `busy`/`idle` status. Maps live session IDs to
+/// whether their owner is busy (`None`: status unknown). `None` when the store
+/// has no registry or liveness cannot be checked here.
+fn live_sessions(root: &Path) -> Option<HashMap<String, Option<bool>>> {
+    #[cfg(not(unix))]
+    {
+        let _ = root;
+        None
+    }
+    #[cfg(unix)]
+    {
+        let mut live = HashMap::<String, Option<bool>>::new();
+        for entry in std::fs::read_dir(root.join("sessions")).ok()?.take(10_000) {
+            let Ok(entry) = entry else { continue };
+            let path = entry.path();
+            if path.extension().and_then(|p| p.to_str()) != Some("json")
+                || std::fs::metadata(&path).map_or(true, |m| m.len() > 64 * 1024)
+            {
+                continue;
+            }
+            let Some(record) = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+            else {
+                continue;
+            };
+            let (Some(pid), Some(id)) = (
+                record["pid"]
+                    .as_i64()
+                    .and_then(|pid| libc::pid_t::try_from(pid).ok())
+                    .filter(|pid| *pid > 0),
+                record["sessionId"].as_str(),
+            ) else {
+                continue;
+            };
+            // A crashed CLI leaves its file behind; only a live PID owns a session.
+            if unsafe { libc::kill(pid, 0) } != 0
+                && std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM)
+            {
+                continue;
+            }
+            let busy = record["status"].as_str().map(|status| status != "idle");
+            live.entry(id.to_owned())
+                .and_modify(|state| {
+                    if *state != Some(true) && busy != Some(false) {
+                        *state = busy;
+                    }
+                })
+                .or_insert(busy);
+        }
+        Some(live)
+    }
+}
+
+/// Whether a live CLI is mid-turn on this session. With a registry, a session
+/// no live CLI owns is idle even if its last turn never finished (the CLI
+/// exited or the work continued elsewhere). `None` defers to the transcript.
+fn owner_busy(live: Option<&HashMap<String, Option<bool>>>, id: &str) -> Option<bool> {
+    match live?.get(id) {
+        Some(busy) => *busy,
+        None => Some(false),
+    }
 }
 
 fn read_records(path: &Path) -> Result<Vec<Value>, HarnessError> {
@@ -463,16 +539,9 @@ fn local_command(record: &Value) -> Option<bool> {
     }
 }
 
-fn completed_boundary(records: &[Value]) -> Result<usize, HarnessError> {
-    match turn_finished(records) {
-        None => Err(protocol("The Claude session has no conversation to copy.")),
-        Some(false) => Err(running()),
-        Some(true) => Ok(records.len() - 1),
-    }
-}
-
 /// Whether the newest conversation turn reached a native boundary; `None`
-/// when the records contain no conversation.
+/// when the records contain no conversation. Only decisive when the store has
+/// no live-session registry.
 fn turn_finished(records: &[Value]) -> Option<bool> {
     let mut turns = records
         .iter()

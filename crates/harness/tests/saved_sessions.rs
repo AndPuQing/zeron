@@ -259,6 +259,47 @@ async fn copy_error(records: Vec<Value>) -> Option<String> {
     error
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_live_session_registry_decides_whether_a_session_is_running() {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let alive = std::process::id();
+    // The source never answered its last prompt in every case.
+    for (owners, running) in [
+        (vec![], false),
+        (vec![(alive, Some("busy"))], true),
+        (vec![(alive, Some("idle"))], false),
+        (vec![(dead, Some("busy"))], false),
+        (vec![(alive, None)], true),
+    ] {
+        let (root, harness, _path) =
+            claude_fixture(vec![user(None, USER, json!("never answered"))]);
+        let registry = root.path().join("sessions");
+        std::fs::create_dir(&registry).unwrap();
+        for (pid, status) in &owners {
+            let mut entry = json!({"pid":pid,"sessionId":SOURCE,"cwd":"/项目/a worktree"});
+            if let Some(status) = status {
+                entry["status"] = (*status).into();
+            }
+            std::fs::write(registry.join(format!("{pid}.json")), entry.to_string()).unwrap();
+        }
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert_eq!(source.running, running, "{owners:?}");
+        let copied = harness.copy_saved_session(&source).await;
+        assert_eq!(copied.is_err(), running, "{owners:?}");
+        if running {
+            assert!(copied.unwrap_err().to_string().contains("still running"));
+        }
+    }
+}
+
 #[tokio::test]
 async fn claude_copies_idle_sessions_that_end_with_local_commands() {
     let boundary = "33333333-1111-2222-3333-444444444444";
