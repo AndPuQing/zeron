@@ -294,6 +294,7 @@ fn metadata(
     let mut last = None;
     let mut model = None;
     let mut prompt = None;
+    let mut command = None;
     let mut main = false;
     // Records from the tail sample (or the whole small file) decide whether
     // the newest turn is still running; head records cannot.
@@ -329,7 +330,11 @@ fn metadata(
             title = Some(name.to_owned());
         }
         if main_record(&record) {
-            main |= matches!(record["type"].as_str(), Some("user" | "assistant"));
+            // Local commands (/login, /model, `!` bash) and meta records are
+            // not conversation and make poor titles.
+            let conversation = matches!(record["type"].as_str(), Some("user" | "assistant"))
+                && local_command(&record).is_none();
+            main |= conversation;
             if let Some(time) = timestamp(&record) {
                 first = first.or(Some(time));
                 last = Some(time);
@@ -337,8 +342,19 @@ fn metadata(
             if let Some(name) = record["message"]["model"].as_str() {
                 model = Some(name.to_owned());
             }
-            if prompt.is_none() && record["type"] == "user" {
+            if prompt.is_none() && conversation && record["type"] == "user" {
                 prompt = message_text(&record["message"]["content"]);
+            }
+            // A prompt slash command (skill, custom command) starts a turn
+            // with `<command-message>` first; name the session after it.
+            if command.is_none() && record["type"] == "user" {
+                command = message_text(&record["message"]["content"])
+                    .filter(|text| text.trim_start().starts_with("<command-message>"))
+                    .and_then(|text| {
+                        let name = text.split_once("<command-name>")?.1;
+                        Some(name.split_once("</command-name>")?.0.trim().to_owned())
+                    })
+                    .filter(|name| !name.is_empty());
             }
         }
         if is_recent {
@@ -359,6 +375,7 @@ fn metadata(
         store_id: identity.into(),
         title: title
             .or(prompt)
+            .or(command)
             .unwrap_or_else(|| native_id.into())
             .chars()
             .take(200)
@@ -438,17 +455,25 @@ fn owner_busy(live: Option<&HashMap<String, Option<bool>>>, id: &str) -> Option<
     }
 }
 
-fn read_records(path: &Path) -> Result<Vec<Value>, HarnessError> {
-    let file = File::open(path)?;
-    let before = file.metadata()?;
-    if before.len() > MAX_SOURCE_BYTES {
-        return Err(protocol(
-            "The Claude transcript exceeds the import limit; no history was truncated.",
-        ));
-    }
-    let mut reader = BufReader::new(file);
-    let mut records = Vec::new();
-    let mut total = 0u64;
+/// Raw size a compacted transcript may reach; only its current chain must fit
+/// [`MAX_SOURCE_BYTES`].
+const MAX_COMPACTED_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
+
+fn too_large() -> HarnessError {
+    protocol("The Claude transcript exceeds the import limit; no history was truncated.")
+}
+
+fn too_many() -> HarnessError {
+    protocol("The Claude transcript has too many records to import.")
+}
+
+/// Streams complete records in file order with their line sizes. Blank lines
+/// are skipped, so record indexes agree between passes over the same file.
+fn each_record(
+    path: &Path,
+    mut visit: impl FnMut(Value, u64) -> Result<(), HarnessError>,
+) -> Result<(), HarnessError> {
+    let mut reader = BufReader::new(File::open(path)?);
     loop {
         let mut line = Vec::new();
         let count = reader
@@ -456,13 +481,10 @@ fn read_records(path: &Path) -> Result<Vec<Value>, HarnessError> {
             .take(MAX_RECORD_BYTES as u64 + 1)
             .read_until(b'\n', &mut line)?;
         if count == 0 {
-            break;
+            return Ok(());
         }
-        total += count as u64;
-        if count > MAX_RECORD_BYTES || total > MAX_SOURCE_BYTES {
-            return Err(protocol(
-                "The Claude transcript exceeds the import limit; no history was truncated.",
-            ));
+        if count > MAX_RECORD_BYTES {
+            return Err(too_large());
         }
         if line.last() != Some(&b'\n') {
             return Err(protocol(
@@ -472,23 +494,116 @@ fn read_records(path: &Path) -> Result<Vec<Value>, HarnessError> {
         if line.iter().all(u8::is_ascii_whitespace) {
             continue;
         }
-        records.push(
-            serde_json::from_slice(&line).map_err(|e| {
-                protocol(format!("The Claude transcript has an invalid record: {e}"))
-            })?,
-        );
-        if records.len() > 100_000 {
-            return Err(protocol(
-                "The Claude transcript has too many records to import.",
-            ));
-        }
+        let record = serde_json::from_slice(&line)
+            .map_err(|e| protocol(format!("The Claude transcript has an invalid record: {e}")))?;
+        visit(record, count as u64)?;
     }
+}
+
+fn read_records(path: &Path) -> Result<Vec<Value>, HarnessError> {
+    let before = std::fs::metadata(path)?;
+    let records = if before.len() <= MAX_SOURCE_BYTES {
+        let mut records = Vec::new();
+        let mut total = 0u64;
+        each_record(path, |record, bytes| {
+            total += bytes;
+            if total > MAX_SOURCE_BYTES {
+                return Err(too_large());
+            }
+            records.push(record);
+            if records.len() > 100_000 {
+                return Err(too_many());
+            }
+            Ok(())
+        })?;
+        records
+    } else if before.len() <= MAX_COMPACTED_SOURCE_BYTES {
+        read_compacted(path)?
+    } else {
+        return Err(too_large());
+    };
     let after = std::fs::metadata(path)?;
     if before.len() != after.len() || before.modified()? != after.modified()? {
         return Err(protocol(
             "The Claude session changed while it was read. Finish or stop the source turn and retry.",
         ));
     }
+    Ok(records)
+}
+
+/// Native compaction leaves earlier history unreachable, and long sessions are
+/// mostly that history. Keep the current chain from its newest compaction
+/// boundary (plus later records) and the native state records the copy
+/// carries. A current chain that does not start at a boundary in the kept
+/// range is rejected rather than copied with dangling parents.
+fn read_compacted(path: &Path) -> Result<Vec<Value>, HarnessError> {
+    // Pass 1: parent links of main records, by record index.
+    let mut links = HashMap::<usize, (Option<String>, bool)>::new();
+    let mut positions = HashMap::<String, usize>::new();
+    let mut leaf = None;
+    let mut index = 0usize;
+    each_record(path, |record, _| {
+        if main_record(&record) {
+            let compact = record["subtype"] == "compact_boundary";
+            if compact || matches!(record["type"].as_str(), Some("user" | "assistant")) {
+                leaf = Some(index);
+            }
+            positions.insert(record["uuid"].as_str().unwrap().to_owned(), index);
+            links.insert(
+                index,
+                (record["parentUuid"].as_str().map(str::to_owned), compact),
+            );
+        }
+        index += 1;
+        if index > 1_000_000 {
+            return Err(too_many());
+        }
+        Ok(())
+    })?;
+    let mut chain = HashSet::new();
+    let mut next = leaf;
+    let boundary = loop {
+        let Some(node) = next else {
+            return Err(too_large());
+        };
+        if !chain.insert(node) {
+            return Err(protocol("The Claude transcript contains a parent cycle."));
+        }
+        let (parent, compact) = &links[&node];
+        if *compact {
+            break node;
+        }
+        next = parent.as_ref().and_then(|id| positions.get(id).copied());
+    };
+    if chain.iter().any(|node| *node < boundary) {
+        return Err(too_large());
+    }
+    // Pass 2: keep the boundary onward and native state records.
+    let mut records = Vec::new();
+    let mut total = 0u64;
+    let mut index = 0usize;
+    each_record(path, |record, bytes| {
+        let keep = if main_record(&record) {
+            index >= boundary
+        } else {
+            matches!(
+                record["type"].as_str(),
+                Some("content-replacement" | "atis-latch" | "relocated" | "history-suppression")
+            )
+        };
+        index += 1;
+        if keep {
+            total += bytes;
+            if total > MAX_SOURCE_BYTES {
+                return Err(too_large());
+            }
+            records.push(record);
+            if records.len() > 100_000 {
+                return Err(too_many());
+            }
+        }
+        Ok(())
+    })?;
     Ok(records)
 }
 
@@ -532,7 +647,10 @@ fn local_command(record: &Value) -> Option<bool> {
     .any(|tag| text.starts_with(tag))
     {
         Some(true)
-    } else if text.starts_with("<command-name>") || text.starts_with("<bash-input>") {
+    } else if ["<command-name>", "<command-message>", "<bash-input>"]
+        .iter()
+        .any(|tag| text.starts_with(tag))
+    {
         Some(false)
     } else {
         None

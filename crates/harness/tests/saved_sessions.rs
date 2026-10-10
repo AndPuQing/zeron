@@ -259,6 +259,114 @@ async fn copy_error(records: Vec<Value>) -> Option<String> {
     error
 }
 
+#[tokio::test]
+async fn claude_oversized_transcript_imports_its_chain_from_the_newest_compaction() {
+    let boundary = "33333333-1111-2222-3333-444444444444";
+    let after = "55555555-1111-2222-3333-444444444444";
+    // Nine ~7.5 MB pre-compaction records push the file past the source limit.
+    let filler = "old-history ".repeat(625_000);
+    let mut old = Vec::new();
+    for i in 0..9 {
+        let parent = (i > 0).then(|| format!("old-{}", i - 1));
+        old.push(user(parent.as_deref(), &format!("old-{i}"), json!(filler)));
+    }
+    let mut summary = user(Some(boundary), USER, json!("compact summary"));
+    summary["isCompactSummary"] = true.into();
+    let compacted = vec![
+        json!({"type":"system","subtype":"compact_boundary","uuid":boundary,"parentUuid":null,
+            "logicalParentUuid":"old-8","sessionId":SOURCE,"cwd":"/项目/a worktree"}),
+        summary,
+        assistant(USER, ASSISTANT, json!("after compaction"), "end_turn"),
+        json!({"type":"content-replacement","sessionId":SOURCE,"replacements":[]}),
+    ];
+    let (_root, harness, path) =
+        claude_fixture(old.iter().cloned().chain(compacted.clone()).collect());
+    assert!(
+        std::fs::metadata(&path).unwrap().len() > zeron_harness::saved_sessions::MAX_SOURCE_BYTES
+    );
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let copy = harness.copy_saved_session(&source).await.unwrap();
+    let copied = std::fs::read_to_string(copy.locator.as_ref().unwrap()).unwrap();
+    assert!(!copied.contains("old-history"));
+    assert!(copied.contains("compact_boundary"));
+    assert!(copied.contains("content-replacement"));
+    let history = harness.saved_session_history(&copy).await.unwrap();
+    assert!(format!("{history:?}").contains("after compaction"));
+    assert!(history.notice.as_deref().unwrap().contains("compacted"));
+
+    // A rewind past the boundary makes old history current again; never
+    // copy it with dangling parents.
+    let rewound = old
+        .into_iter()
+        .chain(compacted)
+        .chain([assistant("old-8", after, json!("rewound"), "end_turn")])
+        .collect();
+    let (_root, harness, _path) = claude_fixture(rewound);
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let error = harness.copy_saved_session(&source).await.unwrap_err();
+    assert!(error.to_string().contains("limit"), "{error}");
+}
+
+#[tokio::test]
+async fn claude_sessions_with_only_local_commands_are_not_listed() {
+    let ids = [
+        "44444444-1111-2222-3333-444444444444",
+        "55555555-1111-2222-3333-444444444444",
+        "66666666-1111-2222-3333-444444444444",
+    ];
+    let mut caveat = user(
+        None,
+        ids[0],
+        json!("<local-command-caveat>Caveat</local-command-caveat>"),
+    );
+    caveat["isMeta"] = true.into();
+    let (_root, harness, _path) = claude_fixture(vec![
+        caveat,
+        user(
+            Some(ids[0]),
+            ids[1],
+            json!("<command-name>/login</command-name>"),
+        ),
+        user(
+            Some(ids[1]),
+            ids[2],
+            json!("<local-command-stdout>Login interrupted</local-command-stdout>"),
+        ),
+    ]);
+    assert!(
+        harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+
+    // A prompt slash command starts a real turn and names the session.
+    let (_root, harness, _path) = claude_fixture(vec![
+        user(
+            None,
+            USER,
+            json!(
+                "<command-message>statusline</command-message>\n<command-name>/statusline</command-name>"
+            ),
+        ),
+        assistant(USER, ASSISTANT, json!("configured"), "end_turn"),
+    ]);
+    let sessions = harness.saved_sessions(None).await.unwrap().sessions;
+    assert_eq!(sessions[0].title, "/statusline");
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn claude_live_session_registry_decides_whether_a_session_is_running() {
