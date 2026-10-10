@@ -272,6 +272,15 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "Update the configured Antigravity ACP server",
         },
+        HarnessId::Dsh => ProviderSpec {
+            version_args: &["--version"],
+            // Notify-only: the dsh install (and its profiles) belong to the
+            // user, so Zerun never runs an updater — it just reports npm's
+            // `latest` dist-tag (what `npm install -g` would fetch).
+            latest: LatestSource::Npm("@deepseek-ai/dsh"),
+            update_args: None,
+            manual_command: "npm install -g @deepseek-ai/dsh@latest",
+        },
         HarnessId::Mock => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,
@@ -282,7 +291,7 @@ fn provider(id: HarnessId) -> ProviderSpec {
 }
 
 fn update_plan(harness: HarnessId, executable: &Path) -> Result<UpdatePlan, String> {
-    if let Some(package) = homebrew_package(executable) {
+    if let Some(package) = homebrew_update_package(harness, executable) {
         return Ok(UpdatePlan::Homebrew(package));
     }
     if harness == HarnessId::ClaudeCode && claude_package_manager_command(executable).is_some() {
@@ -646,7 +655,7 @@ impl HarnessUpdateCoordinator {
         if self.settle_if_unmonitored(harness) {
             return Ok(());
         }
-        if let Some(package) = homebrew_package(&executable) {
+        if let Some(package) = homebrew_update_package(harness, &executable) {
             return self
                 .finish_homebrew_check(harness, &executable, installed, source, package)
                 .await;
@@ -1928,6 +1937,14 @@ fn homebrew_token_ok(token: &str) -> bool {
         // brew loads a `.rb` or `.json` argument as a local package file.
         && !token.ends_with(".rb")
         && !token.ends_with(".json")
+}
+
+fn homebrew_update_package(harness: HarnessId, executable: &Path) -> Option<HomebrewPackage> {
+    // dsh remains user-managed regardless of its installation directory.
+    if harness == HarnessId::Dsh {
+        return None;
+    }
+    homebrew_package(executable)
 }
 
 fn homebrew_url_component(token: &str) -> String {
@@ -3459,6 +3476,27 @@ esac
         }
         for output in ["", "Claude 2.1.100", "Auto-update channel: unknown"] {
             assert_eq!(super::parse_claude_release_channel(output), None);
+        }
+    }
+
+    #[test]
+    fn dsh_stays_user_managed_including_homebrew_installs() {
+        for path in [
+            "/opt/homebrew/Cellar/dsh/0.2.0/bin/dsh",
+            "/opt/homebrew/Caskroom/dsh/0.2.0/dsh",
+            "/usr/local/lib/node_modules/@deepseek-ai/dsh/bin/dsh",
+            "/home/test/.bun/bin/dsh",
+        ] {
+            let path = std::path::Path::new(path);
+            if cfg!(unix) && path.to_string_lossy().contains("/homebrew/") {
+                assert!(super::homebrew_package(path).is_some());
+            }
+            assert!(super::homebrew_update_package(HarnessId::Dsh, path).is_none());
+            assert!(!super::can_apply_update(HarnessId::Dsh, path));
+            assert_eq!(
+                super::manual_update_command(HarnessId::Dsh, path, false).as_deref(),
+                Some("npm install -g @deepseek-ai/dsh@latest")
+            );
         }
     }
 

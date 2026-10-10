@@ -215,3 +215,12 @@ delay extension fails rather than skips. Historical ACP verification used pi-acp
 Pi 0.85.1, and `gpt-5.6-luna`: three sessions each completed the original turn and
 two queued follow-ups after 36.6–36.8-second post-tool gaps; cancellation during a
 32-second post-tool gap also completed as Interrupted.
+
+## DeepSeek Harness (`dsh`)
+
+`AcpHarness::dsh()` starts the `acp-plus` profile when installed, falling back
+to the bundled `acp` profile. Its provider-grouped model options use ACP
+`SessionConfigSelectGroup`; shared select parsing handles both flat and grouped
+options. Model IDs remain the exact advertised values, and `off` maps to
+`ReasoningLevel::Minimal`. See [dsh.md](dsh.md) for setup, configuration, and
+capability limits.

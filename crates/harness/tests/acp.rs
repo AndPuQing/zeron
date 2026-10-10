@@ -797,6 +797,100 @@ fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
     assert!(pi.reasoning_levels().is_empty());
 }
 
+fn dsh_harness() -> AcpHarness {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("fake-dsh-acp.sh");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+    }
+    AcpHarness::dsh().with_executable(path)
+}
+
+#[test]
+fn dsh_descriptor_surface_matches_registry_expectations() {
+    let dsh = AcpHarness::dsh();
+    assert_eq!(dsh.id(), HarnessId::Dsh);
+    assert_eq!(dsh.display_name(), "DeepSeek Harness");
+    assert!(dsh.supports_steering());
+    assert_eq!(dsh.steering_mode(), SteeringMode::StepBoundary);
+    assert_eq!(
+        dsh.reasoning_levels(),
+        &[
+            ReasoningLevel::Minimal,
+            ReasoningLevel::Low,
+            ReasoningLevel::High,
+            ReasoningLevel::Max,
+        ]
+    );
+}
+
+/// dsh advertises its model select as provider GROUPS (ACP
+/// `SessionConfigSelectGroup`); flattening has to reach the picker, or the
+/// list comes up empty and every run hard-fails the model check.
+#[tokio::test]
+async fn dsh_grouped_model_options_are_discovered_over_acp() {
+    let models = dsh_harness().models().await.expect("discovery");
+    let rows: Vec<(String, String, Vec<ReasoningLevel>)> = models
+        .iter()
+        .map(|m| (m.id.clone(), m.label.clone(), m.reasoning_levels.clone()))
+        .collect();
+    let ladder = vec![
+        ReasoningLevel::Minimal,
+        ReasoningLevel::Low,
+        ReasoningLevel::High,
+        ReasoningLevel::Max,
+    ];
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "[\"deepseek-official\",\"deepseek-v4-pro\"]".into(),
+                "DeepSeek V4 Pro".into(),
+                ladder.clone(),
+            ),
+            (
+                "[\"deepseek-official\",\"deepseek-v4-flash\"]".into(),
+                "DeepSeek V4 Flash".into(),
+                ladder.clone(),
+            ),
+            (
+                "[\"deepseek-platform\",\"deepseek-chat\"]".into(),
+                "DeepSeek Chat".into(),
+                ladder,
+            ),
+        ]
+    );
+}
+
+/// The saved model round-trips as the exact advertised tuple, and Minimal
+/// effort lands on dsh's `off` value.
+#[tokio::test]
+async fn dsh_runs_the_picked_tuple_model_at_off_effort() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut req = request("hi");
+    req.model = Some("[\"deepseek-official\",\"deepseek-v4-pro\"]".into());
+    req.reasoning = Some(ReasoningLevel::Minimal);
+    req.cwd = workspace.path().display().to_string();
+    let (controls, _steer, _token) = controls();
+    let events = run_to_end(&dsh_harness(), req, controls).await;
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        text.contains("sets:model=[\"deepseek-official\",\"deepseek-v4-pro\"];thought_level=off;"),
+        "{text}"
+    );
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
 fn antigravity_harness() -> AcpHarness {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")

@@ -33,7 +33,7 @@ saved SDK login: 40 entries, mapped to 39 picker rows after removing the
 | Harness | Discovery and coverage |
 | --- | --- |
 | Cursor | SDK JSONL; drain before exit; refresh on subsequent calls; overlapping successful requests share a result. |
-| ACP (Grok, Hermes, Pi, Antigravity) | Read complete JSON-RPC responses before shutdown; replace permanent model caching with refresh and overlapping-request sharing. |
+| ACP (Grok, Hermes, Pi, Antigravity, DeepSeek Harness) | Read complete JSON-RPC responses before shutdown; replace permanent model caching with refresh and overlapping-request sharing. DeepSeek Harness additionally needed grouped `SessionConfigSelectGroup` options flattened before rows could be derived. |
 | Devin | Already refreshes its native JSON catalog command and shares overlapping requests. Tests cover refresh, errors, and timeouts. |
 | OpenCode | Read the complete HTTP provider catalog; replace permanent model caching with refresh and overlapping-request sharing. Commands can still share the discovery server. |
 | Codex | Already reads complete JSON-RPC responses and all model-list pages on each discovery. Pagination tests pass. |

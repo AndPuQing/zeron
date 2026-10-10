@@ -35,6 +35,13 @@ includes Windows binaries. No action is offered when none of the documented
 methods' prerequisites resolves, or for Mock. The row then keeps a manual hint;
 shell hints on Windows can be used in WSL.
 
+DeepSeek Harness (`dsh`) is deliberately unmanaged: no Install action is
+offered and Zerun never runs its updater. Settings shows the documented hint
+(`npm install -g @deepseek-ai/dsh`, then
+`dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus`) and reports
+npm's `latest` dist-tag for awareness only. See
+[docs/research/dsh.md](../../docs/research/dsh.md).
+
 Install processes receive `CI=1`, `NONINTERACTIVE=1`, `TERM=dumb`, no stdin/TTY,
 and no inherited `ZERON_*` or nested Claude environment markers. Output is bounded
 and credentials are redacted before errors reach Settings. Cancel, timeout

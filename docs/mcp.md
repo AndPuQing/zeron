@@ -71,7 +71,7 @@ dialect and leaves the user's configured servers alone:
 | Harness | Where |
 | ------- | ----- |
 | Claude  | `--mcp-config <inline json>` (no `--strict-mcp-config`)             |
-| ACP (Devin, Grok, Hermes, Antigravity) | `session/new` and `session/load` → `mcpServers: [{name, command, args, env}]` |
+| ACP (Devin, Grok, Hermes, Antigravity, DeepSeek Harness) | `session/new` and `session/load` → `mcpServers: [{name, command, args, env}]` |
 | Pi | Per-run `--extension` bridges stdio MCP into Pi tools in the native RPC process |
 | OpenCode | Child-only `OPENCODE_CONFIG_CONTENT`: `mcp.zeron` on 1.x, `mcp.servers.zeron` on 2.x |
 | Codex   | `thread/start` config overrides `mcp_servers.zeron.{command,args,env}` |
