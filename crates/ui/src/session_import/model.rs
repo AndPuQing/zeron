@@ -34,8 +34,42 @@ pub struct ImportDevice {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportEligibility {
     Available,
-    AlreadyManaged { chat_id: String },
-    Unavailable { reason: String },
+    AlreadyManaged {
+        chat_id: String,
+    },
+    Unavailable {
+        reason: String,
+    },
+    /// The source's latest turn had not finished when it was scanned.
+    Running,
+}
+
+/// Rows shown by import state; `AlreadyManaged` rows count as imported.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ImportStatusFilter {
+    #[default]
+    All,
+    NotImported,
+    Imported,
+}
+
+impl ImportStatusFilter {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "Any status",
+            Self::NotImported => "Not imported",
+            Self::Imported => "Imported",
+        }
+    }
+
+    fn matches(self, eligibility: &ImportEligibility) -> bool {
+        let imported = matches!(eligibility, ImportEligibility::AlreadyManaged { .. });
+        match self {
+            Self::All => true,
+            Self::NotImported => !imported,
+            Self::Imported => imported,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +195,7 @@ pub(super) struct ImportModel {
     pub devices: Vec<ImportDevice>,
     pub device_index: usize,
     pub provider: Option<SessionProvider>,
+    pub status: ImportStatusFilter,
     pub current_project_only: bool,
     pub sessions: Vec<ExternalSession>,
     pub selected: HashSet<String>,
@@ -187,6 +222,7 @@ impl ImportModel {
             devices,
             device_index,
             provider: None,
+            status: ImportStatusFilter::default(),
             current_project_only,
             sessions: Vec::new(),
             selected: HashSet::new(),
@@ -286,6 +322,7 @@ impl ImportModel {
             .filter(|row| {
                 self.provider
                     .is_none_or(|provider| row.provider == provider)
+                    && self.status.matches(&row.eligibility)
                     && (!self.current_project_only
                         || project.is_none_or(|path| {
                             row.cwd == path || crate::session_import::path_within(&row.cwd, path)

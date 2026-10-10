@@ -76,9 +76,10 @@ fn selection_excludes_unavailable_sessions_and_survives_filters() {
                 reason: "Directory missing".into(),
             },
         ),
+        session("running", ImportEligibility::Running),
     ];
     assert!(model.selected.is_empty());
-    for id in ["ready", "managed", "missing", "unknown"] {
+    for id in ["ready", "managed", "missing", "running", "unknown"] {
         model.toggle_selection(id);
     }
     assert_eq!(model.selected.len(), 1);
@@ -89,6 +90,37 @@ fn selection_excludes_unavailable_sessions_and_survives_filters() {
         1,
         "filtering preserves explicit selections"
     );
+    let visible = |model: &ImportModel| {
+        model
+            .visible_sessions("")
+            .iter()
+            .map(|row| row.source_ref.clone())
+            .collect::<Vec<_>>()
+    };
+    model.status = ImportStatusFilter::Imported;
+    assert_eq!(visible(&model), ["managed"]);
+    model.status = ImportStatusFilter::NotImported;
+    assert_eq!(visible(&model), ["ready", "missing", "running"]);
+    assert!(model.selected.contains("ready"));
+}
+
+#[test]
+fn imported_rows_move_out_of_the_not_imported_filter() {
+    let mut model = model();
+    model.sessions = vec![session("one", ImportEligibility::Available)];
+    model.status = ImportStatusFilter::NotImported;
+    model.toggle_selection("one");
+    let batch = request_id(model.begin_import(false).unwrap());
+    assert!(model.update_item(
+        batch,
+        "one",
+        ImportItemState::Finished(ImportOutcome::Imported {
+            chat_id: "chat".into()
+        })
+    ));
+    assert!(model.visible_sessions("").is_empty());
+    model.status = ImportStatusFilter::Imported;
+    assert_eq!(model.visible_sessions("").len(), 1);
 }
 
 #[test]

@@ -36,6 +36,13 @@ fn sessions(device: &str) -> Vec<ExternalSession> {
             ImportEligibility::Available,
         ),
         (
+            "native-7",
+            "Refactor the settings store",
+            SessionProvider::ClaudeCode,
+            "fieldnotes",
+            ImportEligibility::Running,
+        ),
+        (
             "native-4",
             "Add deployment status",
             SessionProvider::ClaudeCode,

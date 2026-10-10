@@ -21,7 +21,7 @@ use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons::{self, icon};
 use crate::popover;
 use crate::theme::Theme;
-use model::ImportModel;
+use model::{ImportModel, ImportStatusFilter};
 
 /// A backend can answer requests asynchronously using the dialog's receive_*
 /// methods. Only devices advertising import support should be supplied.
@@ -325,6 +325,35 @@ impl SessionImportDialog {
                 })),
             );
         }
+        let mut statuses = div().flex().items_center().gap(px(2.0));
+        for (index, status) in [
+            ImportStatusFilter::All,
+            ImportStatusFilter::NotImported,
+            ImportStatusFilter::Imported,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let selected = self.model.status == status;
+            statuses = statuses.child(
+                popover::btn_ghost(theme, status.label(), format!("import-status-{index}"))
+                    .id(("import-status", index))
+                    .role(gpui::Role::Button)
+                    .aria_selected(selected)
+                    .tab_index(0)
+                    .px(px(8.0))
+                    .when(selected, |button| {
+                        button
+                            .bg(crate::theme::card_selected_bg())
+                            .text_color(theme.text)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.model.status = status;
+                        this.model.active = None;
+                        cx.notify();
+                    })),
+            );
+        }
         let has_project = self
             .model
             .devices
@@ -371,7 +400,16 @@ impl SessionImportDialog {
                     .justify_between()
                     .flex_wrap()
                     .gap(px(4.0))
-                    .child(providers)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_wrap()
+                            .gap(px(4.0))
+                            .child(providers)
+                            .child(div().w(px(1.0)).h(px(14.0)).mx(px(4.0)).bg(theme.border))
+                            .child(statuses),
+                    )
                     .when(has_project, |row| row.child(scope)),
             )
             .into_any_element()
@@ -410,14 +448,29 @@ impl SessionImportDialog {
                 (Some(reason.clone()), theme.danger)
             }
             None => match &row.eligibility {
-                ImportEligibility::Available => (None, theme.text_muted),
-                ImportEligibility::AlreadyManaged { .. } => {
-                    (Some("Already in Zerun".into()), theme.text_muted)
+                // The title badge already says it.
+                ImportEligibility::Available | ImportEligibility::AlreadyManaged { .. } => {
+                    (None, theme.text_muted)
                 }
                 ImportEligibility::Unavailable { reason } => {
                     (Some(reason.clone()), theme.text_muted)
                 }
+                ImportEligibility::Running => (
+                    Some("Finish or stop its current turn, then scan again to import.".into()),
+                    theme.warning_muted,
+                ),
             },
+        };
+        let badge = match &row.eligibility {
+            ImportEligibility::AlreadyManaged { .. } => {
+                Some(crate::settings::widgets::badge_active(theme, "Imported"))
+            }
+            ImportEligibility::Running => Some(
+                crate::settings::widgets::badge(theme, "Running")
+                    .bg(theme.warning.opacity(0.12))
+                    .text_color(theme.warning_muted),
+            ),
+            ImportEligibility::Available | ImportEligibility::Unavailable { .. } => None,
         };
         let chat_id = batch_state
             .and_then(ImportItemState::chat_id)
@@ -494,6 +547,7 @@ impl SessionImportDialog {
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     )
                     .child(div().flex_1().min_w_0().truncate().child(row.title.clone()))
+                    .children(badge)
                     .child(
                         div()
                             .flex_none()
@@ -552,9 +606,14 @@ impl SessionImportDialog {
             .debug_selector(move || format!("import-row-{index}"))
             .role(gpui::Role::ListItem)
             .aria_label(SharedString::from(format!(
-                "{} · {}",
+                "{} · {}{}",
                 row.title,
-                row.provider.label()
+                row.provider.label(),
+                match row.eligibility {
+                    ImportEligibility::AlreadyManaged { .. } => " · Imported",
+                    ImportEligibility::Running => " · Running",
+                    _ => "",
+                }
             )))
             .aria_selected(selected)
             .min_h(px(72.0))

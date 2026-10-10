@@ -33,6 +33,8 @@ fn discovery(result: ExternalSessionList) -> SessionDiscovery {
                     ImportEligibility::AlreadyManaged { chat_id }
                 } else if let Some(reason) = row.unavailable_reason {
                     ImportEligibility::Unavailable { reason }
+                } else if row.running {
+                    ImportEligibility::Running
                 } else {
                     ImportEligibility::Available
                 };

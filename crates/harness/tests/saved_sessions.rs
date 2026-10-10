@@ -177,6 +177,7 @@ async fn claude_rejects_busy_torn_records_changed_root_and_oversized_sources() {
         .unwrap()
         .sessions
         .remove(0);
+    assert!(source.running);
     assert!(
         harness
             .copy_saved_session(&source)
@@ -212,6 +213,381 @@ async fn claude_rejects_busy_torn_records_changed_root_and_oversized_sources() {
             .to_string()
             .contains("limit")
     );
+}
+
+fn local_command(parent: &str, ids: [&str; 3], name: &str, output: &str) -> Vec<Value> {
+    let mut caveat = user(
+        Some(parent),
+        ids[0],
+        json!("<local-command-caveat>Caveat: run directly in Claude Code.</local-command-caveat>"),
+    );
+    caveat["isMeta"] = true.into();
+    vec![
+        caveat,
+        user(
+            Some(ids[0]),
+            ids[1],
+            json!(format!(
+                "<command-name>/{name}</command-name>\n<command-message>{name}</command-message>\n<command-args></command-args>"
+            )),
+        ),
+        user(
+            Some(ids[1]),
+            ids[2],
+            json!(format!(
+                "<local-command-stdout>{output}</local-command-stdout>"
+            )),
+        ),
+    ]
+}
+
+async fn copy_error(records: Vec<Value>) -> Option<String> {
+    let (_root, harness, _path) = claude_fixture(records);
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let error = harness
+        .copy_saved_session(&source)
+        .await
+        .err()
+        .map(|e| e.to_string());
+    // Discovery flags exactly the sessions the import boundary rejects.
+    assert_eq!(source.running, error.is_some());
+    error
+}
+
+#[tokio::test]
+async fn claude_oversized_transcript_imports_its_chain_from_the_newest_compaction() {
+    let boundary = "33333333-1111-2222-3333-444444444444";
+    let after = "55555555-1111-2222-3333-444444444444";
+    // Nine ~7.5 MB pre-compaction records push the file past the source limit.
+    let filler = "old-history ".repeat(625_000);
+    let mut old = Vec::new();
+    for i in 0..9 {
+        let parent = (i > 0).then(|| format!("old-{}", i - 1));
+        old.push(user(parent.as_deref(), &format!("old-{i}"), json!(filler)));
+    }
+    let mut summary = user(Some(boundary), USER, json!("compact summary"));
+    summary["isCompactSummary"] = true.into();
+    let compacted = vec![
+        json!({"type":"system","subtype":"compact_boundary","uuid":boundary,"parentUuid":null,
+            "logicalParentUuid":"old-8","sessionId":SOURCE,"cwd":"/项目/a worktree"}),
+        summary,
+        assistant(USER, ASSISTANT, json!("after compaction"), "end_turn"),
+        json!({"type":"content-replacement","sessionId":SOURCE,"replacements":[]}),
+    ];
+    let (_root, harness, path) =
+        claude_fixture(old.iter().cloned().chain(compacted.clone()).collect());
+    assert!(
+        std::fs::metadata(&path).unwrap().len() > zeron_harness::saved_sessions::MAX_SOURCE_BYTES
+    );
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let copy = harness.copy_saved_session(&source).await.unwrap();
+    let copied = std::fs::read_to_string(copy.locator.as_ref().unwrap()).unwrap();
+    assert!(!copied.contains("old-history"));
+    assert!(copied.contains("compact_boundary"));
+    assert!(copied.contains("content-replacement"));
+    let history = harness.saved_session_history(&copy).await.unwrap();
+    assert!(format!("{history:?}").contains("after compaction"));
+    assert!(history.notice.as_deref().unwrap().contains("compacted"));
+
+    // A rewind past the boundary makes old history current again; never
+    // copy it with dangling parents.
+    let rewound = old
+        .into_iter()
+        .chain(compacted)
+        .chain([assistant("old-8", after, json!("rewound"), "end_turn")])
+        .collect();
+    let (_root, harness, _path) = claude_fixture(rewound);
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let error = harness.copy_saved_session(&source).await.unwrap_err();
+    assert!(error.to_string().contains("limit"), "{error}");
+}
+
+#[tokio::test]
+async fn claude_sessions_with_only_local_commands_are_not_listed() {
+    let ids = [
+        "44444444-1111-2222-3333-444444444444",
+        "55555555-1111-2222-3333-444444444444",
+        "66666666-1111-2222-3333-444444444444",
+    ];
+    let mut caveat = user(
+        None,
+        ids[0],
+        json!("<local-command-caveat>Caveat</local-command-caveat>"),
+    );
+    caveat["isMeta"] = true.into();
+    let (_root, harness, _path) = claude_fixture(vec![
+        caveat,
+        user(
+            Some(ids[0]),
+            ids[1],
+            json!("<command-name>/login</command-name>"),
+        ),
+        user(
+            Some(ids[1]),
+            ids[2],
+            json!("<local-command-stdout>Login interrupted</local-command-stdout>"),
+        ),
+    ]);
+    assert!(
+        harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .is_empty()
+    );
+
+    // A prompt slash command starts a real turn and names the session.
+    let (_root, harness, _path) = claude_fixture(vec![
+        user(
+            None,
+            USER,
+            json!(
+                "<command-message>statusline</command-message>\n<command-name>/statusline</command-name>"
+            ),
+        ),
+        assistant(USER, ASSISTANT, json!("configured"), "end_turn"),
+    ]);
+    let sessions = harness.saved_sessions(None).await.unwrap().sessions;
+    assert_eq!(sessions[0].title, "/statusline");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_live_session_registry_decides_whether_a_session_is_running() {
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead = child.id();
+    child.wait().unwrap();
+    let alive = std::process::id();
+    // The source never answered its last prompt in every case.
+    for (owners, running) in [
+        (vec![], false),
+        (vec![(alive, Some("busy"))], true),
+        (vec![(alive, Some("idle"))], false),
+        (vec![(dead, Some("busy"))], false),
+        (vec![(alive, None)], true),
+    ] {
+        let (root, harness, _path) =
+            claude_fixture(vec![user(None, USER, json!("never answered"))]);
+        let registry = root.path().join("sessions");
+        std::fs::create_dir(&registry).unwrap();
+        for (pid, status) in &owners {
+            let mut entry = json!({"pid":pid,"sessionId":SOURCE,"cwd":"/项目/a worktree"});
+            if let Some(status) = status {
+                entry["status"] = (*status).into();
+            }
+            std::fs::write(registry.join(format!("{pid}.json")), entry.to_string()).unwrap();
+        }
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert_eq!(source.running, running, "{owners:?}");
+        let copied = harness.copy_saved_session(&source).await;
+        assert_eq!(copied.is_err(), running, "{owners:?}");
+        if running {
+            assert!(copied.unwrap_err().to_string().contains("still running"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn claude_copies_idle_sessions_that_end_with_local_commands() {
+    let boundary = "33333333-1111-2222-3333-444444444444";
+    let ids = [
+        "44444444-1111-2222-3333-444444444444",
+        "55555555-1111-2222-3333-444444444444",
+        "66666666-1111-2222-3333-444444444444",
+    ];
+    let mut records = vec![
+        user(None, USER, json!("request")),
+        assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+    ];
+    records.extend(local_command(ASSISTANT, ids, "fork", "Forked"));
+    assert_eq!(copy_error(records).await, None);
+
+    let mut summary = user(Some(boundary), USER, json!("compact summary"));
+    summary["isCompactSummary"] = true.into();
+    let compacted = vec![
+        json!({"type":"system","subtype":"compact_boundary","uuid":boundary,"parentUuid":null,"sessionId":SOURCE,"cwd":"/项目/a worktree"}),
+        summary,
+    ];
+    let mut records = compacted.clone();
+    records.extend(local_command(USER, ids, "compact", "Compacted"));
+    assert_eq!(copy_error(records).await, None);
+
+    // An automatic compaction mid-turn leaves no command output behind.
+    assert!(
+        copy_error(compacted)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
+    );
+
+    // A prompt command without local output may still be running.
+    let mut records = vec![
+        user(None, USER, json!("request")),
+        assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+    ];
+    records.extend(
+        local_command(ASSISTANT, ids, "review", "")
+            .into_iter()
+            .take(2),
+    );
+    assert!(
+        copy_error(records)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
+    );
+
+    // Meta records injected mid-turn do not hide an unfinished tool call.
+    let mut skill = user(
+        Some(ids[0]),
+        ids[1],
+        json!([{"type":"text","text":"Base directory for this skill"}]),
+    );
+    skill["isMeta"] = true.into();
+    let records = vec![
+        user(None, USER, json!("request")),
+        assistant(
+            USER,
+            ASSISTANT,
+            json!([{"type":"tool_use","id":"tool-1","name":"Skill","input":{}}]),
+            "tool_use",
+        ),
+        user(
+            Some(ASSISTANT),
+            ids[0],
+            json!([{"type":"tool_result","tool_use_id":"tool-1","content":"loaded"}]),
+        ),
+        skill,
+    ];
+    assert!(
+        copy_error(records)
+            .await
+            .unwrap()
+            .contains("Finish or stop")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_incomplete_registry_falls_back_to_the_transcript_boundary() {
+    for malformed in [true, false] {
+        for finished in [true, false] {
+            let mut records = vec![user(None, USER, json!("request"))];
+            if finished {
+                records.push(assistant(USER, ASSISTANT, json!("done"), "end_turn"));
+            }
+            let (root, harness, path) = claude_fixture(records);
+            let original = std::fs::read(&path).unwrap();
+            let registry = root.path().join("sessions");
+            std::fs::create_dir(&registry).unwrap();
+            let owner = registry.join(format!("{}.json", std::process::id()));
+            if malformed {
+                std::fs::write(&owner, "{").unwrap();
+            } else {
+                // A failed read must not count as a confirmed missing owner.
+                std::fs::create_dir(&owner).unwrap();
+            }
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert_eq!(source.running, !finished);
+            let copied = harness.copy_saved_session(&source).await;
+            assert_eq!(copied.is_ok(), finished);
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn current_process_start() -> String {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .to_owned()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-o", "lstart=", "-p", &std::process::id().to_string()])
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_registry_checks_start_tokens_and_preserves_known_busy_owners() {
+    let start = current_process_start();
+    for (token, running) in [
+        (Some(start.clone()), true),
+        (Some(format!("{start}-stale")), false),
+        (None, true),
+    ] {
+        let (root, harness, _) = claude_fixture(vec![
+            user(None, USER, json!("request")),
+            assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+        ]);
+        let registry = root.path().join("sessions");
+        std::fs::create_dir(&registry).unwrap();
+        let pid = std::process::id();
+        let mut entry = json!({"pid":pid,"sessionId":SOURCE,"status":"busy"});
+        if let Some(token) = token {
+            entry["procStart"] = token.into();
+        }
+        std::fs::write(registry.join(format!("{pid}.json")), entry.to_string()).unwrap();
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert_eq!(source.running, running);
+        assert_eq!(harness.copy_saved_session(&source).await.is_err(), running);
+        if running {
+            // An unrelated partial entry cannot hide an owner already observed busy.
+            std::fs::write(registry.join("other.json"), "{").unwrap();
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert!(source.running);
+            assert!(harness.copy_saved_session(&source).await.is_err());
+        }
+    }
 }
 
 #[tokio::test]
@@ -349,40 +725,53 @@ mod codex {
     #[tokio::test]
     #[ignore = "requires an installed Codex CLI; uses only an isolated synthetic store, no model request"]
     async fn installed_codex_can_copy_and_reopen_synthetic_native_history() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("project worktree");
-        std::fs::create_dir(&project).unwrap();
-        let id = uuid::Uuid::new_v4().to_string();
-        let turn = uuid::Uuid::new_v4().to_string();
-        let records = vec![
-            json!({"type":"session_meta","payload":{"id":id,"timestamp":"2026-10-01T12:00:00Z","cwd":project,"originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
-            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn,"model_context_window":258400}}),
-            json!({"type":"event_msg","payload":{"type":"user_message","message":"remember turquoise","images":[],"local_images":[],"text_elements":[]}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"remember turquoise"}]}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"remembered turquoise"}]}}),
-            json!({"type":"event_msg","payload":{"type":"agent_message","message":"remembered turquoise"}}),
-            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":turn,"last_agent_message":"remembered turquoise"}}),
-        ];
-        let directory = root.path().join("sessions/2026/10/01");
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
-        let original = records
-            .into_iter()
-            .map(|mut r| {
-                r["timestamp"] = "2026-10-01T12:00:00Z".into();
-                format!("{r}\n")
-            })
-            .collect::<String>();
-        std::fs::write(&path, &original).unwrap();
-        let harness = CodexHarness::new().with_saved_session_home(root.path());
-        let list = harness.saved_sessions(None).await.unwrap();
-        let source = list.sessions.iter().find(|s| s.native_id == id).unwrap();
-        let copy = harness.copy_saved_session(source).await.unwrap();
-        assert_ne!(copy.native_id, id);
-        let history = harness.saved_session_history(&copy).await.unwrap();
-        assert_eq!(history.messages.len(), 2);
-        assert!(format!("{history:?}").contains("remembered turquoise"));
-        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        for ending in [Some("task_complete"), Some("turn_aborted"), None] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join("project worktree");
+            std::fs::create_dir(&project).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let turn = uuid::Uuid::new_v4().to_string();
+            let mut records = vec![
+                json!({"type":"session_meta","payload":{"id":id,"timestamp":"2026-10-01T12:00:00Z","cwd":project,"originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn,"model_context_window":258400}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"remember turquoise","images":[],"local_images":[],"text_elements":[]}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"remember turquoise"}]}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"remembered turquoise"}]}}),
+                json!({"type":"event_msg","payload":{"type":"agent_message","message":"remembered turquoise"}}),
+            ];
+            if let Some(ending) = ending {
+                records.push(
+                    json!({"type":"event_msg","payload":{"type":ending,"turn_id":turn,
+                    "last_agent_message":"remembered turquoise","reason":"interrupted"}}),
+                );
+            }
+            let directory = root.path().join("sessions/2026/10/01");
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
+            let original = records
+                .into_iter()
+                .map(|mut r| {
+                    r["timestamp"] = "2026-10-01T12:00:00Z".into();
+                    format!("{r}\n")
+                })
+                .collect::<String>();
+            std::fs::write(&path, &original).unwrap();
+            let harness = CodexHarness::new().with_saved_session_home(root.path());
+            let list = harness.saved_sessions(None).await.unwrap();
+            let source = list.sessions.iter().find(|s| s.native_id == id).unwrap();
+            assert!(!source.running);
+            let copied = harness.copy_saved_session(source).await;
+            if ending.is_some() {
+                let copy = copied.unwrap();
+                assert_ne!(copy.native_id, id);
+                let history = harness.saved_session_history(&copy).await.unwrap();
+                assert_eq!(history.messages.len(), 2);
+                assert!(format!("{history:?}").contains("remembered turquoise"));
+            } else {
+                assert!(copied.unwrap_err().to_string().contains("still running"));
+            }
+            assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        }
     }
 
     fn fixture(options: Value) -> (tempfile::TempDir, CodexHarness) {
@@ -436,6 +825,63 @@ mod codex {
         let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
         assert!(calls.contains("lastTurnId"));
         assert!(!calls.contains("turn/start"));
+    }
+
+    #[tokio::test]
+    async fn codex_marks_running_threads_and_never_forks_them() {
+        let (root, harness) = fixture(json!({"turns":[
+            {"id":"turn-0","status":"inProgress","completedAt":null,"items":[]}]}));
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert!(source.running);
+        let error = harness.copy_saved_session(&source).await.unwrap_err();
+        assert!(error.to_string().contains("still running"), "{error}");
+        let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
+        assert!(!calls.contains("thread/fork"));
+
+        let (_root, harness) = fixture(json!({"turns":[
+            {"id":"turn-0","status":"interrupted","completedAt":5,"items":[]}]}));
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert!(!source.running);
+        assert!(harness.copy_saved_session(&source).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn codex_native_fork_decides_ambiguous_interrupted_boundaries() {
+        for in_progress in [false, true] {
+            let (root, harness) = fixture(json!({
+                "turns":[{"id":"turn-0","status":"interrupted","completedAt":null,"items":[]}],
+                "forkInProgress":in_progress
+            }));
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert!(
+                !source.running,
+                "Missing completion time does not prove a turn is running"
+            );
+            let copied = harness.copy_saved_session(&source).await;
+            if in_progress {
+                assert!(copied.unwrap_err().to_string().contains("still running"));
+            } else {
+                assert_eq!(copied.unwrap().native_id, "copy-native-id");
+            }
+            let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
+            assert!(calls.contains("thread/fork"));
+            assert!(!calls.contains("turn/start"));
+        }
     }
 
     #[tokio::test]

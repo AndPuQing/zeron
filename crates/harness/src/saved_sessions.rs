@@ -25,6 +25,10 @@ pub struct SavedSession {
     pub model: Option<String>,
     /// Provider-local locator; never accepted from a UI request.
     pub locator: Option<PathBuf>,
+    /// The latest native turn had not finished when the session was listed.
+    /// Import re-checks the live boundary; this only steers selection.
+    #[serde(default)]
+    pub running: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -129,6 +133,12 @@ pub fn store_id(harness: HarnessId, root: &Path) -> String {
     hash.update(format!("{harness:?}\0"));
     hash.update(root.to_string_lossy().as_bytes());
     format!("{:x}", hash.finalize())
+}
+
+pub fn running() -> HarnessError {
+    HarnessError::Protocol(
+        "This session is still running. Finish or stop its current turn, then scan again.".into(),
+    )
 }
 
 pub fn unsupported() -> HarnessError {
