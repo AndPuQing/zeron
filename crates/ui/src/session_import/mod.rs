@@ -400,16 +400,17 @@ impl SessionImportDialog {
                     .justify_between()
                     .flex_wrap()
                     .gap(px(4.0))
-                    .child(providers)
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_wrap()
+                            .gap(px(4.0))
+                            .child(providers)
+                            .child(div().w(px(1.0)).h(px(14.0)).mx(px(4.0)).bg(theme.border))
+                            .child(statuses),
+                    )
                     .when(has_project, |row| row.child(scope)),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_wrap()
-                    .gap(px(4.0))
-                    .child(statuses),
             )
             .into_any_element()
     }
