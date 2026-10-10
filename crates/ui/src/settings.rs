@@ -838,6 +838,8 @@ pub struct UiSettings {
     pub sidebar_show_harness: bool,
     pub sidebar_show_branch: bool,
     pub sidebar_show_pull_request: bool,
+    /// The project filter row at the top of the sidebar.
+    pub sidebar_show_project_filter: bool,
     /// The sidebar's "Star on GitHub" banner was dismissed (its close button
     /// or following the link). Device-local; never shown again once set.
     pub github_star_banner_dismissed: bool,
@@ -1020,6 +1022,7 @@ impl Default for UiSettings {
             sidebar_show_harness: true,
             sidebar_show_branch: true,
             sidebar_show_pull_request: true,
+            sidebar_show_project_filter: true,
             github_star_banner_dismissed: false,
             last_space_id: None,
             last_project_action_by_space_id: std::collections::HashMap::new(),
@@ -1669,6 +1672,7 @@ impl UiSettings {
             sidebar_show_harness,
             sidebar_show_branch,
             sidebar_show_pull_request,
+            sidebar_show_project_filter,
             github_star_banner_dismissed,
             last_space_id,
             last_project_action_by_space_id,
@@ -2694,6 +2698,7 @@ mod tests {
             sidebar_show_harness: false,
             sidebar_show_branch: false,
             sidebar_show_pull_request: false,
+            sidebar_show_project_filter: false,
             github_star_banner_dismissed: true,
             last_space_id: Some("space-1".into()),
             last_project_action_by_space_id: std::collections::HashMap::from([(
@@ -2918,10 +2923,12 @@ mod tests {
         assert!(settings.sidebar_compact);
         assert!(settings.sidebar_show_project_icon);
         assert!(settings.sidebar_show_project_label);
+        assert!(settings.sidebar_show_project_filter);
         let customized = UiSettings {
             sidebar_compact: false,
             sidebar_show_project_icon: false,
             sidebar_show_project_label: false,
+            sidebar_show_project_filter: false,
             sidebar_organization: SidebarOrganization::ByProject,
             ..settings
         };
