@@ -488,6 +488,108 @@ async fn claude_copies_idle_sessions_that_end_with_local_commands() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_incomplete_registry_falls_back_to_the_transcript_boundary() {
+    for malformed in [true, false] {
+        for finished in [true, false] {
+            let mut records = vec![user(None, USER, json!("request"))];
+            if finished {
+                records.push(assistant(USER, ASSISTANT, json!("done"), "end_turn"));
+            }
+            let (root, harness, path) = claude_fixture(records);
+            let original = std::fs::read(&path).unwrap();
+            let registry = root.path().join("sessions");
+            std::fs::create_dir(&registry).unwrap();
+            let owner = registry.join(format!("{}.json", std::process::id()));
+            if malformed {
+                std::fs::write(&owner, "{").unwrap();
+            } else {
+                // A failed read must not count as a confirmed missing owner.
+                std::fs::create_dir(&owner).unwrap();
+            }
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert_eq!(source.running, !finished);
+            let copied = harness.copy_saved_session(&source).await;
+            assert_eq!(copied.is_ok(), finished);
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn current_process_start() -> String {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let stat = std::fs::read_to_string("/proc/self/stat").unwrap();
+        stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .nth(19)
+            .unwrap()
+            .to_owned()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-o", "lstart=", "-p", &std::process::id().to_string()])
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_registry_checks_start_tokens_and_preserves_known_busy_owners() {
+    let start = current_process_start();
+    for (token, running) in [
+        (Some(start.clone()), true),
+        (Some(format!("{start}-stale")), false),
+        (None, true),
+    ] {
+        let (root, harness, _) = claude_fixture(vec![
+            user(None, USER, json!("request")),
+            assistant(USER, ASSISTANT, json!("done"), "end_turn"),
+        ]);
+        let registry = root.path().join("sessions");
+        std::fs::create_dir(&registry).unwrap();
+        let pid = std::process::id();
+        let mut entry = json!({"pid":pid,"sessionId":SOURCE,"status":"busy"});
+        if let Some(token) = token {
+            entry["procStart"] = token.into();
+        }
+        std::fs::write(registry.join(format!("{pid}.json")), entry.to_string()).unwrap();
+        let source = harness
+            .saved_sessions(None)
+            .await
+            .unwrap()
+            .sessions
+            .remove(0);
+        assert_eq!(source.running, running);
+        assert_eq!(harness.copy_saved_session(&source).await.is_err(), running);
+        if running {
+            // An unrelated partial entry cannot hide an owner already observed busy.
+            std::fs::write(registry.join("other.json"), "{").unwrap();
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert!(source.running);
+            assert!(harness.copy_saved_session(&source).await.is_err());
+        }
+    }
+}
+
 #[tokio::test]
 #[ignore = "set ZERON_IMPORT_CLAUDE_SDK to an installed SDK module; offline, isolated synthetic store"]
 async fn rust_claude_copy_is_readable_by_the_official_sdk() {
@@ -623,40 +725,53 @@ mod codex {
     #[tokio::test]
     #[ignore = "requires an installed Codex CLI; uses only an isolated synthetic store, no model request"]
     async fn installed_codex_can_copy_and_reopen_synthetic_native_history() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("project worktree");
-        std::fs::create_dir(&project).unwrap();
-        let id = uuid::Uuid::new_v4().to_string();
-        let turn = uuid::Uuid::new_v4().to_string();
-        let records = vec![
-            json!({"type":"session_meta","payload":{"id":id,"timestamp":"2026-10-01T12:00:00Z","cwd":project,"originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
-            json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn,"model_context_window":258400}}),
-            json!({"type":"event_msg","payload":{"type":"user_message","message":"remember turquoise","images":[],"local_images":[],"text_elements":[]}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"remember turquoise"}]}}),
-            json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"remembered turquoise"}]}}),
-            json!({"type":"event_msg","payload":{"type":"agent_message","message":"remembered turquoise"}}),
-            json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":turn,"last_agent_message":"remembered turquoise"}}),
-        ];
-        let directory = root.path().join("sessions/2026/10/01");
-        std::fs::create_dir_all(&directory).unwrap();
-        let path = directory.join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
-        let original = records
-            .into_iter()
-            .map(|mut r| {
-                r["timestamp"] = "2026-10-01T12:00:00Z".into();
-                format!("{r}\n")
-            })
-            .collect::<String>();
-        std::fs::write(&path, &original).unwrap();
-        let harness = CodexHarness::new().with_saved_session_home(root.path());
-        let list = harness.saved_sessions(None).await.unwrap();
-        let source = list.sessions.iter().find(|s| s.native_id == id).unwrap();
-        let copy = harness.copy_saved_session(source).await.unwrap();
-        assert_ne!(copy.native_id, id);
-        let history = harness.saved_session_history(&copy).await.unwrap();
-        assert_eq!(history.messages.len(), 2);
-        assert!(format!("{history:?}").contains("remembered turquoise"));
-        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        for ending in [Some("task_complete"), Some("turn_aborted"), None] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join("project worktree");
+            std::fs::create_dir(&project).unwrap();
+            let id = uuid::Uuid::new_v4().to_string();
+            let turn = uuid::Uuid::new_v4().to_string();
+            let mut records = vec![
+                json!({"type":"session_meta","payload":{"id":id,"timestamp":"2026-10-01T12:00:00Z","cwd":project,"originator":"codex_cli_rs","cli_version":"0.160.1","source":"cli","model_provider":"openai"}}),
+                json!({"type":"event_msg","payload":{"type":"task_started","turn_id":turn,"model_context_window":258400}}),
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"remember turquoise","images":[],"local_images":[],"text_elements":[]}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"remember turquoise"}]}}),
+                json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"remembered turquoise"}]}}),
+                json!({"type":"event_msg","payload":{"type":"agent_message","message":"remembered turquoise"}}),
+            ];
+            if let Some(ending) = ending {
+                records.push(
+                    json!({"type":"event_msg","payload":{"type":ending,"turn_id":turn,
+                    "last_agent_message":"remembered turquoise","reason":"interrupted"}}),
+                );
+            }
+            let directory = root.path().join("sessions/2026/10/01");
+            std::fs::create_dir_all(&directory).unwrap();
+            let path = directory.join(format!("rollout-2026-10-01T12-00-00-{id}.jsonl"));
+            let original = records
+                .into_iter()
+                .map(|mut r| {
+                    r["timestamp"] = "2026-10-01T12:00:00Z".into();
+                    format!("{r}\n")
+                })
+                .collect::<String>();
+            std::fs::write(&path, &original).unwrap();
+            let harness = CodexHarness::new().with_saved_session_home(root.path());
+            let list = harness.saved_sessions(None).await.unwrap();
+            let source = list.sessions.iter().find(|s| s.native_id == id).unwrap();
+            assert!(!source.running);
+            let copied = harness.copy_saved_session(source).await;
+            if ending.is_some() {
+                let copy = copied.unwrap();
+                assert_ne!(copy.native_id, id);
+                let history = harness.saved_session_history(&copy).await.unwrap();
+                assert_eq!(history.messages.len(), 2);
+                assert!(format!("{history:?}").contains("remembered turquoise"));
+            } else {
+                assert!(copied.unwrap_err().to_string().contains("still running"));
+            }
+            assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+        }
     }
 
     fn fixture(options: Value) -> (tempfile::TempDir, CodexHarness) {
@@ -714,10 +829,8 @@ mod codex {
 
     #[tokio::test]
     async fn codex_marks_running_threads_and_never_forks_them() {
-        // An unloaded app-server reports a turn running elsewhere as
-        // interrupted without completedAt; thread/fork rejects it.
         let (root, harness) = fixture(json!({"turns":[
-            {"id":"turn-0","status":"interrupted","completedAt":null,"items":[]}]}));
+            {"id":"turn-0","status":"inProgress","completedAt":null,"items":[]}]}));
         let source = harness
             .saved_sessions(None)
             .await
@@ -740,6 +853,35 @@ mod codex {
             .remove(0);
         assert!(!source.running);
         assert!(harness.copy_saved_session(&source).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn codex_native_fork_decides_ambiguous_interrupted_boundaries() {
+        for in_progress in [false, true] {
+            let (root, harness) = fixture(json!({
+                "turns":[{"id":"turn-0","status":"interrupted","completedAt":null,"items":[]}],
+                "forkInProgress":in_progress
+            }));
+            let source = harness
+                .saved_sessions(None)
+                .await
+                .unwrap()
+                .sessions
+                .remove(0);
+            assert!(
+                !source.running,
+                "Missing completion time does not prove a turn is running"
+            );
+            let copied = harness.copy_saved_session(&source).await;
+            if in_progress {
+                assert!(copied.unwrap_err().to_string().contains("still running"));
+            } else {
+                assert_eq!(copied.unwrap().native_id, "copy-native-id");
+            }
+            let calls = std::fs::read_to_string(root.path().join("calls.jsonl")).unwrap();
+            assert!(calls.contains("thread/fork"));
+            assert!(!calls.contains("turn/start"));
+        }
     }
 
     #[tokio::test]

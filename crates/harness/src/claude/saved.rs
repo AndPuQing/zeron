@@ -258,7 +258,7 @@ fn inventory(root: &Path) -> Result<Vec<PathBuf>, HarnessError> {
 fn metadata(
     path: &Path,
     identity: &str,
-    live: Option<&HashMap<String, Option<bool>>>,
+    live: Option<&LiveSessions>,
 ) -> Result<Option<SavedSession>, HarnessError> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
@@ -390,11 +390,15 @@ fn metadata(
     }))
 }
 
-/// Claude Code registers each live CLI as `<root>/sessions/<pid>.json` with
-/// its current session and `busy`/`idle` status. Maps live session IDs to
-/// whether their owner is busy (`None`: status unknown). `None` when the store
-/// has no registry or liveness cannot be checked here.
-fn live_sessions(root: &Path) -> Option<HashMap<String, Option<bool>>> {
+struct LiveSessions {
+    owners: HashMap<String, Option<bool>>,
+    complete: bool,
+}
+
+/// An incomplete snapshot can identify known owners but cannot prove that
+/// other sessions are abandoned. Missing or unreadable registries defer to
+/// the transcript boundary check.
+fn live_sessions(root: &Path) -> Option<LiveSessions> {
     #[cfg(not(unix))]
     {
         let _ = root;
@@ -402,19 +406,32 @@ fn live_sessions(root: &Path) -> Option<HashMap<String, Option<bool>>> {
     }
     #[cfg(unix)]
     {
-        let mut live = HashMap::<String, Option<bool>>::new();
-        for entry in std::fs::read_dir(root.join("sessions")).ok()?.take(10_000) {
-            let Ok(entry) = entry else { continue };
+        let mut live = LiveSessions {
+            owners: HashMap::new(),
+            complete: true,
+        };
+        for (index, entry) in std::fs::read_dir(root.join("sessions")).ok()?.enumerate() {
+            if index >= 10_000 {
+                live.complete = false;
+                break;
+            }
+            let Ok(entry) = entry else {
+                live.complete = false;
+                continue;
+            };
             let path = entry.path();
-            if path.extension().and_then(|p| p.to_str()) != Some("json")
-                || std::fs::metadata(&path).map_or(true, |m| m.len() > 64 * 1024)
-            {
+            if path.extension().and_then(|p| p.to_str()) != Some("json") {
+                continue;
+            }
+            if std::fs::metadata(&path).map_or(true, |m| m.len() > 64 * 1024) {
+                live.complete = false;
                 continue;
             }
             let Some(record) = std::fs::read(&path)
                 .ok()
                 .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
             else {
+                live.complete = false;
                 continue;
             };
             let (Some(pid), Some(id)) = (
@@ -424,16 +441,16 @@ fn live_sessions(root: &Path) -> Option<HashMap<String, Option<bool>>> {
                     .filter(|pid| *pid > 0),
                 record["sessionId"].as_str(),
             ) else {
+                live.complete = false;
                 continue;
             };
-            // A crashed CLI leaves its file behind; only a live PID owns a session.
-            if unsafe { libc::kill(pid, 0) } != 0
-                && std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM)
-            {
-                continue;
-            }
-            let busy = record["status"].as_str().map(|status| status != "idle");
-            live.entry(id.to_owned())
+            let busy = match registered_process_alive(pid, record["procStart"].as_str()) {
+                Some(false) => continue,
+                Some(true) => record["status"].as_str().map(|status| status != "idle"),
+                None => None,
+            };
+            live.owners
+                .entry(id.to_owned())
                 .and_modify(|state| {
                     if *state != Some(true) && busy != Some(false) {
                         *state = busy;
@@ -445,13 +462,56 @@ fn live_sessions(root: &Path) -> Option<HashMap<String, Option<bool>>> {
     }
 }
 
+#[cfg(unix)]
+fn registered_process_alive(pid: libc::pid_t, expected_start: Option<&str>) -> Option<bool> {
+    if unsafe { libc::kill(pid, 0) } != 0 {
+        match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::ESRCH) => return Some(false),
+            Some(libc::EPERM) => {}
+            _ => return None,
+        }
+    }
+    match expected_start {
+        Some(expected) => process_start(pid).map(|actual| actual == expected),
+        // Older entries do not carry a process start token.
+        None => Some(true),
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn process_start(pid: libc::pid_t) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The process name may itself contain spaces or closing parentheses.
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(19)
+        .map(str::to_owned)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+fn process_start(pid: libc::pid_t) -> Option<String> {
+    // Match the CLI's start token on hosts without /proc, including macOS.
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let token = std::str::from_utf8(&output.stdout).ok()?.trim();
+    (output.status.success() && !token.is_empty()).then(|| token.to_owned())
+}
+
 /// Whether a live CLI is mid-turn on this session. With a registry, a session
 /// no live CLI owns is idle even if its last turn never finished (the CLI
 /// exited or the work continued elsewhere). `None` defers to the transcript.
-fn owner_busy(live: Option<&HashMap<String, Option<bool>>>, id: &str) -> Option<bool> {
-    match live?.get(id) {
+fn owner_busy(live: Option<&LiveSessions>, id: &str) -> Option<bool> {
+    let live = live?;
+    match live.owners.get(id) {
         Some(busy) => *busy,
-        None => Some(false),
+        None => live.complete.then_some(false),
     }
 }
 

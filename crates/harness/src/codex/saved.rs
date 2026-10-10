@@ -121,7 +121,7 @@ impl CodexHarness {
                 if let Ok(page) = client.request("thread/turns/list", json!({
                     "threadId": session.native_id, "limit": 1, "sortDirection": "desc", "itemsView": "notLoaded"
                 })).await {
-                    session.running = page["data"][0].is_object() && !turn_finished(&page["data"][0]);
+                    session.running = page["data"][0].is_object() && turn_is_running(&page["data"][0]);
                 }
             }
             let next = response["nextCursor"].as_str().map(str::to_owned);
@@ -202,7 +202,7 @@ impl CodexHarness {
             if last.and_then(|turn| turn["id"].as_str()).is_none_or(str::is_empty) {
                 return Err(protocol("The Codex session has no completed conversation to copy."));
             }
-            if last.is_some_and(|turn| !turn_finished(turn)) { return Err(running()); }
+            if last.is_some_and(turn_is_running) { return Err(running()); }
             let mut params = json!({"threadId": session.native_id, "cwd": session.cwd,
                 "excludeTurns": true, "deferGoalContinuation": true});
             if let Some(id) = last.and_then(|turn| turn["id"].as_str()) { params["lastTurnId"] = id.into(); }
@@ -244,15 +244,15 @@ fn metadata(thread: &Value, identity: &str) -> Option<SavedSession> {
     })
 }
 
-/// A thread that is not loaded in this app-server reports a turn still running
-/// in another process as `interrupted` without `completedAt`, while
-/// `thread/fork` rejects it as in progress.
-fn turn_finished(turn: &Value) -> bool {
+/// Unloaded history reports both stopped turns and turns running elsewhere as
+/// `interrupted`, sometimes without completion timestamps. The native fork's
+/// `lastTurnId` validation decides whether those turns can actually be copied.
+fn turn_is_running(turn: &Value) -> bool {
     let completed_at = turn["completedAt"].as_i64().is_some_and(|time| time > 0);
     match turn["status"].as_str() {
-        Some("completed" | "failed" | "aborted") => true,
-        Some("interrupted") | None => completed_at,
-        _ => false,
+        Some("completed" | "failed" | "aborted" | "interrupted") => false,
+        None => !completed_at,
+        _ => true,
     }
 }
 

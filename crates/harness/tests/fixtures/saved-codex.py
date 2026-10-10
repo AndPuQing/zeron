@@ -46,6 +46,8 @@ for line in sys.stdin:
         assert params["lastTurnId"] == state["turns"][-1]["id"]
         assert params["cwd"] == source["cwd"]
         result = {"thread": dict(source, id="copy-native-id")}
+        if state.get("forkInProgress"):
+            error = {"code": -32600, "message": "lastTurnId identifies an in-progress turn"}
     elif method == "thread/resume":
         if state.get("resumeError"):
             error = {"code": -32602, "message": "missing copied thread"}
