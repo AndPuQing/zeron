@@ -4,15 +4,9 @@ The mobile shells share a visual language, with platform renderers: UIKit's
 native `UIGlassEffect` on iOS 26 and Compose's GPU-backed Backdrop on Android.
 Rust still owns transcript geometry and session behavior.
 
-Android API 36 emulator review: [light/dark screens](images/mobile-liquid-glass.png)
-and [the expanded composer above the keyboard](images/mobile-glass-composer-keyboard.png).
-
-![Android Liquid Glass screen review](images/mobile-liquid-glass.png)
-
 ## Component research
 
-Reviewed upstream READMEs, and inspected Backdrop's published sources and
-sample controls on 2026-10-11. These are references, not additional app dependencies.
+The following libraries inform the rendering and component choices.
 
 | Project | Useful patterns | Decision |
 | --- | --- | --- |
@@ -86,15 +80,3 @@ multiline draft, send, and check the last row and jump-to-latest placement. Chec
 the queue, question panel, large font sizes, and Android 10/11 fallback on devices
 before release. Run the iOS Xcode build and existing SessionFlow/TransitionTour
 UI tests on a Mac; native iOS effects cannot be exercised on a Linux host.
-
-Local validation: the Debug APK build and all 12 existing unit tests passed.
-Full Android Lint reports four existing errors: three API annotations in the
-UniFFI-generated cleaner and one `remember` returning `Unit` in `Transcript.kt`.
-Those files are unchanged by this UI migration. No new glass-component Lint
-errors were reported. iOS build verification requires Xcode on a Mac.
-
-The final APK was installed in an isolated API 36 emulator. Sessions, Settings,
-Search, New session and Chat were inspected; light/dark navigation and chat,
-composer focus, draft entry and keyboard placement were checked. The app crash
-buffer remained empty. Device-level performance and API 29/30 rendering are
-still release checks, not claims from the emulator review.
