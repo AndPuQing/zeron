@@ -34,6 +34,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.shape.RoundedCornerShape
 import sh.zeron.android.R
 import sh.zeron.android.core.AppModel
 
@@ -51,7 +52,7 @@ fun SignInScreen(model: AppModel) {
         Image(
             painterResource(R.mipmap.ic_launcher_foreground),
             null,
-            Modifier.size(148.dp).clip(MaterialShapes.Cookie12Sided.toShape()),
+            Modifier.size(148.dp).clip(RoundedCornerShape(32.dp)),
         )
         Spacer(Modifier.height(32.dp))
         Text("Zerun", style = MaterialTheme.typography.displayMedium)
@@ -69,7 +70,11 @@ fun SignInScreen(model: AppModel) {
                 CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, Uri.parse(url))
             },
             modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.MediumContainerHeight),
-            shapes = ButtonDefaults.shapes(),
+            shape = RoundedCornerShape(50),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.onSurface,
+                contentColor = MaterialTheme.colorScheme.background,
+            ),
             contentPadding = ButtonDefaults.contentPaddingFor(ButtonDefaults.MediumContainerHeight),
         ) {
             Text("Sign in", style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
@@ -78,7 +83,7 @@ fun SignInScreen(model: AppModel) {
         OutlinedButton(
             onClick = { model.startDemo() },
             modifier = Modifier.fillMaxWidth().heightIn(min = ButtonDefaults.MediumContainerHeight),
-            shapes = ButtonDefaults.shapes(),
+            shape = RoundedCornerShape(50),
         ) {
             Text("Explore the demo", style = ButtonDefaults.textStyleFor(ButtonDefaults.MediumContainerHeight))
         }

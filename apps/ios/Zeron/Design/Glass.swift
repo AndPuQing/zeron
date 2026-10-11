@@ -4,6 +4,14 @@ import UIKit
 /// render server does the refraction and morphing — no snapshots, no custom
 /// blur stacks, nothing that can stutter on the main thread.
 enum Glass {
+    /// Shared mobile geometry; Android uses the same values in dp.
+    enum Metrics {
+        static let control: CGFloat = 44
+        static let composerRadius: CGFloat = 25
+        static let cardRadius: CGFloat = 26
+        static let title: CGFloat = 30
+    }
+
     static func effect(interactive: Bool = false, tint: UIColor? = nil) -> UIGlassEffect {
         let effect = UIGlassEffect(style: .regular)
         effect.isInteractive = interactive
@@ -36,7 +44,7 @@ enum Glass {
     }
 
     /// A round glass icon button (toolbar "…", search, attach).
-    static func circleButton(symbol: String, size: CGFloat = 44, pointSize: CGFloat = 17, action: UIAction? = nil) -> UIButton {
+    static func circleButton(symbol: String, size: CGFloat = Metrics.control, pointSize: CGFloat = 17, action: UIAction? = nil) -> UIButton {
         var config = UIButton.Configuration.glass()
         config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium))
         config.baseForegroundColor = Palette.text

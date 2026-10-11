@@ -23,6 +23,16 @@ Zeron also uses the following editor foundations from the pinned `zeronsh/gpui-c
 
 Zeron's own source code is licensed under the terms in `LICENSE`. Bundled third-party components retain their respective licenses and notices.
 
+## Android Liquid Glass
+
+The Android shell uses [Backdrop](https://github.com/Kyant0/AndroidLiquidGlass/tree/1.0.6)
+1.0.6 and its transitive [Shapes](https://github.com/Kyant0/Shapes) 1.2.0
+dependency by Kyant. Both are licensed under Apache-2.0 (Backdrop: Copyright
+2025 Kyant; Shapes: Copyright 2026 Kyant). The full upstream licenses are included
+in the APK at `assets/licenses/Backdrop-LICENSE.txt` and
+`assets/licenses/Shapes-LICENSE.txt`. The app's glass components are maintained
+in `apps/android/app/src/main/java/sh/zeron/android/design/Glass.kt`.
+
 ## Symbols
 
 Zeron bundles the SVG icon set and filename/folder associations from

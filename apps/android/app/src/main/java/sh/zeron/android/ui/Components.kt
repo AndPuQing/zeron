@@ -3,48 +3,45 @@ package sh.zeron.android.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.LoadingIndicator
-import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import sh.zeron.android.design.GeistMono
 import sh.zeron.android.design.LocalDarkTheme
 import sh.zeron.android.design.ProjectColors
+import sh.zeron.android.design.glassControlFill
 import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.SessionRow
 import uniffi.zeron_core.projectColorIndex
 
 /**
- * Grouped-list corners (Android 16 settings style): the group's outer
- * corners are large, the seams between items small.
+ * Continuous outer corners for grouped settings on both platforms.
  */
-fun segmentShape(index: Int, count: Int, outer: Dp = 24.dp, inner: Dp = 6.dp): Shape {
+fun segmentShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 0.dp): Shape {
     val top = if (index == 0) outer else inner
     val bottom = if (index == count - 1) outer else inner
     return RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
@@ -57,7 +54,7 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier, trailing: @Compos
         Text(
             text,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.align(Alignment.CenterStart),
         )
         trailing?.let { Box(Modifier.align(Alignment.CenterEnd)) { it() } }
@@ -86,22 +83,18 @@ fun SegmentedGroup(
 @Composable
 fun ProjectTile(name: String?, colorIndex: Int, size: Dp = 40.dp, modifier: Modifier = Modifier) {
     val tone = ProjectColors.color(colorIndex, LocalDarkTheme.current)
-    // Expressive shapes: projects are "cookies", projectless sessions a circle.
-    val shape = when {
-        name == null -> CircleShape
-        size < 28.dp -> RoundedCornerShape(size * 0.28f)
-        else -> MaterialShapes.Cookie9Sided.toShape()
-    }
+    val shape = if (name == null) CircleShape else RoundedCornerShape(size * (3f / 13f))
     Box(
-        modifier.size(size).clip(shape).background(tone.copy(alpha = 0.16f)),
+        modifier.size(size).clip(shape).background(tone.copy(alpha = 0.08f)),
         contentAlignment = Alignment.Center,
     ) {
         if (name != null) {
             val fontSize = (size.value * if (size < 28.dp) 0.62f else 0.42f).sp
             Text(
                 name.trim().take(1).uppercase(),
-                color = tone,
-                fontWeight = FontWeight.SemiBold,
+                color = tone.copy(alpha = 0.85f),
+                fontFamily = GeistMono,
+                fontWeight = FontWeight.Medium,
                 fontSize = fontSize,
                 style = androidx.compose.ui.text.TextStyle(
                     lineHeight = fontSize,
@@ -139,7 +132,7 @@ fun StatusLabel(row: SessionRow) {
         }
     }
     when (row.indicator) {
-        ChatIndicator.WORKING -> LoadingIndicator(Modifier.size(26.dp))
+        ChatIndicator.WORKING -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp)
         ChatIndicator.AWAITING_INPUT -> label("Input", MaterialTheme.colorScheme.primary, dot = true)
         ChatIndicator.ERRORED -> label("Failed", MaterialTheme.colorScheme.error, dot = true)
         ChatIndicator.COMPLETED -> label("Done", successColor(), dot = false)
@@ -159,14 +152,9 @@ fun composerContainer(): Color =
     if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
 
 @Composable
-fun chipContainer(): Color =
-    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer
+fun chipContainer(): Color = glassControlFill()
 
 /** Segmented list shapes, with a lone item rounded like a whole group. */
 @Composable
 fun segmentedShapes(index: Int, count: Int): androidx.compose.material3.ListItemShapes =
-    if (count == 1) {
-        androidx.compose.material3.ListItemDefaults.shapes(shape = RoundedCornerShape(24.dp))
-    } else {
-        androidx.compose.material3.ListItemDefaults.segmentedShapes(index, count)
-    }
+    androidx.compose.material3.ListItemDefaults.shapes(shape = segmentShape(index, count))

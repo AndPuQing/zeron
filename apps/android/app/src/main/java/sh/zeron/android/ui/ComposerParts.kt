@@ -10,7 +10,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -66,12 +65,14 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sh.zeron.android.design.GeistMono
+import sh.zeron.android.design.GlassMetrics
+import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.FileMatch
 
 /**
- * The composer, shared by sessions and the new-session page. One tonal
+ * The composer, shared by sessions and the new-session page. One glass
  * surface with two states: a resting one-line capsule — [+] Message… [↑] —
  * and, while focused or holding a draft, a card with staged photos and the
  * full-width prompt above a toolbar of context chips.
@@ -90,10 +91,8 @@ fun ComposerSurface(
 ) {
     var focused by remember { mutableStateOf(false) }
     val card = alwaysCard || focused || model.hasContent
-    Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = composerContainer(),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    GlassSurface(
+        shape = RoundedCornerShape(GlassMetrics.composerRadius),
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
@@ -232,10 +231,8 @@ fun MentionSuggestions(model: ComposerModel, search: suspend (String) -> List<Fi
         files = runCatching { search(query) }.getOrDefault(emptyList()).take(5)
     }
     AnimatedVisibility(query != null && files.isNotEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically(), modifier = modifier) {
-        Surface(
-            shape = RoundedCornerShape(24.dp),
-            color = composerContainer(),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        GlassSurface(
+            shape = RoundedCornerShape(18.dp),
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         ) {
             Column(Modifier.padding(6.dp)) {

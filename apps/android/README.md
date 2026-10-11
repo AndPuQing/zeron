@@ -6,9 +6,12 @@ where; Kotlin paints, scrolls and handles gestures.** The transcript's text
 measurement, markdown layout, prefix-sum virtualization and display lists are
 the exact code iOS runs — see [`docs/mobile-rewrite.md`](../../docs/mobile-rewrite.md).
 
-The UI is Material 3 Expressive (`MaterialExpressiveTheme`, expressive motion,
-flexible app bars, shape-morphing loading indicators, connected button groups,
-segmented lists) themed with Zeron's own palette and Geist type.
+The UI follows the iOS shell's Liquid Glass style: floating capsule navigation,
+round glass actions and a glass composer, with shared neutral/violet colors and
+Geist type. Compose Material 3 supplies controls and accessibility; Backdrop
+1.0.6 supplies GPU backdrop blur and refraction. Android 12 adds blur, Android
+13 adds refraction, and Android 10/11 use an opaque material fallback.
+See [the shared mobile design and component research](../../docs/mobile-liquid-glass.md).
 
 ## Build & run
 
@@ -172,7 +175,7 @@ iterating on Kotlin; `ZERON_ANDROID_ABIS=arm64-v8a` builds one ABI.
 core/        AppModel (owns CoreClient, republishes snapshots as flows),
              CredentialStore, Fonts + AndroidMeasurer (Minikin fallback
              measurement for glyphs Geist lacks)
-design/      ZeronTheme (Material 3 Expressive), transcript palette
+design/      ZeronTheme, GlassScene + GlassSurface, transcript palette
 transcript/  TranscriptState (layout engine + viewport: anchoring, follow the
              tail), Transcript (virtualized rows over LayoutFrame), RowModel
              (canvas painter for Rust display lists, streaming veil, fades),
