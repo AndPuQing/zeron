@@ -167,6 +167,34 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    /// One fake-edge reply per request line. The wake nudge gets the scripted
+    /// status; everything else on this port gets a plausible success instead
+    /// of a panic: the engine's chat2 client (row pushes, pulls, checkpoints)
+    /// shares this edge, and so does anything else on the machine that finds
+    /// an ephemeral port. A row push carries the JSON ack
+    /// `ChatTransport::push` expects, so a delivery racing the row ack in the
+    /// test below still settles rather than leaving the outbox pending.
+    fn fake_edge_reply(line: &str, status: usize) -> String {
+        if line.starts_with("POST /device/remote/nudge ") {
+            return format!(
+                "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            );
+        }
+        if line.starts_with("POST ") && line.contains("/rows?") {
+            let batch = line
+                .split("batchId=")
+                .nth(1)
+                .and_then(|rest| rest.split(['&', ' ']).next())
+                .unwrap_or_default();
+            let body = format!(r#"{{"batchId":"{batch}","seq":1}}"#);
+            return format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+    }
+
     #[tokio::test]
     async fn remote_chat_transports_carry_the_host_on_both_paths() {
         use zeron_sync::chat_client::ChatTransport;
@@ -222,13 +250,20 @@ mod tests {
         let edge = format!("http://{}", listener.local_addr().unwrap());
         let attempts = Arc::new(AtomicUsize::new(0));
         let status = Arc::new(AtomicUsize::new(500));
+        // Only wake nudges may count as attempts, and no request may panic the
+        // handler: a stray probe used to satisfy the retry wait below or fail
+        // the run from inside a spawned task, hiding which one it was. Record
+        // the others instead and report them with any failure.
+        let strays = Arc::new(Mutex::new(Vec::<String>::new()));
         let count = attempts.clone();
         let code = status.clone();
+        let seen = strays.clone();
         let server = tokio::spawn(async move {
             loop {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 let count = count.clone();
                 let code = code.clone();
+                let seen = seen.clone();
                 tokio::spawn(async move {
                     let mut request = Vec::new();
                     let mut buf = [0; 4096];
@@ -242,14 +277,14 @@ mod tests {
                             break;
                         }
                     }
-                    assert!(
-                        String::from_utf8_lossy(&request).starts_with("POST /device/remote/nudge ")
-                    );
-                    count.fetch_add(1, Ordering::SeqCst);
-                    let response = format!(
-                        "HTTP/1.1 {} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        code.load(Ordering::SeqCst)
-                    );
+                    let request = String::from_utf8_lossy(&request);
+                    let line = request.lines().next().unwrap_or_default();
+                    if line.starts_with("POST /device/remote/nudge ") {
+                        count.fetch_add(1, Ordering::SeqCst);
+                    } else {
+                        lock(&seen).push(line.to_string());
+                    }
+                    let response = fake_edge_reply(line, code.load(Ordering::SeqCst));
                     let _ = stream.write_all(response.as_bytes()).await;
                 });
             }
@@ -292,7 +327,12 @@ mod tests {
             }
         })
         .await
-        .expect("failed wake was not retried");
+        .unwrap_or_else(|_| {
+            panic!(
+                "failed wake was not retried; non-nudge requests: {:?}",
+                lock(&strays)
+            )
+        });
         assert!(
             store
                 .sync_job_version("outgoing", "remote-wake")
@@ -301,7 +341,14 @@ mod tests {
         );
         assert!(
             !store.has_pending_chat_updates("outgoing").unwrap(),
-            "row delivery and wake delivery are independent"
+            "row delivery and wake delivery are independent (pending: {:?}, non-nudge requests: {:?})",
+            store
+                .pending_chat_updates("outgoing")
+                .unwrap()
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>(),
+            lock(&strays)
         );
         host.shutdown_workers().await;
         workspace.flush();
