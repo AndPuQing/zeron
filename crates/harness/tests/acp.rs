@@ -15,7 +15,7 @@ use zeron_harness::{
 };
 use zeron_proto::{
     AgentEvent, DoneStatus, HarnessId, ReasoningLevel, RunRequest, SandboxLevel, SteeringMode,
-    TodoItem, TodoStatus, ToolCall, UserInputAnswer,
+    TodoItem, TodoStatus, ToolCall, UserInputAnswer, UserInputQuestion,
 };
 
 fn fixture_path() -> PathBuf {
@@ -54,6 +54,20 @@ fn request(prompt: &str) -> RunRequest {
 }
 
 fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
+    controls_answering(|questions| {
+        questions
+            .iter()
+            .map(|q| UserInputAnswer {
+                question_id: q.id.clone(),
+                labels: vec!["Yes".into()],
+            })
+            .collect()
+    })
+}
+
+fn controls_answering(
+    answer: impl Fn(&[UserInputQuestion]) -> Vec<UserInputAnswer> + Send + Sync + 'static,
+) -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
     let (steer_tx, steer_rx) = mpsc::channel(8);
     let token = CancellationToken::new();
     let controls = RunControls {
@@ -61,14 +75,7 @@ fn controls() -> (RunControls, mpsc::Sender<SteerMessage>, CancellationToken) {
         execution_lease: None,
         request_input: Box::new(move |questions| {
             let (tx, rx) = oneshot::channel();
-            let answers: Vec<UserInputAnswer> = questions
-                .iter()
-                .map(|q| UserInputAnswer {
-                    question_id: q.id.clone(),
-                    labels: vec!["Yes".into()],
-                })
-                .collect();
-            let _ = tx.send(answers);
+            let _ = tx.send(answer(&questions));
             rx
         }),
         steering: steer_rx,
@@ -888,6 +895,81 @@ async fn dsh_runs_the_picked_tuple_model_at_off_effort() {
         text.contains("sets:model=[\"deepseek-official\",\"deepseek-v4-pro\"];thought_level=off;"),
         "{text}"
     );
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+/// dsh's `ask_user_question` rides ACP form elicitation: Zeron has to advertise
+/// `clientCapabilities.elicitation.form` and answer `elicitation/create`
+/// through the shared input bridge, or dsh reports that no user-questions
+/// answerer accepted the request.
+#[tokio::test]
+async fn dsh_form_elicitation_round_trips_through_the_input_bridge() {
+    let workspace = tempfile::tempdir().unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<UserInputQuestion>::new()));
+    let captured = seen.clone();
+    let (controls, _steer, _token) = controls_answering(move |questions| {
+        *captured.lock().unwrap() = questions.to_vec();
+        questions
+            .iter()
+            .map(|q| UserInputAnswer {
+                question_id: q.id.clone(),
+                labels: match q.id.as_str() {
+                    // Typed "Other" instead of a listed choice.
+                    "runtime" => vec!["Use monoio".into()],
+                    "extras" => vec!["Logging".into(), "Metrics".into()],
+                    "count" => vec!["3".into()],
+                    _ => vec!["remember the flag".into()],
+                },
+            })
+            .collect()
+    });
+    let mut req = request("scenario:ask");
+    req.cwd = workspace.path().display().to_string();
+    let events = run_to_end(&dsh_harness(), req, controls).await;
+
+    let asked = seen.lock().unwrap().clone();
+    assert_eq!(asked.len(), 4, "{asked:?}");
+    // serde_json sorts the form's object keys, so index by id.
+    let by_id = |id: &str| {
+        asked
+            .iter()
+            .find(|q| q.id == id)
+            .unwrap_or_else(|| panic!("missing question {id}"))
+            .clone()
+    };
+
+    let runtime = by_id("runtime");
+    assert_eq!(runtime.header, "Runtime");
+    assert_eq!(runtime.question, "Which async runtime should I use?");
+    assert_eq!(
+        runtime.options,
+        vec!["Use tokio".to_string(), "Use smol".to_string()]
+    );
+    assert!(!runtime.multi_select);
+
+    let extras = by_id("extras");
+    assert!(extras.multi_select);
+    assert_eq!(
+        extras.options,
+        vec!["Logging".to_string(), "Metrics".to_string()]
+    );
+
+    let count = by_id("count");
+    assert!(count.options.is_empty());
+    assert!(!count.multiline);
+
+    let note = by_id("note");
+    assert!(note.multiline);
+    assert!(note.options.is_empty());
+
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            AgentEvent::TextDelta { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(text.contains("ask:ok elic:yes"), "{text}");
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
 }
 
