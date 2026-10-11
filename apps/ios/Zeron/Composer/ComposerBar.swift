@@ -88,7 +88,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     let textView = UITextView()
-    private let glass = Glass.surface(interactive: false, radius: 25)
+    private let glass = Glass.surface(interactive: false, radius: Glass.Metrics.composerRadius)
     private let placeholderLabel = UILabel()
     private let attachButton = UIButton(type: .system)
     private let actionButton = UIButton(type: .system)

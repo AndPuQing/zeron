@@ -42,6 +42,8 @@ import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Schedule
 import sh.zeron.android.design.HarnessMark
+import sh.zeron.android.design.GlassSurface
+import sh.zeron.android.design.GlassMetrics
 import sh.zeron.android.transcript.TranscriptState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.focus.FocusRequester
@@ -377,9 +379,8 @@ fun StatusBanner(text: String, action: Pair<String, () -> Unit>?) {
 @Composable
 fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit) {
     val picked = remember(input.requestId) { input.questions.associate { it.id to mutableStateListOf<String>() } }
-    Surface(
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    GlassSurface(
+        shape = RoundedCornerShape(GlassMetrics.cardRadius),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -423,10 +424,9 @@ fun QueuePanel(queue: List<QueueItem>, handle: SessionHandle, editingId: String?
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         queue.forEachIndexed { i, item ->
             val editing = item.id == editingId
-            Surface(
+            GlassSurface(
                 shape = segmentShape(i, queue.size, outer = 20.dp, inner = 6.dp),
-                color = if (editing) MaterialTheme.colorScheme.secondaryContainer else composerContainer(),
-                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                tint = if (editing) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -7,7 +7,7 @@ final class QuestionPanel: UIView, UITextFieldDelegate, UITextViewDelegate {
     var onSubmit: (([(questionId: String, labels: [String])]) -> Void)?
     var onHeightChange: (() -> Void)?
 
-    private let card = Glass.surface(radius: 26)
+    private let card = Glass.surface(radius: Glass.Metrics.cardRadius)
     private let header = UILabel()
     private let question = UILabel()
     private let options = UIStackView()

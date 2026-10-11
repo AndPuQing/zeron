@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.HarnessMark
+import sh.zeron.android.design.GlassScene
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.ModelInfo
@@ -123,76 +124,82 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     }
 
     var composerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-    sh.zeron.android.design.WallpaperHero(model.wallpaper, cutout = { composerBounds })
-    Scaffold(
-        containerColor = androidx.compose.ui.graphics.Color.Transparent,
-        snackbarHost = { SnackbarHost(snackbar) },
-        topBar = {
-            TopAppBar(
-                title = { Text("New session", style = MaterialTheme.typography.titleLargeEmphasized, modifier = Modifier.padding(start = 12.dp)) },
-                navigationIcon = { TonalCircleButton(ZIcons.Close, "Close", onClick = onClose, modifier = Modifier.padding(start = 8.dp), size = 44.dp) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-            )
-        },
-    ) { padding ->
-        Column(
-            Modifier
-                .padding(top = padding.calculateTopPadding())
-                .fillMaxSize()
-                .imePadding()
-                .navigationBarsPadding(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            // The headline lives in the free space above the composer.
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    HarnessMark(draft.harness, 40.dp, tint = MaterialTheme.colorScheme.onSurface)
-                    Text(
-                        "What are we building?",
-                        style = MaterialTheme.typography.headlineSmall,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.padding(horizontal = 32.dp),
-                    )
-                }
+    GlassScene(
+        modifier = Modifier.fillMaxSize(),
+        background = { source ->
+            Box(source.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                sh.zeron.android.design.WallpaperHero(model.wallpaper, cutout = { composerBounds })
             }
-            MentionSuggestions(
-                composer,
-                search = { q ->
-                    val c = client
-                    if (c == null || project == null) emptyList() else c.searchFiles(project.deviceId, null, project.id, q)
-                },
-                modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
-            )
-            ComposerSurface(
-                model = composer,
-                placeholder = "Describe the task",
-                action = ComposerAction.Send,
-                onAction = ::create,
-                alwaysCard = true,
-                focusRequester = focus,
-                modifier = Modifier
-                    .padding(horizontal = 12.dp)
-                    .padding(bottom = 8.dp)
-                    .widthIn(max = 768.dp)
-                    .onGloballyPositioned { composerBounds = it.boundsInRoot() },
+        },
+    ) {
+        Scaffold(
+            containerColor = androidx.compose.ui.graphics.Color.Transparent,
+            snackbarHost = { SnackbarHost(snackbar) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("New session", style = MaterialTheme.typography.titleLargeEmphasized, modifier = Modifier.padding(start = 12.dp)) },
+                    navigationIcon = { TonalCircleButton(ZIcons.Close, "Close", onClick = onClose, modifier = Modifier.padding(start = 8.dp), size = 44.dp) },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+                )
+            },
+        ) { padding ->
+            Column(
+                Modifier
+                    .padding(top = padding.calculateTopPadding())
+                    .fillMaxSize()
+                    .imePadding()
+                    .navigationBarsPadding(),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                ProjectChip(draft, projects, onPick = { draft = it })
-                if (project != null) {
-                    if (project.gitDetected) BranchChip(model, draft, project.deviceId, project.path) { draft = it }
-                } else {
-                    HostChip(draft, hosts) { draft = it }
+                // The headline lives in the free space above the composer.
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        HarnessMark(draft.harness, 40.dp, tint = MaterialTheme.colorScheme.onSurface)
+                        Text(
+                            "What are we building?",
+                            style = MaterialTheme.typography.headlineSmall,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.padding(horizontal = 32.dp),
+                        )
+                    }
                 }
-                ModelChip(draft, choice, models) { draft = it }
-                val efforts = choice?.model?.reasoningLevels.orEmpty()
-                if (efforts.isNotEmpty()) {
-                    val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
-                    EffortChip(effort, efforts) { draft = draft.copy(effort = it) }
+                MentionSuggestions(
+                    composer,
+                    search = { q ->
+                        val c = client
+                        if (c == null || project == null) emptyList() else c.searchFiles(project.deviceId, null, project.id, q)
+                    },
+                    modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
+                )
+                ComposerSurface(
+                    model = composer,
+                    placeholder = "Describe the task",
+                    action = ComposerAction.Send,
+                    onAction = ::create,
+                    alwaysCard = true,
+                    focusRequester = focus,
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 8.dp)
+                        .widthIn(max = 768.dp)
+                        .onGloballyPositioned { composerBounds = it.boundsInRoot() },
+                ) {
+                    ProjectChip(draft, projects, onPick = { draft = it })
+                    if (project != null) {
+                        if (project.gitDetected) BranchChip(model, draft, project.deviceId, project.path) { draft = it }
+                    } else {
+                        HostChip(draft, hosts) { draft = it }
+                    }
+                    ModelChip(draft, choice, models) { draft = it }
+                    val efforts = choice?.model?.reasoningLevels.orEmpty()
+                    if (efforts.isNotEmpty()) {
+                        val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
+                        EffortChip(effort, efforts) { draft = draft.copy(effort = it) }
+                    }
                 }
             }
         }
     }
-}
 }
 
 @Composable

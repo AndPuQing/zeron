@@ -9,47 +9,26 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.animation.animateColorAsState
-import sh.zeron.android.design.ZIcon
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.statusBarsPadding
-import sh.zeron.android.design.ZIcons
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Archive
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.MoreVert
-import androidx.compose.material.icons.outlined.PushPin
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SmallFloatingActionButton
-import androidx.compose.material3.Surface
-import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -62,10 +41,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.foundation.background
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -78,6 +53,8 @@ import kotlinx.coroutines.withContext
 import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.Geist
 import sh.zeron.android.design.GeistMono
+import sh.zeron.android.design.GlassScene
+import sh.zeron.android.design.ZIcons
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
@@ -147,17 +124,25 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
     var overflow by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
-    // Flat Material chrome: the header sits on the page and takes the
-    // container tone once the transcript scrolls under it; the transcript
-    // ends where the composer begins (nothing streams behind it).
-    val scrolled by remember { derivedStateOf { transcript.offset > 1f } }
-    val headerColor by animateColorAsState(
-        if (scrolled) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.background,
-        MaterialTheme.motionScheme.defaultEffectsSpec(),
-        label = "header",
-    )
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        Surface(color = headerColor) {
+    val density = LocalDensity.current
+    var headerHeight by remember { mutableStateOf(88.dp) }
+    var footerHeight by remember { mutableStateOf(80.dp) }
+    LaunchedEffect(footerHeight) {
+        // The last row can clear the floating composer, queue and input panel.
+        transcript.bottomInset = footerHeight.value + 12f
+    }
+    GlassScene(
+        modifier = Modifier.fillMaxSize().imePadding(),
+        background = { source ->
+            Box(source.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                Transcript(transcript, actions, Modifier.fillMaxSize().padding(top = headerHeight))
+            }
+        },
+    ) {
+        Box(
+            Modifier.align(Alignment.TopCenter)
+                .onSizeChanged { headerHeight = with(density) { it.height.toDp() } },
+        ) {
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -165,13 +150,13 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
                     .padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                TonalCircleButton(ZIcons.Back, "Back", onClick = onBack, container = MaterialTheme.colorScheme.surfaceContainerHighest)
+                TonalCircleButton(ZIcons.Back, "Back", onClick = onBack)
                 Column(Modifier.weight(1f).padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(composer.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMediumEmphasized)
                     Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Box {
-                    TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true }, container = MaterialTheme.colorScheme.surfaceContainerHighest)
+                    TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true })
                     ActionMenu(
                         overflow,
                         { overflow = false },
@@ -184,24 +169,20 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
                 }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            Transcript(transcript, actions, Modifier.fillMaxSize())
-            val showJump by remember { derivedStateOf { !transcript.following && transcript.distanceFromBottom > 400f } }
-            androidx.compose.animation.AnimatedVisibility(
-                showJump,
-                enter = fadeIn() + scaleIn(),
-                exit = fadeOut() + scaleOut(),
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
-            ) {
-                SmallFloatingActionButton(
-                    onClick = { transcript.scrollToBottom() },
-                    shape = CircleShape,
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                ) { ZIcon(ZIcons.ArrowDown, "Jump to latest", Modifier.size(22.dp)) }
-            }
+        val showJump by remember { derivedStateOf { !transcript.following && transcript.distanceFromBottom > 400f } }
+        androidx.compose.animation.AnimatedVisibility(
+            showJump,
+            enter = fadeIn() + scaleIn(),
+            exit = fadeOut() + scaleOut(),
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = footerHeight + 12.dp),
+        ) {
+            TonalCircleButton(ZIcons.ArrowDown, "Jump to latest", onClick = { transcript.scrollToBottom() })
         }
-        Column(Modifier.fillMaxWidth().imePadding().navigationBarsPadding()) {
+        Column(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+                .onSizeChanged { footerHeight = with(density) { it.height.toDp() } }
+                .navigationBarsPadding(),
+        ) {
             Banner(composer, connectivity?.state, onRetry = { runCatching { handle.retryDelivery() } })
             composer.openInput?.let { QuestionPanel(it) { answers -> runCatching { handle.respondInput(it.requestId, answers) } } }
             Composer(model, core, handle, composer, row, transcript)

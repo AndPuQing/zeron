@@ -231,7 +231,7 @@ private fun LazyListScope.group(
                 Modifier.animateItem().fillMaxWidth().padding(start = 28.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(title, style = MaterialTheme.typography.titleSmallEmphasized, color = MaterialTheme.colorScheme.primary)
+                Text(title, style = MaterialTheme.typography.titleSmallEmphasized, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.width(8.dp))
                 Text("${rows.size}", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.weight(1f))
@@ -270,9 +270,10 @@ private fun SwipeableSessionRow(
         enableDismissFromStartToEnd = false,
         onDismiss = { if (it == SwipeToDismissBoxValue.EndToStart) archive(row) },
         backgroundContent = {
-            Surface(Modifier.fillMaxSize(), shape = shape, color = MaterialTheme.colorScheme.tertiaryContainer) {
+            val revealing = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
+            Surface(Modifier.fillMaxSize(), shape = shape, color = if (revealing) MaterialTheme.colorScheme.tertiaryContainer else androidx.compose.ui.graphics.Color.Transparent) {
                 Box(Modifier.padding(end = 28.dp), contentAlignment = Alignment.CenterEnd) {
-                    ZIcon(ZIcons.Archive, "Archive", tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                    if (revealing) ZIcon(ZIcons.Archive, "Archive", tint = MaterialTheme.colorScheme.onTertiaryContainer)
                 }
             }
         },
@@ -305,8 +306,8 @@ fun SessionItem(
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 menu = true
             },
-            shapes = segmentedShapes(index, count),
-            colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
+            shapes = ListItemDefaults.shapes(shape = RoundedCornerShape(16.dp)),
+            colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.background),
             leadingContent = { HarnessTile(row) },
             supportingContent = { Subline(row) },
             trailingContent = {

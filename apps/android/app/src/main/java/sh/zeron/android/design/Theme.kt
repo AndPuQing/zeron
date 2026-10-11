@@ -4,7 +4,7 @@ import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
@@ -137,7 +137,7 @@ private fun zeronTypography(): Typography {
         displayLarge = base.displayLarge.w(FontWeight.SemiBold, -1.5f),
         displayMedium = base.displayMedium.w(FontWeight.SemiBold, -1.2f),
         displaySmall = base.displaySmall.w(FontWeight.SemiBold, -1f),
-        headlineLarge = base.headlineLarge.w(FontWeight.SemiBold, -0.6f),
+        headlineLarge = base.headlineLarge.w(FontWeight.SemiBold, -0.6f).copy(fontSize = 30.sp, lineHeight = 36.sp),
         headlineMedium = base.headlineMedium.w(FontWeight.SemiBold, -0.4f),
         headlineSmall = base.headlineSmall.w(FontWeight.SemiBold, -0.3f),
         titleLarge = base.titleLarge.w(FontWeight.SemiBold, -0.2f),
@@ -191,9 +191,9 @@ fun ZeronTheme(appearance: Appearance = Appearance(), content: @Composable () ->
     }
     val typography = remember { zeronTypography() }
     CompositionLocalProvider(LocalDarkTheme provides dark) {
-        MaterialExpressiveTheme(
+        MaterialTheme(
             colorScheme = scheme,
-            motionScheme = MotionScheme.expressive(),
+            motionScheme = MotionScheme.standard(),
             typography = typography,
             content = content,
         )

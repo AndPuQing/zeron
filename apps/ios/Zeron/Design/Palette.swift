@@ -1,7 +1,7 @@
 import UIKit
 
-/// App palette. Light is a warm paper grey, dark is true black; accents are a
-/// single teal. Colors are paint-only — nothing here affects layout.
+/// Shared mobile palette: cool neutrals and a violet accent.
+/// Colors are paint-only — nothing here affects layout.
 enum Palette {
     static func dynamic(_ light: UInt32, _ dark: UInt32, alpha: CGFloat = 1) -> UIColor {
         UIColor { traits in

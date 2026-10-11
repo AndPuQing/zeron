@@ -150,6 +150,7 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
+    implementation(libs.compose.backdrop)
     implementation(libs.kotlinx.coroutines.android)
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)

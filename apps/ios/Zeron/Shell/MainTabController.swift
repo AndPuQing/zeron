@@ -127,7 +127,7 @@ final class MainTabController: UITabBarController, UITabBarControllerDelegate, A
         nav.navigationBar.prefersLargeTitles = true
         // Setting an appearance object drops iOS 26's scroll-edge effect;
         // style titles through the bar's own attributes instead.
-        nav.navigationBar.largeTitleTextAttributes = [.font: Fonts.ui(.sansSemibold, 30), .foregroundColor: Palette.text]
+        nav.navigationBar.largeTitleTextAttributes = [.font: Fonts.ui(.sansSemibold, Glass.Metrics.title), .foregroundColor: Palette.text]
         nav.navigationBar.titleTextAttributes = [.font: Fonts.ui(.sansSemibold, 17), .foregroundColor: Palette.text]
         nav.navigationBar.tintColor = Palette.text
         return nav
