@@ -65,6 +65,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -374,11 +375,14 @@ fun StatusBanner(text: String, action: Pair<String, () -> Unit>?) {
     }
 }
 
-/** The agent asked something: answer with its options instead of typing. */
+/** The agent asked something: pick its options, or type when it offers none. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit) {
     val picked = remember(input.requestId) { input.questions.associate { it.id to mutableStateListOf<String>() } }
+    val typed = remember(input.requestId) {
+        input.questions.associate { it.id to mutableStateOf(it.prefill.orEmpty()) }
+    }
     GlassSurface(
         shape = RoundedCornerShape(GlassMetrics.cardRadius),
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
@@ -388,23 +392,49 @@ fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (q.header.isNotEmpty()) Text(q.header, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                     Text(q.question, style = MaterialTheme.typography.bodyLarge)
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        val selection = picked.getValue(q.id)
-                        for (option in q.options) {
-                            ToggleButton(
-                                checked = option in selection,
-                                onCheckedChange = { on ->
-                                    if (!q.multiSelect) selection.clear()
-                                    if (on) selection.add(option) else selection.remove(option)
-                                },
-                            ) { Text(option) }
+                    if (q.options.isEmpty()) {
+                        // Free-text questions (dsh elicitation fields) have no
+                        // buttons; without this field they could never be
+                        // answered and the run would wait forever.
+                        OutlinedTextField(
+                            value = typed.getValue(q.id).value,
+                            onValueChange = { typed.getValue(q.id).value = it },
+                            singleLine = !q.multiline,
+                            minLines = if (q.multiline) 3 else 1,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            val selection = picked.getValue(q.id)
+                            for (option in q.options) {
+                                ToggleButton(
+                                    checked = option in selection,
+                                    onCheckedChange = { on ->
+                                        if (!q.multiSelect) selection.clear()
+                                        if (on) selection.add(option) else selection.remove(option)
+                                    },
+                                ) { Text(option) }
+                            }
                         }
                     }
                 }
             }
-            val ready = input.questions.all { picked.getValue(it.id).isNotEmpty() }
+            val ready = input.questions.all { q ->
+                picked.getValue(q.id).isNotEmpty() || typed.getValue(q.id).value.isNotBlank()
+            }
             Button(
-                onClick = { onSubmit(input.questions.map { UserInputAnswer(it.id, picked.getValue(it.id).toList()) }) },
+                onClick = {
+                    onSubmit(
+                        input.questions.map { q ->
+                            val text = typed.getValue(q.id).value
+                            // Typed text overrides picks, matching the desktop
+                            // and iOS panels.
+                            val labels = if (text.isNotBlank()) listOf(text) else picked.getValue(q.id).toList()
+                            UserInputAnswer(q.id, labels)
+                        }
+                    )
+                },
                 enabled = ready,
                 shapes = ButtonDefaults.shapes(),
                 modifier = Modifier.align(Alignment.End),

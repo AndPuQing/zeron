@@ -222,5 +222,9 @@ two queued follow-ups after 36.6–36.8-second post-tool gaps; cancellation duri
 to the bundled `acp` profile. Its provider-grouped model options use ACP
 `SessionConfigSelectGroup`; shared select parsing handles both flat and grouped
 options. Model IDs remain the exact advertised values, and `off` maps to
-`ReasoningLevel::Minimal`. See [dsh.md](dsh.md) for setup, configuration, and
-capability limits.
+`ReasoningLevel::Minimal`. The shared client advertises
+`clientCapabilities.elicitation.form` and renders `elicitation/create` forms
+through the question bridge, preserving each field's schema type (`oneOf`,
+`anyOf`, `enum`, boolean, integer and number, plus the `__other` companion),
+which is what lets dsh's `ask_user_question` reach the user. See
+[dsh.md](dsh.md) for setup, configuration, and capability limits.

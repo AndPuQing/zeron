@@ -20,10 +20,11 @@ Zerun starts `dsh --profile acp-plus` when
 profile. Set `DSH_PROFILE` to choose a different profile, or `DSH_EXECUTABLE`
 to override executable discovery. `DSH_HOME` defaults to `~/.dsh`.
 
-The extended profile provides session loading and mid-turn steering.
-Steering is used at step boundaries when the agent advertises `_meta.steering`.
-The bundled `acp` profile has fewer capabilities. Form elicitation through
-`clientCapabilities.elicitation.form` is currently unsupported by Zerun.
+The extended profile provides session loading, mid-turn steering, and form
+elicitation. Steering is used at step boundaries when the agent advertises
+`_meta.steering`; `ask_user_question` rides ACP `elicitation/create` and
+surfaces in Zerun's question wizard. The bundled `acp` profile has fewer
+capabilities.
 
 Skills are discovered from `$DSH_HOME/skills`, `$DSH_AGENTS_HOME/skills`
 (`DSH_AGENTS_HOME` defaults to `~/.agents`), and the project's `.agents/skills`

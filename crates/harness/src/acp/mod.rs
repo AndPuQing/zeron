@@ -19,8 +19,8 @@
 //!   turn (`cancelled` → Interrupted, `refusal` → Errored, else Completed).
 //! - `session/update` notifications normalize per [`normalize::map_update`].
 //! - Permission requests auto-accept with the agent's preferred allow option
-//!   (zeron sessions run unattended); question-shaped requests block on the
-//!   engine's input bridge.
+//!   (zeron sessions run unattended); question-shaped permission requests and
+//!   form `elicitation/create` requests block on the engine's input bridge.
 //! - Steering: agents advertising `_session/steering` get mid-turn injection;
 //!   others queue steers and deliver them as the next `session/prompt` at the
 //!   turn boundary. The session stays parked between turns while the
@@ -2689,6 +2689,10 @@ fn initialize_params(harness: HarnessId) -> Value {
         "fs": { "readTextFile": false, "writeTextFile": false },
         "terminal": false,
     });
+    // Agents that ask the user — dsh-acp-plus's question answerer, for one —
+    // gate on this: without it they report that no user-questions answerer
+    // accepted the request instead of sending `elicitation/create`.
+    capabilities["elicitation"] = json!({ "form": {} });
     if harness == HarnessId::Devin {
         // Devin otherwise exposes only the parent's run_subagent call. This
         // unlocks lifecycle tags plus every nested message, thought, and tool
@@ -3175,12 +3179,12 @@ fn prompt_turn(
     client.request_now("session/prompt", params)
 }
 
-/// Answer a server→client request. Permission requests are auto-accepted with
-/// the agent's preferred allow option — parity with the claude harness's
-/// bypassPermissions and the codex harness's approvalPolicy "never" (zeron
-/// sessions run unattended). Everything else (fs, terminal, elicitation) was
-/// declined at initialize, so a stray request gets method-not-found rather
-/// than wedging the agent.
+/// Answer a server→client request outside a live turn. Permission requests are
+/// auto-accepted with the agent's preferred allow option — parity with the
+/// claude harness's bypassPermissions and the codex harness's approvalPolicy
+/// "never" (zeron sessions run unattended). A form elicitation has no question
+/// UI here, so it is declined; fs and terminal were declined at initialize, so
+/// a stray request gets method-not-found rather than wedging the agent.
 fn handle_server_request(
     client: &RpcClient,
     id: Value,
@@ -3201,6 +3205,12 @@ fn handle_server_request(
                 ),
                 None => client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } })),
             }
+            Vec::new()
+        }
+        "elicitation/create" => {
+            // Setup phases (session/new, session/load) have no question UI:
+            // decline so the agent falls back instead of failing the call.
+            client.respond(&id, json!({ "action": "decline" }));
             Vec::new()
         }
         _ => {
@@ -3251,8 +3261,16 @@ fn handle_server_request_live(
         .and_then(Value::as_str)
         .is_some_and(|id| id != session_id)
     {
-        client.respond(&id, json!({"outcome": {"outcome": "cancelled"}}));
+        // A request for another session is cancelled in the shape its own
+        // method expects.
+        match method {
+            "elicitation/create" => client.respond(&id, json!({ "action": "cancel" })),
+            _ => client.respond(&id, json!({"outcome": {"outcome": "cancelled"}})),
+        }
         return Vec::new();
+    }
+    if method == "elicitation/create" {
+        return handle_elicitation_live(client, id, params, request_input);
     }
     if method != "session/request_permission" {
         return handle_server_request(client, id, method, params);
@@ -3311,6 +3329,307 @@ fn handle_server_request_live(
             ),
             None => client.respond(&id, json!({ "outcome": { "outcome": "cancelled" } })),
         }
+    });
+    Vec::new()
+}
+
+/// A form the agent elicited (`elicitation/create`, `mode: "form"`), translated
+/// into the shared question shape plus the wire value behind each choice.
+struct ElicitForm {
+    questions: Vec<UserInputQuestion>,
+    /// Per question, the displayed label → the schema value to return.
+    choices: Vec<Vec<(String, String)>>,
+    /// Per question, the free-text companion property (`<id>__other`), when the
+    /// form offers one.
+    others: Vec<Option<String>>,
+    /// Per question, the primitive the answer has to round-trip as.
+    kinds: Vec<ElicitKind>,
+    /// Properties the schema marks required. A form whose answers cannot fill
+    /// one of them is declined rather than accepted with the field missing.
+    required: Vec<String>,
+}
+
+/// The primitive an elicitation answer round-trips as. `Choice` covers a
+/// `string` with `enum`/`oneOf`/`anyOf` and the `array` multi-select.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ElicitKind {
+    Choice,
+    Text,
+    Bool,
+    Integer,
+    Number,
+}
+
+/// Parse an ACP `elicitation/create` form. `None` for URL-mode requests or a
+/// form with no renderable field, so the caller can decline.
+fn elicit_form(params: &Value) -> Option<ElicitForm> {
+    if params.get("mode").and_then(Value::as_str) != Some("form") {
+        return None;
+    }
+    let message = params
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or("The agent needs your input.");
+    let schema = params.get("requestedSchema")?;
+    let properties = schema.get("properties").and_then(Value::as_object)?;
+    let mut form = ElicitForm {
+        questions: Vec::new(),
+        choices: Vec::new(),
+        others: Vec::new(),
+        kinds: Vec::new(),
+        required: schema
+            .get("required")
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+    };
+    for (id, field) in properties {
+        // acp-plus pairs every choice field with an `<id>__other` free-text
+        // field; it folds into that question instead of being asked alone.
+        if id.ends_with("__other") {
+            continue;
+        }
+        let mut choices = elicit_choices(field);
+        // A field type we cannot spell back (custom `_` or a future variant)
+        // declines the whole form: accepting would break the schema.
+        let kind = elicit_kind(field, &choices)?;
+        if kind == ElicitKind::Bool {
+            choices = vec![
+                ("Yes".to_owned(), "true".to_owned()),
+                ("No".to_owned(), "false".to_owned()),
+            ];
+        }
+        let multi_select = kind == ElicitKind::Choice
+            && field.get("type").and_then(Value::as_str) == Some("array");
+        form.questions.push(UserInputQuestion {
+            id: id.clone(),
+            header: field
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or(id)
+                .to_owned(),
+            question: field
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or(message)
+                .to_owned(),
+            options: choices.iter().map(|(label, _)| label.clone()).collect(),
+            multi_select,
+            prefill: None,
+            multiline: kind == ElicitKind::Text,
+        });
+        form.choices.push(choices);
+        let other = format!("{id}__other");
+        form.others
+            .push(properties.contains_key(&other).then_some(other));
+        form.kinds.push(kind);
+    }
+    (!form.questions.is_empty()).then_some(form)
+}
+
+/// The choices one elicitation property offers as `(label, value)`. An empty
+/// list means a scalar field. Multi-select spells its values under `items`;
+/// single-select under `oneOf`/`anyOf` (each entry `{const, title}`) or a plain
+/// `enum`. Titles are what the user sees; `const`/enum values are what the
+/// schema expects back.
+fn elicit_choices(field: &Value) -> Vec<(String, String)> {
+    let source = field.get("items").unwrap_or(field);
+    for key in ["oneOf", "anyOf"] {
+        if let Some(entries) = source.get(key).and_then(Value::as_array) {
+            return entries
+                .iter()
+                .filter_map(|entry| {
+                    let value = entry.get("const").and_then(Value::as_str)?;
+                    let label = entry.get("title").and_then(Value::as_str).unwrap_or(value);
+                    Some((label.to_owned(), value.to_owned()))
+                })
+                .collect();
+        }
+    }
+    source
+        .get("enum")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(|value| value.as_str().map(|v| (v.to_owned(), v.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The primitive one property's answer must be spelled as. `None` for a type
+/// Zeron cannot render faithfully (a custom `_` extension or a future variant),
+/// which declines the form rather than answering it wrong.
+fn elicit_kind(field: &Value, choices: &[(String, String)]) -> Option<ElicitKind> {
+    match field.get("type").and_then(Value::as_str) {
+        Some("array") => (!choices.is_empty()).then_some(ElicitKind::Choice),
+        Some("boolean") => Some(ElicitKind::Bool),
+        Some("integer") => Some(ElicitKind::Integer),
+        Some("number") => Some(ElicitKind::Number),
+        Some("string") | None => Some(if choices.is_empty() {
+            ElicitKind::Text
+        } else {
+            ElicitKind::Choice
+        }),
+        Some(_) => None,
+    }
+}
+
+/// Spell a scalar answer as the schema's JSON type. `None` when the text does
+/// not parse as that type.
+fn elicit_scalar(kind: ElicitKind, raw: &str) -> Option<Value> {
+    match kind {
+        ElicitKind::Bool => match raw.trim().to_ascii_lowercase().as_str() {
+            "true" | "yes" | "1" => Some(Value::Bool(true)),
+            "false" | "no" | "0" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        ElicitKind::Integer => raw
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .map(|value| Value::Number(value.into())),
+        ElicitKind::Number => raw
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        ElicitKind::Text | ElicitKind::Choice => Some(Value::String(raw.to_owned())),
+    }
+}
+
+/// Fold the bridge's answers back into the form's `content`, keyed the way the
+/// schema (and acp-plus's `answerItem`) expects: a listed pick goes to the
+/// question id, a typed answer to its `__other` companion, and a scalar answer
+/// is spelled as the schema's type. `None` when a required property would be
+/// missing, so the caller declines instead of accepting an invalid form.
+fn elicit_content(form: &ElicitForm, answers: &[UserInputAnswer]) -> Option<Value> {
+    let mut content = serde_json::Map::new();
+    for (ix, question) in form.questions.iter().enumerate() {
+        let labels = answers
+            .iter()
+            .find(|answer| answer.question_id == question.id)
+            .map(|answer| answer.labels.as_slice())
+            .unwrap_or_default();
+        let choices = &form.choices[ix];
+        match form.kinds[ix] {
+            ElicitKind::Text => {
+                let text = labels.first().cloned().unwrap_or_default();
+                if !text.is_empty() {
+                    content.insert(question.id.clone(), Value::String(text));
+                }
+            }
+            ElicitKind::Bool | ElicitKind::Integer | ElicitKind::Number => {
+                let (listed, custom) = partition_choices(labels, choices);
+                let raw = listed.first().cloned().or_else(|| custom.clone());
+                match raw
+                    .as_deref()
+                    .and_then(|raw| elicit_scalar(form.kinds[ix], raw))
+                {
+                    Some(value) => {
+                        content.insert(question.id.clone(), value);
+                    }
+                    // The typed answer is not a valid value of the schema's
+                    // type: keep it only where the form offers a companion.
+                    None => {
+                        if let (Some(other), Some(custom)) = (&form.others[ix], custom) {
+                            content.insert(other.clone(), Value::String(custom));
+                        }
+                    }
+                }
+            }
+            ElicitKind::Choice => {
+                let (listed, custom) = partition_choices(labels, choices);
+                if question.multi_select {
+                    content.insert(
+                        question.id.clone(),
+                        Value::Array(listed.into_iter().map(Value::String).collect()),
+                    );
+                } else if let Some(value) = listed.into_iter().next() {
+                    content.insert(question.id.clone(), Value::String(value));
+                }
+                if let (Some(other), Some(custom)) = (&form.others[ix], custom) {
+                    content.insert(other.clone(), Value::String(custom));
+                }
+            }
+        }
+    }
+    // An answer that leaves a required property out cannot be accepted: the
+    // agent would receive a success with a field its schema demands. A choice
+    // answered through its `__other` companion still satisfies the base
+    // property — that is how acp-plus spells a typed answer.
+    let satisfied = |name: &str| {
+        content.contains_key(name)
+            || form.questions.iter().enumerate().any(|(ix, question)| {
+                question.id == name
+                    && form.others[ix]
+                        .as_deref()
+                        .is_some_and(|other| content.contains_key(other))
+            })
+    };
+    if form.required.iter().any(|name| !satisfied(name)) {
+        return None;
+    }
+    Some(Value::Object(content))
+}
+
+/// Split the bridge's labels into schema values and the first non-listed
+/// ("Other") text.
+fn partition_choices(
+    labels: &[String],
+    choices: &[(String, String)],
+) -> (Vec<String>, Option<String>) {
+    let mut listed = Vec::new();
+    let mut custom = None;
+    for label in labels {
+        match choices.iter().find(|(name, _)| name == label) {
+            Some((_, value)) => listed.push(value.clone()),
+            None if custom.is_none() => custom = Some(label.clone()),
+            None => {}
+        }
+    }
+    (listed, custom)
+}
+
+/// A live-run `elicitation/create`: render the form through the engine's input
+/// bridge (a subtask so the message loop keeps flowing) and answer with the
+/// accepted content. A form the bridge drops is cancelled, never wedged.
+fn handle_elicitation_live(
+    client: &RpcClient,
+    id: Value,
+    params: &Value,
+    request_input: &std::sync::Arc<RequestInputFn>,
+) -> Vec<AgentEvent> {
+    let Some(form) = elicit_form(params) else {
+        // URL-mode or empty forms have no wizard to show.
+        client.respond(&id, json!({ "action": "decline" }));
+        return Vec::new();
+    };
+    let client = client.clone();
+    let request_input = std::sync::Arc::clone(request_input);
+    tokio::spawn(async move {
+        let answers = (request_input)(form.questions.clone())
+            .await
+            .unwrap_or_default();
+        let result = if answers.is_empty() {
+            json!({ "action": "cancel" })
+        } else {
+            match elicit_content(&form, &answers) {
+                Some(content) => json!({ "action": "accept", "content": content }),
+                // The answers cannot satisfy the schema: decline rather than
+                // accept with a required field missing.
+                None => json!({ "action": "decline" }),
+            }
+        };
+        client.respond(&id, result);
     });
     Vec::new()
 }
@@ -5784,6 +6103,278 @@ mod tests {
 
         let grok = initialize_params(HarnessId::Grok);
         assert!(grok["clientCapabilities"].get("_meta").is_none());
+    }
+
+    #[test]
+    fn acp_initialize_advertises_form_elicitation() {
+        for harness in [HarnessId::Dsh, HarnessId::Devin, HarnessId::Grok] {
+            let params = initialize_params(harness);
+            assert_eq!(
+                params["clientCapabilities"]["elicitation"]["form"],
+                json!({}),
+                "{harness:?}"
+            );
+            assert_eq!(params["clientCapabilities"]["fs"]["readTextFile"], false);
+        }
+    }
+
+    #[test]
+    fn elicitation_form_flattens_choices_and_folds_the_other_field() {
+        let params = json!({
+            "sessionId": "s-1",
+            "mode": "form",
+            "message": "A few questions",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "runtime": {
+                        "type": "string",
+                        "title": "Runtime",
+                        "description": "Which async runtime should I use?",
+                        "oneOf": [
+                            { "const": "Use tokio", "title": "Use tokio" },
+                            { "const": "Use smol", "title": "Use smol" }
+                        ]
+                    },
+                    "runtime__other": { "type": "string", "title": "Other (optional)" },
+                    "extras": {
+                        "type": "array",
+                        "title": "Extras",
+                        "items": {
+                            "type": "string",
+                            "anyOf": [
+                                { "const": "logging", "title": "Logging" },
+                                { "const": "metrics", "title": "Metrics" }
+                            ]
+                        }
+                    },
+                    "extras__other": { "type": "string", "title": "Other (optional)" },
+                    "note": { "type": "string", "title": "Note", "description": "Anything else?" }
+                }
+            }
+        });
+        let form = elicit_form(&params).expect("form");
+        assert_eq!(form.questions.len(), 3, "{:?}", form.questions);
+        // serde_json sorts object keys, so index by id rather than position.
+        let at = |id: &str| {
+            form.questions
+                .iter()
+                .position(|q| q.id == id)
+                .unwrap_or_else(|| panic!("missing question {id}"))
+        };
+
+        let runtime = at("runtime");
+        assert_eq!(form.questions[runtime].header, "Runtime");
+        assert_eq!(
+            form.questions[runtime].question,
+            "Which async runtime should I use?"
+        );
+        assert_eq!(
+            form.questions[runtime].options,
+            vec!["Use tokio".to_string(), "Use smol".to_string()]
+        );
+        assert!(!form.questions[runtime].multi_select);
+        assert!(!form.questions[runtime].multiline);
+        assert_eq!(form.others[runtime].as_deref(), Some("runtime__other"));
+
+        let extras = at("extras");
+        assert!(form.questions[extras].multi_select);
+        assert_eq!(
+            form.questions[extras].options,
+            vec!["Logging".to_string(), "Metrics".to_string()]
+        );
+        assert_eq!(
+            form.choices[extras],
+            vec![
+                ("Logging".to_string(), "logging".to_string()),
+                ("Metrics".to_string(), "metrics".to_string())
+            ]
+        );
+
+        let note = at("note");
+        assert!(form.questions[note].multiline);
+        assert!(form.questions[note].options.is_empty());
+        assert_eq!(form.questions[note].question, "Anything else?");
+        assert!(form.others[note].is_none());
+
+        assert!(elicit_form(&json!({ "mode": "url" })).is_none());
+        assert!(
+            elicit_form(&json!({
+                "mode": "form",
+                "requestedSchema": { "type": "object", "properties": {} }
+            }))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn elicitation_answers_map_listed_picks_and_typed_text() {
+        let params = json!({
+            "mode": "form",
+            "message": "q",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "runtime": {
+                        "type": "string",
+                        "title": "Runtime",
+                        "oneOf": [{ "const": "Use tokio", "title": "Use tokio" }]
+                    },
+                    "runtime__other": { "type": "string", "title": "Other" },
+                    "extras": {
+                        "type": "array",
+                        "title": "Extras",
+                        "items": { "type": "string", "enum": ["logging", "metrics"] }
+                    },
+                    "extras__other": { "type": "string", "title": "Other" },
+                    "note": { "type": "string", "title": "Note" }
+                }
+            }
+        });
+        let form = elicit_form(&params).expect("form");
+        let answers = vec![
+            UserInputAnswer {
+                question_id: "runtime".into(),
+                labels: vec!["Use monoio".into()],
+            },
+            UserInputAnswer {
+                question_id: "extras".into(),
+                labels: vec!["logging".into(), "metrics".into()],
+            },
+            UserInputAnswer {
+                question_id: "note".into(),
+                labels: vec!["remember the flag".into()],
+            },
+        ];
+        let content = elicit_content(&form, &answers).expect("content");
+        assert_eq!(content["runtime__other"], json!("Use monoio"));
+        assert!(content.get("runtime").is_none());
+        assert_eq!(content["extras"], json!(["logging", "metrics"]));
+        assert_eq!(content["note"], json!("remember the flag"));
+    }
+
+    #[test]
+    fn elicitation_form_types_scalars_and_declines_unknown_fields() {
+        let params = json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "title": "Enabled" },
+                    "count": { "type": "integer", "title": "Count" },
+                    "ratio": { "type": "number", "title": "Ratio" },
+                    "note": { "type": "string", "title": "Note" }
+                }
+            }
+        });
+        let form = elicit_form(&params).expect("form");
+        let at = |id: &str| {
+            form.questions
+                .iter()
+                .position(|q| q.id == id)
+                .unwrap_or_else(|| panic!("missing question {id}"))
+        };
+
+        // Boolean becomes a Yes/No choice so every shell can answer it, and the
+        // wire value is the JSON boolean the schema asked for.
+        let enabled = at("enabled");
+        assert_eq!(form.kinds[enabled], ElicitKind::Bool);
+        assert_eq!(
+            form.questions[enabled].options,
+            vec!["Yes".to_string(), "No".to_string()]
+        );
+        assert_eq!(
+            form.choices[enabled],
+            vec![
+                ("Yes".to_string(), "true".to_string()),
+                ("No".to_string(), "false".to_string())
+            ]
+        );
+
+        let count = at("count");
+        assert_eq!(form.kinds[count], ElicitKind::Integer);
+        assert!(form.questions[count].options.is_empty());
+        assert!(!form.questions[count].multiline);
+
+        assert_eq!(form.kinds[at("ratio")], ElicitKind::Number);
+        assert_eq!(form.kinds[at("note")], ElicitKind::Text);
+        assert!(form.questions[at("note")].multiline);
+
+        // A type Zeron cannot render declines the whole form.
+        assert!(
+            elicit_form(&json!({
+                "mode": "form",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": { "blob": { "type": "object", "title": "Blob" } }
+                }
+            }))
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn elicitation_content_converts_scalars_and_requires_required_fields() {
+        let params = json!({
+            "mode": "form",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "enabled": { "type": "boolean", "title": "Enabled" },
+                    "count": { "type": "integer", "title": "Count" },
+                    "ratio": { "type": "number", "title": "Ratio" },
+                    "runtime": {
+                        "type": "string",
+                        "title": "Runtime",
+                        "oneOf": [{ "const": "Use tokio", "title": "Use tokio" }]
+                    }
+                },
+                "required": ["enabled", "count", "runtime"]
+            }
+        });
+        let form = elicit_form(&params).expect("form");
+        let answers = |runtime: &str| {
+            vec![
+                UserInputAnswer {
+                    question_id: "enabled".into(),
+                    labels: vec!["Yes".into()],
+                },
+                UserInputAnswer {
+                    question_id: "count".into(),
+                    labels: vec!["3".into()],
+                },
+                UserInputAnswer {
+                    question_id: "ratio".into(),
+                    labels: vec!["2.5".into()],
+                },
+                UserInputAnswer {
+                    question_id: "runtime".into(),
+                    labels: vec![runtime.into()],
+                },
+            ]
+        };
+
+        let content = elicit_content(&form, &answers("Use tokio")).expect("content");
+        assert_eq!(content["enabled"], json!(true));
+        assert_eq!(content["count"], json!(3));
+        assert_eq!(content["ratio"], json!(2.5));
+        assert_eq!(content["runtime"], json!("Use tokio"));
+
+        // A custom answer for a plain enum (no `__other`) cannot satisfy the
+        // required field: decline instead of accepting an incomplete form.
+        assert!(elicit_content(&form, &answers("Use monoio")).is_none());
+
+        // An unparsable scalar is dropped, and the required field then declines.
+        assert!(
+            elicit_content(
+                &form,
+                &[UserInputAnswer {
+                    question_id: "count".into(),
+                    labels: vec!["many".into()],
+                }]
+            )
+            .is_none()
+        );
     }
 
     #[test]
