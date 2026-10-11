@@ -2,7 +2,7 @@
 
 在本地管理你的编码 agent（Claude Code、Codex、Cursor、Devin、Grok、Hermes、Pi、Antigravity、DeepSeek Harness），也可以打开多设备同步。
 
-*[English](README.md) | 简体中文 | [한국어](README.ko.md) | [日本語](README.ja.md)*
+*[English](README.md) | 简体中文 | [한국어](README.ko.md) | [日本語](README.ja.md) | [Español](README.es.md)*
 
 ![Zerun 桌面应用](docs/media/readme/app-screenshot.jpg)
 
@@ -24,7 +24,7 @@ macOS/Linux 数据放在 `~/.zerun`，Windows 放在 `%LOCALAPPDATA%\Zerun`；
 ## Android
 
 从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载
-`zerun-<version>-android.apk`，支持 Android 10 及以上的 arm64 和 x86_64 设备。
+`zerun-<version>-android.apk`，支持 Android 10 及以上的 arm64 设备。
 可以免登录体验演示，登录后查看同步会话。在设置中选择 **Check for updates**，
 应用会下载并校验新版，再由 Android 系统确认安装。首次安装或更新时，按系统提示
 允许 Zerun 安装应用。详见 [Android 安装、构建与更新说明](apps/android/README.md)。

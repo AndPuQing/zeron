@@ -2,7 +2,7 @@
 
 Control your coding agents (Claude Code, Codex, Cursor, Devin, Grok, Hermes, Pi, Antigravity, DeepSeek Harness) locally by default, with optional multi-device sync.
 
-*English | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md)*
+*English | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [Español](README.es.md)*
 
 ![Zerun desktop app](docs/media/readme/app-screenshot.jpg)
 
@@ -25,7 +25,7 @@ port is 27642 (`ZERUN_CALLBACK_PORT`).
 ## Android
 
 Download `zerun-<version>-android.apk` from [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest).
-The signed APK supports Android 10 and later on arm64 and x86_64. Open the demo
+The signed release APK supports Android 10 and later on arm64. Open the demo
 without an account, or sign in to follow your synced sessions. Settings →
 **Check for updates** downloads a verified release and opens Android's installer.
 See [Android setup and updates](apps/android/README.md).
