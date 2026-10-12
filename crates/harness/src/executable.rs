@@ -282,6 +282,7 @@ pub(crate) fn parse_version(bytes: &[u8]) -> Option<semver::Version> {
         .find_map(|word| {
             semver::Version::parse(
                 word.trim_matches(|c: char| matches!(c, '(' | ')' | ','))
+                    .trim_end_matches('.')
                     .trim_start_matches('v'),
             )
             .ok()
@@ -540,6 +541,12 @@ mod tests {
 
     #[test]
     fn semantic_versions_support_cli_labels_and_prereleases() {
+        assert_eq!(
+            parse_version(
+                b"GitHub Copilot CLI 1.0.95.\nRun 'copilot update' to check for updates."
+            ),
+            Some(semver::Version::new(1, 0, 95))
+        );
         assert_eq!(
             parse_version(b"Claude Code v2.1.3 (native)"),
             Some(semver::Version::new(2, 1, 3))

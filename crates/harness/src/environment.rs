@@ -69,6 +69,7 @@ pub fn validate_name(name: &str) -> Result<(), String> {
         "APPDATA",
         "LOCALAPPDATA",
         "CODEX_HOME",
+        "COPILOT_HOME",
         "CLAUDE_CONFIG_DIR",
         "PI_CODING_AGENT_DIR",
         "GROK_HOME",
@@ -89,6 +90,7 @@ pub fn validate_name(name: &str) -> Result<(), String> {
         || [
             "CLAUDE_CODE_EXECUTABLE",
             "CODEX_EXECUTABLE",
+            "COPILOT_EXECUTABLE",
             "CURSOR_SDK_SHIM_EXECUTABLE",
             "GROK_EXECUTABLE",
             "DEVIN_EXECUTABLE",
@@ -267,6 +269,8 @@ mod tests {
             " A",
             "HOME",
             "CODEX_HOME",
+            "COPILOT_HOME",
+            "COPILOT_EXECUTABLE",
             "ZERUN_TEST",
             "CLAUDECODE",
         ] {

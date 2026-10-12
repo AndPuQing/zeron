@@ -24,6 +24,10 @@ pub(crate) fn context(
             vec![root.join("settings.json"), root.join(".credentials.json")]
         }
         HarnessId::Cursor => vec![home.join(".cursor/sdk/auth.json")],
+        HarnessId::Copilot => {
+            let root = crate::acp::copilot_home();
+            vec![root.join("config.json")]
+        }
         HarnessId::Opencode => {
             let data = root("XDG_DATA_HOME", home.join(".local/share"));
             let config = root("XDG_CONFIG_HOME", home.join(".config"));
@@ -108,6 +112,7 @@ pub(crate) fn context(
     hash_files(&mut hash, files.iter().chain(extra))?;
     let prefixes: &[&str] = match id {
         HarnessId::Codex => &["CODEX_", "OPENAI_"],
+        HarnessId::Copilot => &["COPILOT_", "GH_TOKEN", "GITHUB_TOKEN"],
         HarnessId::ClaudeCode => &["CLAUDE_", "ANTHROPIC_", "AWS_"],
         HarnessId::Opencode => &["OPENCODE_", "OPENAI_", "ANTHROPIC_", "GOOGLE_"],
         HarnessId::Grok => &["GROK_", "XAI_"],

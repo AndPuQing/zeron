@@ -12,6 +12,9 @@
 //!   ports of zeron's `icons.tsx`. gpui tints SVGs with the text color, so the
 //!   Claude mark's brand orange is applied at the call site ([`CLAUDE_BRAND`]).
 //!
+//! - `copilot-mark` comes from GitHub Octicons (MIT); see the bundled
+//!   `assets/icons/LICENSE-octicons`.
+//!
 //! Icons render via [`icon`]: `icon(icons::PAPERCLIP).size(px(16.)).text_color(…)`.
 
 use std::borrow::Cow;
@@ -221,6 +224,7 @@ icon_assets![
     // Harness brand marks (icons.tsx).
     (CLAUDE_MARK, "claude-mark"),
     (OPENAI_MARK, "openai-mark"),
+    (COPILOT_MARK, "copilot-mark"),
     (CURSOR_MARK, "cursor-mark"),
     (DEVIN_MARK, "devin-mark"),
     (GROK_MARK, "grok-mark"),

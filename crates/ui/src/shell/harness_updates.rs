@@ -93,6 +93,7 @@ fn visible_rows(
 fn agent_name(harness: HarnessId) -> &'static str {
     match harness {
         HarnessId::ClaudeCode => "Claude Code",
+        HarnessId::Copilot => "GitHub Copilot",
         HarnessId::Codex => "Codex",
         HarnessId::Cursor => "Cursor",
         HarnessId::Devin => "Devin",

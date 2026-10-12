@@ -295,9 +295,10 @@ mod tests {
         }
     }
 
-    const HARNESSES: [crate::HarnessId; 10] = [
+    const HARNESSES: [crate::HarnessId; 11] = [
         crate::HarnessId::ClaudeCode,
         crate::HarnessId::Codex,
+        crate::HarnessId::Copilot,
         crate::HarnessId::Cursor,
         crate::HarnessId::Devin,
         crate::HarnessId::Grok,

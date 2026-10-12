@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub enum HarnessId {
     ClaudeCode,
     Codex,
+    /// GitHub Copilot CLI, driven over its native ACP server (`copilot --acp`).
+    Copilot,
     Cursor,
     /// Cognition's Devin agent, driven over ACP (`devin acp`).
     Devin,

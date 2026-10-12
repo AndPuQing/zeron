@@ -6112,6 +6112,7 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
             Some(crate::icons::claude_brand()),
         ),
         HarnessId::Codex => (crate::icons::OPENAI_MARK, None),
+        HarnessId::Copilot => (crate::icons::COPILOT_MARK, None),
         HarnessId::Cursor => (crate::icons::CURSOR_MARK, None),
         // Cognition's mark (the Devin product icon), monochrome.
         HarnessId::Devin => (crate::icons::DEVIN_MARK, None),
