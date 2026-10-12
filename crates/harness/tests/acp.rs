@@ -873,6 +873,136 @@ async fn dsh_grouped_model_options_are_discovered_over_acp() {
     );
 }
 
+fn dsh_storage_fixture() -> (tempfile::TempDir, AcpHarness) {
+    use std::os::unix::fs::PermissionsExt;
+    use zeron_harness::environment::{EnvironmentEntry, EnvironmentSnapshot};
+
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("dsh.py");
+    std::fs::write(&script, include_str!("fixtures/fake-dsh-storage.py")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(dir.path().join("state"), "ok").unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::fs::write(home.join(".credentials.yaml"), "fixture credentials").unwrap();
+    let environment = EnvironmentSnapshot {
+        entries: std::collections::BTreeMap::from([(
+            "DSH_HOME".into(),
+            EnvironmentEntry::Set {
+                value: home.to_str().unwrap().into(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let harness = AcpHarness::dsh()
+        .with_executable(script)
+        .with_environment(std::sync::Arc::new(environment))
+        .with_model_discovery_timeout(Duration::from_secs(2));
+    (dir, harness)
+}
+
+fn assert_dsh_probes_cleaned(dir: &std::path::Path, expected: usize) {
+    let launches = std::fs::read_to_string(dir.join("launches.jsonl")).unwrap();
+    assert_eq!(launches.lines().count(), expected);
+    let mut scratches = std::collections::HashSet::new();
+    for line in launches.lines() {
+        let launch: serde_json::Value = serde_json::from_str(line).unwrap();
+        let scratch = std::path::Path::new(launch["scratch"].as_str().unwrap());
+        assert!(
+            scratches.insert(scratch.to_path_buf()),
+            "shared probe storage"
+        );
+        assert!(!scratch.exists(), "probe storage survived: {scratch:?}");
+        assert_eq!(
+            launch["home"].as_str().unwrap(),
+            dir.join("home").to_str().unwrap()
+        );
+        assert_eq!(launch["search"], ":memory:");
+        for name in ["sessions", "storages"] {
+            let root = std::path::Path::new(launch["roots"][name].as_str().unwrap());
+            assert!(root.starts_with(scratch));
+            assert!(!dir.join("home").join(name).exists(), "polluted {name}");
+        }
+    }
+    assert!(!dir.join("home/session-index.sqlite").exists());
+    assert_eq!(
+        std::fs::read_to_string(dir.join("home/.credentials.yaml")).unwrap(),
+        "fixture credentials"
+    );
+}
+
+#[tokio::test]
+async fn dsh_model_command_and_skill_probes_leave_no_persistent_sessions() {
+    let (dir, harness) = dsh_storage_fixture();
+    let (models, commands) = tokio::join!(harness.model_catalog(true), harness.commands());
+    assert_eq!(models.unwrap().models[0].id, "fixture-model");
+    assert!(
+        commands
+            .unwrap()
+            .iter()
+            .any(|command| command.name == "plan")
+    );
+    let workspace = dir.path().join("project");
+    std::fs::create_dir(&workspace).unwrap();
+    assert!(
+        harness
+            .commands_for(&workspace)
+            .await
+            .unwrap()
+            .iter()
+            .any(|command| command.name == "plan")
+    );
+    let skills_workspace = dir.path().join("skills-project");
+    let skill = skills_workspace.join(".dsh/skills/plan");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: plan\ndescription: Plan carefully\n---\nPlan the task.\n",
+    )
+    .unwrap();
+    let skills = harness.skills(&skills_workspace).await.unwrap().unwrap();
+    assert!(skills.iter().any(|skill| {
+        skill.name == "plan"
+            && skill
+                .command
+                .as_ref()
+                .is_some_and(|command| command.name == "plan")
+    }));
+    assert_dsh_probes_cleaned(dir.path(), 4);
+}
+
+#[tokio::test]
+async fn dsh_failed_and_timed_out_probes_clean_their_storage() {
+    for state in ["error", "exit", "timeout"] {
+        let (dir, harness) = dsh_storage_fixture();
+        std::fs::write(dir.path().join("state"), state).unwrap();
+        assert!(harness.model_catalog(true).await.is_err(), "{state}");
+        // Transient failures are retried; every attempt must be isolated.
+        assert_dsh_probes_cleaned(dir.path(), 3);
+    }
+}
+
+#[tokio::test]
+async fn dsh_real_runs_keep_persistent_session_storage() {
+    let (dir, harness) = dsh_storage_fixture();
+    let mut req = request("hi");
+    req.model = Some("fixture-model".into());
+    req.cwd = dir.path().display().to_string();
+    let (controls, _steer, _token) = controls();
+    let events = run_to_end(&harness, req, controls).await;
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+    let launch: serde_json::Value = serde_json::from_str(
+        std::fs::read_to_string(dir.path().join("launches.jsonl"))
+            .unwrap()
+            .trim(),
+    )
+    .unwrap();
+    assert!(launch["scratch"].is_null());
+    assert!(dir.path().join("home/sessions").is_dir());
+    assert!(dir.path().join("home/storages").is_dir());
+    assert!(dir.path().join("home/session-index.sqlite").is_file());
+}
+
 /// The saved model round-trips as the exact advertised tuple, and Minimal
 /// effort lands on dsh's `off` value.
 #[tokio::test]

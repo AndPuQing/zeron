@@ -33,6 +33,7 @@
 
 mod antigravity_paths;
 mod devin_models;
+mod dsh_discovery;
 mod normalize;
 mod prompt;
 mod subagent;
@@ -1527,7 +1528,7 @@ impl AcpHarness {
     pub async fn sign_out(&self) -> Result<(), HarnessError> {
         let home = std::env::var("HOME").ok();
         let (_scratch, mut child, _stderr, sign_in_prompted) =
-            self.spawn_agent(home.as_deref(), false, &[], None).await?;
+            self.spawn_agent(home.as_deref(), false, &[], false).await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
                 client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
@@ -1912,7 +1913,7 @@ impl AcpHarness {
         cwd: Option<&str>,
         block_on_install: bool,
         extra_args: &[String],
-        _mcp: Option<&zeron_proto::McpServer>,
+        discovery: bool,
     ) -> Result<
         (
             Option<ScratchDir>,
@@ -1946,9 +1947,16 @@ impl AcpHarness {
                 }
             }
         }
-        let scratch = self.adapter_scratch()?;
+        let scratch = if discovery && self.spec.id == HarnessId::Dsh {
+            Some(ScratchDir::new("dsh-discovery")?)
+        } else {
+            self.adapter_scratch()?
+        };
         if let Some(dir) = &scratch {
             dir.apply(&mut cmd);
+            if discovery && self.spec.id == HarnessId::Dsh {
+                dsh_discovery::configure(&mut cmd, dir)?;
+            }
         }
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1993,7 +2001,7 @@ impl AcpHarness {
         cwd: Option<&std::path::Path>,
     ) -> Result<Vec<SlashCommand>, HarnessError> {
         let (_scratch, mut child, _stderr, sign_in_prompted) = self
-            .spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], None)
+            .spawn_agent(cwd.and_then(|p| p.to_str()), false, &[], true)
             .await?;
         let (client, mut incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
@@ -2065,7 +2073,7 @@ impl AcpHarness {
     /// matching entries and names the pick when the agent advertises nothing.
     async fn discover_models(&self) -> Result<Vec<Model>, HarnessError> {
         let (_scratch, mut child, stderr_tail, sign_in_prompted) =
-            self.spawn_agent(None, false, &[], None).await?;
+            self.spawn_agent(None, false, &[], true).await?;
         let (client, _incoming) = match (child.stdin.take(), child.stdout.take()) {
             (Some(stdin), Some(stdout)) => {
                 client_with_sign_in_prompt(stdin, stdout, self.spec.id, &sign_in_prompted)
@@ -2619,7 +2627,7 @@ impl Harness for AcpHarness {
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let (scratch, mut child, stderr_tail, sign_in_prompted) = self
-            .spawn_agent(Some(&request.cwd), true, &[], request.mcp.as_ref())
+            .spawn_agent(Some(&request.cwd), true, &[], false)
             .await?;
         let stdin = child
             .stdin

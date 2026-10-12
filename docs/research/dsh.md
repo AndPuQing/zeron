@@ -44,3 +44,16 @@ The `thought_level` values `off`, `low`, `high`, and `max` map to
 Model-discovery cache invalidation tracks `.credentials.yaml` and
 `cordis.patch.yml` below `DSH_HOME`, plus `package.json` and `cordis.patch.yml`
 in the selected profile directory.
+
+Model, command, and skill discovery creates short-lived ACP sessions. Zerun
+adds a process-local `--patch` overlay that redirects session logs and JSON
+workspace/projection storage to a private temporary directory and disables
+the SQLite session search index. The directory is removed after the probe
+exits, including on errors and timeouts. Discovery uses the standard base
+profile's storage entry IDs; custom profiles should retain those IDs.
+Profiles, credentials, and model settings still come from `DSH_HOME`; real
+conversations use the profile's normal persistent storage.
+
+Empty unnamed sessions created by older Zerun versions remain in dsh's
+history. Archive confirmed probe sessions in dsh's Web UI; a missing title
+alone does not distinguish a probe from a user's unfinished conversation.
