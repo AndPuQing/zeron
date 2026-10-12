@@ -76,7 +76,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/linux-ci
         with:
-          # Same dependency graph as ui-tests, which saves this cache on main.
+          # ui-tests saves the shared dependency cache on the default branch.
           rust-cache: ui
           apt-cache: browser
           apt-recommends: 'true'

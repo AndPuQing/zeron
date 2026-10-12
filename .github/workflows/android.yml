@@ -114,6 +114,7 @@ jobs:
 
       - name: Rust toolchain and Android targets
         run: |
+          rustup update stable --no-self-update
           rustup show active-toolchain || rustup toolchain install
           rustup target add aarch64-linux-android
           if [[ "$ZERON_ANDROID_ABIS" == *x86_64* ]]; then
@@ -122,6 +123,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: android-mobile-ndk29
+          save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
       - name: cargo-ndk
         run: cargo install cargo-ndk --locked --version 4.1.2
 
