@@ -66,11 +66,11 @@ rm -rf "$ICONSET"
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   # Hardened runtime + secure timestamp are both notarization requirements.
   # (No --deep: Apple deprecated it; the bundle is a single Mach-O anyway.)
-  codesign --entitlements "$ROOT/dist/macos/Dictation.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
+  codesign --entitlements "$ROOT/dist/macos/Zerun.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
 else
   # Ad-hoc signature so the app launches on Apple silicon (Gatekeeper still
   # requires right-click → Open on first launch without notarization).
-  codesign --deep --force --entitlements "$ROOT/dist/macos/voice.entitlements" --sign - "$APP"
+  codesign --deep --force --entitlements "$ROOT/dist/macos/Zerun.entitlements" --sign - "$APP"
 fi
 
 # Verify the finished bundle, including the executable named in its metadata.

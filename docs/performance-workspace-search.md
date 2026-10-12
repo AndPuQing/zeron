@@ -22,7 +22,7 @@ warms the focused chat's index when focus changes.
 - Content searches wait up to 300 ms for the initial scan and return
   `indexing: true` while results may be incomplete. Name searches without an
   indexing field wait up to two seconds.
-- At most seven indexes remain live. Creating another evicts the least
+- At most seven workspace indexes remain live. Creating another evicts the least
   recently used one. Idle indexes expire after 15 minutes; a reaper checks
   once per minute.
 - Each index caches at most 16 MB of file contents. Indexes store paths and
@@ -48,6 +48,20 @@ Content queries use literal text and smart case, preserve spaces and
 backslashes, and skip binary files and files larger than 10 MB. Results include
 the file, line, byte column and UTF-8 byte ranges within a bounded preview.
 Queries have a two-second search budget and may return partial results.
+
+## Home-folder searches
+
+The host's home folder uses a separate names-only index. It reads directory
+listings without opening file contents, and skips cloud folders, hidden
+folders, machine state and dependency directories. Content search is unavailable
+at the home root. Open a specific project folder to search its contents.
+
+The home index holds at most 250,000 entries. After one minute, the next query
+starts a background refresh while the existing index continues answering.
+
+New chats without a project use individual folders under the host's data
+directory (`~/.zerun/scratch` by default). Their searches stay within that folder.
+Existing chats that use the home folder retain their working directory.
 
 ## Development
 

@@ -17,6 +17,9 @@ pub mod capabilities {
     pub const HARNESS_UPDATES_V1: &str = "harness-updates-v1";
     pub const HARNESS_ENVIRONMENT_V1: &str = "harness-environment-v1";
     pub const EXTERNAL_SESSION_IMPORT_V1: &str = "external-session-import-v1";
+    /// The host creates a projectless chat's scratch folder
+    /// (`crate::projectless`) when it runs; older hosts only know `~`.
+    pub const PROJECTLESS_SCRATCH_V1: &str = "projectless-scratch-v1";
 
     pub const CURRENT: &[&str] = &[
         COMPOSER_REFERENCES_V1,
@@ -27,6 +30,7 @@ pub mod capabilities {
         MESSAGE_QUEUE_EDIT_LEASE_V1,
         HARNESS_UPDATES_V1,
         HARNESS_ENVIRONMENT_V1,
+        PROJECTLESS_SCRATCH_V1,
         crate::voice::remote::CAPABILITY,
         EXTERNAL_SESSION_IMPORT_V1,
     ];
@@ -110,6 +114,7 @@ mod tests {
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
                     "harness-environment-v1",
+                    "projectless-scratch-v1",
                     "voice-client-media-v1",
                     "external-session-import-v1"
                 ],
