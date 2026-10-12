@@ -111,6 +111,7 @@ fn install_params(harness: HarnessId, target: &Option<String>) -> serde_json::Va
 pub fn cli_name(harness: HarnessId) -> &'static str {
     match harness {
         HarnessId::ClaudeCode => "claude",
+        HarnessId::Copilot => "copilot",
         HarnessId::Codex => "codex",
         HarnessId::Cursor => "cursor-agent",
         HarnessId::Devin => "devin",
@@ -281,6 +282,14 @@ impl HarnessesPage {
             .flex()
             .flex_col()
             .gap(px(20.0))
+            .when(harness == HarnessId::Copilot, |details| {
+                details.child(
+                    div()
+                        .text_size(px(12.0))
+                        .text_color(theme.text_muted)
+                        .child("Sign in on the execution device with `copilot login`. Copilot CLI manages its own GitHub account."),
+                )
+            })
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
             .children(self.environment_editor.clone())

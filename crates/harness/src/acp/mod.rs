@@ -3,7 +3,8 @@
 //!
 //! KEPT ONLY for agents built ground-up on ACP: Grok ([`AcpHarness::grok`],
 //! `grok agent stdio`), Devin ([`AcpHarness::devin`], `devin acp`), Hermes
-//! ([`AcpHarness::hermes`], `hermes acp`), Antigravity
+//! ([`AcpHarness::hermes`], `hermes acp`), GitHub Copilot
+//! ([`AcpHarness::copilot`], `copilot --acp`), Antigravity
 //! ([`AcpHarness::antigravity`], Google's `agy_acp_server`, installed from its
 //! pinned release archive) and DeepSeek Harness ([`AcpHarness::dsh`],
 //! `dsh --profile acp-plus`). Pi, Claude, Codex and Cursor use native drivers
@@ -33,6 +34,7 @@
 mod antigravity_paths;
 mod devin_models;
 mod normalize;
+mod prompt;
 mod subagent;
 mod subagent_devin;
 mod system_message;
@@ -64,6 +66,7 @@ use crate::{
 };
 use child::Child;
 use normalize::{map_update, parse_commands, preferred_allow_option};
+use prompt::Prompt;
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
 
@@ -1261,6 +1264,75 @@ fn dsh_spec() -> AcpAgentSpec {
     }
 }
 
+pub(crate) fn copilot_home() -> PathBuf {
+    crate::model_context::root(
+        "COPILOT_HOME",
+        crate::executable::home_or_current_dir().join(".copilot"),
+    )
+}
+
+pub(crate) fn copilot_skill_dirs() -> Vec<PathBuf> {
+    vec![copilot_home().join("skills")]
+}
+
+fn copilot_install_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(home) = crate::executable::home_dir() {
+        for dir in [".local/bin", ".bun/bin", ".npm-global/bin"] {
+            paths.push(home.join(dir).join("copilot"));
+        }
+    }
+    paths.push(PathBuf::from("/opt/homebrew/bin/copilot"));
+    paths.push(PathBuf::from("/usr/local/bin/copilot"));
+    paths
+}
+
+fn copilot_spec() -> AcpAgentSpec {
+    AcpAgentSpec {
+        id: HarnessId::Copilot,
+        display_name: "GitHub Copilot",
+        executable: "copilot",
+        env_override: "COPILOT_EXECUTABLE",
+        // Preserve Copilot's native cached-release selection: disabling its
+        // updater would also ignore releases installed by `copilot update`.
+        args: || args(&["--acp"]),
+        npm_package: None,
+        archive: None,
+        extra_paths: copilot_install_paths,
+        cli_executable: "copilot",
+        cli_extra_paths: copilot_install_paths,
+        install_hint: "Install GitHub Copilot CLI with `npm install -g @github/copilot`, \
+            then run `copilot login` on the execution device; set COPILOT_EXECUTABLE \
+            to override the binary path",
+        // Only Auto is guaranteed. Account-dependent models and effort
+        // choices come from the native session's advertised config options.
+        models: || {
+            vec![Model {
+                id: "auto".into(),
+                label: "Auto".into(),
+                description: Some("Let Copilot pick the best model".into()),
+                reasoning_levels: Vec::new(),
+                options: Vec::new(),
+            }]
+        },
+        steering_mode: SteeringMode::TurnBoundary,
+        reasoning_levels: &[],
+        prompt_transform: identity_transform,
+        effort_values: default_effort_values,
+        ladder_extras: &[],
+        prompt_complete_extension: false,
+        prompt_stall: None,
+        stall_hint: "The Copilot CLI process is likely wedged.",
+        effort_in_model_id: false,
+        // Terminal authentication is handled by Copilot itself. An auth
+        // error must surface login instructions rather than launching a UI.
+        auth_method: Some("copilot-login"),
+        skill_dirs: copilot_skill_dirs,
+        hidden_commands: &[],
+        drops_unstarted_cancelled_prompt: false,
+    }
+}
+
 /// how long a sign-in may wait on the browser: the antigravity server gives
 /// its loopback redirect 300s, plus room for the token exchange.
 const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(330);
@@ -1443,6 +1515,11 @@ impl AcpHarness {
     /// profile before acp-plus is installed).
     pub fn dsh() -> Self {
         Self::with_spec(dsh_spec())
+    }
+
+    /// GitHub Copilot CLI's native ACP server (`copilot --acp`).
+    pub fn copilot() -> Self {
+        Self::with_spec(copilot_spec())
     }
 
     /// sign the agent out with acp `logout`, clearing the credentials its
@@ -2007,6 +2084,17 @@ impl AcpHarness {
                 .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
                 .await?;
             let mut models = models_from_session(&session, &(self.spec.models)());
+            if self.spec.id == HarnessId::Copilot {
+                // Copilot can advertise Auto twice (the synthetic default
+                // plus the account catalog). Preserve the first row's label.
+                let mut seen = std::collections::HashSet::new();
+                models.retain(|model| seen.insert(model.id.clone()));
+                // Permissions use the shared ACP host handling, rather
+                // than a model trait that would promise a second policy.
+                for model in &mut models {
+                    model.options.retain(|option| option.id != "allow_all");
+                }
+            }
             // Prompt-convention modes (Claude Ultrathink) extend any real
             // ladder — never an effort-less model's empty one.
             for model in &mut models {
@@ -3164,12 +3252,12 @@ fn stop_outcome(
 fn prompt_turn(
     client: RpcClient,
     session_id: String,
-    text: String,
+    text: Prompt,
     prompt_id: Option<String>,
 ) -> BoxFuture<'static, Result<Value, HarnessError>> {
     let mut params = json!({
         "sessionId": session_id,
-        "prompt": [{ "type": "text", "text": text }],
+        "prompt": text.content(),
     });
     if let Some(id) = prompt_id {
         params["_meta"] = json!({ "promptId": id, "requestId": id });
@@ -3637,6 +3725,9 @@ fn handle_elicitation_live(
 /// Where an agent that signs in from settings sends a signed-out run: the
 /// provider's Accounts section, whose connect flow is the same for every agent.
 fn not_signed_in(agent_name: &str) -> String {
+    if agent_name == "GitHub Copilot" {
+        return "GitHub Copilot isn't signed in. Run `copilot login` on the execution device, then retry.".into();
+    }
     format!(
         "{agent_name} isn't signed in. Open Settings → Providers → {agent_name} and connect an account."
     )
@@ -4074,7 +4165,7 @@ async fn select_session_config(
         )),
         model => model.map(str::to_owned),
     };
-    if rules.harness == HarnessId::Antigravity {
+    if matches!(rules.harness, HarnessId::Antigravity | HarnessId::Copilot) {
         validate_config_model_selection(
             &session_response,
             requested_model.as_deref(),
@@ -4250,6 +4341,11 @@ async fn run_session(session: Session) {
                 Ok(resp) => (resume.clone(), resp),
                 Err(e) if auth_method.is_some() && is_auth_required(&e) => {
                     return Err(HarnessError::Protocol(not_signed_in(agent_name)));
+                }
+                Err(e) if request.require_native_resume => {
+                    return Err(HarnessError::Protocol(format!(
+                        "{agent_name} could not restore required session {resume}: {e}"
+                    )));
                 }
                 // A missing/foreign session falls back to a fresh one.
                 Err(e) => {
@@ -4453,7 +4549,12 @@ async fn run_session(session: Session) {
         prompt_stall.map(|d| tokio::time::Instant::now() + d);
     // The text of the prompt in flight (re-sent by a preempt when the agent
     // drops an unstarted cancelled prompt).
-    let mut current_prompt_text = prompt_transform(request.reasoning, &request.prompt);
+    let mut current_prompt_text = Prompt::new(
+        harness,
+        prompt_transform(request.reasoning, &request.prompt),
+        &request.attachments,
+    )
+    .await;
     let mut turn: Option<BoxFuture<'static, Result<Value, HarnessError>>> = Some({
         prompt_turn(
             client.clone(),
@@ -4464,15 +4565,15 @@ async fn run_session(session: Session) {
     });
     // Steers waiting for the turn boundary (agents without the extension, or
     // extension steers that lost the turn-end race).
-    let mut queued_steers: VecDeque<String> = VecDeque::new();
+    let mut queued_steers: VecDeque<Prompt> = VecDeque::new();
     // The in-flight `_session/steering` call (text + response future), plus
     // followers awaiting their turn. Polled from the main select so the loop
     // keeps draining `incoming` while the agent responds — awaiting inline
     // deadlocks against a full incoming channel when the agent floods
     // updates (the reader blocks on the channel and never parses the
     // steering response).
-    let mut steering_call: Option<(String, BoxFuture<'static, Result<Value, HarnessError>>)> = None;
-    let mut steer_backlog: VecDeque<String> = VecDeque::new();
+    let mut steering_call: Option<(Prompt, BoxFuture<'static, Result<Value, HarnessError>>)> = None;
+    let mut steer_backlog: VecDeque<Prompt> = VecDeque::new();
     let mut steering_open = true;
     // Immediate steering for agents without a mid-turn steering extension:
     // a steer cancels the current generation (never a running tool — it
@@ -4773,7 +4874,7 @@ async fn run_session(session: Session) {
                         prompt_complete_extension.then(|| format!("zeron-p{prompt_seq}"));
                     prompt_stall_deadline =
                         prompt_stall.map(|d| tokio::time::Instant::now() + d);
-                    current_prompt_text = texts.join("\n\n");
+                    current_prompt_text = Prompt::join(texts);
                     turn = Some(prompt_turn(
                         client.clone(),
                         session_id.clone(),
@@ -5291,7 +5392,9 @@ async fn run_session(session: Session) {
                     }
                     // Same transform as the initial prompt: Claude's
                     // Ultrathink prefix rides every steer too.
-                    let text = prompt_transform(request.reasoning, &msg.prompt);
+                    let text = Prompt::new(
+                        harness, prompt_transform(request.reasoning, &msg.prompt), &msg.attachments,
+                    ).await;
                     if turn.is_none() && cancel_flush_deadline.is_some() {
                         // A busy-session cancel is already in flight: this
                         // steer lines up behind it and dispatches at flush.

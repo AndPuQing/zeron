@@ -131,6 +131,7 @@ pub(super) fn default_hermes_home() -> PathBuf {
 pub(super) fn cli_name(harness: HarnessId) -> &'static str {
     match harness {
         HarnessId::ClaudeCode => "claude",
+        HarnessId::Copilot => "copilot",
         HarnessId::Codex => "codex",
         HarnessId::Cursor => "Cursor",
         HarnessId::Grok => "grok",

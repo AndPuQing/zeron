@@ -888,6 +888,25 @@ pub fn default_registry() -> HarnessRegistry {
         Box::new(|| zeron_harness::AcpHarness::dsh().installed()),
         Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::dsh()) as Arc<dyn Harness>)),
     );
+    registry.register_configured(
+        HarnessDescriptor {
+            id: HarnessId::Copilot,
+            name: "GitHub Copilot".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::TurnBoundary,
+            reasoning_levels: Vec::new(),
+            installed: true,
+            can_install: false,
+            enabled: None,
+        },
+        Box::new(|| zeron_harness::AcpHarness::copilot().installed()),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::copilot().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
+    );
     registry
 }
 
@@ -971,7 +990,8 @@ mod tests {
                 HarnessId::Pi,
                 HarnessId::Opencode,
                 HarnessId::Antigravity,
-                HarnessId::Dsh
+                HarnessId::Dsh,
+                HarnessId::Copilot
             ]
         );
         assert!(registry.resolve(HarnessId::Mock).is_ok());
@@ -1046,6 +1066,30 @@ mod tests {
                 ReasoningLevel::High,
                 ReasoningLevel::Max,
             ]
+        );
+    }
+
+    #[test]
+    fn copilot_descriptor_matches_the_resolved_native_driver() {
+        let registry = default_registry();
+        let before = registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == HarnessId::Copilot)
+            .unwrap();
+        let driver = registry.resolve(HarnessId::Copilot).unwrap();
+        assert_eq!(before.name, driver.display_name());
+        assert_eq!(before.supports_steering, driver.supports_steering());
+        assert_eq!(before.steering_mode, driver.steering_mode());
+        assert_eq!(before.reasoning_levels, driver.reasoning_levels());
+        let after = registry
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.id == HarnessId::Copilot)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap()
         );
     }
 

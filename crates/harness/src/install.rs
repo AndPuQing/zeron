@@ -71,6 +71,11 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
             "irm 'https://cursor.com/install?win32=true' | iex",
         )],
         Cursor => vec![Shell("curl https://cursor.com/install -fsS | bash", "bash")],
+        Copilot if windows => vec![Npm("@github/copilot", false)],
+        Copilot => vec![
+            Shell("curl -fsSL https://gh.io/copilot-install | bash", "bash"),
+            Npm("@github/copilot", false),
+        ],
         Opencode if windows => vec![Npm("@opencode/cli", false)],
         Opencode => vec![
             Shell("curl -fsSL https://opencode.ai/install | bash", "bash"),
@@ -156,6 +161,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
     Some(match id {
         ClaudeCode => "curl -fsSL https://claude.ai/install.sh | bash",
         Codex => "npm install -g @openai/codex",
+        Copilot => "npm install -g @github/copilot",
         Cursor => "curl https://cursor.com/install -fsS | bash",
         Opencode => "npm install -g @opencode/cli",
         Pi => "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
@@ -172,6 +178,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
     match id {
         ClaudeCode => ("claude", "~/.local/bin"),
         Codex => ("codex", "~/.local/bin or the npm global bin"),
+        Copilot => ("copilot", "~/.local/bin or the npm global bin"),
         Cursor => ("cursor-agent", "~/.local/bin or ~/.cursor/bin"),
         Opencode => ("opencode", "~/.opencode/bin or the npm global bin"),
         Pi => ("pi", "the npm global bin"),
@@ -189,6 +196,7 @@ pub fn installed(id: HarnessId) -> bool {
     match id {
         ClaudeCode => crate::ClaudeHarness::new().installed(),
         Codex => crate::CodexHarness::new().installed(),
+        Copilot => crate::AcpHarness::copilot().installed(),
         Cursor => crate::CursorHarness::new().installed(),
         Opencode => crate::OpencodeHarness::new().installed(),
         Pi => crate::PiHarness::new().installed(),
@@ -398,9 +406,10 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 11] = [
+    const IDS: [HarnessId; 12] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
+        HarnessId::Copilot,
         HarnessId::Cursor,
         HarnessId::Opencode,
         HarnessId::Pi,

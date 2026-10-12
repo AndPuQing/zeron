@@ -347,6 +347,7 @@ fn harness_from_env() -> zeron_engine::HarnessId {
     match std::env::var("ZERON_HARNESS").as_deref().map(str::trim) {
         Ok("mock") => zeron_engine::HarnessId::Mock,
         Ok("codex") => zeron_engine::HarnessId::Codex,
+        Ok("copilot") => zeron_engine::HarnessId::Copilot,
         Ok("cursor") => zeron_engine::HarnessId::Cursor,
         Ok("devin") => zeron_engine::HarnessId::Devin,
         Ok("grok") => zeron_engine::HarnessId::Grok,

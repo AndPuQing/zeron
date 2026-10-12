@@ -1,15 +1,14 @@
 # Explicit agent installation
 
 Settings → Providers → **Install** runs on the selected device, as its user. Merely
-listing or detecting agents never invokes these CLI installers. The table below
-was checked with `curl -fsSL` against the linked vendor documentation on
-2026-09-21. Commands download the vendor's current release, except for the existing
-pinned Antigravity archive.
+listing or detecting agents never invokes these CLI installers. Commands download
+the vendor's current release, except for the pinned Antigravity archive.
 
 | Agent / documentation | Unix command (Linux and macOS) | Native Windows command |
 | --- | --- | --- |
 | [Claude Code](https://code.claude.com/docs/en/setup) | `curl -fsSL https://claude.ai/install.sh \| bash` | `irm https://claude.ai/install.ps1 \| iex` |
 | [Codex](https://github.com/openai/codex/blob/main/README.md) | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | `irm https://chatgpt.com/codex/install.ps1 \| iex` |
+| [GitHub Copilot](https://docs.github.com/copilot/how-tos/copilot-cli) | `curl -fsSL https://gh.io/copilot-install \| bash` | `npm.cmd install -g @github/copilot` |
 | [Cursor](https://cursor.com/docs/cli/installation) | `curl https://cursor.com/install -fsS \| bash` | `irm 'https://cursor.com/install?win32=true' \| iex` |
 | [OpenCode](https://opencode.ai/docs/) | `curl -fsSL https://opencode.ai/install \| bash` | `npm.cmd install -g @opencode/cli` |
 | [Pi](https://pi.dev/docs/latest) | `curl -fsSL https://pi.dev/install.sh \| sh` | `npm.cmd install -g --ignore-scripts @earendil-works/pi-coding-agent` |
@@ -25,6 +24,7 @@ Windows npm commands use the resolved npm launcher (normally `npm.cmd`).
 
 If shell prerequisites are absent, these documented npm alternatives are used
 when npm resolves: `npm install -g @openai/codex`,
+`npm install -g @github/copilot`,
 `npm install -g @opencode/cli`,
 `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`, and
 `npm install -g @xai-official/grok`. Codex also falls back to npm on Windows when
@@ -73,3 +73,18 @@ The iOS app adds no Install action. `HarnessDescriptor.can_install` already has
 `#[serde(default)]` (`crates/engine/src/registry.rs`); iOS's `WireHarness: Decodable`
 in `apps/ios/Zeron/Sync/WorkspaceStore.swift` ignores unrecognized keys, including
 `canInstall`. `HarnessCatalog` continues consuming the existing mapped fields.
+
+## GitHub Copilot CLI
+
+Install a current Copilot CLI with native ACP support, then run `copilot login`
+on the device that executes your sessions. Enable **GitHub Copilot** in
+Settings → Providers and select it when creating a conversation. Remote desktop
+and mobile clients use the account on that execution device. Zerun uses the
+CLI's existing login; account switching remains in Copilot CLI.
+
+The driver launches `copilot --acp`, streams text and tool
+results, accepts images, restores native sessions and supports stopping a turn
+without losing the session. Follow-up prompts wait for the current turn to end.
+The CLI supplies the available models and their config options; **Auto** is the
+fallback when discovery is unavailable. `COPILOT_EXECUTABLE` can select a custom
+binary. Updates use Settings' provider update action or `copilot update`.

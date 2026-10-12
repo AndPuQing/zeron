@@ -228,6 +228,12 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: None,
             manual_command: "Update Codex with its original installer or package manager",
         },
+        HarnessId::Copilot => ProviderSpec {
+            version_args: &["--version"],
+            latest: LatestSource::Npm("@github/copilot"),
+            update_args: Some(&["update"]),
+            manual_command: "copilot update",
+        },
         HarnessId::Cursor => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Manual,
@@ -2302,6 +2308,7 @@ fn version_tokens(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|character: char| {
         !(character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '+'))
     })
+    .map(|candidate| candidate.trim_end_matches('.'))
     .filter(|candidate| version_numbers(candidate).is_some())
     .map(|candidate| candidate.trim_start_matches('v').to_owned())
 }
@@ -2545,6 +2552,20 @@ mod tests {
             provider(HarnessId::Antigravity).latest,
             LatestSource::AntigravityAcp
         ));
+    }
+
+    #[test]
+    fn copilot_version_and_updater_use_the_native_cli() {
+        assert_eq!(
+            installed_version(
+                HarnessId::Copilot,
+                "GitHub Copilot CLI 1.0.95.\nRun 'copilot update' to check for updates."
+            ),
+            Some("1.0.95".into())
+        );
+        let spec = provider(HarnessId::Copilot);
+        assert!(matches!(spec.latest, LatestSource::Npm("@github/copilot")));
+        assert_eq!(spec.update_args, Some(&["update"][..]));
     }
 
     #[test]

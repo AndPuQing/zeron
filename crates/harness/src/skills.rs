@@ -122,6 +122,7 @@ fn project_dirs(harness: HarnessId) -> &'static [&'static str] {
         HarnessId::Antigravity => &[".agents/skills", ".gemini/skills"],
         HarnessId::Dsh => &[".agents/skills", ".dsh/skills"],
         HarnessId::Codex => &[".agents/skills", ".codex/skills"],
+        HarnessId::Copilot => &[".agents/skills", ".github/skills", ".claude/skills"],
         HarnessId::Mock => &[],
     }
 }
@@ -135,6 +136,13 @@ fn discover_at(harness: HarnessId, cwd: &Path, home: &Path) -> Result<Vec<Skill>
         HarnessId::Antigravity => {
             roots.extend(
                 crate::acp::antigravity_skill_dirs()
+                    .into_iter()
+                    .map(|path| (path, String::new())),
+            );
+        }
+        HarnessId::Copilot => {
+            roots.extend(
+                crate::acp::copilot_skill_dirs()
                     .into_iter()
                     .map(|path| (path, String::new())),
             );

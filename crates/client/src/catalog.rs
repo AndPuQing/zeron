@@ -159,6 +159,7 @@ pub fn harness_label(id: &str) -> String {
     match id {
         "claude-code" => "Claude Code",
         "codex" => "Codex",
+        "copilot" => "GitHub Copilot",
         "devin" => "Devin",
         "grok" => "Grok",
         "hermes" => "Hermes",
@@ -184,6 +185,13 @@ pub fn fallback_models(harness: &str) -> Vec<ModelInfo> {
         )]
     };
     match harness {
+        "copilot" => vec![model(
+            "auto",
+            "Auto",
+            "Let Copilot pick the best model",
+            &[],
+            vec![],
+        )],
         "grok" => vec![model(
             "grok-4.5",
             "Grok 4.5",
@@ -652,6 +660,8 @@ mod tests {
         assert_eq!(model_label("codex", "gpt-5.6-terra"), "GPT-5.6-Terra");
         assert_eq!(model_label("codex", "some-new-model"), "some-new-model");
         assert_eq!(harness_label("opencode"), "OpenCode");
+        assert_eq!(harness_label("copilot"), "GitHub Copilot");
+        assert_eq!(fallback_models("copilot")[0].id, "auto");
     }
 
     #[test]
