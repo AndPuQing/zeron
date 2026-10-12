@@ -27,10 +27,12 @@ OUT="${1:-$ROOT/target/android-core}"
 mkdir -p "$OUT/kotlin" "$OUT/jniLibs"
 cd "$ROOT"
 
-cargo build --locked -p zeron-mobile --lib --profile mobile
-cargo build --locked -p zeron-mobile --bin uniffi-bindgen --features bindgen --profile mobile
-HOST_LIB="$ROOT/target/mobile/libzeron_mobile.$([[ "$(uname)" == Darwin ]] && echo dylib || echo so)"
-"$ROOT/target/mobile/uniffi-bindgen" generate --library "$HOST_LIB" --language kotlin \
+# The host library only supplies UniFFI metadata. Build it and bindgen together
+# in the dev profile; the Android libraries below still use the mobile profile.
+CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p zeron-mobile --lib \
+  --bin uniffi-bindgen --features bindgen
+HOST_LIB="$ROOT/target/debug/libzeron_mobile.$([[ "$(uname)" == Darwin ]] && echo dylib || echo so)"
+"$ROOT/target/debug/uniffi-bindgen" generate --library "$HOST_LIB" --language kotlin \
   --metadata-no-deps --no-format --out-dir "$OUT/kotlin"
 echo "kotlin bindings: $OUT/kotlin"
 
