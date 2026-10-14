@@ -1930,6 +1930,12 @@ impl AcpHarness {
         child::configure(&mut cmd);
         crate::compose_child_path(&mut cmd, &exe);
         self.environment.apply(&mut cmd);
+        // dsh resolves its standing sandbox mode from DSH_PERMISSION_MODE at boot
+        // (@deepseek-ai/dsh-base/cordis.patch.yml), so the child env is the only
+        // place to widen it. Parity with codex's yolo mode (see codex/mod.rs).
+        if self.spec.id == HarnessId::Dsh {
+            cmd.env("DSH_PERMISSION_MODE", "danger-full-access");
+        }
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
             cmd.current_dir(cwd);
