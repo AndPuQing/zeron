@@ -12,12 +12,18 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 use serde::{Deserialize, Serialize};
 
 use zeron_proto::{HarnessId, ReasoningLevel};
 
 const FILE_NAME: &str = "composer-defaults.json";
+
+// On Windows, rename-over-existing can temporarily make the destination
+// unavailable to another opener. Coordinate this process's readers and
+// writers so a concurrent replacement cannot look like missing preferences.
+static FILE_ACCESS: RwLock<()> = RwLock::new(());
 
 /// Model option picks: option id → choice id (the `ChatConfig` shape).
 pub type ModelOptions = serde_json::Map<String, serde_json::Value>;
@@ -78,6 +84,7 @@ pub struct ComposerDefaults {
 impl ComposerDefaults {
     /// Load from `{data_dir}/composer-defaults.json`; defaults on any failure.
     pub fn load(data_dir: &Path) -> Self {
+        let _access = FILE_ACCESS.read().unwrap_or_else(|err| err.into_inner());
         match std::fs::read_to_string(Self::path(data_dir)) {
             Ok(text) => match serde_json::from_str::<ComposerDefaults>(&text) {
                 Ok(defaults) => defaults,
@@ -92,6 +99,7 @@ impl ComposerDefaults {
 
     /// Write atomically (temp file + rename) so a crash mid-write never corrupts.
     pub fn save(&self, data_dir: &Path) -> io::Result<()> {
+        let _access = FILE_ACCESS.write().unwrap_or_else(|err| err.into_inner());
         std::fs::create_dir_all(data_dir)?;
         let path = Self::path(data_dir);
         // Each writer owns its temporary file; overlapping windows must not
@@ -106,6 +114,7 @@ impl ComposerDefaults {
                 .open(&tmp)?;
             file.write_all(&json)?;
             file.sync_all()?;
+            drop(file);
             std::fs::rename(&tmp, &path)?;
             #[cfg(unix)]
             std::fs::File::open(data_dir)?.sync_all()?;
@@ -264,21 +273,47 @@ mod tests {
     #[test]
     fn concurrent_projectless_saves_leave_a_complete_preference() {
         let dir = tempfile::tempdir().unwrap();
+        ComposerDefaults {
+            device: Some("initial-device".into()),
+            no_project: true,
+            ..Default::default()
+        }
+        .save(dir.path())
+        .unwrap();
+        let start = std::sync::Barrier::new(12);
         std::thread::scope(|scope| {
             for i in 0..8 {
                 let path = dir.path();
+                let start = &start;
                 scope.spawn(move || {
                     let defaults = ComposerDefaults {
                         device: Some(format!("device-{i}")),
                         no_project: true,
                         ..Default::default()
                     };
+                    start.wait();
                     for _ in 0..10 {
                         defaults.save(path).unwrap();
                         let saved = ComposerDefaults::load(path);
                         assert!(saved.no_project);
                         assert!(saved.project.is_none());
                         assert!(saved.device.is_some());
+                    }
+                });
+            }
+            // Independent readers must also retain the saved opt-out while
+            // another window replaces the file, even without saving first.
+            for _ in 0..4 {
+                let path = dir.path();
+                let start = &start;
+                scope.spawn(move || {
+                    start.wait();
+                    for _ in 0..80 {
+                        let saved = ComposerDefaults::load(path);
+                        assert!(saved.no_project);
+                        assert!(saved.project.is_none());
+                        assert!(saved.device.is_some());
+                        std::thread::yield_now();
                     }
                 });
             }
