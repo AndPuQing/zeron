@@ -68,6 +68,7 @@ jobs:
             if (files.length < context.payload.pull_request.changed_files) return true;
             // The app links the Rust mobile core and everything it depends on.
             const mobileCore = ['crates/mobile/', 'crates/client/', 'crates/text/', 'crates/markdown/',
+              'crates/visual/', 'crates/visual-gpu/',
               'crates/doc/', 'crates/sync/', 'crates/proto/', 'crates/rpc/', 'crates/syntax/',
               'scripts/ios/'];
             const affectsIOS = path => path?.startsWith('apps/ios/')
