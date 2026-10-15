@@ -43,12 +43,16 @@ val buildCore by tasks.registering(Exec::class) {
     description = "Builds crates/mobile for Android and generates Kotlin bindings."
     val ndk = System.getenv("ANDROID_NDK_HOME")
         ?: androidComponents.sdkComponents.sdkDirectory.get().dir("ndk/$NDK_VERSION").asFile.path
-    val lib = coreOut.resolve("jniLibs/arm64-v8a/libzeron_mobile.so")
+    val abis = (System.getenv("ZERON_ANDROID_ABIS")?.takeIf { it.isNotBlank() } ?: "arm64-v8a x86_64")
+        .trim().split(Regex("\\s+"))
     val skip = skipCore
+    val requiredLibraries = abis.flatMap { abi ->
+        listOf("libzeron_mobile.so", "libc++_shared.so").map { coreOut.resolve("jniLibs/$abi/$it") }
+    }
     workingDir = repoRoot
     commandLine("bash", "scripts/android/build-core.sh", coreOut.path)
     environment("ANDROID_NDK_HOME", ndk)
-    onlyIf { !skip || !lib.exists() }
+    onlyIf { !skip || requiredLibraries.any { !it.isFile } }
 }
 
 // Tool and file icons: the iOS asset catalog's SVGs, rasterized.
@@ -74,6 +78,7 @@ android {
         targetSdk = 37
         versionCode = forkVersionCode.toInt()
         versionName = forkVersion
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField(
             "String", "RELEASE_CERTIFICATE_SHA256",
             "\"${repoRoot.resolve("apps/android/release-certificate.sha256").readText().trim()}\"",
@@ -155,6 +160,8 @@ dependencies {
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     testImplementation("junit:junit:4.13.2")
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
 
 kotlin {

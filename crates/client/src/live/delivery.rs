@@ -5,6 +5,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
+use zeron_sync::edge_route::RequestExt;
 
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -104,7 +105,7 @@ async fn deliver(weak: std::sync::Weak<ClientInner>, chat: &str) {
                 .bearer_auth(token)
                 .json(&serde_json::json!({ "chatId": chat }))
                 .timeout(Duration::from_secs(10))
-                .send()
+                .send_routed()
                 .await
                 .map_err(|err| crate::ClientError::Network(err.to_string()))?;
             // Another owner's device (403) or a chat id its room refuses

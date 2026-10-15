@@ -14,6 +14,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
+use zeron_sync::edge_route::RequestExt;
 
 use serde::{Deserialize, Serialize};
 
@@ -198,7 +199,7 @@ pub async fn exchange_code(edge_url: &str, code: &str) -> Result<AuthExchange> {
         let response = http()
             .post(url)
             .json(&serde_json::json!({ "code": code }))
-            .send()
+            .send_routed()
             .await
             .map_err(net)?;
         let reply: Reply = check(response).await?.json().await.map_err(net)?;
@@ -225,7 +226,7 @@ pub async fn list_orgs(edge_url: &str, access_token: &str) -> Result<Vec<AuthOrg
         let response = http()
             .get(url)
             .bearer_auth(token)
-            .send()
+            .send_routed()
             .await
             .map_err(net)?;
         let reply: Reply = check(response).await?.json().await.map_err(net)?;
@@ -247,7 +248,12 @@ pub async fn refresh(
         body["organizationId"] = serde_json::Value::String(org.to_owned());
     }
     crate::runtime::run(async move {
-        let response = http().post(url).json(&body).send().await.map_err(net)?;
+        let response = http()
+            .post(url)
+            .json(&body)
+            .send_routed()
+            .await
+            .map_err(net)?;
         check(response).await?.json().await.map_err(net)
     })
     .await

@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, Weak};
+use zeron_sync::edge_route::RequestExt;
 
 use base64::Engine as _;
 use serde::Serialize;
@@ -2574,7 +2575,7 @@ impl DocHost {
                 base64::engine::general_purpose::STANDARD.encode(&frontier),
             )
             .body(snapshot.clone())
-            .send()
+            .send_routed()
             .await
             .map_err(|e| format!("seed checkpoint POST: {}", describe_http_error(e)))?;
         if !res.status().is_success() {
@@ -2877,7 +2878,7 @@ impl DocHost {
                     .bearer_auth(&bearer)
                     .header("content-type", "application/json")
                     .body(body)
-                    .send()
+                    .send_routed()
                     .await;
             });
         }
@@ -2962,7 +2963,7 @@ impl DocHost {
                     base64::engine::general_purpose::STANDARD.encode(&frontier),
                 )
                 .body(snapshot)
-                .send()
+                .send_routed()
                 .await
             {
                 Ok(res) if res.status().is_success() => {
@@ -3133,7 +3134,7 @@ impl DocHost {
             let res = http
                 .get(&url)
                 .timeout(std::time::Duration::from_secs(3))
-                .send()
+                .send_routed()
                 .await;
             if let Ok(res) = res
                 && res.status().is_success()
@@ -4893,7 +4894,7 @@ impl DocHost {
                     .bearer_auth(&bearer)
                     .header("content-type", content_type)
                     .body(body)
-                    .send()
+                    .send_routed()
                     .await;
                 match sent {
                     Ok(res) if res.status().is_success() => {}
@@ -4947,7 +4948,7 @@ impl DocHost {
             .http
             .get(&url)
             .bearer_auth(&bearer)
-            .send()
+            .send_routed()
             .await
             .map_err(|e| {
                 EngineError::Other(format!("sidecar fetch failed: {}", describe_http_error(e)))

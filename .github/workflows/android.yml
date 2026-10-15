@@ -130,7 +130,7 @@ jobs:
       - name: Test and build debug APK
         if: inputs.release != true
         working-directory: apps/android
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug --no-daemon --console=plain
+        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain
 
       - name: Test, sign and verify release APK
         if: inputs.release == true

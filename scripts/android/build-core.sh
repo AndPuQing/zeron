@@ -36,6 +36,8 @@ HOST_LIB="$ROOT/target/debug/libzeron_mobile.$([[ "$(uname)" == Darwin ]] && ech
   --metadata-no-deps --no-format --out-dir "$OUT/kotlin"
 echo "kotlin bindings: $OUT/kotlin"
 
-cargo ndk "${ABIS[@]}" -o "$OUT/jniLibs" \
+# Luau links the NDK C++ runtime; cargo-ndk also copies it into each ABI's
+# jniLibs directory so Android can load the mobile core.
+cargo ndk "${ABIS[@]}" --link-libcxx-shared -o "$OUT/jniLibs" \
   build --locked -p zeron-mobile --lib --profile mobile
 echo "jniLibs: $OUT/jniLibs"

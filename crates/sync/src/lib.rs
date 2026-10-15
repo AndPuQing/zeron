@@ -14,6 +14,7 @@ pub mod budget;
 pub mod chat_client;
 pub mod chat_frames;
 pub mod dial;
+pub mod edge_route;
 pub mod net_path;
 pub mod registry;
 pub mod socket;

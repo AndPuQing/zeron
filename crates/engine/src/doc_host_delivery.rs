@@ -3,6 +3,7 @@
 //! when those rows have been acknowledged and their room is cold.
 
 use super::*;
+use zeron_sync::edge_route::RequestExt;
 
 impl DocHost {
     pub(super) fn spawn_remote_wake_delivery(&self) {
@@ -108,7 +109,7 @@ async fn deliver(weak: std::sync::Weak<DocHostInner>, chat: &str) {
                 .bearer_auth(bearer)
                 .json(&serde_json::json!({ "chatId": chat }))
                 .timeout(std::time::Duration::from_secs(10))
-                .send()
+                .send_routed()
                 .await
                 .map_err(|err| EngineError::Other(describe_http_error(err)))
         }

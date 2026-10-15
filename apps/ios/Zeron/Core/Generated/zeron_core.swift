@@ -16704,7 +16704,7 @@ public func authListOrgs(edgeUrl: String, accessToken: String)async throws  -> [
         )
 }
 /**
- * Production edge base URL.
+ * Current production entrance hint. Network calls resolve it automatically.
  */
 public func authProductionEdgeUrl() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
@@ -16853,6 +16853,34 @@ public func relativeTimeLabel(atMs: Int64, nowMs: Int64) -> String  {
 })
 }
 /**
+ * Native downloaders call this only after transport or gateway failure.
+ */
+public func reportEdgeTransportFailure(url: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_report_edge_transport_failure(
+        FfiConverterString.lower(url),uniffiCallStatus
+    )
+}
+}
+/**
+ * Resolve the shared automatic route for native update downloads.
+ */
+public func resolveProductionEdgeUrl()async  -> String  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_func_resolve_production_edge_url(
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterString.lift,
+            errorHandler: nil
+            
+        )
+}
+/**
  * WorkOS AuthKit authorize URL (start of the web-auth session).
  */
 public func workosAuthorizeUrl(state: String) -> String  {
@@ -16988,7 +17016,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_func_auth_list_orgs() != 21299) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_func_auth_production_edge_url() != 61532) {
+    if (uniffi_zeron_mobile_checksum_func_auth_production_edge_url() != 32574) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_auth_refresh() != 53630) {
@@ -17028,6 +17056,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_relative_time_label() != 32740) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_report_edge_transport_failure() != 61119) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_resolve_production_edge_url() != 34941) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_workos_authorize_url() != 35994) {

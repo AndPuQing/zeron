@@ -116,6 +116,7 @@ pub async fn pump_with_timing<S, T>(
                 Ok(Ok(()))
             ) {
                 tracing::warn!("socket write failed or stopped progressing; reconnecting");
+                progress.transport_failed();
                 return;
             }
         }
@@ -130,6 +131,7 @@ pub async fn pump_with_timing<S, T>(
                 Ok(Some(Ok(frame))) => frame,
                 _ => {
                     tracing::warn!("socket read failed or silent past lease; reconnecting");
+                    progress.transport_failed();
                     return;
                 }
             };

@@ -20,7 +20,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import sh.zeron.android.BuildConfig
-import uniffi.zeron_core.authProductionEdgeUrl
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -46,7 +45,6 @@ class AndroidUpdater(private val app: Application) {
     private val scope = MainScope()
     private val prefs = app.getSharedPreferences("updates", 0)
     private val directory = File(app.cacheDir, "updates")
-    private val base = "${authProductionEdgeUrl().trimEnd('/')}/releases"
     private val _state = MutableStateFlow(UpdateState())
     val state = _state.asStateFlow()
     private var checkJob: Job? = null
@@ -175,11 +173,11 @@ class AndroidUpdater(private val app: Application) {
 
     private fun apk(release: AndroidRelease) = File(directory, release.fileName)
 
-    private fun connection(path: String): HttpsURLConnection {
-        val url = URL("$base/$path")
+    private fun connection(origin: String, path: String): HttpsURLConnection {
+        val url = URL("${origin.trimEnd('/')}/releases/$path")
         if (url.protocol != "https") throw IOException("Updates require an HTTPS release source.")
         return (url.openConnection() as HttpsURLConnection).apply {
-            connectTimeout = 20_000
+            connectTimeout = 8_000
             readTimeout = 30_000
             useCaches = false
             instanceFollowRedirects = false
@@ -188,66 +186,61 @@ class AndroidUpdater(private val app: Application) {
         }
     }
 
-    private fun fetchRelease(): AndroidRelease? {
-        val connection = connection("manifest.json")
-        try {
-            if (connection.responseCode != 200) throw IOException("Release source returned HTTP ${connection.responseCode}.")
-            val bytes = ByteArrayOutputStream()
-            connection.inputStream.use { input ->
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    if (bytes.size() + count > 1024 * 1024) throw IOException("Release manifest is too large.")
-                    bytes.write(buffer, 0, count)
-                }
+    private suspend fun fetchRelease(): AndroidRelease? = withEdgeRoute("manifest.json", openConnection = ::connection) { connection ->
+        val bytes = ByteArrayOutputStream()
+        edgeNetwork { connection.inputStream }.use { input ->
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = edgeNetwork { input.read(buffer) }
+                if (count < 0) break
+                if (bytes.size() + count > 1024 * 1024) throw IOException("Release manifest is too large.")
+                bytes.write(buffer, 0, count)
             }
-            val manifest = JSONObject(bytes.toString("UTF-8"))
-            val version = manifest.getString("version")
-            if (UpdatePolicy.versionCode(version) <= BuildConfig.VERSION_CODE) return null
-            val name = "zerun-$version-android.apk"
-            val metadata = manifest.getJSONObject("files").optJSONObject(name)
-                ?: throw IOException("The Android package is not available for this release yet.")
-            return UpdatePolicy.release(version, metadata.getString("sha256"))
-        } finally {
-            connection.disconnect()
         }
+        val manifest = JSONObject(bytes.toString("UTF-8"))
+        val version = manifest.getString("version")
+        if (UpdatePolicy.versionCode(version) <= BuildConfig.VERSION_CODE) return@withEdgeRoute null
+        val name = "zerun-$version-android.apk"
+        val metadata = manifest.getJSONObject("files").optJSONObject(name)
+            ?: throw IOException("The Android package is not available for this release yet.")
+        UpdatePolicy.release(version, metadata.getString("sha256"))
     }
 
     private suspend fun downloadApk(release: AndroidRelease) {
         directory.mkdirs()
         val part = File(directory, "${release.fileName}.part")
-        val connection = connection(release.fileName)
         try {
-            if (connection.responseCode != 200) throw IOException("Download returned HTTP ${connection.responseCode}. Please try again.")
-            val total = connection.contentLengthLong.takeIf { it > 0 }
-            val maxBytes = 512 * 1024 * 1024L
-            if (total != null && total > maxBytes) throw IOException("The update exceeds the download size limit.")
-            var received = 0L
-            var lastProgress = 0L
-            connection.inputStream.use { input ->
-                part.outputStream().use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        received += count
-                        if (received > maxBytes) throw IOException("The update exceeds the download size limit.")
-                        output.write(buffer, 0, count)
-                        val now = SystemClock.elapsedRealtime()
-                        if (now - lastProgress >= 250) {
-                            withContext(Dispatchers.Main) { _state.value = _state.value.copy(downloadedBytes = received, totalBytes = total) }
-                            lastProgress = now
+            withEdgeRoute(release.fileName, openConnection = ::connection) { connection ->
+                val total = edgeNetwork { connection.contentLengthLong }.takeIf { it > 0 }
+                val maxBytes = 512 * 1024 * 1024L
+                if (total != null && total > maxBytes) throw IOException("The update exceeds the download size limit.")
+                var received = 0L
+                var lastProgress = 0L
+                edgeNetwork { connection.inputStream }.use { input ->
+                    // Each route attempt starts from zero; partial bytes from
+                    // different responses are never mixed before validation.
+                    part.outputStream().use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val count = edgeNetwork { input.read(buffer) }
+                            if (count < 0) break
+                            received += count
+                            if (received > maxBytes) throw IOException("The update exceeds the download size limit.")
+                            output.write(buffer, 0, count)
+                            val now = SystemClock.elapsedRealtime()
+                            if (now - lastProgress >= 250) {
+                                withContext(Dispatchers.Main) { _state.value = _state.value.copy(downloadedBytes = received, totalBytes = total) }
+                                lastProgress = now
+                            }
                         }
                     }
                 }
+                if (total != null && received != total) throw EdgeTransportFailure(IOException("The download was incomplete. Please try again."))
             }
-            if (total != null && received != total) throw IOException("The download was incomplete. Please try again.")
             verifyApk(part, release)
             if (!part.renameTo(apk(release))) throw IOException("Could not save the update. Please try again.")
             directory.listFiles()?.filter { it.name != release.fileName }?.forEach { it.delete() }
         } finally {
-            connection.disconnect()
             part.delete()
         }
     }

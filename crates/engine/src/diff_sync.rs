@@ -46,6 +46,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
+use zeron_sync::edge_route::RequestExt;
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -336,7 +337,11 @@ impl CheckoutDiffSync {
                 workspace: workspace.clone(),
                 device_id: device_id.to_string(),
                 edge,
-                http: reqwest::Client::new(),
+                http: reqwest::Client::builder()
+                    .connect_timeout(std::time::Duration::from_secs(8))
+                    .read_timeout(std::time::Duration::from_secs(30))
+                    .build()
+                    .expect("edge HTTP client"),
                 entries: Mutex::new(HashMap::new()),
                 reconcile_gate: tokio::sync::Mutex::new(()),
                 identities: Mutex::new(HashMap::new()),
@@ -951,7 +956,7 @@ async fn sync_entry(inner: &Arc<DiffSyncInner>, entry: &Arc<CheckoutEntry>) {
                 .post(&url)
                 .bearer_auth(&bearer)
                 .json(&sidecar)
-                .send()
+                .send_routed()
                 .await;
             match result {
                 Ok(response) if !response.status().is_success() => {

@@ -5,7 +5,7 @@ use std::{
     io,
     pin::Pin,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     task::{Context, Poll},
@@ -22,6 +22,8 @@ struct Activity {
     completed_write_ms: AtomicU64,
     writing: AtomicBool,
     blocked_write: AtomicBool,
+    route: OnceLock<(Arc<crate::edge_route::Router>, usize)>,
+    route_failed: AtomicBool,
 }
 
 /// Shared byte-activity clock. It sends no extra frames and allocates once
@@ -37,10 +39,22 @@ impl Default for Progress {
             completed_write_ms: AtomicU64::new(0),
             writing: AtomicBool::new(false),
             blocked_write: AtomicBool::new(false),
+            route: OnceLock::new(),
+            route_failed: AtomicBool::new(false),
         }))
     }
 }
 impl Progress {
+    pub(crate) fn set_route(&self, router: Arc<crate::edge_route::Router>, index: usize) {
+        let _ = self.0.route.set((router, index));
+    }
+    pub(crate) fn transport_failed(&self) {
+        if let Some((router, index)) = self.0.route.get()
+            && !self.0.route_failed.swap(true, Ordering::Relaxed)
+        {
+            router.failed(*index);
+        }
+    }
     fn record(&self, write: bool) {
         let clock = if write {
             &self.0.write_ms
@@ -107,6 +121,7 @@ impl Progress {
                 }) => return Ok(result),
                 _ = tokio::time::sleep_until(deadline) => {
                     if self.latest(write_only).max(started) + lease <= Instant::now() {
+                        self.transport_failed();
                         return Err(());
                     }
                 }
@@ -150,6 +165,9 @@ impl<S: AsyncRead + Unpin> AsyncRead for ProgressIo<S> {
         if buf.filled().len() > before {
             this.progress.record(false);
         }
+        if matches!(result, Poll::Ready(Err(_))) {
+            this.progress.transport_failed();
+        }
         result
     }
 }
@@ -164,10 +182,18 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for ProgressIo<S> {
         if matches!(result, Poll::Ready(Ok(n)) if n > 0) {
             this.progress.record(true);
         }
+        if matches!(result, Poll::Ready(Err(_))) {
+            this.progress.transport_failed();
+        }
         result
     }
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+        let this = self.get_mut();
+        let result = Pin::new(&mut this.inner).poll_flush(cx);
+        if matches!(result, Poll::Ready(Err(_))) {
+            this.progress.transport_failed();
+        }
+        result
     }
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)

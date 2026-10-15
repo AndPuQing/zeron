@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Duration;
+use zeron_sync::edge_route::RequestExt;
 
 use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
@@ -570,6 +571,7 @@ impl Client {
             (registry, None)
         } else {
             let (store, registry) = LiveBackend::open(&config.data_dir, &config.device_id)?;
+            zeron_sync::edge_route::configure_cache(config.edge_base(), &config.data_dir);
             (registry, Some(store))
         };
         let inner = Arc::new(ClientInner {
@@ -1272,7 +1274,7 @@ impl Client {
             .post(url)
             .bearer_auth(token_value)
             .json(&body)
-            .send()
+            .send_routed()
             .await
             .map_err(|e| ClientError::Network(e.to_string()))?;
         if !response.status().is_success() {
@@ -1298,7 +1300,7 @@ impl Client {
         let response = crate::auth::http()
             .delete(url)
             .bearer_auth(token_value)
-            .send()
+            .send_routed()
             .await
             .map_err(|e| ClientError::Network(e.to_string()))?;
         if !response.status().is_success() {

@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
+use zeron_sync::edge_route::RequestExt;
 
 use anyhow::{Context as _, bail};
 use futures::StreamExt as _;
@@ -239,7 +240,7 @@ async fn fetch_release_metadata_with_limits(
             // cache to a minute, and a proxy holding an old manifest for
             // longer is exactly the "prompt appears late" failure.
             .header(reqwest::header::CACHE_CONTROL, "no-cache")
-            .send()
+            .send_routed()
             .await
             .with_context(|| format!("fetching {url}"))?;
         let status = response.status();
@@ -255,10 +256,16 @@ async fn fetch_release_metadata_with_limits(
         {
             bail!("release metadata exceeds {max_bytes} bytes");
         }
+        let response_url = response.url().clone();
         let mut body = Vec::new();
         let mut stream = response.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.context("reading release metadata")?;
+            let chunk = chunk
+                .map_err(|error| {
+                    zeron_sync::edge_route::report_transport_failure(response_url.as_str());
+                    error
+                })
+                .context("reading release metadata")?;
             anyhow::ensure!(
                 body.len().saturating_add(chunk.len()) <= max_bytes,
                 "release metadata exceeds {max_bytes} bytes"
@@ -606,36 +613,56 @@ pub async fn download_release_file(
         );
     }
     let partial = dest.with_extension("partial");
-    let resp = http_client()?
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("downloading {url}"))?
-        .error_for_status()
-        .with_context(|| format!("downloading {url}"))?;
-    let mut out = tokio::fs::File::create(&partial)
-        .await
-        .with_context(|| format!("creating {}", partial.display()))?;
-    let mut hasher = Sha256::new();
-    let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("reading download stream")?;
-        hasher.update(&chunk);
-        out.write_all(&chunk).await.context("writing download")?;
-    }
-    out.flush().await.context("flushing download")?;
-    drop(out);
-    if let Some(expected) = expected {
-        let actual = format!("{:x}", hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expected.trim()) {
-            tokio::fs::remove_file(&partial).await.ok();
-            bail!("checksum mismatch for {file}: expected {expected}, got {actual}");
+    let client = http_client()?;
+    'download: for attempt in 0..2 {
+        let resp = client
+            .get(&url)
+            .send_routed()
+            .await
+            .with_context(|| format!("downloading {url}"))?
+            .error_for_status()
+            .with_context(|| format!("downloading {url}"))?;
+        let used_origin = resp.url().origin().ascii_serialization();
+        let mut out = tokio::fs::File::create(&partial)
+            .await
+            .with_context(|| format!("creating {}", partial.display()))?;
+        let mut hasher = Sha256::new();
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(chunk) => chunk,
+                Err(error) => {
+                    zeron_sync::edge_route::report_transport_failure(&used_origin);
+                    drop(out);
+                    tokio::fs::remove_file(&partial).await.ok();
+                    if attempt == 0
+                        && zeron_sync::edge_route::current_origin(&used_origin) != used_origin
+                    {
+                        // Start a clean file on the alternate entrance. The
+                        // manifest checksum still validates the entire file.
+                        continue 'download;
+                    }
+                    return Err(error).context("reading download stream");
+                }
+            };
+            hasher.update(&chunk);
+            out.write_all(&chunk).await.context("writing download")?;
         }
+        out.flush().await.context("flushing download")?;
+        drop(out);
+        if let Some(expected) = expected {
+            let actual = format!("{:x}", hasher.finalize());
+            if !actual.eq_ignore_ascii_case(expected.trim()) {
+                tokio::fs::remove_file(&partial).await.ok();
+                bail!("checksum mismatch for {file}: expected {expected}, got {actual}");
+            }
+        }
+        tokio::fs::rename(&partial, dest)
+            .await
+            .with_context(|| format!("moving {} into place", dest.display()))?;
+        return Ok(());
     }
-    tokio::fs::rename(&partial, dest)
-        .await
-        .with_context(|| format!("moving {} into place", dest.display()))?;
-    Ok(())
+    unreachable!("bounded download attempts")
 }
 
 fn run(program: &str, args: &[&str]) -> anyhow::Result<()> {
@@ -1443,6 +1470,49 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn interrupted_or_corrupt_download_never_replaces_an_existing_artifact() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for (advertised_length, expected_body, valid) in [
+            (100, "abc", false),
+            (3, "different", false),
+            (3, "abc", true),
+        ] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {advertised_length}\r\nConnection: close\r\n\r\nabc").as_bytes()).await.unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("package.tar.gz");
+            std::fs::write(&dest, b"previous verified artifact").unwrap();
+            let manifest = Manifest {
+                version: "1.2.3".to_owned(),
+                files: BTreeMap::from([(
+                    "package.tar.gz".to_owned(),
+                    FileMeta {
+                        sha256: Some(format!("{:x}", Sha256::digest(expected_body.as_bytes()))),
+                    },
+                )]),
+            };
+            let result = download_release_file(&origin, &manifest, "package.tar.gz", &dest).await;
+            assert_eq!(result.is_ok(), valid);
+            assert_eq!(
+                std::fs::read(&dest).unwrap(),
+                if valid {
+                    b"abc".as_slice()
+                } else {
+                    b"previous verified artifact".as_slice()
+                }
+            );
+            assert!(!dest.with_extension("partial").exists());
+            server.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn stalled_update_headers_and_body_time_out_but_progressing_body_survives() {
         use std::time::Duration;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -1467,7 +1537,7 @@ mod tests {
             let request = async {
                 client
                     .get(format!("http://{address}"))
-                    .send()
+                    .send_routed()
                     .await?
                     .bytes()
                     .await
@@ -1499,7 +1569,7 @@ mod tests {
         assert_eq!(
             client
                 .get(format!("http://{address}"))
-                .send()
+                .send_routed()
                 .await
                 .unwrap()
                 .bytes()
@@ -1608,7 +1678,7 @@ mod tests {
             http_client_with_timeouts(Duration::from_millis(100), Duration::from_secs(30)).unwrap();
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            client.get(format!("https://{address}")).send(),
+            client.get(format!("https://{address}")).send_routed(),
         )
         .await
         .expect("bounded TLS handshake")

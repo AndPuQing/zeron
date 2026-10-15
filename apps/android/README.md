@@ -159,11 +159,36 @@ enable future in-app updates. Debug APKs have a different signer and cannot be
 upgraded to production APKs in place. Download-cache eviction or terminating
 the app during an incomplete download requires downloading again.
 
+## Interactive visuals
+
+Agent visuals render directly in Android transcripts using the shared Rust
+Luau runtime, layout, charts, canvas drawing and GPU renderer. Buttons, tabs,
+toggles and sliders forward touch and accessibility actions to that runtime;
+charts support scrubbing, and 3D scenes support touch orbiting. Mostly vertical
+drags over charts and sliders scroll the transcript. Animation pauses when a
+visual leaves the viewport or the app enters the background, and follows the
+system animation setting. Scenes and shaders require a usable Vulkan adapter;
+the visual shows an error if rendering is unavailable.
+
+The offline demo session `chat-visuals` includes controls, charts, a canvas,
+a 3D scene and a shader. Run the Android device regressions on a connected
+emulator or phone with:
+
+```sh
+cd apps/android
+./gradlew :app:connectedDebugAndroidTest
+```
+
+The tests launch the offline demo and exercise controls, state retention,
+pixel formats and drawing at device density. Debug and production installations
+must use separate test devices when their signing certificates differ.
+
 ## Shared core and assets
 
 The `buildCore` task runs `scripts/android/build-core.sh`, which builds
 `crates/mobile` for Android (`jniLibs`) and generates its Kotlin bindings into
-`target/android-core/`. `-PzeronSkipCore` reuses the last build while
+`target/android-core/`. Each ABI also includes the NDK C++ shared runtime
+required by Luau. `-PzeronSkipCore` reuses the last build while
 iterating on Kotlin; `ZERON_ANDROID_ABIS=arm64-v8a` builds one ABI.
 `scripts/android/gen-icons.sh` rasterizes the shared tool/file SVG icons
 (needs `rsvg-convert`). The Geist fonts are read straight from the iOS app's

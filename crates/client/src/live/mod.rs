@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+use zeron_sync::edge_route::RequestExt;
 
 use futures::future::BoxFuture;
 use tokio::sync::Notify;
@@ -141,7 +142,7 @@ impl RegistryTransport for RegistryHttp {
             let response = crate::auth::http()
                 .get(url)
                 .bearer_auth(token)
-                .send()
+                .send_routed()
                 .await
                 .map_err(http_err)?;
             if !response.status().is_success() {
@@ -164,7 +165,7 @@ impl RegistryTransport for RegistryHttp {
                 .bearer_auth(token)
                 .header("content-type", "application/json")
                 .body(body)
-                .send()
+                .send_routed()
                 .await
                 .map_err(http_err)?;
             if !response.status().is_success() {
@@ -315,7 +316,7 @@ impl LiveBackend {
             let ok = crate::auth::http()
                 .get(url)
                 .timeout(Duration::from_secs(3))
-                .send()
+                .send_routed()
                 .await
                 .is_ok_and(|r| r.status().is_success());
             if ok {

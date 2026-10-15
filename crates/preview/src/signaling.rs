@@ -77,12 +77,8 @@ async fn connect(
     let mut websocket_config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default();
     websocket_config.max_message_size = Some(1024 * 1024);
     websocket_config.max_frame_size = Some(1024 * 1024);
-    let (socket, _) = tokio::time::timeout(
-        Duration::from_secs(10),
-        tokio_tungstenite::connect_async_with_config(request, Some(websocket_config), false),
-    )
-    .await??;
-    let (mut write, mut read) = socket.split();
+    let socket = zeron_sync::dial::connect_ws_request(request, Some(websocket_config)).await?;
+    let (mut write, mut read) = socket.socket.split();
     let mut changes = catalog.subscribe();
     let mut advertised = catalog.local_services();
     write

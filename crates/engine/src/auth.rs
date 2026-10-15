@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
+use zeron_sync::edge_route::RequestExt;
 
 use futures::FutureExt;
 use serde::{Deserialize, Serialize};
@@ -276,6 +277,7 @@ pub struct Auth {
 impl Auth {
     /// Build from config: dev mode unless a WorkOS client id is configured.
     pub fn new(config: AuthConfig) -> Self {
+        zeron_sync::edge_route::configure_cache(&config.edge_url, &config.data_dir);
         let workos = config
             .workos_client_id
             .clone()
@@ -332,6 +334,7 @@ impl Auth {
     /// dev auth mode forces dev mode even when a client id is configured (matching the
     /// edge's "bearer = user id" verification).
     pub async fn detect(mut config: AuthConfig) -> Self {
+        zeron_sync::edge_route::configure_cache(&config.edge_url, &config.data_dir);
         if config.workos_client_id.is_some() {
             #[derive(Deserialize)]
             struct Health {
@@ -342,7 +345,7 @@ impl Auth {
                 reqwest::Client::new()
                     .get(&url)
                     .timeout(Duration::from_secs(3))
-                    .send()
+                    .send_routed()
                     .await
                     .ok()?
                     .json::<Health>()
@@ -680,7 +683,7 @@ impl Auth {
             .http
             .post(&url)
             .json(&serde_json::json!({ "code": code }))
-            .send()
+            .send_routed()
             .await
             .map_err(|e| {
                 EngineError::Other(format!(
@@ -872,7 +875,7 @@ impl Auth {
                 refresh_token: &refresh_token,
                 organization_id,
             })
-            .send()
+            .send_routed()
             .await;
         let res = match res {
             Ok(res) => res,
@@ -995,7 +998,7 @@ impl Auth {
         if let Some(body) = body {
             req = req.json(&body);
         }
-        let res = req.send().await.map_err(|e| {
+        let res = req.send_routed().await.map_err(|e| {
             EngineError::Other(format!(
                 "the edge is unreachable: {}",
                 describe_http_error(e)

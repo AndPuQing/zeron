@@ -22,6 +22,7 @@
 //! simply never joined again. The legacy snapshot is kept for rollback.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use zeron_sync::edge_route::RequestExt;
 
 use chrono::Utc;
 use tokio::sync::watch;
@@ -1559,7 +1560,7 @@ async fn relay_probe_task(weak: Weak<WorkspaceHostInner>) {
                 .get(&url)
                 .bearer_auth(&bearer)
                 .timeout(RELAY_PROBE_TIMEOUT)
-                .send()
+                .send_routed()
                 .await;
             let Ok(response) = response else { continue };
             if !response.status().is_success() {
@@ -1666,7 +1667,11 @@ impl WsDerivedRegistryTransport {
     fn new(url: Arc<dyn zeron_sync::UrlProvider>) -> Self {
         Self {
             url,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(8))
+                .read_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .expect("edge HTTP client"),
         }
     }
 
@@ -1724,7 +1729,7 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
                 req = req.bearer_auth(token);
             }
             let resp = req
-                .send()
+                .send_routed()
                 .await
                 .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))?;
             if !resp.status().is_success() {
@@ -1755,7 +1760,7 @@ impl zeron_sync::RegistryTransport for WsDerivedRegistryTransport {
                 req = req.bearer_auth(token);
             }
             let resp = req
-                .send()
+                .send_routed()
                 .await
                 .map_err(|e| zeron_sync::SyncError::WebSocket(describe_http_error(e)))?;
             if !resp.status().is_success() {

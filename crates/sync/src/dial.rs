@@ -25,6 +25,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::MaybeTlsStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::error::{Error as WsError, UrlError};
+use tokio_tungstenite::tungstenite::{handshake::client::Request, protocol::WebSocketConfig};
 
 /// Delay before starting the next address attempt while one is still pending
 /// (RFC 8305 §5's "Connection Attempt Delay"; 250ms is its recommended value).
@@ -37,20 +38,93 @@ pub type WsStream = crate::socket::Connection<MaybeTlsStream<crate::socket::Prog
 /// [`crate::wake::notify_online`] so sibling sockets waiting out a reconnect
 /// backoff redial immediately instead of sleeping through the recovery.
 pub async fn connect_ws(url: &str) -> Result<WsStream, WsError> {
-    // Bound DNS, all TCP attempts, TLS and HTTP upgrade together. Some
-    // callers (notably the host relay) have no outer connection deadline.
-    tokio::time::timeout(Duration::from_secs(20), connect_ws_inner(url))
-        .await
-        .map_err(|_| {
-            WsError::Io(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "WebSocket dial timed out",
-            ))
-        })?
+    connect_ws_request(url.into_client_request()?, None).await
 }
 
-async fn connect_ws_inner(url: &str) -> Result<WsStream, WsError> {
-    let request = url.into_client_request()?;
+/// The routed dialer also accepts explicit headers and framing limits.
+pub async fn connect_ws_request(
+    request: Request,
+    config: Option<WebSocketConfig>,
+) -> Result<WsStream, WsError> {
+    // Bound DNS, all TCP attempts, TLS and HTTP upgrade together. Some
+    // callers (notably the host relay) have no outer connection deadline.
+    tokio::time::timeout(
+        Duration::from_secs(20),
+        connect_routed(request, config, crate::edge_route::shared()),
+    )
+    .await
+    .map_err(|_| dial_timeout())?
+}
+
+fn dial_timeout() -> WsError {
+    WsError::Io(io::Error::new(
+        io::ErrorKind::TimedOut,
+        "WebSocket dial timed out",
+    ))
+}
+
+async fn connect_routed(
+    request: Request,
+    config: Option<WebSocketConfig>,
+    router: &std::sync::Arc<crate::edge_route::Router>,
+) -> Result<WsStream, WsError> {
+    let url = reqwest::Url::parse(&request.uri().to_string()).ok();
+    let Some(url) = url.filter(|url| router.index(url).is_some()) else {
+        return connect_ws_inner(request, config).await;
+    };
+    let first = router.select().await;
+    let mut index = first;
+    for attempt in 0..2 {
+        let mut routed = request.clone();
+        let url = router.rewrite(&url, index);
+        *routed.uri_mut() = url
+            .as_str()
+            .parse()
+            .map_err(|_| WsError::Url(UrlError::NoHostName))?;
+        // IntoClientRequest populated Host before the origin was selected.
+        let host = routed
+            .uri()
+            .authority()
+            .ok_or(WsError::Url(UrlError::NoHostName))?
+            .as_str()
+            .to_owned();
+        routed.headers_mut().insert("host", host.parse()?);
+        let result = tokio::time::timeout(Duration::from_secs(8), connect_ws_inner(routed, config))
+            .await
+            .unwrap_or_else(|_| Err(dial_timeout()));
+        match result {
+            Ok(connection) => {
+                router.succeeded(index);
+                connection.progress.set_route(router.clone(), index);
+                return Ok(connection);
+            }
+            Err(error) => {
+                let transport = match &error {
+                    WsError::Http(response) => {
+                        matches!(response.status().as_u16(), 408 | 502 | 503 | 504)
+                    }
+                    WsError::Io(_) | WsError::Tls(_) | WsError::Protocol(_) => true,
+                    _ => false,
+                };
+                if !transport {
+                    return Err(error);
+                }
+                router.failed(index);
+                let next = router.select().await;
+                if attempt == 1 || next == index || next == first {
+                    return Err(error);
+                }
+                index = next;
+            }
+        }
+    }
+    unreachable!("bounded dial attempts")
+}
+
+async fn connect_ws_inner(
+    request: Request,
+    config: Option<WebSocketConfig>,
+) -> Result<WsStream, WsError> {
     let uri = request.uri();
     let host = uri
         .host()
@@ -72,7 +146,7 @@ async fn connect_ws_inner(url: &str) -> Result<WsStream, WsError> {
     let _ = stream.set_nodelay(true);
     let (stream, progress) = crate::socket::ProgressIo::new(stream);
     let (ws, _response) =
-        tokio_tungstenite::client_async_tls_with_config(request, stream, None, None).await?;
+        tokio_tungstenite::client_async_tls_with_config(request, stream, config, None).await?;
     crate::wake::notify_online();
     Ok(crate::socket::Connection {
         socket: ws,
@@ -146,6 +220,114 @@ fn interleave_families(addrs: Vec<SocketAddr>) -> VecDeque<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::SinkExt;
+    use tokio::sync::mpsc;
+    use tokio_tungstenite::tungstenite::{Message, http::Response};
+
+    async fn entrance(
+        status: Option<u16>,
+    ) -> (
+        String,
+        mpsc::UnboundedReceiver<Request>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::unbounded_channel();
+        let task = tokio::spawn(async move {
+            let mut tasks = tokio::task::JoinSet::new();
+            loop {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (stream, _) = accepted.unwrap();
+                        let tx = tx.clone();
+                        tasks.spawn(async move {
+                            let socket = tokio_tungstenite::accept_hdr_async(stream, move |request: &Request, mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                                if request.uri().path() == "/health" {
+                                    let body = r#"{"ok":true,"auth":"workos"}"#;
+                                    return Err(Response::builder().status(200).header("content-length", body.len()).body(Some(body.to_owned())).unwrap());
+                                }
+                                tx.send(request.clone()).unwrap();
+                                if let Some(protocol) = request.headers().get("sec-websocket-protocol") {
+                                    response.headers_mut().insert("sec-websocket-protocol", protocol.clone());
+                                }
+                                match status {
+                                    Some(status) => Err(Response::builder().status(status).body(None).unwrap()),
+                                    None => Ok(response),
+                                }
+                            }).await;
+                            if let Ok(mut socket) = socket {
+                                let _ = socket.send(Message::Text("x".repeat(2048))).await;
+                                std::future::pending::<()>().await;
+                            }
+                        });
+                    }
+                    _ = tasks.join_next(), if !tasks.is_empty() => {}
+                }
+            }
+        });
+        (origin, rx, task)
+    }
+
+    #[tokio::test]
+    async fn websocket_fails_over_sequentially_preserving_credentials_query_and_limits() {
+        let (a, mut seen_a, task_a) = entrance(Some(503)).await;
+        let (b, mut seen_b, task_b) = entrance(None).await;
+        let router = crate::edge_route::Router::new([&a, &b]);
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("network-route.json"),
+            serde_json::json!({"origin": a}).to_string(),
+        )
+        .unwrap();
+        router.configure_cache(dir.path());
+        let mut request = format!(
+            "{}/preview/org/ws?device=abc&token=test",
+            a.replace("http:", "ws:")
+        )
+        .into_client_request()
+        .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer test-bearer".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("sec-websocket-protocol", "zerun-test".parse().unwrap());
+        let mut config = WebSocketConfig::default();
+        config.max_message_size = Some(1024);
+        config.max_frame_size = Some(1024);
+        let mut socket = connect_routed(request, Some(config), &router)
+            .await
+            .unwrap();
+        let first = seen_a.recv().await.unwrap();
+        let second = seen_b.recv().await.unwrap();
+        assert_eq!(first.uri().path_and_query(), second.uri().path_and_query());
+        assert_eq!(second.headers()["authorization"], "Bearer test-bearer");
+        assert_eq!(second.headers()["sec-websocket-protocol"], "zerun-test");
+        assert_eq!(second.headers()["host"], b.trim_start_matches("http://"));
+        assert!(matches!(
+            socket.socket.next().await.unwrap(),
+            Err(WsError::Capacity(_))
+        ));
+        task_a.abort();
+        task_b.abort();
+    }
+
+    #[tokio::test]
+    async fn websocket_auth_rejection_does_not_try_the_other_entrance() {
+        let (a, mut seen_a, task_a) = entrance(Some(401)).await;
+        let (b, mut seen_b, task_b) = entrance(Some(401)).await;
+        let router = crate::edge_route::Router::new([&a, &b]);
+        let request = format!("{}/ws", a.replace("http:", "ws:"))
+            .into_client_request()
+            .unwrap();
+        let error = connect_routed(request, None, &router).await.err().unwrap();
+        assert!(matches!(error, WsError::Http(response) if response.status() == 401));
+        let hits = usize::from(seen_a.try_recv().is_ok()) + usize::from(seen_b.try_recv().is_ok());
+        assert_eq!(hits, 1);
+        task_a.abort();
+        task_b.abort();
+    }
 
     fn addr(s: &str) -> SocketAddr {
         s.parse().unwrap()

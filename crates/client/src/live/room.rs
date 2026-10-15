@@ -10,6 +10,7 @@
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::Duration;
+use zeron_sync::edge_route::RequestExt;
 
 use futures::future::BoxFuture;
 use loro::VersionVector;
@@ -363,7 +364,7 @@ impl CheckpointFetcher for ChatHttp {
                 if !got.is_empty() {
                     request = request.header("range", format!("bytes={}-", got.len()));
                 }
-                let response = match request.send().await {
+                let response = match request.send_routed().await {
                     Ok(response) => response,
                     Err(err) => {
                         last_failure = Some(err.to_string());
@@ -396,6 +397,9 @@ impl CheckpointFetcher for ChatHttp {
                         Ok(Some(chunk)) => got.extend_from_slice(&chunk),
                         Ok(None) => return Ok(got),
                         Err(err) => {
+                            zeron_sync::edge_route::report_transport_failure(
+                                response.url().as_str(),
+                            );
                             last_failure = Some(err.to_string());
                             break;
                         }
@@ -423,7 +427,7 @@ impl ChatTransport for ChatHttp {
                 .get(url)
                 .bearer_auth(token)
                 .timeout(Duration::from_secs(120))
-                .send()
+                .send_routed()
                 .await
                 .map_err(http_err)?;
             if !response.status().is_success() {
@@ -456,7 +460,7 @@ impl ChatTransport for ChatHttp {
                 .post(url)
                 .bearer_auth(token)
                 .body(bytes)
-                .send()
+                .send_routed()
                 .await
                 .map_err(http_err)?;
             if !response.status().is_success() {

@@ -9,6 +9,7 @@
 //! of the redownload-forever class the old s2 clients suffered.
 
 use std::sync::Arc;
+use zeron_sync::edge_route::RequestExt;
 
 use futures::future::BoxFuture;
 use zeron_doc::SessionDoc;
@@ -285,7 +286,7 @@ impl CheckpointFetcher for EdgeCheckpointFetcher {
                 if !got.is_empty() {
                     req = req.header("range", format!("bytes={}-", got.len()));
                 }
-                let res = match req.send().await {
+                let res = match req.send_routed().await {
                     Ok(res) => res,
                     Err(err) => {
                         let err = describe_http_error(err);
@@ -330,6 +331,7 @@ impl CheckpointFetcher for EdgeCheckpointFetcher {
                         Ok(None) => return Ok(got),
                         Err(err) => {
                             // Mid-body drop: keep the bytes, resume via Range.
+                            zeron_sync::edge_route::report_transport_failure(stream.url().as_str());
                             let err = describe_http_error(err);
                             tracing::warn!(error = %err, resumed_at = got.len(),
                                 "chat2 checkpoint stream dropped; resuming");
@@ -410,7 +412,7 @@ impl zeron_sync::chat_client::ChatTransport for EdgeChatTransport {
                 .get(&url)
                 .query(&[("after", after.to_string()), ("device", device)])
                 .bearer_auth(&bearer)
-                .send()
+                .send_routed()
                 .await
                 .map_err(|e| SyncError::WebSocket(describe_http_error(e)))?;
             if !res.status().is_success() {
@@ -450,7 +452,7 @@ impl zeron_sync::chat_client::ChatTransport for EdgeChatTransport {
                 request = request.query(&[("hostDevice", host)]);
             }
             let res = request
-                .send()
+                .send_routed()
                 .await
                 .map_err(|e| SyncError::WebSocket(describe_http_error(e)))?;
             if !res.status().is_success() {

@@ -50,8 +50,9 @@ with zipfile.ZipFile(sys.argv[1]) as apk:
     abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
     if abis != {"arm64-v8a"}:
         raise SystemExit(f"Release APK must contain only arm64-v8a libraries, found: {sorted(abis)}")
-    if apk.getinfo("lib/arm64-v8a/libzeron_mobile.so").file_size == 0:
-        raise SystemExit("Empty native core for arm64-v8a")
+    for library in ("libzeron_mobile.so", "libc++_shared.so"):
+        if apk.getinfo(f"lib/arm64-v8a/{library}").file_size == 0:
+            raise SystemExit(f"Empty native library for arm64-v8a: {library}")
 PY
 
 OUT="$ROOT/target/package"

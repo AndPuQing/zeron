@@ -137,11 +137,7 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
             state.toggleDetail(key, kind.detail, kind.open)
         }
         WidgetKind.Shimmer -> Shimmer(state, model, w, palette)
-        is WidgetKind.Visual -> Text(
-            "View on desktop or iOS.",
-            color = Color(palette[ColorRole.TEXT_TERTIARY]),
-            style = MaterialTheme.typography.bodySmall,
-        )
+        is WidgetKind.Visual -> VisualWidget(state, kind.id, actions)
     }
 }
 

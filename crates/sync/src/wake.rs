@@ -58,6 +58,7 @@ pub fn subscribe() -> broadcast::Receiver<()> {
                             slept_s = wall_elapsed.as_secs(),
                             "wake: system resumed from suspend"
                         );
+                        crate::edge_route::network_changed();
                         let _ = detector.send(());
                     }
                     wall = SystemTime::now();
@@ -100,6 +101,7 @@ pub fn notify_online() {
 ///   event buses rather than burn dial attempts the OS says cannot succeed.
 pub fn set_path_online(online: bool) {
     let was_offline = PATH_OFFLINE.swap(!online, Ordering::Relaxed);
+    crate::edge_route::network_changed();
     if online && was_offline {
         tracing::info!("wake: network path restored");
         notify_online();

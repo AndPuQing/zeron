@@ -413,7 +413,11 @@ impl CoreClient {
                 .register_push_target(
                     &token,
                     &environment,
-                    zc::PushPrefs { done: prefs.done, input: prefs.input, failed: prefs.failed },
+                    zc::PushPrefs {
+                        done: prefs.done,
+                        input: prefs.input,
+                        failed: prefs.failed,
+                    },
                 )
                 .await
         })
@@ -447,7 +451,12 @@ impl CoreClient {
         query: String,
     ) -> CoreResult<Vec<FileMatch>> {
         let client = self.client.clone();
-        let files = on_runtime(async move { client.search_files(&device_id, chat_id, space_id, &query).await }).await?;
+        let files = on_runtime(async move {
+            client
+                .search_files(&device_id, chat_id, space_id, &query)
+                .await
+        })
+        .await?;
         Ok(files
             .into_iter()
             .map(|f| FileMatch {
@@ -546,10 +555,27 @@ impl CoreClient {
 
 // ── static helpers ─────────────────────────────────────────────────────────
 
-/// Production edge base URL.
+/// Current production entrance hint. Network calls resolve it automatically.
 #[uniffi::export]
 pub fn auth_production_edge_url() -> String {
-    zc::auth::PRODUCTION_EDGE_URL.to_owned()
+    zeron_sync::edge_route::current_origin(zc::auth::PRODUCTION_EDGE_URL)
+}
+
+/// Resolve the shared automatic route for native update downloads.
+#[uniffi::export]
+pub async fn resolve_production_edge_url() -> String {
+    zc::runtime::shared()
+        .spawn(async {
+            zeron_sync::edge_route::resolve_origin(zc::auth::PRODUCTION_EDGE_URL).await
+        })
+        .await
+        .unwrap_or_else(|_| auth_production_edge_url())
+}
+
+/// Native downloaders call this only after transport or gateway failure.
+#[uniffi::export]
+pub fn report_edge_transport_failure(url: String) {
+    zeron_sync::edge_route::report_transport_failure(&url);
 }
 
 /// OAuth callback scheme (`zerun-dev`).

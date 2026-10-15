@@ -70,12 +70,14 @@ private data class TextSheet(val title: String, val text: String, val mono: Bool
 fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
     val client by model.client.collectAsState()
     val core = client ?: return
-    val handle: SessionHandle = remember(chatId) { runCatching { core.openSession(chatId) }.getOrNull() } ?: run {
+    val handle: SessionHandle = remember(core, chatId) { runCatching { core.openSession(chatId) }.getOrNull() } ?: run {
         Text("This session isn't available.", Modifier.padding(32.dp))
         return
     }
-    val transcript = remember(chatId) { TranscriptState() }
-    DisposableEffect(chatId) {
+    val transcript = remember(core, chatId) { TranscriptState() }
+    val pixelScale = LocalDensity.current.density
+    DisposableEffect(transcript) {
+        transcript.engine.setVisualSource(core, handle.composer().host.deviceId, pixelScale)
         transcript.engine.attach(core, chatId)
         handle.setViewAttached(true)
         core.markSeen(chatId)
@@ -98,7 +100,7 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
 
     val context = LocalContext.current
     var sheet by remember { mutableStateOf<TextSheet?>(null) }
-    val actions = remember(chatId) {
+    val actions = remember(core, chatId) {
         TranscriptActions(
             openUrl = { url ->
                 val uri = Uri.parse(url)
