@@ -29,6 +29,8 @@
          the same isolated development instance. -->
     <key>LSEnvironment</key>
     <dict>
+        <key>ZERON_AUTO_UPDATE</key>
+        <string>0</string>
         <key>ZERUN_DATA_DIR</key>
         <string>__DATA_DIR__</string>
         <key>ZERUN_IPC_PORT</key>
