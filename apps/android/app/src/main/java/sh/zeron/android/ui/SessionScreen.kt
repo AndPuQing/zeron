@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -221,14 +224,15 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                 val sideChatTone = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
                     MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 GlassSurface(onClick = { showSideChats = true }, contentColor = sideChatTone) {
-                    Row(Modifier.heightIn(min = 44.dp).padding(horizontal = 12.dp).semantics { contentDescription = "Side chats" },
+                    Row(Modifier.heightIn(min = 44.dp).widthIn(min = 44.dp).padding(horizontal = 12.dp).semantics { contentDescription = "Side chats" },
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) {
                         if (sideChatBusy) ActivityIndicator(Modifier.size(16.dp), color = sideChatTone)
                         else sh.zeron.android.design.ZIcon(ZIcons.Branch, null, Modifier.size(17.dp))
                         if (children.isNotEmpty()) Text(children.size.toString(), style = MaterialTheme.typography.labelMedium)
                     }
                 }
+                Spacer(Modifier.width(8.dp))
                 Box {
                     TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true })
                     ActionMenu(
