@@ -590,6 +590,61 @@ fn running_subagent_shows_a_spinner_after_its_spawn_resolves() {
     assert!(failed.display(0).unwrap().runs.iter().any(|r| r.color == display::ColorRole::Danger), "failed subagent is tinted danger");
 }
 
+#[test]
+fn compaction_feedback_updates_the_same_mobile_row_and_settles_stale_history() {
+    use zeron_doc::parts::{MessagePart, MessageStatus};
+    use zeron_doc::schema::{MessageRole, SessionMessageEntry};
+    use zeron_proto::CompactionStatus;
+    let mut w = worker(390.0);
+    let mut previous = None;
+    for (status, streaming, expected) in [
+        (CompactionStatus::InProgress, true, "Compacting context…"),
+        (CompactionStatus::Completed, true, "Context compacted"),
+        (CompactionStatus::Failed, false, "Context compaction failed"),
+        (
+            CompactionStatus::Cancelled,
+            false,
+            "Context compaction interrupted",
+        ),
+        (
+            CompactionStatus::InProgress,
+            false,
+            "Context compaction interrupted",
+        ),
+    ] {
+        w.input.entries = vec![Arc::new(SessionMessageEntry {
+            id: "a".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Compaction {
+                id: "c".into(),
+                status,
+            }],
+            created_at: 0,
+            device_id: String::new(),
+            status: Some(if streaming {
+                MessageStatus::Streaming
+            } else {
+                MessageStatus::Complete
+            }),
+            continuation_of: None,
+            duration_ms: None,
+        })];
+        let frame = w.pass();
+        assert_eq!(frame.row_count(), 1);
+        let placement = frame.placement(0).unwrap();
+        assert_eq!(placement.kind, RowKind::Chip);
+        if let Some(key) = previous {
+            assert_eq!(placement.key, key);
+        }
+        previous = Some(placement.key);
+        let d = frame.display(0).unwrap();
+        assert_eq!(d.copy_text, expected);
+        if status == CompactionStatus::Failed {
+            assert!(d.runs.iter().any(|r| r.color == display::ColorRole::Danger));
+        }
+    }
+}
+
 /// The fork seam is tappable: its chip carries a `zerun://chat/<id>` link,
 /// so the host can open the source chat.
 #[test]

@@ -85,6 +85,26 @@ async fn terminal_contract_handles_normal_errors_retries_compaction_and_consumed
             })
             .collect();
         assert_eq!(dones, vec![&status], "{prompt}: {events:?}");
+        if prompt == "compact" {
+            let updates: Vec<_> = events
+                .iter()
+                .filter_map(|e| match e {
+                    AgentEvent::ContextCompaction { id, status } => Some((id, status)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(updates.len(), 2, "{events:?}");
+            assert_eq!(updates[0].0, updates[1].0);
+            assert_eq!(*updates[0].1, zeron_proto::CompactionStatus::InProgress);
+            assert_eq!(*updates[1].1, zeron_proto::CompactionStatus::Completed);
+            assert!(events.iter().any(|e| matches!(
+                e,
+                AgentEvent::ContextUsage {
+                    tokens: Some(9),
+                    ..
+                }
+            )));
+        }
         if prompt == "hello" {
             let text: String = events
                 .iter()

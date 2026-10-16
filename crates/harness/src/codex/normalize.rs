@@ -264,6 +264,14 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
     let id = str_field(item, &["id"]);
     let status = str_field(item, &["status"]);
     match item_type(item) {
+        "contextCompaction" => vec![AgentEvent::ContextCompaction {
+            id,
+            status: if phase == Phase::Started {
+                zeron_proto::CompactionStatus::InProgress
+            } else {
+                zeron_proto::CompactionStatus::Completed
+            },
+        }],
         "imageGeneration" | "image_generation" => {
             let call = ToolCall::Unknown {
                 name: "Generate image".into(),

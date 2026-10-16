@@ -437,6 +437,30 @@ impl RowBuilder {
                             let gap = gap_for(&rows, false);
                             rows.push(Placed { core: Arc::new(chip_row(ctx, &entry.id, id, "questionmark.bubble", ColorRole::Accent, &text)), gap });
                         }
+                        MessagePart::Compaction { id, status } => {
+                            use zeron_proto::CompactionStatus;
+                            let (status, label) =
+                                zeron_doc::parts::compaction_feedback(*status, streaming);
+                            let (icon, color) = match status {
+                                CompactionStatus::InProgress => {
+                                    ("arrow.triangle.2.circlepath", ColorRole::Accent)
+                                }
+                                CompactionStatus::Completed => {
+                                    ("checkmark", ColorRole::TextSecondary)
+                                }
+                                CompactionStatus::Failed => {
+                                    ("exclamationmark.triangle", ColorRole::Danger)
+                                }
+                                CompactionStatus::Cancelled => {
+                                    ("stop.circle", ColorRole::TextTertiary)
+                                }
+                            };
+                            let gap = gap_for(&rows, false);
+                            rows.push(Placed {
+                                core: Arc::new(chip_row(ctx, &entry.id, id, icon, color, label)),
+                                gap,
+                            });
+                        }
                         MessagePart::Error { id, message } => {
                             let gap = gap_for(&rows, false);
                             rows.push(Placed { core: Arc::new(chip_row(ctx, &entry.id, id, "exclamationmark.triangle", ColorRole::Danger, message)), gap });
