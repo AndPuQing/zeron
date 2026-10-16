@@ -133,7 +133,7 @@ private fun Home(model: AppModel, nav: NavHostController) {
                     NavItem("Settings", ZIcons.TabSettings, tab == Tab.Settings) { tab = Tab.Settings },
                 ),
                 trailing = {
-                    TonalCircleButton(ZIcons.Search, "Search", onClick = { nav.navigate(Routes.SEARCH) }, size = 64.dp)
+                    TonalCircleButton(ZIcons.Search, "Search", onClick = { nav.navigate(Routes.SEARCH) }, size = 64.dp, iconSize = 28.dp)
                 },
             )
         }

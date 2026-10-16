@@ -54,6 +54,8 @@ fun TonalCircleButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     size: Dp = GlassMetrics.control,
+    // Back and close have more padding inside their SVG viewports.
+    iconSize: Dp = if (icon == ZIcons.Back || icon == ZIcons.Close) 28.dp else 24.dp,
     container: Color = Color.Transparent,
     content: Color = MaterialTheme.colorScheme.onSurface,
 ) {
@@ -63,7 +65,7 @@ fun TonalCircleButton(
         contentColor = content,
         modifier = modifier.size(size),
     ) {
-        Box(contentAlignment = Alignment.Center) { ZIcon(icon, contentDescription, Modifier.size(20.dp), tint = content) }
+        Box(contentAlignment = Alignment.Center) { ZIcon(icon, contentDescription, Modifier.size(iconSize), tint = content) }
     }
 }
 

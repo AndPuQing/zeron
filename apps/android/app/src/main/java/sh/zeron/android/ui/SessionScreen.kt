@@ -224,11 +224,11 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                 val sideChatTone = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
                     MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 GlassSurface(onClick = { showSideChats = true }, contentColor = sideChatTone) {
-                    Row(Modifier.heightIn(min = 44.dp).widthIn(min = 44.dp).padding(horizontal = 12.dp).semantics { contentDescription = "Side chats" },
+                    Row(Modifier.heightIn(min = 44.dp).widthIn(min = 44.dp).padding(horizontal = 10.dp).semantics { contentDescription = "Side chats" },
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)) {
-                        if (sideChatBusy) ActivityIndicator(Modifier.size(16.dp), color = sideChatTone)
-                        else sh.zeron.android.design.ZIcon(ZIcons.Branch, null, Modifier.size(17.dp))
+                        if (sideChatBusy) ActivityIndicator(Modifier.size(20.dp), color = sideChatTone)
+                        else sh.zeron.android.design.ZIcon(ZIcons.Branch, null, Modifier.size(24.dp))
                         if (children.isNotEmpty()) Text(children.size.toString(), style = MaterialTheme.typography.labelMedium)
                     }
                 }
