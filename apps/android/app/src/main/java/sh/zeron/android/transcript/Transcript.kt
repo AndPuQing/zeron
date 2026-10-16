@@ -52,6 +52,9 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
@@ -247,7 +250,13 @@ private fun RowHost(
             .pointerTaps(model, d, actions, onLongPress = {
                 haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                 menuAt = it
-            }),
+            })
+            .semantics {
+                model.display.links.singleOrNull()?.takeIf { it.url.startsWith("zerun://chat/") }?.let { link ->
+                    contentDescription = model.display.copyText
+                    onClick("Open source chat") { actions.openUrl(link.url); true }
+                }
+            },
     ) {
         model.display.scrollers.forEachIndexed { i, s ->
             val scroll = rememberScrollState()

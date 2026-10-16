@@ -90,6 +90,9 @@ class AppModel(private val app: Application) {
     private val _sessionEvents = MutableSharedFlow<String>(extraBufferCapacity = 256)
     val sessionEvents: SharedFlow<String> = _sessionEvents
 
+    private val _sideChatBusy = MutableStateFlow(false)
+    val sideChatBusy: StateFlow<Boolean> = _sideChatBusy.asStateFlow()
+
     /** Organizations to pick from mid sign-in (more than one). */
     val orgChoice = MutableStateFlow<Pair<List<AuthOrg>, CompletableDeferred<AuthOrg?>>?>(null)
     val signInError = MutableStateFlow<String?>(null)
@@ -398,6 +401,31 @@ class AppModel(private val app: Application) {
     fun setSectionCollapsed(id: String, collapsed: Boolean) = attempt("collapse") { _client.value?.setSectionCollapsed(id, collapsed) }
 
     fun row(id: String): SessionRow? = _client.value?.sessionRow(id)
+
+    fun children(parentId: String): List<SessionRow> =
+        _client.value?.childSessions(parentId).orEmpty().filterNot { it.archived }
+
+    fun createSideChat(parentId: String): String {
+        val client = checkNotNull(_client.value) { "Not signed in." }
+        check(_sideChatBusy.compareAndSet(false, true)) { "A side chat is already being created." }
+        return try {
+            client.createSideChat(parentId, null).also { refreshWorkspace() }
+        } finally {
+            _sideChatBusy.value = false
+        }
+    }
+
+    /** A side chat forks as a sibling, under the same top-level parent. */
+    suspend fun forkSideChat(sourceId: String): String {
+        val client = checkNotNull(_client.value) { "Not signed in." }
+        check(_sideChatBusy.compareAndSet(false, true)) { "A side chat is already being created." }
+        return try {
+            val parentId = client.sessionRow(sourceId)?.parentChatId ?: sourceId
+            client.forkSideChat(sourceId, parentId).also { refreshWorkspace() }
+        } finally {
+            _sideChatBusy.value = false
+        }
+    }
 
     /** Create the chat and send its first message. */
     fun createSession(draft: NewSessionDraft, text: String, attachments: List<uniffi.zeron_core.OutgoingAttachment> = emptyList()): String? {
