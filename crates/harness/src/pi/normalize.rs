@@ -10,9 +10,11 @@ pub(super) struct Normalizer {
     pub error: Option<String>,
     pub aborted: bool,
     pub window: Option<u64>,
+    compaction_id: Option<String>,
 }
 impl Normalizer {
     pub fn reset(&mut self) {
+        self.compaction_id = None;
         self.error = None;
         self.aborted = false;
         self.text.clear();
@@ -146,7 +148,29 @@ impl Normalizer {
                     diff,
                 });
             }
+            "compaction_start" => {
+                let id = self
+                    .compaction_id
+                    .get_or_insert_with(|| uuid::Uuid::new_v4().to_string())
+                    .clone();
+                events.push(AgentEvent::ContextCompaction {
+                    id,
+                    status: zeron_proto::CompactionStatus::InProgress,
+                });
+            }
             "compaction_end" => {
+                let id = self
+                    .compaction_id
+                    .take()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let status = if frame["aborted"] == true {
+                    zeron_proto::CompactionStatus::Cancelled
+                } else if frame["result"].is_object() {
+                    zeron_proto::CompactionStatus::Completed
+                } else {
+                    zeron_proto::CompactionStatus::Failed
+                };
+                events.push(AgentEvent::ContextCompaction { id, status });
                 if let Some(tokens) = frame["result"]["estimatedTokensAfter"].as_u64() {
                     events.push(AgentEvent::ContextUsage {
                         tokens: Some(tokens),
@@ -217,6 +241,62 @@ fn tool(name: &str, args: &Value) -> ToolCall {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn compaction_lifecycle_preserves_id_and_updates_usage() {
+        use zeron_proto::CompactionStatus;
+        let mut n = Normalizer::default();
+        let start = n.map(&json!({"type":"compaction_start", "reason":"threshold"}));
+        assert_eq!(n.map(&json!({"type":"compaction_start"})), start);
+        let AgentEvent::ContextCompaction {
+            id,
+            status: CompactionStatus::InProgress,
+        } = &start[0]
+        else {
+            panic!("{start:?}");
+        };
+        let end = n.map(&json!({"type":"compaction_end", "result":{"estimatedTokensAfter":1200}, "aborted":false}));
+        assert_eq!(
+            end[0],
+            AgentEvent::ContextCompaction {
+                id: id.clone(),
+                status: CompactionStatus::Completed
+            }
+        );
+        assert_eq!(
+            end[1],
+            AgentEvent::ContextUsage {
+                tokens: Some(1200),
+                window: None
+            }
+        );
+        let next = n.map(&json!({"type":"compaction_start"}));
+        assert_ne!(start, next);
+    }
+
+    #[test]
+    fn compaction_completed_only_failure_and_abort_are_distinct() {
+        use zeron_proto::CompactionStatus;
+        for (frame, expected) in [
+            (
+                json!({"type":"compaction_end", "result":{}, "aborted":false}),
+                CompactionStatus::Completed,
+            ),
+            (
+                json!({"type":"compaction_end", "aborted":true}),
+                CompactionStatus::Cancelled,
+            ),
+            (
+                json!({"type":"compaction_end", "errorMessage":"failed", "willRetry":true}),
+                CompactionStatus::Failed,
+            ),
+        ] {
+            let events = Normalizer::default().map(&frame);
+            assert!(
+                matches!(&events[0], AgentEvent::ContextCompaction { status, .. } if *status == expected)
+            );
+        }
+    }
+
     #[test]
     fn final_message_reconciles_without_duplicate_text_and_retry_clears_error() {
         let mut n = Normalizer::default();

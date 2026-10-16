@@ -5,7 +5,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use zeron_proto::{AgentEvent, SUBAGENT_INPUT_KEEP, ToolCall, ToolDiff, UserInputQuestion};
+use zeron_proto::{
+    AgentEvent, CompactionStatus, SUBAGENT_INPUT_KEEP, ToolCall, ToolDiff, UserInputQuestion,
+};
 
 use crate::constants::MSG_INLINE_MAX;
 
@@ -208,6 +210,11 @@ pub enum MessagePart {
         #[serde(default)]
         resolved: bool,
     },
+    /// A provider context operation, kept separate from authored reply text.
+    Compaction {
+        id: String,
+        status: CompactionStatus,
+    },
     Error {
         id: String,
         message: String,
@@ -237,6 +244,7 @@ impl MessagePart {
             | MessagePart::Reasoning { id, .. }
             | MessagePart::Tool { id, .. }
             | MessagePart::Input { id, .. }
+            | MessagePart::Compaction { id, .. }
             | MessagePart::Error { id, .. }
             | MessagePart::Fork { id, .. } => id,
         }
@@ -271,6 +279,7 @@ impl MessagePart {
                 mime_type,
             } => id.len() + path.len() + name.len() + mime_type.len(),
             MessagePart::Visual { id, path, title } => id.len() + path.len() + title.len(),
+            MessagePart::Compaction { id, .. } => id.len(),
             MessagePart::Error { message, .. } => message.len(),
             MessagePart::Fork {
                 source_chat_id,
@@ -445,14 +454,43 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
                 }
             }
         }
+        AgentEvent::ContextCompaction { id, status } => {
+            let id = format!("compaction:{id}");
+            if let Some(MessagePart::Compaction {
+                status: current, ..
+            }) = out.iter_mut().find(|p| p.id() == id)
+            {
+                // Late/duplicate starts must not reopen a settled operation.
+                if *current == CompactionStatus::InProgress
+                    || *status != CompactionStatus::InProgress
+                {
+                    *current = *status;
+                }
+            } else {
+                out.push(MessagePart::Compaction {
+                    id,
+                    status: *status,
+                });
+            }
+        }
         AgentEvent::Error { message } => {
+            settle_compactions(out, CompactionStatus::Failed);
             let id = format!("e{}", out.len());
             out.push(MessagePart::Error {
                 id,
                 message: message.clone(),
             });
         }
-        AgentEvent::Done { error, .. } => {
+        AgentEvent::Done { status, error, .. } => {
+            settle_compactions(
+                out,
+                if *status == zeron_proto::DoneStatus::Errored {
+                    CompactionStatus::Failed
+                } else {
+                    // Missing completion is not evidence of a successful compaction.
+                    CompactionStatus::Cancelled
+                },
+            );
             if let Some(message) = error {
                 let id = format!("e{}", out.len());
                 out.push(MessagePart::Error {
@@ -523,6 +561,37 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::UserMessage { .. } => {}
     }
+}
+
+fn settle_compactions(parts: &mut [MessagePart], terminal: CompactionStatus) {
+    for part in parts {
+        if let MessagePart::Compaction { status, .. } = part
+            && *status == CompactionStatus::InProgress
+        {
+            *status = terminal;
+        }
+    }
+}
+
+/// Presentation fallback for a stream that ended without a terminal event.
+pub fn compaction_feedback(
+    status: CompactionStatus,
+    streaming: bool,
+) -> (CompactionStatus, &'static str) {
+    let status = if status == CompactionStatus::InProgress && !streaming {
+        CompactionStatus::Cancelled
+    } else {
+        status
+    };
+    (
+        status,
+        match status {
+            CompactionStatus::InProgress => "Compacting context…",
+            CompactionStatus::Completed => "Context compacted",
+            CompactionStatus::Failed => "Context compaction failed",
+            CompactionStatus::Cancelled => "Context compaction interrupted",
+        },
+    )
 }
 
 /// Stamp sidecar keys onto resolved tool parts that have sidecar content.
@@ -723,6 +792,84 @@ pub fn join_continuations(entries: Vec<Vec<MessagePart>>) -> Vec<MessagePart> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compaction_updates_in_place_without_merging_reply_text() {
+        let mut parts = vec![];
+        let event = |status| AgentEvent::ContextCompaction {
+            id: "c1".into(),
+            status,
+        };
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::TextDelta {
+                text: "before".into(),
+            },
+        );
+        fold_event_into_parts(&mut parts, &event(CompactionStatus::InProgress));
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::TextDelta {
+                text: "after".into(),
+            },
+        );
+        fold_event_into_parts(&mut parts, &event(CompactionStatus::Completed));
+        fold_event_into_parts(&mut parts, &event(CompactionStatus::Completed));
+        fold_event_into_parts(&mut parts, &event(CompactionStatus::InProgress));
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], MessagePart::Text { text, .. } if text == "before"));
+        assert!(matches!(
+            &parts[1],
+            MessagePart::Compaction {
+                status: CompactionStatus::Completed,
+                ..
+            }
+        ));
+        assert!(matches!(&parts[2], MessagePart::Text { text, .. } if text == "after"));
+        fold_event_into_parts(
+            &mut parts,
+            &AgentEvent::ContextCompaction {
+                id: "c2".into(),
+                status: CompactionStatus::Completed,
+            },
+        );
+        assert_eq!(parts.len(), 4, "completion-only operations are visible");
+    }
+
+    #[test]
+    fn compaction_cannot_remain_running_after_a_turn_ends() {
+        use zeron_proto::DoneStatus;
+        for (done, expected) in [
+            (DoneStatus::Completed, CompactionStatus::Cancelled),
+            (DoneStatus::Interrupted, CompactionStatus::Cancelled),
+            (DoneStatus::Errored, CompactionStatus::Failed),
+        ] {
+            let mut parts = vec![];
+            fold_event_into_parts(
+                &mut parts,
+                &AgentEvent::ContextCompaction {
+                    id: "c".into(),
+                    status: CompactionStatus::InProgress,
+                },
+            );
+            fold_event_into_parts(
+                &mut parts,
+                &AgentEvent::Done {
+                    status: done,
+                    result: None,
+                    error: None,
+                    session_id: None,
+                },
+            );
+            assert!(
+                matches!(&parts[0], MessagePart::Compaction { status, .. } if *status == expected)
+            );
+        }
+        assert_eq!(
+            compaction_feedback(CompactionStatus::InProgress, false).0,
+            CompactionStatus::Cancelled
+        );
+    }
 
     fn text_delta(s: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: s.into() }

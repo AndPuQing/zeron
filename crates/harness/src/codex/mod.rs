@@ -1545,7 +1545,6 @@ async fn run_session(session: Session) {
                         if phase == Phase::Completed {
                             let output = match item_type(item) {
                                 "exitedReviewMode" => item.get("review").and_then(Value::as_str),
-                                "contextCompaction" => Some("Context compacted."),
                                 _ => None,
                             };
                             if let Some(text) = output

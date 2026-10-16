@@ -215,6 +215,12 @@ fn is_synthetic_user_text(text: &str) -> bool {
     text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted")
 }
 
+struct CompactionState {
+    id: String,
+    status: zeron_proto::CompactionStatus,
+    boundary: Option<String>,
+}
+
 /// Per-run normalization state.
 ///
 /// `saw_init` dedupes `system:init` — the CLI re-emits it every time the model
@@ -227,6 +233,7 @@ fn is_synthetic_user_text(text: &str) -> bool {
 /// resume turns them into the done→Working→done wake.
 pub(crate) struct Normalizer {
     saw_init: bool,
+    compactions: std::collections::HashMap<String, CompactionState>,
     last_model: Option<String>,
     /// Background-agent ids (`task_started.task_id`) → the spawning Agent
     /// tool_use id. `SendMessage` steers address the AGENT id; this map
@@ -254,6 +261,7 @@ impl Normalizer {
     pub fn new() -> Self {
         Self {
             saw_init: false,
+            compactions: std::collections::HashMap::new(),
             last_model: None,
             agent_tasks: std::collections::HashMap::new(),
             agent_tool_spawns: std::collections::HashMap::new(),
@@ -378,6 +386,56 @@ impl Normalizer {
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {
+                if f.subtype == "status" || f.subtype == "compact_boundary" {
+                    use zeron_proto::CompactionStatus;
+                    let status = if f.subtype == "compact_boundary"
+                        || f.compact_result.as_deref() == Some("success")
+                    {
+                        Some(CompactionStatus::Completed)
+                    } else if f.compact_result.as_deref() == Some("failed") {
+                        Some(CompactionStatus::Failed)
+                    } else if f.status.as_deref() == Some("compacting") {
+                        Some(CompactionStatus::InProgress)
+                    } else {
+                        None
+                    };
+                    let Some(status) = status else {
+                        return Vec::new();
+                    };
+                    let parent = f.parent_tool_use_id.as_deref().filter(|p| !p.is_empty());
+                    let state = self
+                        .compactions
+                        .entry(parent.unwrap_or("").to_owned())
+                        .or_insert_with(|| CompactionState {
+                            id: new_message_id(),
+                            status: CompactionStatus::InProgress,
+                            boundary: None,
+                        });
+                    let new_start = status == CompactionStatus::InProgress
+                        && state.status != CompactionStatus::InProgress;
+                    let new_boundary = f.subtype == "compact_boundary"
+                        && state.boundary.is_some()
+                        && f.uuid.is_some()
+                        && state.boundary != f.uuid;
+                    if new_start || new_boundary {
+                        state.id = new_message_id();
+                        state.boundary = None;
+                    }
+                    if f.subtype == "compact_boundary" {
+                        state.boundary = f.uuid;
+                    }
+                    state.status = status;
+                    let event = AgentEvent::ContextCompaction {
+                        id: state.id.clone(),
+                        status,
+                    };
+                    return vec![if let Some(parent) = parent {
+                        tag(parent, event)
+                    } else {
+                        event
+                    }];
+                }
+
                 // A background subagent's completion arrives as an UNTAGGED
                 // `task_notification` carrying the spawning tool's id — the
                 // wire's only terminal signal for it (live-verified 2.1.228:
@@ -729,6 +787,7 @@ impl Normalizer {
             }
 
             Frame::Result(f) => {
+                self.compactions.remove("");
                 let model_usage = self
                     .last_model
                     .as_deref()
@@ -834,6 +893,96 @@ impl Normalizer {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn compaction_status_boundary_and_failure_share_lifecycle_identity() {
+        use zeron_proto::CompactionStatus;
+        let mut n = Normalizer::new();
+        let mut map = |v: Value| {
+            n.normalize(
+                super::super::wire::parse_frame(&v.to_string()).unwrap(),
+                false,
+            )
+        };
+        let start = map(json!({"type":"system", "subtype":"status", "status":"compacting"}));
+        assert_eq!(
+            map(json!({"type":"system", "subtype":"status", "status":"compacting"})),
+            start
+        );
+        assert!(map(json!({"type":"system", "subtype":"status", "status":null})).is_empty());
+        let AgentEvent::ContextCompaction {
+            id,
+            status: CompactionStatus::InProgress,
+        } = &start[0]
+        else {
+            panic!("{start:?}");
+        };
+        let done = map(
+            json!({"type":"system", "subtype":"status", "status":null, "compact_result":"success"}),
+        );
+        assert_eq!(
+            done,
+            vec![AgentEvent::ContextCompaction {
+                id: id.clone(),
+                status: CompactionStatus::Completed
+            }]
+        );
+        assert_eq!(
+            map(json!({"type":"system", "subtype":"compact_boundary", "uuid":"boundary"})),
+            done
+        );
+        let next = map(json!({"type":"system", "subtype":"status", "status":"compacting"}));
+        assert_ne!(next, start);
+        let failed = map(
+            json!({"type":"system", "subtype":"status", "status":null, "compact_result":"failed"}),
+        );
+        assert!(matches!(
+            &failed[0],
+            AgentEvent::ContextCompaction {
+                status: CompactionStatus::Failed,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn distinct_completion_only_boundaries_do_not_collapse_into_one_operation() {
+        let mut n = Normalizer::new();
+        let mut map = |id: &str| {
+            n.normalize(
+                super::super::wire::parse_frame(
+                    &json!({"type":"system", "subtype":"compact_boundary", "uuid":id}).to_string(),
+                )
+                .unwrap(),
+                false,
+            )
+        };
+        let first = map("first");
+        assert_eq!(map("first"), first);
+        assert_ne!(map("second"), first);
+    }
+
+    #[test]
+    fn compaction_completion_only_and_child_scope_are_supported() {
+        use zeron_proto::CompactionStatus;
+        let mut n = Normalizer::new();
+        let parent = n.normalize(
+            super::super::wire::parse_frame(r#"{"type":"system","subtype":"compact_boundary"}"#)
+                .unwrap(),
+            false,
+        );
+        assert!(matches!(
+            &parent[0],
+            AgentEvent::ContextCompaction {
+                status: CompactionStatus::Completed,
+                ..
+            }
+        ));
+        let child = n.normalize(super::super::wire::parse_frame(r#"{"type":"system","subtype":"status","status":"compacting","parent_tool_use_id":"spawn"}"#).unwrap(), false);
+        assert!(
+            matches!(&child[0], AgentEvent::Subagent { parent_tool_use_id, event } if parent_tool_use_id == "spawn" && matches!(event.as_ref(), AgentEvent::ContextCompaction { status: CompactionStatus::InProgress, .. }))
+        );
+    }
 
     #[test]
     fn decodes_typed_tools() {

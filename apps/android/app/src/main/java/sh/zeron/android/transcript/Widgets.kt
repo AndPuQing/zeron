@@ -222,6 +222,9 @@ private fun AssetIcon(name: String, tint: Color) {
     val context = LocalContext.current
     when (name) {
         "square", "checkmark.square.fill" -> return TaskBox(name != "square", tint)
+        "arrow.triangle.2.circlepath" -> return ZIcon(ZIcons.Refresh, null, Modifier.fillMaxSize(), tint = tint)
+        "checkmark" -> return ZIcon(ZIcons.Check, null, Modifier.fillMaxSize(), tint = tint)
+        "stop.circle" -> return ZIcon(ZIcons.Stop, null, Modifier.fillMaxSize(), tint = tint)
         "arrow.triangle.branch" -> return ZIcon(ZIcons.Branch, null, Modifier.fillMaxSize(), tint = tint)
         "exclamationmark.triangle" -> return ZIcon(ZIcons.Warning, null, Modifier.fillMaxSize(), tint = tint)
         "questionmark.bubble" -> return ZIcon(ZIcons.Chat, null, Modifier.fillMaxSize(), tint = tint)

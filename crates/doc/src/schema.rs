@@ -75,6 +75,8 @@ struct DocPartJson {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mime_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    compaction_status: Option<zeron_proto::CompactionStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     /// Thinking body for `kind: "reasoning"` (additive). Deliberately NOT the
     /// `text` field: old readers' unknown-kind fallback renders `text` as
@@ -215,6 +217,12 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             resolved: Some(*resolved),
             ..Default::default()
         },
+        MessagePart::Compaction { id, status } => DocPartJson {
+            id: id.clone(),
+            kind: "compaction".into(),
+            compaction_status: Some(*status),
+            ..Default::default()
+        },
         MessagePart::Error { id, message } => DocPartJson {
             id: id.clone(),
             kind: "error".into(),
@@ -284,6 +292,12 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 .and_then(|q| serde_json::from_value(q).ok())
                 .unwrap_or_default(),
             resolved: p.resolved.unwrap_or(false),
+        },
+        "compaction" => MessagePart::Compaction {
+            id: p.id,
+            status: p
+                .compaction_status
+                .unwrap_or(zeron_proto::CompactionStatus::Cancelled),
         },
         "error" => MessagePart::Error {
             id: p.id,
@@ -869,6 +883,12 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
             map.insert(key, value.as_str())?;
         }
     }
+    if let Some(status) = doc_part.compaction_status {
+        map.insert(
+            "compactionStatus",
+            loro_value_from_json(&serde_json::to_value(status)?),
+        )?;
+    }
     if let Some(call) = &doc_part.call {
         map.insert("call", loro_value_from_json(call))?;
     }
@@ -1327,6 +1347,12 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
             map.insert(key, value.as_str())?;
         }
     }
+    if let Some(status) = doc_part.compaction_status {
+        map.insert(
+            "compactionStatus",
+            loro_value_from_json(&serde_json::to_value(status)?),
+        )?;
+    }
     if let Some(call) = &doc_part.call {
         map.insert("call", loro_value_from_json(call))?;
     }
@@ -1429,6 +1455,34 @@ pub fn materialize_tail(
 mod tests {
     use super::*;
     use crate::parts::fold_event_into_parts;
+
+    #[test]
+    fn compaction_status_updates_survive_doc_sync_and_snapshot() {
+        use zeron_proto::CompactionStatus;
+        let doc = SessionDoc::init("compaction").unwrap();
+        let mut writer = SegmentWriter::begin(&doc, "a", "owner", 1).unwrap();
+        let mut parts = vec![];
+        for status in [
+            CompactionStatus::InProgress,
+            CompactionStatus::Completed,
+            CompactionStatus::Failed,
+            CompactionStatus::Cancelled,
+        ] {
+            fold_event_into_parts(
+                &mut parts,
+                &AgentEvent::ContextCompaction {
+                    id: "c".into(),
+                    status,
+                },
+            );
+            writer.sync(&parts).unwrap();
+            let imported = LoroDoc::new();
+            imported.import(&doc.export_snapshot().unwrap()).unwrap();
+            let loaded = SessionDoc::from_doc(imported);
+            assert_eq!(loaded.read_entries().unwrap()[0].parts, parts);
+            assert_eq!(parts.len(), 1);
+        }
+    }
 
     #[test]
     fn fork_seam_round_trips_through_the_doc() {

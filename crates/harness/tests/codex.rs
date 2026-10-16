@@ -1534,7 +1534,7 @@ async fn native_commands_use_rpc_operations_and_render_results() {
     }
     .link();
     for (prompt, resume, expected) in [
-        ("/compact", true, "Context compacted."),
+        ("/compact", true, ""),
         ("/review", true, "Review fixture result"),
         (
             "/review check error handling",
@@ -1552,6 +1552,22 @@ async fn native_commands_use_rpc_operations_and_render_results() {
         let mut req = request(prompt);
         req.resume = resume.then(|| "existing-thread".into());
         let events = run_to_end(&harness(), req, controls).await;
+        if prompt == "/compact" {
+            assert_eq!(
+                events
+                    .iter()
+                    .filter_map(|event| match event {
+                        AgentEvent::ContextCompaction { id, status } =>
+                            Some((id.as_str(), *status)),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                vec![
+                    ("compact-1", zeron_proto::CompactionStatus::InProgress),
+                    ("compact-1", zeron_proto::CompactionStatus::Completed),
+                ]
+            );
+        }
         let mut text = String::new();
         let mut completions = 0;
         for event in events {

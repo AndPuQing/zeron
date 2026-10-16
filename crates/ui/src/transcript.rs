@@ -1080,6 +1080,9 @@ pub enum RowKind {
         header: SharedString,
         resolved: bool,
     },
+    Compaction {
+        status: zeron_proto::CompactionStatus,
+    },
     ErrorChip {
         message: SharedString,
     },
@@ -1675,6 +1678,22 @@ pub fn rows_for_entry(
                                 header,
                                 resolved: *resolved,
                             },
+                            entry_id: entry_id.clone(),
+                            timestamp: None,
+                            copy_text: None,
+                            compact_fold: None,
+                        });
+                    }
+                    MessagePart::Compaction {
+                        id: part_id,
+                        status,
+                    } => {
+                        let (status, _) = zeron_doc::parts::compaction_feedback(*status, streaming);
+                        rows.push(Row {
+                            id: format!("{}#{}", entry.id, part_id).into(),
+                            version: status as u64,
+                            turn_start: false,
+                            kind: RowKind::Compaction { status },
                             entry_id: entry_id.clone(),
                             timestamp: None,
                             copy_text: None,
@@ -7530,6 +7549,52 @@ impl Transcript {
             RowKind::Visual { owner, path, title } => {
                 self.render_visual(&row.id, owner, path, title, cx)
             }
+            RowKind::Compaction { status } => {
+                use zeron_proto::CompactionStatus;
+                let (_, label) = zeron_doc::parts::compaction_feedback(*status, true);
+                let tint = if *status == CompactionStatus::Failed {
+                    theme.danger
+                } else {
+                    theme.text_muted
+                };
+                let indicator = if *status == CompactionStatus::InProgress {
+                    crate::loaders::mini_mono_spinner(
+                        format!("compaction-{}", row.id),
+                        2.0,
+                        tint,
+                        cx.entity_id(),
+                        cx,
+                    )
+                    .into_any_element()
+                } else {
+                    crate::icons::icon(match status {
+                        CompactionStatus::Completed => crate::icons::CHECK,
+                        CompactionStatus::Failed => crate::icons::CLOSE_CIRCLE,
+                        _ => crate::icons::STOP,
+                    })
+                    .size(px(14.0))
+                    .text_color(tint)
+                    .into_any_element()
+                };
+                div()
+                    .py(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(px(12.0))
+                    .text_color(tint)
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(14.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(indicator),
+                    )
+                    .child(label)
+                    .into_any_element()
+            }
             RowKind::ErrorChip { message } => error_chip(message.clone(), &theme),
             RowKind::ForkMarker { source_title, .. } => fork_marker(source_title.clone(), &theme),
         };
@@ -10089,6 +10154,9 @@ fn entry_fingerprint(entry: &SessionMessageEntry, pending: bool) -> u64 {
                 acc.push(0);
             }
         }
+        if let MessagePart::Compaction { status, .. } = part {
+            acc.push(0x20 | *status as u8);
+        }
         if let MessagePart::Input { resolved, .. } = part {
             acc.push(0x10 | *resolved as u8);
         }
@@ -12375,6 +12443,58 @@ mod tests {
         assert_eq!(visible.len(), 2);
         assert!(matches!(visible[0].kind, RowKind::ToolGroup { .. }));
         assert!(matches!(visible[1].kind, RowKind::Markdown { .. }));
+    }
+
+    #[test]
+    fn compaction_rows_remain_visible_and_refresh_status_in_compact_mode() {
+        use zeron_proto::CompactionStatus;
+        let mut entry = assistant(
+            "a",
+            MessageStatus::Streaming,
+            vec![
+                tool_part("tool", "ls"),
+                MessagePart::Compaction {
+                    id: "c".into(),
+                    status: CompactionStatus::InProgress,
+                },
+            ],
+        );
+        for compact in [false, true] {
+            let active = rows_for_entry(&entry, false, compact, &mut parse);
+            let row = active
+                .iter()
+                .find(|r| matches!(r.kind, RowKind::Compaction { .. }))
+                .unwrap();
+            assert!(row.compact_fold.is_none());
+            assert!(matches!(
+                row.kind,
+                RowKind::Compaction {
+                    status: CompactionStatus::InProgress
+                }
+            ));
+            let old_fingerprint = entry_fingerprint(&entry, false);
+            let mut done = entry.clone();
+            done.parts[1] = MessagePart::Compaction {
+                id: "c".into(),
+                status: CompactionStatus::Completed,
+            };
+            let settled = rows_for_entry(&done, false, compact, &mut parse);
+            let next = settled
+                .iter()
+                .find(|r| matches!(r.kind, RowKind::Compaction { .. }))
+                .unwrap();
+            assert_eq!(row.id, next.id);
+            assert_ne!(row.version, next.version);
+            assert_ne!(old_fingerprint, entry_fingerprint(&done, false));
+        }
+        entry.status = Some(MessageStatus::Aborted);
+        let rows = rows_for_entry(&entry, false, false, &mut parse);
+        assert!(rows.iter().any(|r| matches!(
+            r.kind,
+            RowKind::Compaction {
+                status: CompactionStatus::Cancelled
+            }
+        )));
     }
 
     #[test]

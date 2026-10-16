@@ -70,6 +70,13 @@ pub(crate) struct SystemFrame {
     /// `task_notification` terminal status (`completed`/`failed`/`killed`…).
     #[serde(default)]
     pub status: Option<String>,
+    #[serde(default)]
+    pub compact_result: Option<String>,
+    #[serde(default)]
+    pub uuid: Option<String>,
+    /// System frames can be scoped to a nested agent just like content frames.
+    #[serde(default)]
+    pub parent_tool_use_id: Option<String>,
     /// `task_started` / `task_notification`: stable agent/task id
     /// (`SendMessage`'s `to:` address), used to retain spawn identity.
     #[serde(default, alias = "taskId")]

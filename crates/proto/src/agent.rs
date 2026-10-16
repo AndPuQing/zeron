@@ -578,6 +578,16 @@ pub enum DoneStatus {
     Errored,
 }
 
+/// Lifecycle of a context compaction, independent of the prompt turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompactionStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors zeron's `AgentEvent` tagged enum.
@@ -639,6 +649,11 @@ pub enum AgentEvent {
         /// Inline file diff for edit-shaped tools (ACP `Diff` content).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<ToolDiff>,
+    },
+    /// Updates one compaction in place; a completion may arrive without a start.
+    ContextCompaction {
+        id: String,
+        status: CompactionStatus,
     },
     /// Latest context occupancy, independent of cumulative billing usage.
     /// Missing fields preserve the previous measurement; zero tokens is valid.
