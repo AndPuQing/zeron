@@ -73,7 +73,19 @@ private fun MainNav(model: AppModel) {
         composable(Routes.HOME) { Home(model, nav) }
         composable(Routes.CHAT) { entry ->
             val id = entry.arguments?.getString("id") ?: return@composable
-            SessionScreen(model, id, onBack = { nav.popBackStack() })
+            SessionScreen(model, id, onBack = { nav.popBackStack() }, onOpen = { target ->
+                val currentId = nav.currentBackStackEntry?.arguments?.getString("id")
+                val route = Routes.chat(target)
+                // Reuse the source page when returning from a fork or its seam.
+                if (target != currentId && !nav.popBackStack(route, inclusive = false)) {
+                    val parent = currentId?.let { model.row(it)?.parentChatId }
+                    nav.navigate(route) {
+                        if (currentId != null && parent != null && model.row(target)?.parentChatId == parent) {
+                            popUpTo(Routes.chat(currentId)) { inclusive = true }
+                        }
+                    }
+                }
+            })
         }
         composable(Routes.NEW) {
             NewSessionScreen(model, onClose = { nav.popBackStack() }, onCreated = { id ->

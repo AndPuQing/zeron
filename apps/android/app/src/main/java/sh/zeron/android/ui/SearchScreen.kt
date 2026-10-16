@@ -50,7 +50,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
     LaunchedEffect(Unit) { focus.requestFocus() }
     val results = remember(query, workspace) {
         val q = query.trim()
-        if (q.isEmpty()) workspace?.front?.recent.orEmpty() else client?.search(q, 60u)?.map { it.session }.orEmpty()
+        if (q.isEmpty()) workspace?.front?.recent.orEmpty() else client?.searchIncludingChildren(q, 60u)?.map { it.session }.orEmpty()
     }
     val density = LocalDensity.current
     var searchHeight by remember { mutableStateOf(100.dp) }

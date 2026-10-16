@@ -10,11 +10,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -26,9 +28,14 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +44,8 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,7 +57,9 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.Geist
@@ -59,24 +70,29 @@ import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
 import uniffi.zeron_core.ComposerState
+import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
 import uniffi.zeron_core.SessionHandle
 
 private data class TextSheet(val title: String, val text: String, val mono: Boolean)
+private data class SideChatError(val title: String, val message: String)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
+fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (String) -> Unit) {
     val client by model.client.collectAsState()
     val core = client ?: return
     val handle: SessionHandle = remember(core, chatId) { runCatching { core.openSession(chatId) }.getOrNull() } ?: run {
-        Text("This session isn't available.", Modifier.padding(32.dp))
+        Column(Modifier.statusBarsPadding().padding(24.dp)) {
+            TonalCircleButton(ZIcons.Back, "Back", onClick = onBack)
+            Text("This session isn't available.", Modifier.padding(top = 24.dp))
+        }
         return
     }
     val transcript = remember(core, chatId) { TranscriptState() }
     val pixelScale = LocalDensity.current.density
-    DisposableEffect(transcript) {
+    DisposableEffect(core, handle, transcript, pixelScale) {
         transcript.engine.setVisualSource(core, handle.composer().host.deviceId, pixelScale)
         transcript.engine.attach(core, chatId)
         handle.setViewAttached(true)
@@ -88,23 +104,56 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
     }
 
     // Composer-facing state: re-pulled on this chat's events.
-    var composer by remember { mutableStateOf(handle.composer()) }
+    var composer by remember(handle) { mutableStateOf(handle.composer()) }
+    var canFork by remember(handle) { mutableStateOf(handle.canFork()) }
     val workspace by model.workspace.collectAsState()
     val connectivity by model.connectivity.collectAsState()
-    LaunchedEffect(chatId) {
-        model.sessionEvents.collect { if (it == chatId) composer = handle.composer() }
+    LaunchedEffect(model, handle, chatId) {
+        model.sessionEvents.collect {
+            if (it == chatId) {
+                composer = handle.composer()
+                canFork = handle.canFork()
+            }
+        }
     }
     // Upload rings on pending thumbnails follow the escort.
     LaunchedEffect(composer.transferProgress) { transcript.uploadProgress = composer.transferProgress }
     val row = remember(workspace, chatId) { model.row(chatId) }
+    val parentId = row?.parentChatId ?: chatId
+    val parent = remember(workspace, parentId) { model.row(parentId) }
+    val children = remember(workspace, parentId) { model.children(parentId) }
+    val sideChatBusy by model.sideChatBusy.collectAsState()
+    var showSideChats by rememberSaveable(chatId) { mutableStateOf(false) }
+    var sideChatError by remember(chatId) { mutableStateOf<SideChatError?>(null) }
+    val scope = rememberCoroutineScope()
+    val createSideChat: (Boolean) -> Unit = { fork ->
+        if (!sideChatBusy) {
+            scope.launch {
+                try {
+                    val id = if (fork) model.forkSideChat(chatId) else model.createSideChat(parentId)
+                    showSideChats = false
+                    onOpen(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    sideChatError = SideChatError(
+                        if (fork) "Couldn't fork this chat" else "Couldn't create a side chat",
+                        e.message?.removePrefix("reason=")?.takeIf { it.isNotBlank() } ?: "Please try again.",
+                    )
+                }
+            }
+        }
+    }
 
     val context = LocalContext.current
-    var sheet by remember { mutableStateOf<TextSheet?>(null) }
-    val actions = remember(core, chatId) {
+    var sheet by remember(chatId) { mutableStateOf<TextSheet?>(null) }
+    val actions = remember(core, chatId, onOpen) {
         TranscriptActions(
             openUrl = { url ->
                 val uri = Uri.parse(url)
-                if (uri.scheme == "http" || uri.scheme == "https") {
+                if (uri.scheme == "zerun" && uri.host == "chat") {
+                    uri.pathSegments.singleOrNull()?.takeIf { it.isNotBlank() }?.let(onOpen)
+                } else if (uri.scheme == "http" || uri.scheme == "https") {
                     CustomTabsIntent.Builder().build().launchUrl(context, uri)
                 } else {
                     runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }
@@ -122,8 +171,9 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
     }
 
     val project = row?.project?.name ?: "No project"
-    val subtitle = composer.host.name?.let { "$project @ $it" } ?: project
-    var overflow by remember { mutableStateOf(false) }
+    val subtitle = if (row?.parentChatId != null) "Side chat of ${parent?.title ?: "main chat"}"
+        else composer.host.name?.let { "$project @ $it" } ?: project
+    var overflow by remember(chatId) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
     val density = LocalDensity.current
@@ -153,9 +203,33 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 TonalCircleButton(ZIcons.Back, "Back", onClick = onBack)
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    Modifier.weight(1f).padding(horizontal = 12.dp).heightIn(min = 48.dp)
+                        .clickable(enabled = row?.parentChatId != null, onClickLabel = "Open main chat") { onOpen(parentId) },
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+                ) {
                     Text(composer.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMediumEmphasized)
-                    Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        subtitle,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (row?.parentChatId != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 4.dp),
+                    )
+                }
+                BadgedBox(badge = {
+                    if (sideChatBusy) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                    else if (children.isNotEmpty()) Badge { Text(children.size.toString()) }
+                }) {
+                    TonalCircleButton(
+                        ZIcons.Branch,
+                        "Side chats",
+                        onClick = { showSideChats = true },
+                        content = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
+                            MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    )
                 }
                 Box {
                     TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true })
@@ -163,8 +237,19 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
                         overflow,
                         { overflow = false },
                         listOfNotNull(
+                            if (row?.parentChatId == null) MenuAction("New side chat", ZIcons.Plus, enabled = !sideChatBusy) { createSideChat(false) } else null,
+                            MenuAction(
+                                "Fork to side chat",
+                                ZIcons.Branch,
+                                enabled = canFork && !sideChatBusy,
+                                supporting = when {
+                                    sideChatBusy -> "Forking…"
+                                    !canFork -> "Needs a completed reply"
+                                    else -> "Through the last completed reply"
+                                },
+                            ) { createSideChat(true) },
                             MenuAction("Copy transcript", ZIcons.Copy) { transcript.frame?.let { clipboard.setText(AnnotatedString(it.plainText())) } },
-                            row?.let { r -> MenuAction(if (r.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(chatId, !r.pinned) } },
+                            row?.takeIf { it.parentChatId == null }?.let { r -> MenuAction(if (r.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(chatId, !r.pinned) } },
                             row?.let { MenuAction("Archive", ZIcons.Archive) { model.archive(chatId); onBack() } },
                         ),
                     )
@@ -189,6 +274,25 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit) {
             composer.openInput?.let { QuestionPanel(it) { answers -> runCatching { handle.respondInput(it.requestId, answers) } } }
             Composer(model, core, handle, composer, row, transcript)
         }
+    }
+
+    if (showSideChats) {
+        SideChatsSheet(
+            parent, children, chatId, sideChatBusy, canFork,
+            onDismiss = { showSideChats = false },
+            onNew = { createSideChat(false) },
+            onFork = { createSideChat(true) },
+            onOpen = { id -> showSideChats = false; onOpen(id) },
+        )
+    }
+
+    sideChatError?.let { error ->
+        AlertDialog(
+            onDismissRequest = { sideChatError = null },
+            title = { Text(error.title) },
+            text = { Text(error.message) },
+            confirmButton = { TextButton(onClick = { sideChatError = null }) { Text("OK") } },
+        )
     }
 
     sheet?.let { s ->

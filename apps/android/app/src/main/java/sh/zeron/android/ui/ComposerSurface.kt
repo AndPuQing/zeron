@@ -121,7 +121,14 @@ class MenuChoice(
 
 class MenuSection(val title: String?, val choices: List<MenuChoice>)
 
-class MenuAction(val label: String, @androidx.annotation.DrawableRes val icon: Int, val destructive: Boolean = false, val onClick: () -> Unit)
+class MenuAction(
+    val label: String,
+    @androidx.annotation.DrawableRes val icon: Int,
+    val destructive: Boolean = false,
+    val enabled: Boolean = true,
+    val supporting: String? = null,
+    val onClick: () -> Unit,
+)
 
 /** An expressive action menu (one segmented group). */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -130,13 +137,19 @@ fun ActionMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<MenuActio
     DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
         DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
             actions.forEachIndexed { i, a ->
-                val tint = if (a.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                val tint = when {
+                    !a.enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                    a.destructive -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurface
+                }
                 DropdownMenuItem(
                     onClick = {
                         onDismiss()
                         a.onClick()
                     },
+                    enabled = a.enabled,
                     text = { Text(a.label, color = tint) },
+                    supportingText = a.supporting?.let { { Text(it) } },
                     shape = MenuDefaults.itemShape(i, actions.size).shape,
                     leadingIcon = { sh.zeron.android.design.ZIcon(a.icon, null, Modifier.size(20.dp), tint = tint) },
                 )

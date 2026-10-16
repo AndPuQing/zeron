@@ -309,7 +309,22 @@ fun SessionItem(
             shapes = ListItemDefaults.shapes(shape = RoundedCornerShape(16.dp)),
             colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.background),
             leadingContent = { HarnessTile(row) },
-            supportingContent = { Subline(row) },
+            supportingContent = {
+                val parentId = row.parentChatId
+                if (parentId != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ZIcon(ZIcons.Branch, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Side chat of ${model.row(parentId)?.title ?: "main chat"}",
+                            modifier = Modifier.padding(start = 6.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                } else Subline(row)
+            },
             trailingContent = {
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     StatusLabel(row)
@@ -322,8 +337,8 @@ fun SessionItem(
         ActionMenu(
             menu,
             { menu = false },
-            listOf(
-                MenuAction(if (row.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(row.id, !row.pinned) },
+            listOfNotNull(
+                if (row.parentChatId == null) MenuAction(if (row.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(row.id, !row.pinned) } else null,
                 MenuAction("Rename", ZIcons.Rename) { renaming = true },
                 MenuAction("Archive", ZIcons.Archive) { archive(row) },
             ),
