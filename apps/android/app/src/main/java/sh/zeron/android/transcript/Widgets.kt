@@ -21,24 +21,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.CheckBoxOutlineBlank
-import androidx.compose.material.icons.filled.CheckBox
-import androidx.compose.material.icons.automirrored.outlined.CallSplit
-import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.CircularWavyProgressIndicator
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.MaterialTheme
+import sh.zeron.android.design.ActivityIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -112,7 +103,7 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
             state.toggle(key)
         }
         is WidgetKind.ToolStatus -> when {
-            kind.running -> CircularProgressIndicator(Modifier.fillMaxSize().padding(1.dp), strokeWidth = 1.5.dp, color = Color(palette[ColorRole.TEXT_TERTIARY]))
+            kind.running -> ActivityIndicator(Modifier.fillMaxSize().padding(1.dp), color = Color(palette[ColorRole.TEXT_TERTIARY]))
             else -> ZIcon(
                 if (kind.failed) ZIcons.Close else ZIcons.Check,
                 null,
@@ -121,7 +112,7 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
             )
         }
         is WidgetKind.Image -> RemoteImage(kind.reference, w, actions) { state.uploadProgress }
-        WidgetKind.Spinner -> CircularProgressIndicator(Modifier.fillMaxSize().padding(1.dp), strokeWidth = 1.5.dp, color = Color(palette[ColorRole.TEXT_TERTIARY]))
+        WidgetKind.Spinner -> ActivityIndicator(Modifier.fillMaxSize().padding(1.dp), color = Color(palette[ColorRole.TEXT_TERTIARY]))
         is WidgetKind.Working -> WorkingIndicator(kind.sinceMs, kind.streaming, palette)
         is WidgetKind.Detail -> Tap("${kind.title} details") { actions.showText(kind.title, w.payload ?: "", true) }
         is WidgetKind.Icon -> AssetIcon(kind.name, Color(palette[kind.color]))
@@ -183,7 +174,7 @@ private fun CopyButton(payload: String, palette: TranscriptPalette) {
     }
 }
 
-/** Tail-of-turn indicator: the expressive loading shape + "Working…" and elapsed time. */
+/** Tail-of-turn indicator: the mobile activity glyph + "Working…" and elapsed time. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun WorkingIndicator(sinceMs: Long?, streaming: Boolean, palette: TranscriptPalette) {
@@ -196,7 +187,7 @@ private fun WorkingIndicator(sinceMs: Long?, streaming: Boolean, palette: Transc
     }
     val secs = sinceMs?.let { max(0L, (now - it) / 1000) } ?: 0L
     Row(Modifier.fillMaxSize(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        LoadingIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.primary)
+        ActivityIndicator(Modifier.size(16.dp), color = Color(palette[ColorRole.TEXT_SECONDARY]))
         Text(
             buildAnnotatedString {
                 append(if (streaming) "Writing…" else "Working…")
@@ -274,12 +265,12 @@ private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions
     Box(Modifier.fillMaxSize().clip(RoundedCornerShape(radius)), contentAlignment = Alignment.Center) {
         image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
             ?: Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh))
-        // Still being escorted to the host: a scrim and a wavy ring that fills with the transfer.
+        // Still being escorted to the host: a scrim and a progress ring that fills with the transfer.
         val p = if (reference.startsWith("pending://")) progress() else null
         androidx.compose.animation.AnimatedVisibility(p != null, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f)), contentAlignment = Alignment.Center) {
                 val side = minOf(w.w, w.h)
-                CircularWavyProgressIndicator(
+                CircularProgressIndicator(
                     progress = { (p ?: 0.0).toFloat().coerceIn(0.02f, 1f) },
                     modifier = Modifier.size(minOf(40f, side * 0.55f).dp),
                     color = Color.White,

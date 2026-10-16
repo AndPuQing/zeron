@@ -15,17 +15,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.DropdownMenuGroup
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenuPopup
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.FilledIconButton
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,12 +33,12 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /** What the composer's trailing button does right now. */
 enum class ComposerAction { Send, Queue, Stop }
 
 /** Send / queue / stop: circular controls inside the glass composer. */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun ActionButton(action: ComposerAction, hasText: Boolean, onClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
@@ -49,35 +48,28 @@ internal fun ActionButton(action: ComposerAction, hasText: Boolean, onClick: () 
         label = "action",
     ) { stop ->
         if (stop) {
-            FilledTonalIconButton(
+            Surface(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     onClick()
                 },
                 shape = CircleShape,
-                colors = IconButtonDefaults.filledTonalIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-                modifier = Modifier.size(40.dp),
-            ) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Stop, "Stop", Modifier.size(18.dp)) }
+                color = MaterialTheme.colorScheme.onSurface,
+                contentColor = MaterialTheme.colorScheme.background,
+                modifier = Modifier.size(34.dp),
+            ) { Box(contentAlignment = Alignment.Center) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Stop, "Stop", Modifier.size(16.dp)) } }
         } else {
-            FilledIconButton(
+            Surface(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     onClick()
                 },
                 enabled = hasText,
                 shape = CircleShape,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    // White on the accent in both appearances, like iOS (the
-                    // dark scheme's on-primary is a navy that muddies the arrow).
-                    contentColor = Color.White,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                ),
-                modifier = Modifier.size(40.dp),
-            ) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Send, if (action == ComposerAction.Queue) "Queue" else "Send", Modifier.size(22.dp)) }
+                color = if (hasText) MaterialTheme.colorScheme.primary else sh.zeron.android.design.glassControlFill(),
+                contentColor = if (hasText) Color.White else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
+                modifier = Modifier.size(34.dp),
+            ) { Box(contentAlignment = Alignment.Center) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Send, if (action == ComposerAction.Queue) "Queue" else "Send", Modifier.size(20.dp)) } }
         }
     }
 }
@@ -99,12 +91,12 @@ fun ContextChip(
             contentColor = tint,
         ) {
             Row(
-                Modifier.heightIn(min = 34.dp).padding(start = 10.dp, end = 12.dp),
+                Modifier.heightIn(min = 32.dp).padding(start = 10.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { leading() }
-                Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.5.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         menu()
@@ -130,30 +122,50 @@ class MenuAction(
     val onClick: () -> Unit,
 )
 
-/** An expressive action menu (one segmented group). */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+/** Compact system-style rows: text first, action glyph at the trailing edge. */
 @Composable
 fun ActionMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<MenuAction>) {
-    DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
-        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
-            actions.forEachIndexed { i, a ->
-                val tint = when {
-                    !a.enabled -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                    a.destructive -> MaterialTheme.colorScheme.error
-                    else -> MaterialTheme.colorScheme.onSurface
-                }
-                DropdownMenuItem(
-                    onClick = {
-                        onDismiss()
-                        a.onClick()
-                    },
-                    enabled = a.enabled,
-                    text = { Text(a.label, color = tint) },
-                    supportingText = a.supporting?.let { { Text(it) } },
-                    shape = MenuDefaults.itemShape(i, actions.size).shape,
-                    leadingIcon = { sh.zeron.android.design.ZIcon(a.icon, null, Modifier.size(20.dp), tint = tint) },
-                )
+    AppMenuPopup(expanded, onDismiss) {
+        actions.forEachIndexed { i, action ->
+            if (i > 0) Hairline()
+            MenuRow(action.label, action.supporting, action.enabled, destructive = action.destructive,
+                trailing = { sh.zeron.android.design.ZIcon(action.icon, null, Modifier.size(20.dp)) }) {
+                onDismiss()
+                action.onClick()
             }
+        }
+    }
+}
+
+@Composable
+internal fun MenuRow(
+    label: String,
+    supporting: String? = null,
+    enabled: Boolean = true,
+    selected: Boolean = false,
+    selectable: Boolean = false,
+    destructive: Boolean = false,
+    leading: (@Composable () -> Unit)? = null,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val color = (if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+        .copy(alpha = if (enabled) 1f else 0.3f)
+    androidx.compose.runtime.CompositionLocalProvider(androidx.compose.material3.LocalContentColor provides color) {
+        Row(
+            Modifier.fillMaxWidth().pressable(enabled, role = if (selectable) Role.RadioButton else Role.Button, onClick = onClick)
+                .then(if (selectable) Modifier.semantics { this.selected = selected } else Modifier)
+                .heightIn(min = 46.dp).padding(horizontal = 16.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            leading?.invoke()
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(label, style = MaterialTheme.typography.bodyLarge, color = color)
+                supporting?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.45f)) }
+            }
+            trailing?.invoke()
         }
     }
 }

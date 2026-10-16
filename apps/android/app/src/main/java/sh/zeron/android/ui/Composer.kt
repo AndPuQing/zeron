@@ -28,19 +28,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.CallSplit
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.Delete
-import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material.icons.outlined.KeyboardArrowUp
-import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Send
-import androidx.compose.material.icons.outlined.Speed
-import androidx.compose.material.icons.outlined.Schedule
 import sh.zeron.android.design.HarnessMark
 import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.GlassMetrics
@@ -55,21 +45,11 @@ import uniffi.zeron_core.QueueEditStart
 import java.util.UUID
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.AssistChipDefaults
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.ToggleButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -87,6 +67,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.launch
 import sh.zeron.android.core.AppModel
 import uniffi.zeron_core.BusyPolicy
@@ -362,15 +345,13 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
 
 @Composable
 fun StatusBanner(text: String, action: Pair<String, () -> Unit>?) {
-    Surface(
+    GlassSurface(
         shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Row(Modifier.padding(start = 16.dp, end = if (action != null) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(vertical = 10.dp).weight(1f, fill = false))
-            action?.let { (label, run) -> TextButton(onClick = run) { Text(label) } }
+            action?.let { (label, run) -> AppTextButton(onClick = run) { Text(label) } }
         }
     }
 }
@@ -396,25 +377,32 @@ fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit
                         // Free-text questions (dsh elicitation fields) have no
                         // buttons; without this field they could never be
                         // answered and the run would wait forever.
-                        OutlinedTextField(
+                        AppTextField(
                             value = typed.getValue(q.id).value,
                             onValueChange = { typed.getValue(q.id).value = it },
                             singleLine = !q.multiline,
                             minLines = if (q.multiline) 3 else 1,
-                            shape = RoundedCornerShape(16.dp),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     } else {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             val selection = picked.getValue(q.id)
-                            for (option in q.options) {
-                                ToggleButton(
-                                    checked = option in selection,
-                                    onCheckedChange = { on ->
+                            q.options.forEachIndexed { index, option ->
+                                val chosen = option in selection
+                                Surface(shape = RoundedCornerShape(14.dp),
+                                    color = if (chosen) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else chipContainer(),
+                                    contentColor = if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                ) {
+                                    Row(Modifier.fillMaxWidth().pressable(role = if (q.multiSelect) Role.Checkbox else Role.RadioButton) {
                                         if (!q.multiSelect) selection.clear()
-                                        if (on) selection.add(option) else selection.remove(option)
-                                    },
-                                ) { Text(option) }
+                                        if (!chosen) selection.add(option) else selection.remove(option)
+                                    }.semantics { selected = chosen }.padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        if (chosen) ZIcon(ZIcons.Check, null, Modifier.size(18.dp))
+                                        else Text("${index + 1}", style = MaterialTheme.typography.bodyMedium)
+                                        Text(option, style = MaterialTheme.typography.titleMedium)
+                                    }
+                                }
                             }
                         }
                     }
@@ -423,7 +411,7 @@ fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit
             val ready = input.questions.all { q ->
                 picked.getValue(q.id).isNotEmpty() || typed.getValue(q.id).value.isNotBlank()
             }
-            Button(
+            AppButton(
                 onClick = {
                     onSubmit(
                         input.questions.map { q ->
@@ -436,7 +424,6 @@ fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit
                     )
                 },
                 enabled = ready,
-                shapes = ButtonDefaults.shapes(),
                 modifier = Modifier.align(Alignment.End),
             ) {
                 ZIcon(ZIcons.Send, null, Modifier.size(18.dp))

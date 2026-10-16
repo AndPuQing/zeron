@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -29,12 +30,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.DropdownMenuGroup
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenuPopup
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -199,9 +195,7 @@ private fun AttachButton(model: ComposerModel, enabled: Boolean) {
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Staging.MAX_IMAGES)) { add(it) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { add(it) }
     Box {
-        IconButton(onClick = { open = true }, enabled = enabled && model.images.size < Staging.MAX_IMAGES) {
-            ZIcon(ZIcons.Plus, "Attach", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        PlainIconButton(ZIcons.Plus, "Attach", onClick = { open = true }, enabled = enabled && model.images.size < Staging.MAX_IMAGES, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         val clip = if (open) context.getSystemService(android.content.ClipboardManager::class.java)?.primaryClip else null
         val pasted = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
             ?.takeIf { context.contentResolver.getType(it)?.startsWith("image/") == true }
@@ -262,40 +256,24 @@ fun MentionSuggestions(model: ComposerModel, search: suspend (String) -> List<Fi
     }
 }
 
-/** An expressive choice menu: one group, inline section labels, a trailing check on the choice. */
+/** System-style choice groups: a checkmark, never a filled selection tile. */
 @Composable
 fun ChoiceMenu(expanded: Boolean, onDismiss: () -> Unit, sections: List<MenuSection>) {
-    DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
-        val groups = sections.filter { it.choices.isNotEmpty() }
-        val all = groups.sumOf { it.choices.size }
-        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
-            var index = 0
-            groups.forEach { section ->
-                section.title?.let { title -> MenuDefaults.Label { Text(title, style = MaterialTheme.typography.labelMedium) } }
-                section.choices.forEach { choice ->
-                    DropdownMenuItem(
-                        selected = choice.selected,
-                        onClick = {
-                            choice.onClick()
-                            onDismiss()
-                        },
-                        text = { Text(choice.label) },
-                        supportingText = choice.supporting?.let { { Text(it) } },
-                        shapes = MenuDefaults.itemShape(index++, all),
-                        leadingIcon = choice.leading,
-                        selectedLeadingIcon = choice.leading,
-                        trailingIcon = if (choice.selected) {
-                            { ZIcon(ZIcons.Check, null, Modifier.size(20.dp)) }
-                        } else {
-                            null
-                        },
-                        colors = MenuDefaults.selectableItemColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            selectedTrailingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                        ),
-                    )
+    AppMenuPopup(expanded, onDismiss) {
+        sections.filter { it.choices.isNotEmpty() }.forEachIndexed { group, section ->
+            if (group > 0) Box(Modifier.fillMaxWidth().size(6.dp).background(sh.zeron.android.design.glassControlFill()))
+            section.title?.let { title ->
+                Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp))
+            }
+            section.choices.forEachIndexed { index, choice ->
+                if (index > 0) Hairline(Modifier.padding(start = 44.dp))
+                MenuRow(choice.label, choice.supporting, selected = choice.selected, selectable = true,
+                    leading = { Box(Modifier.size(16.dp)) { if (choice.selected) ZIcon(ZIcons.Check, null, Modifier.size(16.dp)) } },
+                    trailing = choice.leading,
+                ) {
+                    choice.onClick()
+                    onDismiss()
                 }
             }
         }

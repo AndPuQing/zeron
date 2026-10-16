@@ -28,14 +28,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -57,6 +51,11 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import sh.zeron.android.design.GlassSurface
+import sh.zeron.android.design.ActivityIndicator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -214,22 +213,21 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                         subtitle,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
                         color = if (row?.parentChatId != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 4.dp),
+                        modifier = Modifier.padding(top = 1.dp),
                     )
                 }
-                BadgedBox(badge = {
-                    if (sideChatBusy) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                    else if (children.isNotEmpty()) Badge { Text(children.size.toString()) }
-                }) {
-                    TonalCircleButton(
-                        ZIcons.Branch,
-                        "Side chats",
-                        onClick = { showSideChats = true },
-                        content = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
-                            MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    )
+                val sideChatTone = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
+                    MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                GlassSurface(onClick = { showSideChats = true }, contentColor = sideChatTone) {
+                    Row(Modifier.heightIn(min = 44.dp).padding(horizontal = 12.dp).semantics { contentDescription = "Side chats" },
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)) {
+                        if (sideChatBusy) ActivityIndicator(Modifier.size(16.dp), color = sideChatTone)
+                        else sh.zeron.android.design.ZIcon(ZIcons.Branch, null, Modifier.size(17.dp))
+                        if (children.isNotEmpty()) Text(children.size.toString(), style = MaterialTheme.typography.labelMedium)
+                    }
                 }
                 Box {
                     TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true })
@@ -287,17 +285,12 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
     }
 
     sideChatError?.let { error ->
-        AlertDialog(
-            onDismissRequest = { sideChatError = null },
-            title = { Text(error.title) },
-            text = { Text(error.message) },
-            confirmButton = { TextButton(onClick = { sideChatError = null }) { Text("OK") } },
-        )
+        AppAlert(error.title, onDismiss = { sideChatError = null },
+            actions = listOf(AlertAction("OK") { sideChatError = null })) { Text(error.message) }
     }
 
     sheet?.let { s ->
-        ModalBottomSheet(onDismissRequest = { sheet = null }) {
-            Text(s.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp))
+        AppSheet(s.title, onDismiss = { sheet = null }) {
             SelectionContainer {
                 Text(
                     s.text,

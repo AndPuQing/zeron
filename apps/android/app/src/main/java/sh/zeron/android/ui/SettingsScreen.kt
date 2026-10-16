@@ -5,31 +5,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ButtonGroupDefaults
-import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.ToggleButton
-import androidx.compose.material3.ToggleButtonDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -40,18 +27,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import sh.zeron.android.core.AppModel
-import sh.zeron.android.design.GlassMetrics
-import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.ThemeMode
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.coreVersion
 
-@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun SettingsScreen(model: AppModel) {
     val update by model.updates.state.collectAsState()
@@ -60,132 +45,77 @@ fun SettingsScreen(model: AppModel) {
     val devices = workspace?.devices.orEmpty()
     val list = androidx.compose.foundation.lazy.rememberLazyListState()
     Box(Modifier.fillMaxSize()) {
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        state = list,
-        contentPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp, bottom = 200.dp),
-    ) {
-        item { ScreenHeader("Settings", null) }
-        item {
-            GlassSurface(
-                shape = RoundedCornerShape(GlassMetrics.cardRadius),
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-                Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(56.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(model.accountName.take(1).uppercase(), style = MaterialTheme.typography.headlineSmallEmphasized, color = MaterialTheme.colorScheme.primary)
-                    }
-                    Spacer(Modifier.width(16.dp))
-                    Column {
-                        Text(model.accountName, style = MaterialTheme.typography.titleLargeEmphasized, color = MaterialTheme.colorScheme.onSurface)
-                        Text(model.accountDetail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
+        LazyColumn(
+            Modifier.fillMaxSize(), state = list,
+            contentPadding = PaddingValues(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 8.dp, bottom = 200.dp),
+        ) {
+            item { ScreenHeader("Settings", null) }
+            section("Account")
+            item {
+                GroupedRow(0, 1, Modifier.padding(horizontal = 20.dp),
+                    leadingContent = {
+                        Box(Modifier.size(22.dp).clip(CircleShape).background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.1f)), contentAlignment = Alignment.Center) {
+                            Text(model.accountName.take(1).uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }, supportingContent = { Text(model.accountDetail) },
+                ) { Text(model.accountName) }
             }
-        }
-        section("Appearance")
-        item {
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                Surface(shape = segmentedShapes(0, 2).shape, color = cardColor()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Theme", style = MaterialTheme.typography.titleMedium)
-                        Spacer(Modifier.height(12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(ButtonGroupDefaults.ConnectedSpaceBetween)) {
-                            val modes = listOf(
-                                Triple(ThemeMode.System, "System", ZIcons.Monitor),
-                                Triple(ThemeMode.Light, "Light", ZIcons.Sun),
-                                Triple(ThemeMode.Dark, "Dark", ZIcons.Moon),
-                            )
-                            modes.forEachIndexed { index, (mode, label, icon) ->
-                                ToggleButton(
-                                    checked = appearance.mode == mode,
-                                    onCheckedChange = { model.setAppearance(appearance.copy(mode = mode)) },
-                                    modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                                    shapes = when (index) {
-                                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                        modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                                    },
-                                ) {
-                                    ZIcon(icon, null, Modifier.size(ToggleButtonDefaults.IconSize))
-                                    Spacer(Modifier.size(ToggleButtonDefaults.IconSpacing))
-                                    Text(label)
-                                }
-                            }
+            if (devices.isNotEmpty()) {
+                section("Devices")
+                item {
+                    Column(Modifier.padding(horizontal = 20.dp)) {
+                        devices.forEachIndexed { i, device ->
+                            GroupedRow(i, devices.size,
+                                leadingContent = { IconTile(when {
+                                    !device.isExecutionHost -> ZIcons.Phone
+                                    device.platform == "linux" -> ZIcons.Server
+                                    else -> ZIcons.Laptop
+                                }) },
+                                supportingContent = { Text(listOfNotNull(
+                                    if (device.isSelf) "This device" else if (device.online) "Online" else "Offline",
+                                    device.version?.let { "v$it" },
+                                    if (device.sessionCount > 0u) "${device.sessionCount} sessions" else null,
+                                ).joinToString(" · ")) },
+                                trailingContent = { Box(Modifier.size(8.dp).clip(CircleShape).background(
+                                    if (device.online || device.isSelf) successColor() else MaterialTheme.colorScheme.outline)) },
+                            ) { Text(device.name) }
                         }
                     }
                 }
-                SegmentedListItem(
-                    onClick = { model.setAppearance(appearance.copy(dynamicColor = !appearance.dynamicColor)) },
-                    shapes = segmentedShapes(1, 2),
-                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                    leadingContent = { IconTile(ZIcons.Magic) },
-                    supportingContent = { Text("Tint Zerun with your wallpaper's palette") },
-                    trailingContent = { Switch(appearance.dynamicColor, { model.setAppearance(appearance.copy(dynamicColor = it)) }) },
-                ) { Text("Wallpaper colors") }
             }
-        }
-        section("Wallpaper")
-        item { WallpaperSettings(model) }
-        if (devices.isNotEmpty()) {
-            section("Devices")
+            section("Appearance")
             item {
-                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                    devices.forEachIndexed { i, device ->
-                        SegmentedListItem(
-                            onClick = {},
-                            shapes = segmentedShapes(i, devices.size),
-                            colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                            leadingContent = {
-                                IconTile(
-                                    when {
-                                        !device.isExecutionHost -> ZIcons.Phone
-                                        device.platform == "linux" -> ZIcons.Server
-                                        else -> ZIcons.Laptop
-                                    },
-                                )
-                            },
-                            supportingContent = {
-                                Text(
-                                    listOfNotNull(
-                                        if (device.isSelf) "This device" else if (device.online) "Online" else "Offline",
-                                        device.version?.let { "v$it" },
-                                        if (device.sessionCount > 0u) "${device.sessionCount} sessions" else null,
-                                    ).joinToString(" · "),
-                                )
-                            },
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    val modes = listOf(
+                        Triple(ThemeMode.System, "System", ZIcons.Monitor),
+                        Triple(ThemeMode.Light, "Light", ZIcons.Sun),
+                        Triple(ThemeMode.Dark, "Dark", ZIcons.Moon),
+                    )
+                    modes.forEachIndexed { index, (mode, label, icon) ->
+                        GroupedRow(index, modes.size,
+                            modifier = Modifier.semantics { selected = appearance.mode == mode; role = Role.RadioButton },
+                            onClick = { model.setAppearance(appearance.copy(mode = mode)) },
+                            leadingContent = { IconTile(icon) },
                             trailingContent = {
-                                Box(
-                                    Modifier.size(10.dp).clip(CircleShape).background(
-                                        if (device.online || device.isSelf) successColor() else MaterialTheme.colorScheme.outlineVariant,
-                                    ),
-                                )
+                                if (appearance.mode == mode) ZIcon(ZIcons.Check, "Selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                             },
-                        ) { Text(device.name) }
+                        ) { Text(label) }
                     }
                 }
             }
-        }
-        section("About")
-        item {
-            Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-                SegmentedListItem(
-                    onClick = {},
-                    shapes = segmentedShapes(0, 3),
-                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                    leadingContent = { IconTile(ZIcons.Info) },
-                    supportingContent = { Text("Zerun ${update.currentVersion} · core ${coreVersion()}") },
-                ) { Text("Version") }
-                SegmentedListItem(
-                    onClick = { model.updates.check() },
-                    shapes = segmentedShapes(1, 3),
-                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                    leadingContent = { IconTile(ZIcons.Info) },
-                    supportingContent = {
-                        Text(when {
+            section("Wallpaper")
+            item { WallpaperSettings(model) }
+            section("About")
+            item {
+                Column(Modifier.padding(horizontal = 20.dp)) {
+                    GroupedRow(0, 3,
+                        leadingContent = { IconTile(ZIcons.Info) },
+                        supportingContent = { Text("Zerun ${update.currentVersion} · core ${coreVersion()}") },
+                    ) { Text("Version") }
+                    GroupedRow(1, 3,
+                        onClick = { model.updates.check() },
+                        leadingContent = { IconTile(ZIcons.Refresh) },
+                        supportingContent = { Text(when {
                             update.downloading -> "Downloading update…"
                             update.checking -> "Checking…"
                             update.ready -> "Version ${update.latest?.version} is ready to install"
@@ -193,46 +123,33 @@ fun SettingsScreen(model: AppModel) {
                             update.error != null -> "Check failed — tap to retry"
                             update.checked -> "You're up to date"
                             else -> "Check for a newer version of Zerun"
-                        })
-                    },
-                ) { Text("Check for updates") }
-                SegmentedListItem(
-                    onClick = { model.signOut() },
-                    shapes = segmentedShapes(2, 3),
-                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                    leadingContent = { IconTile(ZIcons.Logout, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) },
-                ) { Text(if (model.isDemo) "Leave demo" else "Sign out", color = MaterialTheme.colorScheme.error) }
+                        }) },
+                        trailingContent = { ZIcon(ZIcons.ChevronRight, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.outline) },
+                    ) { Text("Check for updates") }
+                    GroupedRow(2, 3,
+                        onClick = { model.signOut() },
+                        leadingContent = { IconTile(ZIcons.Logout, content = MaterialTheme.colorScheme.error) },
+                    ) { Text(if (model.isDemo) "Leave demo" else "Sign out", color = MaterialTheme.colorScheme.error) }
+                }
             }
         }
-    }
-    StatusBarScrim(scrolled = list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0)
+        StatusBarScrim(scrolled = list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0)
     }
 }
 
 private fun LazyListScope.section(title: String) {
     item {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleSmallEmphasized,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 28.dp, top = 24.dp, bottom = 8.dp),
-        )
+        Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 36.dp, top = 24.dp, bottom = 8.dp))
     }
 }
 
-/** A leading glyph on a tonal rounded tile. */
+/** Settings use unboxed, secondary glyphs, matching the iOS grouped cells. */
 @Composable
-fun IconTile(
-    icon: Int,
-    container: Color = MaterialTheme.colorScheme.secondaryContainer,
-    content: Color = MaterialTheme.colorScheme.onSecondaryContainer,
-) {
-    Box(Modifier.size(40.dp).clip(RoundedCornerShape(14.dp)).background(container), contentAlignment = Alignment.Center) {
-        ZIcon(icon, null, Modifier.size(22.dp), tint = content)
-    }
+fun IconTile(icon: Int, content: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+    Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) { ZIcon(icon, null, Modifier.size(20.dp), tint = content) }
 }
 
-/** Wallpaper: shown behind new sessions and the sessions list (iOS parity). */
 @Composable
 private fun WallpaperSettings(model: AppModel) {
     val store = model.wallpaper
@@ -243,34 +160,27 @@ private fun WallpaperSettings(model: AppModel) {
     ) { uri -> if (uri != null) scope.launch { store.set(uri, "Photo") } }
     var effects by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val rows = if (state.set) 3 else 1
-    Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap)) {
-        SegmentedListItem(
-            onClick = {
-                picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly))
-            },
-            shapes = segmentedShapes(0, rows),
-            colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
+    Column(Modifier.padding(horizontal = 20.dp)) {
+        GroupedRow(0, rows,
+            onClick = { picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             leadingContent = { IconTile(ZIcons.Image) },
             supportingContent = { Text(if (state.set) state.name ?: "Photo" else "Shown behind new sessions and the sessions list") },
+            trailingContent = { ZIcon(ZIcons.ChevronRight, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.outline) },
         ) { Text(if (state.set) "Change wallpaper" else "Choose wallpaper") }
         if (state.set) {
             Box {
-                SegmentedListItem(
+                GroupedRow(1, rows,
                     onClick = { effects = true },
-                    shapes = segmentedShapes(1, rows),
-                    colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
                     leadingContent = { IconTile(ZIcons.Magic) },
                     supportingContent = { Text("${sh.zeron.android.core.WallpaperStore.label(state.effect)} — ${sh.zeron.android.core.WallpaperStore.detail(state.effect)}") },
+                    trailingContent = { ZIcon(ZIcons.ChevronRight, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.outline) },
                 ) { Text("Effect") }
                 ChoiceMenu(effects, { effects = false }, listOf(MenuSection("Effect", sh.zeron.android.core.WallpaperStore.effects.map { e ->
                     MenuChoice(sh.zeron.android.core.WallpaperStore.label(e), e == state.effect) { store.setEffect(e) }
                 })))
             }
-            SegmentedListItem(
-                onClick = { store.remove() },
-                shapes = segmentedShapes(2, rows),
-                colors = ListItemDefaults.segmentedColors(containerColor = cardColor()),
-                leadingContent = { IconTile(ZIcons.Delete, MaterialTheme.colorScheme.errorContainer, MaterialTheme.colorScheme.onErrorContainer) },
+            GroupedRow(2, rows, onClick = { store.remove() },
+                leadingContent = { IconTile(ZIcons.Delete, content = MaterialTheme.colorScheme.error) },
             ) { Text("Remove wallpaper", color = MaterialTheme.colorScheme.error) }
         }
     }

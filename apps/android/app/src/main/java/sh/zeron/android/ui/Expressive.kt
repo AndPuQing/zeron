@@ -86,18 +86,18 @@ fun ScreenHeader(title: String, subtitle: String?, modifier: Modifier = Modifier
     }
 }
 
-/** A neutral filter capsule with a quiet violet selection. */
+/** A compact neutral filter, matching the shell’s quiet selection wash. */
 @Composable
 fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = null, @DrawableRes icon: Int? = null) {
     val container by animateColorAsState(
-        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else Color.Transparent,
+        if (selected) glassControlFill() else Color.Transparent,
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "pill",
     )
-    val fg = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-    GlassSurface(onClick = onClick, tint = container, contentColor = fg, modifier = Modifier.semantics { this.selected = selected }) {
+    val fg = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(onClick = onClick, shape = RoundedCornerShape(9.dp), color = container, contentColor = fg, modifier = Modifier.semantics { this.selected = selected }) {
         Row(
-            Modifier.heightIn(min = 40.dp).padding(horizontal = 16.dp),
+            Modifier.heightIn(min = 36.dp).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -107,10 +107,10 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = nu
                 Box(
                     Modifier
                         .clip(CircleShape)
-                        .background(if (selected) fg.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                        .background(if (selected) fg.copy(alpha = 0.2f) else glassControlFill())
                         .padding(horizontal = 7.dp, vertical = 1.dp),
                 ) {
-                    Text("$count", style = MaterialTheme.typography.labelMedium, color = if (selected) fg else MaterialTheme.colorScheme.primary)
+                    Text("$count", style = MaterialTheme.typography.labelMedium, color = fg)
                 }
             }
         }

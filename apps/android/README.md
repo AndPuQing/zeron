@@ -8,8 +8,9 @@ the exact code iOS runs — see [`docs/mobile-rewrite.md`](../../docs/mobile-rew
 
 The UI follows the iOS shell's Liquid Glass style: floating capsule navigation,
 round glass actions and a glass composer, with shared neutral/violet colors and
-Geist type. Compose Material 3 supplies controls and accessibility; Backdrop
-1.0.6 supplies GPU backdrop blur and refraction. Android 12 adds blur, Android
+Geist type. Compact menus, inset grouped settings, checkmark selections and
+activity glyphs follow the iOS shell. Compose supplies accessibility and Android
+sheet and keyboard behavior; Backdrop 1.0.6 supplies GPU blur and refraction. Android 12 adds blur, Android
 13 adds refraction, and Android 10/11 use an opaque material fallback.
 See [the shared mobile design and component research](../../docs/mobile-liquid-glass.md).
 

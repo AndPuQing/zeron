@@ -7,11 +7,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -27,17 +25,30 @@ fun UpdateDialog(updater: AndroidUpdater) {
     if (!state.prompt) return
     val activity = LocalContext.current.activity()
     val latest = state.latest
-    AlertDialog(
-        onDismissRequest = updater::dismiss,
-        title = { Text(when {
+    val actions = buildList {
+        if (latest != null || state.checking || state.downloading || state.error != null) {
+            add(AlertAction(if (state.downloading) "Hide" else "Later", onClick = updater::dismiss))
+        }
+        when {
+            state.checking || state.downloading -> Unit
+            state.ready -> add(AlertAction("Install", enabled = activity != null) { activity?.let(updater::install) })
+            latest != null -> add(AlertAction(if (state.error == null) "Download" else "Retry download", onClick = updater::download))
+            state.error != null -> add(AlertAction("Retry") { updater.check() })
+            else -> add(AlertAction("OK", onClick = updater::dismiss))
+        }
+    }
+    AppAlert(
+        onDismiss = updater::dismiss,
+        title = when {
             state.downloading -> "Downloading update"
             state.checking -> "Checking for updates"
             state.ready -> "Ready to install"
             latest != null -> "Update available"
             state.error != null -> "Update check failed"
             else -> "You're up to date"
-        }) },
-        text = {
+        },
+        actions = actions,
+        content = {
             Column {
                 Text("Installed version: ${state.currentVersion}")
                 if (latest != null) {
@@ -63,20 +74,7 @@ fun UpdateDialog(updater: AndroidUpdater) {
                 }
             }
         },
-        confirmButton = {
-            when {
-                state.checking || state.downloading -> Unit
-                state.ready -> TextButton(onClick = { activity?.let(updater::install) }, enabled = activity != null) { Text("Install") }
-                latest != null -> TextButton(onClick = updater::download) { Text(if (state.error == null) "Download" else "Retry download") }
-                state.error != null -> TextButton(onClick = { updater.check() }) { Text("Retry") }
-                else -> TextButton(onClick = updater::dismiss) { Text("OK") }
-            }
-        },
-        dismissButton = {
-            if (latest != null || state.checking || state.downloading || state.error != null) {
-                TextButton(onClick = updater::dismiss) { Text(if (state.downloading) "Hide" else "Later") }
-            }
-        },
+
     )
 }
 

@@ -14,7 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Home
-import androidx.compose.material3.CircularProgressIndicator
+import sh.zeron.android.design.ActivityIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -58,23 +58,6 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier, trailing: @Compos
             modifier = Modifier.align(Alignment.CenterStart),
         )
         trailing?.let { Box(Modifier.align(Alignment.CenterEnd)) { it() } }
-    }
-}
-
-/**
- * A group of items with segmented corners and 2dp seams.
- */
-@Composable
-fun SegmentedGroup(
-    count: Int,
-    modifier: Modifier = Modifier,
-    item: @Composable (index: Int, shape: Shape) -> Unit,
-) {
-    Column(modifier.padding(horizontal = 12.dp)) {
-        for (i in 0 until count) {
-            item(i, segmentShape(i, count))
-            if (i < count - 1) Spacer(Modifier.height(2.dp))
-        }
     }
 }
 
@@ -128,33 +111,28 @@ fun StatusLabel(row: SessionRow) {
                 sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Check, null, Modifier.size(15.dp), tint = color)
             }
             Spacer(Modifier.width(5.dp))
-            Text(text, style = MaterialTheme.typography.labelLarge, color = color)
+            Text(text, style = MaterialTheme.typography.labelMedium, color = color)
         }
     }
     when (row.indicator) {
-        ChatIndicator.WORKING -> CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 1.5.dp)
+        ChatIndicator.WORKING -> Row(verticalAlignment = Alignment.CenterVertically) {
+            ActivityIndicator(Modifier.size(12.dp))
+            Spacer(Modifier.width(5.dp))
+            Text("Working", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         ChatIndicator.AWAITING_INPUT -> label("Input", MaterialTheme.colorScheme.primary, dot = true)
         ChatIndicator.ERRORED -> label("Failed", MaterialTheme.colorScheme.error, dot = true)
-        ChatIndicator.COMPLETED -> label("Done", successColor(), dot = false)
-        ChatIndicator.IDLE -> Row(verticalAlignment = Alignment.CenterVertically) {
+        ChatIndicator.COMPLETED, ChatIndicator.IDLE -> if (row.indicator == ChatIndicator.COMPLETED && row.unseen) {
+            label("Done", successColor(), dot = false)
+        } else Row(verticalAlignment = Alignment.CenterVertically) {
             if (row.unseen) {
                 Box(Modifier.size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                 Spacer(Modifier.width(5.dp))
             }
-            Text(row.timeLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.outline)
+            Text(row.timeLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
         }
     }
 }
 
-/** The composer's surface: bright in light (like a sheet of paper), raised in dark. */
-@Composable
-fun composerContainer(): Color =
-    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
-
 @Composable
 fun chipContainer(): Color = glassControlFill()
-
-/** Segmented list shapes, with a lone item rounded like a whole group. */
-@Composable
-fun segmentedShapes(index: Int, count: Int): androidx.compose.material3.ListItemShapes =
-    androidx.compose.material3.ListItemDefaults.shapes(shape = segmentShape(index, count))
