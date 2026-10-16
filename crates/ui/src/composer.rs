@@ -5700,6 +5700,13 @@ pub enum WorkspaceCommand {
     Terminal,
     Rename,
     Stop,
+    Archive,
+    Copy,
+    Side,
+    Shortcuts,
+    Appearance,
+    Accounts,
+    Quit,
 }
 
 impl WorkspaceCommand {
@@ -5749,12 +5756,68 @@ fn with_workspace_commands(
             name = format!("zeron:{name}");
         }
         rows.push(InvocationCandidate {
+            unavailable_reason: None,
             invocation: zeron_proto::invocation::Invocation::Command { name: name.clone() },
             name,
             description: description.into(),
             input_hint: None,
             workspace_command: Some(command),
         });
+    }
+    rows
+}
+
+/// Native Codex client commands are routed to existing desktop controls.
+fn with_provider_commands(
+    rows: Vec<InvocationCandidate>,
+    in_chat: bool,
+    harness: Option<HarnessId>,
+    side_chat: bool,
+) -> Vec<InvocationCandidate> {
+    let mut rows = with_workspace_commands(rows, in_chat);
+    if harness != Some(HarnessId::Codex) {
+        return rows;
+    }
+    for row in &mut rows {
+        if row.workspace_command.is_some() || row.invocation.prefix() != '/' {
+            continue;
+        }
+        row.workspace_command = match row.name.as_str() {
+            "model" | "fast" => Some(WorkspaceCommand::Model),
+            "new" | "clear" => Some(WorkspaceCommand::New),
+            "resume" | "agents" => Some(WorkspaceCommand::Resume),
+            "diff" if in_chat => Some(WorkspaceCommand::Diff),
+            "mention" | "subagents" if in_chat => Some(WorkspaceCommand::Files),
+            "rename" if in_chat => Some(WorkspaceCommand::Rename),
+            "archive" if in_chat => Some(WorkspaceCommand::Archive),
+            "copy" if in_chat => Some(WorkspaceCommand::Copy),
+            "side" | "btw" | "fork" if in_chat => Some(WorkspaceCommand::Side),
+            "keymap" => Some(WorkspaceCommand::Shortcuts),
+            "theme" => Some(WorkspaceCommand::Appearance),
+            "logout" => Some(WorkspaceCommand::Accounts),
+            "quit" | "exit" => Some(WorkspaceCommand::Quit),
+            _ => None,
+        };
+        if side_chat && row.workspace_command.is_some() {
+            row.unavailable_reason =
+                Some("Use this action from the main conversation’s menu.".into());
+        }
+        if !in_chat
+            && matches!(
+                row.name.as_str(),
+                "copy"
+                    | "diff"
+                    | "mention"
+                    | "subagents"
+                    | "rename"
+                    | "archive"
+                    | "side"
+                    | "btw"
+                    | "fork"
+            )
+        {
+            row.unavailable_reason = Some("Start a conversation before using this action.".into());
+        }
     }
     rows
 }
@@ -5769,12 +5832,13 @@ fn workspace_command_for_text(
         return None;
     }
     rows.iter()
-        .find(|row| row.name == token.query)?
+        .find(|row| row.name == token.query && row.unavailable_reason.is_none())?
         .workspace_command
 }
 
 #[derive(Debug, Clone)]
 struct InvocationCandidate {
+    unavailable_reason: Option<String>,
     workspace_command: Option<WorkspaceCommand>,
     name: String,
     description: String,
@@ -5900,6 +5964,7 @@ fn invocation_candidates(
     commands
         .into_iter()
         .map(|c| InvocationCandidate {
+            unavailable_reason: c.unavailable_reason,
             workspace_command: None,
             input_hint: c.input_hint,
             name: c.name.clone(),
@@ -5911,6 +5976,7 @@ fn invocation_candidates(
                 .into_iter()
                 .filter(|s| s.enabled)
                 .map(|s| InvocationCandidate {
+                    unavailable_reason: None,
                     workspace_command: None,
                     input_hint: None,
                     name: s.name.clone(),
@@ -8163,9 +8229,11 @@ impl Composer {
                 match decoded {
                     Ok(candidates) => {
                         let candidates = if !skill && commands_allowed {
-                            with_workspace_commands(
+                            with_provider_commands(
                                 candidates,
                                 composer.state.read(cx).selected_chat.is_some(),
+                                composer.pickers.read(cx).resolved(cx).harness,
+                                composer.side_chat,
                             )
                         } else {
                             candidates
@@ -8208,6 +8276,11 @@ impl Composer {
             .unwrap_or_default();
         let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
         self.slash.filtered = crate::popover::filter_indices(&query, &names);
+        if query.is_empty() {
+            self.slash
+                .filtered
+                .sort_by_key(|&index| commands[index].unavailable_reason.is_some());
+        }
         self.slash.active = (!self.slash.filtered.is_empty()).then_some(0);
         // A fresh query/reopen restarts the row stack at the top.
         crate::popover::reset_menu_scroll(&self.slash_scroll, &mut self.popup_bar);
@@ -8255,6 +8328,11 @@ impl Composer {
         else {
             return;
         };
+        if let Some(reason) = command.unavailable_reason {
+            self.slash.error = Some(reason.into());
+            cx.notify();
+            return;
+        }
         if let Some(action) = command.workspace_command {
             self.execute_workspace_command(action, token.range, cx);
             return;
@@ -8377,7 +8455,11 @@ impl Composer {
                     format!("/{}", command.name)
                 }
                 .into();
-                let mut description = command.description.clone();
+                let mut description = command
+                    .unavailable_reason
+                    .as_ref()
+                    .map(|reason| format!("{} · {reason}", command.description))
+                    .unwrap_or_else(|| command.description.clone());
                 if let Some(hint) = &command.input_hint {
                     if description.is_empty() {
                         description = format!("<{hint}>");
@@ -8389,6 +8471,7 @@ impl Composer {
                 rows.push(
                     crate::popover::menu_row(theme, selected, format!("slash-result-{row_ix}"))
                         .id(("slash-result", row_ix))
+                        .when(command.unavailable_reason.is_some(), |row| row.opacity(0.5))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.slash.active = Some(row_ix);
                             this.accept_slash(cx);
@@ -12392,11 +12475,13 @@ mod tests {
         let native = invocation_candidates(
             vec![
                 SlashCommand {
+                    unavailable_reason: None,
                     name: "model".into(),
                     description: "Native model command".into(),
                     input_hint: Some("model id".into()),
                 },
                 SlashCommand {
+                    unavailable_reason: None,
                     name: "zeron:model".into(),
                     description: "Plugin command".into(),
                     input_hint: None,
@@ -12436,6 +12521,82 @@ mod tests {
                 "{literal:?}"
             );
         }
+    }
+
+    #[test]
+    fn codex_menu_routes_desktop_actions_and_keeps_cli_only_commands_visible() {
+        let rows = invocation_candidates(zeron_harness::codex::commands::catalog(), vec![]);
+        let rows = with_provider_commands(rows, true, Some(HarnessId::Codex), false);
+        assert_eq!(
+            workspace_command_for_text("/model", &rows),
+            Some(WorkspaceCommand::Model)
+        );
+        assert_eq!(
+            workspace_command_for_text("/copy", &rows),
+            Some(WorkspaceCommand::Copy)
+        );
+        assert_eq!(workspace_command_for_text("/stop", &rows), None);
+        assert_eq!(
+            workspace_command_for_text("/zeron:stop", &rows),
+            Some(WorkspaceCommand::Stop)
+        );
+        for entry in zeron_harness::codex::commands::CATALOG {
+            if matches!(
+                entry.delivery,
+                zeron_harness::codex::commands::Delivery::Desktop
+            ) {
+                assert!(
+                    rows.iter()
+                        .any(|row| row.name == entry.name && row.workspace_command.is_some()),
+                    "unmapped desktop command: {}",
+                    entry.name
+                );
+            }
+        }
+        let goal = rows.iter().find(|row| row.name == "goal").unwrap();
+        assert!(goal.unavailable_reason.is_none());
+        assert!(goal.workspace_command.is_none());
+        let tui = rows.iter().find(|row| row.name == "tui").unwrap();
+        assert!(tui.unavailable_reason.is_some());
+        let side = with_provider_commands(
+            invocation_candidates(zeron_harness::codex::commands::catalog(), vec![]),
+            true,
+            Some(HarnessId::Codex),
+            true,
+        );
+        assert_eq!(workspace_command_for_text("/archive", &side), None);
+    }
+
+    #[gpui::test]
+    fn codex_menu_preserves_unavailable_drafts_and_inserts_goal(cx: &mut gpui::TestAppContext) {
+        let (_dir, handle) = composer_focus_window(cx);
+        handle
+            .update(cx, |composer, _, cx| {
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("/tui", cx));
+                composer.slash.token = slash_token("/tui", 4);
+                composer.slash_cache.insert(
+                    composer.slash.context.clone(),
+                    invocation_candidates(zeron_harness::codex::commands::catalog(), vec![]),
+                );
+                composer.refilter_slash(cx);
+                composer.accept_slash(cx);
+                assert_eq!(composer.input.read(cx).text(), "/tui");
+                assert!(composer.slash.error.is_some());
+                composer
+                    .input
+                    .update(cx, |input, cx| input.set_text("/go", cx));
+                composer.slash.token = slash_token("/go", 3);
+                composer.refilter_slash(cx);
+                composer.accept_slash(cx);
+                assert!(
+                    zeron_proto::invocation::invocation_prompt(composer.input.read(cx).text())
+                        .starts_with("/goal")
+                );
+                assert!(composer.slash.token.is_none());
+            })
+            .unwrap();
     }
 
     #[gpui::test]
@@ -12530,6 +12691,7 @@ mod tests {
                     composer.slash_cache.insert(
                         composer.slash.context.clone(),
                         vec![InvocationCandidate {
+                            unavailable_reason: None,
                             name: "review".into(),
                             description: String::new(),
                             input_hint: None,
@@ -14732,6 +14894,7 @@ mod tests {
     #[test]
     fn partial_discovery_keeps_commands_and_skills_independently() {
         let command = SlashCommand {
+            unavailable_reason: None,
             name: "review".into(),
             description: String::new(),
             input_hint: None,
@@ -14836,6 +14999,7 @@ mod tests {
             let commands = ["review", "bad\ncommand", "two words"]
                 .into_iter()
                 .map(|name| SlashCommand {
+                    unavailable_reason: None,
                     name: name.into(),
                     description: String::new(),
                     input_hint: None,
@@ -14880,11 +15044,13 @@ mod tests {
         for (harness, _) in crate::settings::SKILL_COMPLETION_HARNESSES {
             let commands = vec![
                 SlashCommand {
+                    unavailable_reason: None,
                     name: "review".into(),
                     description: String::new(),
                     input_hint: None,
                 },
                 SlashCommand {
+                    unavailable_reason: None,
                     name: "compact".into(),
                     description: String::new(),
                     input_hint: None,
@@ -14917,6 +15083,7 @@ mod tests {
     fn combined_invocations_preserve_skill_identity_and_command_collisions() {
         use zeron_proto::invocation::{Invocation, Skill};
         let commands = vec![SlashCommand {
+            unavailable_reason: None,
             name: "review".into(),
             description: "Command".into(),
             input_hint: None,

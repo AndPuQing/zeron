@@ -425,6 +425,7 @@ fn parse_initialize_commands(response: &Value) -> Vec<SlashCommand> {
                 return None;
             }
             Some(SlashCommand {
+                unavailable_reason: None,
                 name: name.to_owned(),
                 description: c
                     .get("description")

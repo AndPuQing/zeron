@@ -530,6 +530,9 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct SlashCommand {
     pub name: String,
+    /// Visible for discovery, but unavailable in this client integration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unavailable_reason: Option<String>,
     #[serde(default)]
     pub description: String,
     /// Placeholder hint for the command's argument, when it takes one.

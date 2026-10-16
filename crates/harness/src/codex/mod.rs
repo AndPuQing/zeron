@@ -50,6 +50,8 @@ pub mod realtime;
 mod saved;
 mod subagents;
 
+pub mod commands;
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -746,18 +748,7 @@ impl Harness for CodexHarness {
     }
 
     async fn commands(&self) -> Result<Vec<SlashCommand>, HarnessError> {
-        Ok(vec![
-            SlashCommand {
-                name: "compact".into(),
-                description: "Compact this conversation's context".into(),
-                input_hint: None,
-            },
-            SlashCommand {
-                name: "review".into(),
-                description: "Review uncommitted changes, or supply review instructions".into(),
-                input_hint: Some("optional instructions".into()),
-            },
-        ])
+        Ok(commands::catalog())
     }
 
     async fn run(
@@ -1042,50 +1033,26 @@ fn command_request(
     let Some((name, args)) = zeron_proto::invocation::leading_command(&decoded) else {
         return Ok(None);
     };
-    if matches!(name, "compact" | "review")
-        && zeron_proto::invocation::invocation_links(text)
-            .iter()
-            .any(|(_, invocation)| {
-                matches!(
-                    invocation,
-                    zeron_proto::invocation::Invocation::Skill { .. }
-                )
-            })
+    if commands::entry(name).is_none() {
+        return Ok(None);
+    }
+    if zeron_proto::invocation::invocation_links(text)
+        .iter()
+        .any(|(_, invocation)| {
+            matches!(
+                invocation,
+                zeron_proto::invocation::Invocation::Skill { .. }
+            )
+        })
     {
         return Err(HarnessError::Protocol(
             "Codex commands cannot include skill selections; send them in a separate prompt".into(),
         ));
     }
-    match name {
-        "compact" if args.is_empty() => Ok(Some((
-            "thread/compact/start",
-            json!({"threadId": thread_id}),
-        ))),
-        "compact" => Err(HarnessError::Protocol(
-            "/compact takes no arguments; send other text separately".into(),
-        )),
-        "review" => Ok(Some((
-            "review/start",
-            json!({
-                "threadId": thread_id, "delivery": "inline",
-                "target": if args.is_empty() { json!({"type":"uncommittedChanges"}) }
-                    else { json!({"type":"custom", "instructions":args}) },
-            }),
-        ))),
-        // Known client commands need explicit UI mappings. Do not silently
-        // send those to the model; unknown slash tokens and paths stay literal.
-        "model" | "permissions" | "approvals" | "new" | "clear" | "resume" | "fork" | "status"
-        | "diff" | "mention" | "mcp" | "skills" | "plan" | "fast" | "logout" | "quit" | "exit"
-        | "init" | "rename" | "feedback" | "ps" | "stop" | "clean" | "archive" | "delete" => {
-            Err(HarnessError::Protocol(format!(
-                "/{name} is not mapped in Zeron's Codex integration. Available commands: /compact and /review."
-            )))
-        }
-        _ => Ok(None),
-    }
+    commands::request(name, args, thread_id).map(Some)
 }
 
-async fn start_turn(client: &RpcClient, params: Value) -> Result<String, HarnessError> {
+async fn start_turn(client: &RpcClient, params: Value) -> Result<commands::Started, HarnessError> {
     let text = params
         .pointer("/input/0/text")
         .and_then(Value::as_str)
@@ -1101,9 +1068,14 @@ async fn start_turn(client: &RpcClient, params: Value) -> Result<String, Harness
             "Codex commands cannot include skill selections; send them in a separate prompt".into(),
         ));
     }
-    let (method, params) = native.unwrap_or(("turn/start", params));
-    let started = client.request(method, params).await?;
-    Ok(started["turn"]["id"].as_str().unwrap_or("").to_owned())
+    if let Some((method, arguments)) = native {
+        commands::execute(client, method, arguments, params).await
+    } else {
+        let started = client.request("turn/start", params).await?;
+        Ok(commands::Started::Turn(
+            started["turn"]["id"].as_str().unwrap_or_default().into(),
+        ))
+    }
 }
 
 /// The per-run event loop: one task multiplexing app-server messages, the
@@ -1280,9 +1252,10 @@ async fn run_session(session: Session) {
             cwd: thread["cwd"].as_str().unwrap_or(&request.cwd).to_owned(),
             model_provider: thread["modelProvider"].as_str().map(str::to_owned),
         };
-        Ok::<_, HarnessError>((thread_id, children, voice_context))
+        let resolved_model = thread["model"].as_str().map(str::to_owned);
+        Ok::<_, HarnessError>((thread_id, children, voice_context, resolved_model))
     };
-    let (thread_id, mut children, voice_context) = tokio::select! {
+    let (thread_id, mut children, voice_context, resolved_model) = tokio::select! {
         res = setup => match res {
             Ok(thread_id) => thread_id,
             Err(e) => {
@@ -1320,6 +1293,9 @@ async fn run_session(session: Session) {
         let mut p = serde_json::Map::new();
         p.insert("threadId".into(), Value::String(thread_id.clone()));
         p.insert("input".into(), prompt_input(text));
+        if !live.cwd.is_empty() {
+            p.insert("cwd".into(), live.cwd.clone().into());
+        }
         p.insert("approvalPolicy".into(), approval_policy.into());
         p.insert("sandboxPolicy".into(), sandbox_policy_value(live.sandbox));
         // Reasoning summaries stream (`item/reasoning/summaryTextDelta`) only
@@ -1327,7 +1303,7 @@ async fn run_session(session: Session) {
         // nothing renders and the UI's 45s staleness gate flips Working off
         // (user report: "not streaming, doesn't say it's working").
         p.insert("summary".into(), "auto".into());
-        if let Some(model) = &live.model {
+        if let Some(model) = live.model.as_ref().or(resolved_model.as_ref()) {
             p.insert("model".into(), Value::String(model.clone()));
         }
         if let Some(effort) = to_effort(live.reasoning) {
@@ -1367,9 +1343,17 @@ async fn run_session(session: Session) {
             controls,
         )
     });
+    let mut command_completed = false;
     if !idle {
         match start_turn(&client, turn_params(&live, &request.prompt)).await {
-            Ok(id) => router.adopt_started(id),
+            Ok(commands::Started::Turn(id)) => router.adopt_started(id),
+            Ok(commands::Started::Reply(text)) => {
+                command_completed = true;
+                if !send_command_reply(&event_tx, &thread_id, text).await {
+                    shutdown_child(&mut child, kill_grace).await;
+                    return;
+                }
+            }
             Err(e) => {
                 let _ = event_tx
                     .send(Ok(AgentEvent::Done {
@@ -1423,7 +1407,7 @@ async fn run_session(session: Session) {
     // as Interrupted and the app-server stays up for the next turn.
     let mut stopping = false;
     // A Done has been emitted for the turn currently/last in flight.
-    let mut done_current = idle;
+    let mut done_current = idle || command_completed;
     let mut current_native = command_request(&request.prompt, &thread_id)
         .ok()
         .flatten()
@@ -1436,6 +1420,29 @@ async fn run_session(session: Session) {
     let mut torn_down: Vec<i32> = Vec::new();
 
     'main: loop {
+        // Synchronous commands have no server turn/completed notification.
+        // Drain the next accepted message here instead of stranding its ledger.
+        if done_current && router.active.is_none() {
+            if let Some((text, config)) = queued_steers.pop_front() {
+                if let Some(next) = config {
+                    live = *next;
+                }
+                current_native = command_request(&text, &thread_id).ok().flatten().is_some();
+                if !steer_as_new_turn(
+                    &client,
+                    turn_params(&live, &text),
+                    &mut router,
+                    &event_tx,
+                    &mut assistant_message_id,
+                    &mut done_current,
+                )
+                .await
+                {
+                    break 'main;
+                }
+                continue 'main;
+            }
+        }
         tokio::select! {
             inc = incoming.recv() => match inc {
                 Some(Incoming::Notification { method, params }) => {
@@ -2035,6 +2042,24 @@ async fn run_session(session: Session) {
     }
 }
 
+async fn send_command_reply(
+    events: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    thread: &str,
+    text: String,
+) -> bool {
+    send(events, AgentEvent::TextDelta { text }).await
+        && send(
+            events,
+            AgentEvent::Done {
+                status: DoneStatus::Completed,
+                result: None,
+                error: None,
+                session_id: Some(thread.into()),
+            },
+        )
+        .await
+}
+
 /// How long an interrupted turn's commands get to exit before a process
 /// still running counts as background work.
 const COMMAND_EXIT_GRACE: Duration = Duration::from_secs(3);
@@ -2084,12 +2109,11 @@ async fn steer_as_new_turn(
     assistant_message_id: &mut String,
     done_current: &mut bool,
 ) -> bool {
+    let thread = params["threadId"].as_str().unwrap_or_default().to_owned();
     match start_turn(client, params).await {
-        Ok(id) => {
-            router.adopt_started(id);
-            *done_current = false;
+        Ok(started) => {
             let (prev, next) = rotate(assistant_message_id);
-            send(
+            if !send(
                 event_tx,
                 AgentEvent::Steered {
                     assistant_message_id: Some(prev),
@@ -2097,6 +2121,21 @@ async fn steer_as_new_turn(
                 },
             )
             .await
+            {
+                return false;
+            }
+            match started {
+                commands::Started::Turn(id) => {
+                    router.adopt_started(id);
+                    *done_current = false;
+                    true
+                }
+                commands::Started::Reply(text) => {
+                    router.active = None;
+                    *done_current = true;
+                    send_command_reply(event_tx, &thread, text).await
+                }
+            }
         }
         Err(e) => {
             let _ = send(
