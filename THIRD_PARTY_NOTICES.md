@@ -433,3 +433,14 @@ as `Voice/WebRTC-LICENSE.txt`. The binary also contains WebRTC's own bundled
 third-party components (such as BoringSSL, libsrtp, Opus, libyuv and Abseil)
 under their respective licenses; see the WebRTC source tree's `third_party/`
 for each license.
+
+## WebRTC for Android voice
+
+The Android app links `io.github.webrtc-sdk:android:150.7871.01` from Maven
+Central (AAR SHA-256
+`0a1627b1a48c2bc17d9a40d62fc47bd45166f44a311e95917f147c402de379b0`).
+The SDK packaging project is MIT licensed: https://github.com/webrtc-sdk/android.
+Google WebRTC is BSD 3-Clause licensed, with its additional patent grant:
+https://webrtc.org/support/license. Both license texts ship in the Android APK
+under `assets/licenses/`. WebRTC's bundled third-party components retain their
+respective licenses in the WebRTC source tree.

@@ -11,3 +11,6 @@
 # FieldOrder refers to fields by name; JNA also constructs Structure subclasses.
 -keep class uniffi.zeron_core.** extends com.sun.jna.Structure { *; }
 -keep class uniffi.zeron_core.** implements com.sun.jna.Callback { *; }
+
+# The native WebRTC SDK calls Java objects and their members through JNI.
+-keep class org.webrtc.** { *; }

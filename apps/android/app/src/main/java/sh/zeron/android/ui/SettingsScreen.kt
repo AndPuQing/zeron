@@ -60,6 +60,8 @@ fun SettingsScreen(model: AppModel) {
                     }, supportingContent = { Text(model.accountDetail) },
                 ) { Text(model.accountName) }
             }
+            section("Voice")
+            item { VoiceSettingsRow(model) }
             if (devices.isNotEmpty()) {
                 section("Devices")
                 item {

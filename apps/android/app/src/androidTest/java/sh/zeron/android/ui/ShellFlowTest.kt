@@ -1,6 +1,7 @@
 package sh.zeron.android.ui
 
 import android.content.Intent
+import android.os.Build
 import android.os.SystemClock
 import androidx.core.view.WindowCompat
 import androidx.test.platform.app.InstrumentationRegistry
@@ -26,13 +27,13 @@ class ShellFlowTest {
         val original = model.appearance.value
         try {
             for (mode in listOf(ThemeMode.Dark, ThemeMode.Light)) {
-                findText(mode.name).click()
+                findText(mode.name, aboveBottomChrome = true).click()
                 await { model.appearance.value.mode == mode }
                 device.waitForIdle()
                 assertSystemBars(mode)
                 launch("settings")
                 assertEquals(mode, model.appearance.value.mode)
-                assertTrue(device.wait(Until.hasObject(By.text(mode.name)), 5_000))
+                findText(mode.name, aboveBottomChrome = true)
                 assertSystemBars(mode)
             }
         } finally {
@@ -90,10 +91,22 @@ class ShellFlowTest {
         device.waitForIdle()
     }
 
-    private fun findText(text: String): androidx.test.uiautomator.UiObject2 {
+    private fun findText(text: String, aboveBottomChrome: Boolean = false): androidx.test.uiautomator.UiObject2 {
         repeat(5) {
-            device.wait(Until.findObject(By.text(text)), 1_000)?.let { return it }
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+            // Layer-backed scrolling can leave UiAutomation's cached bounds stale.
+            if (aboveBottomChrome && Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            var scrollDown = false
+            device.wait(Until.findObject(By.text(text)), 1_000)?.let {
+                // Lazy content remains discoverable behind the floating bottom controls.
+                val bounds = it.visibleBounds
+                if (!aboveBottomChrome || bounds.centerY() in device.displayHeight / 8..device.displayHeight * 3 / 4) return it
+                scrollDown = bounds.centerY() < device.displayHeight / 8
+            }
+            if (aboveBottomChrome) {
+                // A short drag avoids flinging a newly visible radio row past the top.
+                device.swipe(device.displayWidth / 2, device.displayHeight / 2,
+                    device.displayWidth / 2, device.displayHeight * (if (scrollDown) 2 else 1) / 3, 60)
+            } else device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
                 device.displayWidth / 2, device.displayHeight / 3, 20)
             device.waitForIdle()
         }

@@ -12,6 +12,7 @@ jna = "5.19.1"
 browser = "1.10.0"
 coreSplashscreen = "1.2.0"
 backdrop = "1.0.6"
+webrtc = "150.7871.01"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -33,6 +34,7 @@ compose-material-icons = { group = "androidx.compose.material", name = "material
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 compose-backdrop = { module = "io.github.kyant0:backdrop", version.ref = "backdrop" }
+webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

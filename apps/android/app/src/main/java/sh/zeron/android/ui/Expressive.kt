@@ -164,7 +164,7 @@ fun FloatingNavBar(items: List<NavItem>, modifier: Modifier = Modifier, trailing
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun NewSessionBar(summary: String?, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun NewSessionBar(summary: String?, onClick: () -> Unit, modifier: Modifier = Modifier, trailing: @Composable (() -> Unit)? = null) {
     GlassSurface(
         onClick = onClick,
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -183,6 +183,7 @@ fun NewSessionBar(summary: String?, onClick: () -> Unit, modifier: Modifier = Mo
                     Text(summary, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            trailing?.invoke()
         }
     }
 }

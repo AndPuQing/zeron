@@ -38,9 +38,11 @@ class MainActivity : ComponentActivity() {
                 route = extras?.getString("route"),
                 wallpaper = extras?.getString("wallpaper"),
                 wallpaperEffect = extras?.getString("wallpaper-effect"),
+                voicePreview = extras?.getBoolean("voice-preview") == true,
             ),
         )
         handleCallback(intent)
+        if (intent.getBooleanExtra("open-voice", false) && model.voice.state.value.live) model.voice.openStage()
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = model.onForeground()
             override fun onStop(owner: LifecycleOwner) = model.onBackground()
@@ -51,6 +53,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleCallback(intent)
+        if (intent.getBooleanExtra("open-voice", false) && model.voice.state.value.live) model.voice.openStage()
     }
 
     override fun onResume() {

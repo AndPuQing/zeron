@@ -62,6 +62,7 @@ object Routes {
 private fun MainNav(model: AppModel) {
     val nav = rememberNavController()
     LaunchedEffect(Unit) {
+        if (model.launch.voicePreview && !model.voice.state.value.live) model.voice.preview()
         when (val route = model.launch.route) {
             null -> Unit
             "new" -> nav.navigate(Routes.NEW)
@@ -97,6 +98,7 @@ private fun MainNav(model: AppModel) {
             SearchScreen(model, onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.chat(it)) })
         }
     }
+    VoiceOverlays(model) { id -> nav.navigate(Routes.chat(id)) }
 }
 
 private enum class Tab { Sessions, Settings }
@@ -105,6 +107,7 @@ private enum class Tab { Sessions, Settings }
 private fun Home(model: AppModel, nav: NavHostController) {
     var tab by rememberSaveable { mutableStateOf(if (model.launch.route == "settings") Tab.Settings else Tab.Sessions) }
     val workspace by model.workspace.collectAsState()
+    val voice by model.voice.state.collectAsState()
     val summary = remember(workspace) { workspace?.let { liveSummary(it) } }
     GlassScene(
         modifier = Modifier.fillMaxSize(),
@@ -126,7 +129,8 @@ private fun Home(model: AppModel, nav: NavHostController) {
                 .padding(top = 12.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            NewSessionBar(summary, onClick = { nav.navigate(Routes.NEW) })
+            if (voice.live) VoiceCallStrip(model, Modifier.padding(horizontal = 16.dp))
+            else NewSessionBar(summary, onClick = { nav.navigate(Routes.NEW) }, trailing = { VoiceEntry(model) })
             FloatingNavBar(
                 listOf(
                     NavItem("Sessions", ZIcons.TabSessions, tab == Tab.Sessions) { tab = Tab.Sessions },
