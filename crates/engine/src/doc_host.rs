@@ -5526,6 +5526,15 @@ impl DocHost {
                 if sessions.respond_input(chat_id, request_id, answers.clone())? {
                     return Ok((SessionCommandStatus::Applied, None));
                 }
+                // An orphaned answer starts a runtime, so it shares queue/worktree
+                // serialization. Live answers above must bypass this lock: a
+                // prompt holding it may itself be waiting for user input.
+                // Do not acquire command_drain_lock here: the normal command
+                // drain may already own it (or be waiting for this control).
+                let _transition = handle.drain_lock.lock().await;
+                if sessions.respond_input(chat_id, request_id, answers.clone())? {
+                    return Ok((SessionCommandStatus::Applied, None));
+                }
                 // No live resolver. Only a request id the doc shows as an
                 // OPEN question on a SETTLED entry gets the orphan fallback:
                 // a mismatched or already-resolved id is a stale/buggy answer
@@ -5574,14 +5583,14 @@ impl DocHost {
                 request.prompt = respond_input_prompt(&questions, answers);
                 request.resume = None; // dispatch re-derives the harness session
                 request.attachments = Vec::new();
-                if let Err(err) = handle.doc.resolve_input(request_id) {
-                    tracing::warn!(chat = %chat_id, request = %request_id, error = %err,
-                        "orphaned input resolve failed");
-                }
                 let harness = self.harness_for_request(chat_id, &request);
                 sessions.prepare_imported_run(chat_id, harness, &mut request)?;
                 self.dispatch_with_source_context(sessions, chat_id, harness, request, None)
                     .await?;
+                if let Err(err) = handle.doc.resolve_input(request_id) {
+                    tracing::warn!(chat = %chat_id, request = %request_id, error = %err,
+                        "orphaned input resolve failed");
+                }
                 Ok((
                     SessionCommandStatus::Applied,
                     Some("answered as new turn".into()),
@@ -6828,3 +6837,7 @@ mod sync_lifecycle_tests;
 
 #[path = "doc_host_delivery.rs"]
 mod remote_delivery;
+
+#[cfg(test)]
+#[path = "doc_host_worktree_tests.rs"]
+mod worktree_transition_tests;
