@@ -412,8 +412,9 @@ pub struct PullRequestDetailPage {
     selection_prefix: String,
     cache: Rc<RefCell<PullRequestCache>>,
     preview: Option<ChangeRequestListItem>,
-    /// A newly observed board revision, deferred while reading or posting.
+    /// A newly observed board update, deferred while reading or posting.
     board_refresh_owed: bool,
+    board_metadata_refresh_owed: bool,
     error: Option<String>,
     loading: bool,
     fetched: Option<Instant>,
@@ -490,6 +491,7 @@ impl PullRequestDetailPage {
             cache,
             preview,
             board_refresh_owed: false,
+            board_metadata_refresh_owed: false,
             error: None,
             loading: false,
             fetched: None,
@@ -637,6 +639,8 @@ impl PullRequestDetailPage {
         }
         if page.detail.is_none() {
             page.load(stale, cx);
+        } else {
+            page.revalidate_if_stale(cx);
         }
         page
     }
@@ -669,6 +673,20 @@ impl PullRequestDetailPage {
         let url = self.url.clone();
         let copy_url = self.url.clone();
         let (number, title) = self.identity();
+        let status = self
+            .detail
+            .as_ref()
+            .map(|detail| pr_state_label(&detail.state, detail.is_draft))
+            .or_else(|| {
+                self.preview.as_ref().map(|preview| {
+                    let state = match preview.state {
+                        zeron_proto::ChangeRequestState::Open => "OPEN",
+                        zeron_proto::ChangeRequestState::Merged => "MERGED",
+                        zeron_proto::ChangeRequestState::Closed => "CLOSED",
+                    };
+                    pr_state_label(state, preview.is_draft)
+                })
+            });
         div()
             .w_full()
             .min_w_0()
@@ -707,6 +725,27 @@ impl PullRequestDetailPage {
                             .child(title),
                     ),
             )
+            .when_some(status, |el, status| {
+                let color = match status {
+                    "Open" => theme.success,
+                    "Merged" => theme.code_text,
+                    "Closed" => theme.danger,
+                    _ => theme.text_muted,
+                };
+                el.child(
+                    div()
+                        .id("pr-state-badge")
+                        .debug_selector(|| "pr-state-badge".into())
+                        .flex_none()
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(color)
+                        .bg(color.opacity(0.15))
+                        .child(status),
+                )
+            })
             .child(
                 action("pr-detail-refresh", "Refresh pull request", &theme)
                     .when(self.loading, |el| el.opacity(0.4))
@@ -753,7 +792,7 @@ impl PullRequestDetailPage {
     }
 
     /// Reconcile already-loaded board data when this tab becomes active.
-    /// Observe each head once: a stale board or a failed refresh must not
+    /// Observe each board snapshot once: a stale board or a failed refresh must not
     /// turn tab switching into repeated network requests.
     pub(crate) fn update_board_preview(
         &mut self,
@@ -769,8 +808,15 @@ impl PullRequestDetailPage {
             .preview
             .as_ref()
             .is_none_or(|old| old.head_ref_oid != preview.head_ref_oid);
+        let metadata_changed = self.preview.as_ref().is_some_and(|old| {
+            old.updated_at != preview.updated_at
+                || old.state != preview.state
+                || old.is_draft != preview.is_draft
+                || old.review_decision != preview.review_decision
+        });
         self.preview = Some(preview);
-        if changed {
+        if changed || metadata_changed {
+            self.board_metadata_refresh_owed |= metadata_changed;
             self.board_refresh_owed = true;
             self.refresh_from_board(cx);
         }
@@ -790,15 +836,31 @@ impl PullRequestDetailPage {
         else {
             return false;
         };
+        let metadata_changed = std::mem::take(&mut self.board_metadata_refresh_owed);
         if self
             .detail
             .as_ref()
             .is_some_and(|detail| detail.head_ref_oid == head)
         {
-            return false;
+            if metadata_changed {
+                self.load_with_params(self.params(true), cx);
+            }
+            return metadata_changed;
         }
         self.refresh_with_head(Some(head), cx);
         true
+    }
+
+    /// Revalidate on reopening/activation without discarding an unchanged patch.
+    pub(crate) fn revalidate_if_stale(&mut self, cx: &mut Context<Self>) {
+        if !self.loading
+            && self.error.is_none()
+            && self.state.read(cx).engine().is_some()
+            && self.submission.is_none()
+            && self.fetched.is_some_and(|at| at.elapsed().as_secs() >= 60)
+        {
+            self.load_with_params(self.params(true), cx);
+        }
     }
 
     /// Reload the details, and the diff now or on the next Code visit.
@@ -1200,6 +1262,9 @@ impl PullRequestDetailPage {
         crate::markdown::render::clear_selection_surface(&self.selection_prefix);
         self.tab = tab;
         self.scroll.scroll.set_offset(gpui::Point::default());
+        if tab == Tab::Activity {
+            self.revalidate_if_stale(cx);
+        }
         if tab == Tab::Code && self.diff.is_none() && self.diff_task.is_none() {
             self.load_diff(false, cx);
         }
@@ -1444,6 +1509,19 @@ fn status_chip(raw: &str, theme: &Theme) -> AnyElement {
 /// Space between the Summary's stacked cards; the header sits 2× further.
 const CARD_GAP: f32 = 12.0;
 
+// A closed draft is closed; draft only qualifies an open pull request.
+fn pr_state_label(state: &str, is_draft: bool) -> &'static str {
+    if state.eq_ignore_ascii_case("merged") {
+        "Merged"
+    } else if state.eq_ignore_ascii_case("closed") {
+        "Closed"
+    } else if state.eq_ignore_ascii_case("open") {
+        if is_draft { "Draft" } else { "Open" }
+    } else {
+        "Unknown"
+    }
+}
+
 /// Title and metadata line; shared by the loaded page and its placeholder.
 fn detail_header(
     title: &str,
@@ -1686,11 +1764,7 @@ impl Render for PullRequestDetailPage {
                                 .mt(px(24.0))
                                 .child(field(
                                     "Status",
-                                    if detail.is_draft {
-                                        "Draft".into()
-                                    } else {
-                                        detail.state.clone()
-                                    },
+                                    pr_state_label(&detail.state, detail.is_draft).into(),
                                     true,
                                     &theme,
                                 ))
@@ -2581,7 +2655,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn pull_request_reopening_uses_cached_content_without_a_network_request(
+    fn pull_request_reopening_offline_uses_cached_content_without_a_network_request(
         cx: &mut gpui::TestAppContext,
     ) {
         fixture::init(cx);
@@ -2774,9 +2848,112 @@ mod tests {
             additions: 1,
             deletions: 1,
             mergeability: zeron_proto::ChangeRequestMergeability::Unknown,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            updated_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         }
+    }
+
+    #[test]
+    fn pull_request_status_prioritizes_terminal_states_over_draft() {
+        assert_eq!(pr_state_label("OPEN", false), "Open");
+        assert_eq!(pr_state_label("OPEN", true), "Draft");
+        assert_eq!(pr_state_label("MERGED", true), "Merged");
+        assert_eq!(pr_state_label("CLOSED", true), "Closed");
+        assert_eq!(pr_state_label("closed", false), "Closed");
+        assert_eq!(pr_state_label("", false), "Unknown");
+    }
+
+    #[gpui::test]
+    fn pull_request_same_head_activity_refresh_keeps_diff_and_draft(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let rpc = ScriptedRpc::new(|method, params| async move {
+            assert_eq!(method, methods::GET_CHANGE_REQUEST);
+            assert_eq!(params["refresh"], true);
+            zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                head_ref_oid: "a".repeat(40),
+                state: "CLOSED".into(),
+                comments: vec![zeron_proto::ChangeRequestComment {
+                    body: "New GitHub comment".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = "https://github.com/a/b/pull/1";
+        let mut cached = snapshot("Before comment");
+        cached.detail.head_ref_oid = "a".repeat(40);
+        cached.diff = Some(ParsedDiff::new("same patch".into()));
+        cache.borrow_mut().put(None, url.into(), cached);
+        let preview = board_preview(&"a".repeat(40));
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                Some(preview.clone()),
+                window,
+                cx,
+            )
+        });
+        let mut updated = preview;
+        updated.updated_at += chrono::Duration::seconds(1);
+        updated.state = zeron_proto::ChangeRequestState::Closed;
+        page.update(cx, |page, cx| {
+            page.comment_input
+                .update(cx, |input, cx| input.set_text("Keep draft", cx));
+            page.select_tab(Tab::Activity, cx);
+            page.update_board_preview(updated.clone(), cx);
+            page.update_board_preview(updated.clone(), cx);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.update(cx, |page, cx| {
+            assert_eq!(page.detail.as_ref().unwrap().state, "CLOSED");
+            assert_eq!(
+                page.detail.as_ref().unwrap().comments[0].body,
+                "New GitHub comment"
+            );
+            assert_eq!(page.activity_bodies.len(), 1);
+            assert_eq!(page.diff.as_ref().unwrap().patch, "same patch");
+            assert_eq!(page.comment_input.read(cx).text(), "Keep draft");
+            page.update_board_preview(updated, cx);
+            assert!(!page.loading);
+        });
+        assert_eq!(rpc.completed(), 1);
+        // Entering Activity after the freshness interval also refreshes when
+        // the board has not observed a new comment yet.
+        page.update(cx, |page, cx| {
+            page.select_tab(Tab::Summary, cx);
+            page.fetched = Some(Instant::now() - Duration::from_secs(61));
+            page.select_tab(Tab::Activity, cx);
+            assert!(page.loading);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        assert_eq!(rpc.completed(), 2);
+        // Reopening a cached page must not leave Activity stale indefinitely.
+        cache.borrow_mut().entries[0].1.fetched = Instant::now() - Duration::from_secs(61);
+        let (reopened, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                None,
+                window,
+                cx,
+            )
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            reopened.read_with(cx, |page, _| !page.loading)
+        });
+        assert_eq!(rpc.completed(), 3);
     }
 
     #[gpui::test]
