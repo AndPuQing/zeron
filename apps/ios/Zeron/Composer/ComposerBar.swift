@@ -467,13 +467,17 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         }
     }
 
-    private func insertCommand(_ command: ComposerCommand) {
+    func insertCommand(_ command: ComposerCommand) {
         guard command.unavailableReason == nil,
               let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange) else { return }
         let ns = textView.text as NSString
+        let selected = prepareComposerSelection(
+            text: ns.replacingCharacters(in: q.range, with: ""),
+            selections: Array(selectedCommands.values), command: command
+        )
         let suffix = ns.substring(from: NSMaxRange(q.range))
-        let replacement = command.token + (suffix.first?.isWhitespace == true ? "" : " ")
-        selectedCommands[command.token] = command
+        let replacement = selected.token + (suffix.first?.isWhitespace == true ? "" : " ")
+        selectedCommands[selected.token] = selected
         textView.text = ns.replacingCharacters(in: q.range, with: replacement)
         textView.selectedRange = NSRange(location: q.range.location + (replacement as NSString).length + (suffix.first?.isWhitespace == true ? 1 : 0), length: 0)
         closeCommands()

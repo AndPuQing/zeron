@@ -1137,6 +1137,17 @@ pub fn encode_composer_selections(text: String, selections: Vec<ComposerCommand>
     zc::composer::encode_selections(&text, &selections)
 }
 
+/// Reserve an insertion token without rebinding existing references or literal text.
+#[uniffi::export]
+pub fn prepare_composer_selection(
+    text: String,
+    selections: Vec<ComposerCommand>,
+    command: ComposerCommand,
+) -> ComposerCommand {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::prepare_selection(&text, &selections, command.into()).into()
+}
+
 impl From<zc::composer::ComposerCatalog> for ComposerCatalog {
     fn from(c: zc::composer::ComposerCatalog) -> Self {
         Self {

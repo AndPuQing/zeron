@@ -68,11 +68,14 @@ class ComposerModel(initial: String = "") {
     fun insertCommand(command: uniffi.zeron_core.ComposerCommand) {
         if (command.unavailableReason != null) return
         val (range, _) = slashQuery() ?: return
+        val selected = uniffi.zeron_core.prepareComposerSelection(
+            text.removeRange(range), commands.values.toList(), command,
+        )
         val end = range.last + 1
         val hasSeparator = text.getOrNull(end)?.isWhitespace() == true
-        val replacement = command.token + if (hasSeparator) "" else " "
+        val replacement = selected.token + if (hasSeparator) "" else " "
         val next = text.replaceRange(range, replacement)
-        commands[command.token] = command
+        commands[selected.token] = selected
         value = TextFieldValue(next, TextRange(range.first + replacement.length + if (hasSeparator) 1 else 0))
     }
 

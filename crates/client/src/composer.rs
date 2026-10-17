@@ -110,6 +110,31 @@ fn decode<T: serde::de::DeserializeOwned>(
     }
 }
 
+/// Reserve a display token before inserting a catalog selection. `text` excludes
+/// the completion query being replaced. Restored drafts can assign different
+/// tokens than a freshly loaded catalog, so catalog tokens cannot overwrite them.
+pub fn prepare_selection(
+    text: &str,
+    selections: &[ComposerCommand],
+    mut command: ComposerCommand,
+) -> ComposerCommand {
+    if let Some(existing) = selections.iter().find(|s| s.insertion == command.insertion) {
+        command.token = existing.token.clone();
+        return command;
+    }
+    let base = zeron_proto::invocation::invocation_links(&command.insertion)
+        .into_iter()
+        .next()
+        .map(|(_, invocation)| format!("{}{}", invocation.prefix(), invocation.name()))
+        .unwrap_or_else(|| command.token.clone());
+    let mut suffix = 2;
+    while selections.iter().any(|s| s.token == command.token) || text.contains(&command.token) {
+        command.token = format!("{base}:{suffix}");
+        suffix += 1;
+    }
+    command
+}
+
 /// Find selected tokens in Markdown prose, keeping code, links and escapes literal.
 /// Skills can move within prose; slash commands must remain leading commands.
 fn selected_ranges<'a>(
@@ -340,6 +365,51 @@ mod tests {
             .link(),
             unavailable_reason: None,
         }
+    }
+
+    #[test]
+    fn inserting_a_same_name_skill_after_restoring_does_not_rebind_the_draft() {
+        let a = selected_skill("$review", "/a/SKILL.md");
+        let b = selected_skill("$review:2", "/b/SKILL.md");
+        let wire = encode_selections("$review:2 check this", std::slice::from_ref(&b));
+        let (text, mut selections) = restore_draft(&wire);
+        assert_eq!(text, "$review check this");
+
+        let selected = prepare_selection(&text, &selections, a.clone());
+        assert_eq!(selected.token, "$review:2");
+        let next = format!("{} {text}", selected.token);
+        selections.push(selected);
+        let expected = format!("{} {wire}", a.insertion);
+        assert_eq!(encode_selections(&next, &selections), expected);
+        let (restored, selections) = restore_draft(&save_draft(&next, &selections));
+        assert_eq!(encode_selections(&restored, &selections), expected);
+    }
+
+    #[test]
+    fn new_selections_preserve_literal_tokens_and_unrelated_invalid_references() {
+        let a = selected_skill("$review", "/a/SKILL.md");
+        let selected = prepare_selection("Literal $review and $review:2", &[], a.clone());
+        assert_eq!(selected.token, "$review:3");
+        assert_eq!(
+            encode_selections(
+                "$review:3 Literal $review and $review:2",
+                std::slice::from_ref(&selected)
+            ),
+            format!("{} Literal $review and $review:2", a.insertion)
+        );
+
+        let mut invalid = selected_skill("$review", "/b/SKILL.md");
+        invalid.unavailable_reason = Some("Context changed".into());
+        let selected = prepare_selection("$review check this", &[invalid.clone()], a);
+        assert_ne!(selected.token, invalid.token);
+        let text = format!("{} $review check this", selected.token);
+        assert!(selection_error(&text, &[invalid.clone(), selected.clone()]).is_some());
+
+        // Explicitly selecting the same identity revalidates its existing token.
+        let b = selected_skill("$review:2", "/b/SKILL.md");
+        let reselected = prepare_selection(&text, &[invalid, selected.clone()], b);
+        assert_eq!(reselected.token, "$review");
+        assert!(selection_error(&text, &[reselected, selected]).is_none());
     }
 
     #[test]

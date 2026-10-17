@@ -17180,6 +17180,19 @@ public func fileMentionLink(path: String, isDir: Bool) -> String  {
     )
 })
 }
+/**
+ * Reserve an insertion token without rebinding existing references or literal text.
+ */
+public func prepareComposerSelection(text: String, selections: [ComposerCommand], command: ComposerCommand) -> ComposerCommand  {
+    return try!  FfiConverterTypeComposerCommand_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_prepare_composer_selection(
+        FfiConverterString.lower(text),
+        FfiConverterSequenceTypeComposerCommand.lower(selections),
+        FfiConverterTypeComposerCommand_lower(command),uniffiCallStatus
+    )
+})
+}
 public func restoreComposerDraft(text: String) -> ComposerDraft  {
     return try!  FfiConverterTypeComposerDraft_lift(try! rustCall() {
         uniffiCallStatus in
@@ -17371,6 +17384,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_file_mention_link() != 14340) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_prepare_composer_selection() != 36336) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_restore_composer_draft() != 22567) {

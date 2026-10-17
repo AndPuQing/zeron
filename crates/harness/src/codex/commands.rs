@@ -39,14 +39,14 @@ pub const CATALOG: &[Entry] = &[
         "permissions",
         "Change approval and sandbox policy",
         Unavailable(
-            "Zeron owns this session’s approval and sandbox policy; this Codex CLI picker is unavailable here."
+            "Zerun owns this session’s approval and sandbox policy; this Codex CLI picker is unavailable here."
         )
     ),
     entry!(
         "approvals",
         "Change approval policy",
         Unavailable(
-            "Zeron owns this session’s approval policy; this Codex CLI picker is unavailable here."
+            "Zerun owns this session’s approval policy; this Codex CLI picker is unavailable here."
         )
     ),
     entry!("ide", "Toggle IDE context", Unavailable(TERMINAL)),
@@ -191,7 +191,7 @@ pub const CATALOG: &[Entry] = &[
         "cd",
         "Change the native session working directory",
         Unavailable(
-            "Create a Zeron conversation in the desired project; imported sessions retain their original directory."
+            "Create a Zerun conversation in the desired project; imported sessions retain their original directory."
         )
     ),
     entry!("pwd", "Show this session's working directory", Native),
@@ -199,7 +199,7 @@ pub const CATALOG: &[Entry] = &[
     entry!(
         "worktree",
         "Continue in a native worktree",
-        Unavailable("Choose a project worktree when creating a Zeron conversation.")
+        Unavailable("Choose a project worktree when creating a Zerun conversation.")
     ),
     entry!(
         "daemon",
@@ -222,7 +222,7 @@ pub fn catalog() -> Vec<SlashCommand> {
             input_hint: entry.hint.map(str::to_owned),
             unavailable_reason: match entry.delivery {
                 Unavailable(reason) => Some(reason.into()),
-                Desktop => Some("Use this action in Zeron’s desktop / menu.".into()),
+                Desktop => Some("Use this action in Zerun’s desktop / menu.".into()),
                 Native => None,
             },
         })
@@ -249,7 +249,7 @@ pub fn request(
         Unavailable(reason) => return Err(invalid(format!("/{name}: {reason}"))),
         Desktop => {
             return Err(invalid(format!(
-                "/{name} is a desktop action. Select it from Zeron's / menu."
+                "/{name} is a desktop action. Select it from Zerun's / menu."
             )));
         }
         Native => {}
@@ -274,7 +274,7 @@ pub fn request(
         _ => {}
     }
     if !args.is_empty() {
-        return Err(invalid(format!("/{name} takes no arguments in Zeron.")));
+        return Err(invalid(format!("/{name} takes no arguments in Zerun.")));
     }
     Ok(match name {
         "compact" => ("thread/compact/start", json!({"threadId":thread})),

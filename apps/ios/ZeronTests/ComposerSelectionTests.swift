@@ -3,9 +3,28 @@ import UIKit
 @testable import Zeron
 
 final class ComposerSelectionTests: XCTestCase {
-    private var wire: String {
-        let payload = #"{"kind":"skill","name":"review","path":"/b/SKILL.md"}"#.utf8.map { String(format: "%02x", $0) }.joined()
-        return "[$review](zeron-invoke:\(payload)) check this"
+    private func skillLink(_ path: String) -> String {
+        let payload = "{\"kind\":\"skill\",\"name\":\"review\",\"path\":\"\(path)\"}".utf8.map { String(format: "%02x", $0) }.joined()
+        return "[$review](zeron-invoke:\(payload))"
+    }
+
+    private var wire: String { skillLink("/b/SKILL.md") + " check this" }
+
+    @MainActor
+    func testInsertingSameNameSkillAfterRestorePreservesBothIdentities() {
+        let composer = ComposerBar()
+        composer.text = wire
+        composer.textView.text = "/ " + composer.text
+        composer.textView.selectedRange = NSRange(location: 1, length: 0)
+        composer.insertCommand(ComposerCommand(
+            token: "$review", description: "", inputHint: nil,
+            insertion: skillLink("/a/SKILL.md"), unavailableReason: nil
+        ))
+        XCTAssertEqual(composer.text, "$review:2 $review check this")
+        XCTAssertEqual(composer.encodedDraft, skillLink("/a/SKILL.md") + " " + wire)
+        let reopened = ComposerBar()
+        reopened.text = composer.persistedDraft
+        XCTAssertEqual(reopened.encodedDraft, composer.encodedDraft)
     }
 
     @MainActor
