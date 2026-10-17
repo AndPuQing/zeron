@@ -400,16 +400,23 @@ impl SessionImportDialog {
                     .justify_between()
                     .flex_wrap()
                     .gap(px(4.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap(px(4.0))
-                            .child(providers)
-                            .child(div().w(px(1.0)).h(px(14.0)).mx(px(4.0)).bg(theme.border))
-                            .child(statuses),
-                    )
+                    .child({
+                        let show_providers = needs_provider_filter(&self.model);
+                        let show_statuses = needs_status_filter(&self.model);
+                        let mut groups = div().flex().items_center().flex_wrap().gap(px(4.0));
+                        if show_providers {
+                            groups = groups.child(providers);
+                        }
+                        if show_providers && show_statuses {
+                            groups = groups.child(
+                                div().w(px(1.0)).h(px(14.0)).mx(px(4.0)).bg(theme.border),
+                            );
+                        }
+                        if show_statuses {
+                            groups = groups.child(statuses);
+                        }
+                        groups
+                    })
                     .when(has_project, |row| row.child(scope)),
             )
             .into_any_element()
@@ -448,17 +455,14 @@ impl SessionImportDialog {
                 (Some(reason.clone()), theme.danger)
             }
             None => match &row.eligibility {
-                // The title badge already says it.
-                ImportEligibility::Available | ImportEligibility::AlreadyManaged { .. } => {
-                    (None, theme.text_muted)
-                }
+                // The title badge already says it; a running session explains
+                // itself through the row tooltip instead of a second line.
+                ImportEligibility::Available
+                | ImportEligibility::AlreadyManaged { .. }
+                | ImportEligibility::Running => (None, theme.text_muted),
                 ImportEligibility::Unavailable { reason } => {
                     (Some(reason.clone()), theme.text_muted)
                 }
-                ImportEligibility::Running => (
-                    Some("Finish or stop its current turn, then scan again to import.".into()),
-                    theme.warning_muted,
-                ),
             },
         };
         let badge = match &row.eligibility {
@@ -513,22 +517,7 @@ impl SessionImportDialog {
                 cx.stop_propagation();
                 cx.notify();
             }))
-            .child(
-                div()
-                    .size(px(15.0))
-                    .rounded(px(4.0))
-                    .border_1()
-                    .border_color(if selected {
-                        theme.text
-                    } else {
-                        theme.border_strong
-                    })
-                    .when(selected, |control| {
-                        control
-                            .bg(theme.text)
-                            .child(icon(icons::CHECK).size(px(13.0)).text_color(theme.on_solid))
-                    }),
-            );
+            .child(selection_box(theme, selected));
         let content = div()
             .flex_1()
             .min_w_0()
@@ -559,40 +548,6 @@ impl SessionImportDialog {
                             )),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(crate::typography::ui_rems(12.0))
-                            .text_color(theme.text_muted)
-                            .truncate()
-                            .id(("import-row-cwd", index))
-                            .tooltip(crate::settings::widgets::text_tooltip(row.cwd.clone()))
-                            .child(row.cwd.clone()),
-                    )
-                    .when_some(chat_id.filter(|_| !self.is_importing()), |line, chat_id| {
-                        line.child(
-                            popover::btn_ghost(theme, "Open", format!("import-open-{index}"))
-                                .id(("import-open", index))
-                                .role(gpui::Role::Button)
-                                .tab_index(0)
-                                .flex_none()
-                                .py(px(2.0))
-                                .px(px(6.0))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(SessionImportEvent::OpenChat {
-                                        chat_id: chat_id.clone(),
-                                    });
-                                    cx.stop_propagation();
-                                })),
-                        )
-                    }),
-            )
             .when_some(status, |content, status| {
                 content.child(
                     div()
@@ -606,24 +561,48 @@ impl SessionImportDialog {
             .debug_selector(move || format!("import-row-{index}"))
             .role(gpui::Role::ListItem)
             .aria_label(SharedString::from(format!(
-                "{} · {}{}",
+                "{} · {}{} · {}",
                 row.title,
                 row.provider.label(),
                 match row.eligibility {
                     ImportEligibility::AlreadyManaged { .. } => " · Imported",
                     ImportEligibility::Running => " · Running",
                     _ => "",
-                }
+                },
+                row.cwd,
             )))
             .aria_selected(selected)
-            .min_h(px(72.0))
+            .min_h(px(46.0))
             .gap(px(6.0))
+            .when(row.eligibility == ImportEligibility::Running, |item| {
+                item.tooltip(crate::settings::widgets::text_tooltip(
+                    "Finish or stop its current turn, then scan again to import.",
+                ))
+            })
             .on_click(cx.listener(move |this, _, window, cx| {
                 window.focus(&this.focus, cx);
                 this.toggle_session(row_id.clone(), cx);
             }))
             .when(self.model.batch.is_none(), |item| item.child(selection))
             .child(content)
+            .when_some(chat_id.filter(|_| !self.is_importing()), |item, chat_id| {
+                item.child(
+                    popover::btn_ghost(theme, "Open", format!("import-open-{index}"))
+                        .id(("import-open", index))
+                        .role(gpui::Role::Button)
+                        .aria_label(SharedString::from(format!("Open {}", row.title)))
+                        .tab_index(0)
+                        .flex_none()
+                        .py(px(2.0))
+                        .px(px(6.0))
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(SessionImportEvent::OpenChat {
+                                chat_id: chat_id.clone(),
+                            });
+                            cx.stop_propagation();
+                        })),
+                )
+            })
             .into_any_element()
     }
 
@@ -674,16 +653,61 @@ impl SessionImportDialog {
                     .collect::<Vec<_>>();
                 let all_selected = !group_refs.is_empty()
                     && group_refs.iter().all(|id| self.model.selected.contains(id));
+                let selectable = self.model.batch.is_none() && !group_refs.is_empty();
                 list = list.child(
                     div()
+                        .id(("import-group", index))
+                        .debug_selector(move || format!("import-group-{index}"))
+                        .role(gpui::Role::CheckBox)
+                        .aria_label(SharedString::from(format!(
+                            "{} sessions in {}",
+                            if all_selected { "Deselect" } else { "Select" },
+                            row.project
+                        )))
+                        .aria_toggled(if all_selected {
+                            gpui::Toggled::True
+                        } else {
+                            gpui::Toggled::False
+                        })
+                        .tab_index(0)
+                        .tab_stop(selectable)
                         .mt(px(if index == 0 { 0.0 } else { 8.0 }))
                         .px(px(8.0))
                         .py(px(5.0))
+                        .rounded(px(4.0))
                         .flex()
                         .items_center()
                         .gap(px(6.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
+                        .tooltip(crate::settings::widgets::text_tooltip(row.cwd.clone()))
+                        .when(selectable, |header| {
+                            header.cursor_pointer().on_click(cx.listener(
+                                move |this, _, _, cx| {
+                                    for id in &group_refs {
+                                        if all_selected {
+                                            this.model.selected.remove(id);
+                                        } else if !this.model.selected.contains(id) {
+                                            this.model.toggle_selection(id);
+                                        }
+                                    }
+                                    cx.notify();
+                                },
+                            ))
+                        })
+                        // The slot stays reserved so project names line up with
+                        // the session rows and with each other.
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(28.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .when(selectable, |slot| {
+                                    slot.child(selection_box(theme, all_selected))
+                                }),
+                        )
                         .child(
                             icon(icons::FOLDER)
                                 .size(px(13.0))
@@ -695,39 +719,6 @@ impl SessionImportDialog {
                                 .min_w_0()
                                 .truncate()
                                 .child(row.project.clone()),
-                        )
-                        .when(
-                            self.model.batch.is_none() && !group_refs.is_empty(),
-                            |header| {
-                                header.child(
-                                    popover::btn_ghost(
-                                        theme,
-                                        if all_selected {
-                                            "Deselect"
-                                        } else {
-                                            "Select group"
-                                        },
-                                        format!("import-group-{index}"),
-                                    )
-                                    .id(("import-group", index))
-                                    .role(gpui::Role::Button)
-                                    .tab_index(0)
-                                    .py(px(2.0))
-                                    .px(px(6.0))
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            for id in &group_refs {
-                                                if all_selected {
-                                                    this.model.selected.remove(id);
-                                                } else if !this.model.selected.contains(id) {
-                                                    this.model.toggle_selection(id);
-                                                }
-                                            }
-                                            cx.notify();
-                                        },
-                                    )),
-                                )
-                            },
                         ),
                 );
             }
@@ -926,7 +917,10 @@ impl SessionImportDialog {
                 .iter()
                 .filter(|row| self.model.selected.contains(&row.source_ref))
                 .count();
-            summary = if selected > shown_selected {
+            // Nothing selected needs no words; the dimmed import button says it.
+            summary = if selected == 0 {
+                String::new()
+            } else if selected > shown_selected {
                 format!(
                     "{selected} selected · {} hidden by filters",
                     selected - shown_selected
@@ -977,16 +971,6 @@ impl SessionImportDialog {
             .flex()
             .flex_col()
             .gap(px(10.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .text_size(crate::typography::ui_rems(12.0))
-                    .text_color(theme.text_muted)
-                    .child(icon(icons::ARCHIVE_MINIMALISTIC).size(px(14.0)))
-                    .child("Imported sessions go to Archived. Open one to add it to Sessions."),
-            )
             .child(
                 div()
                     .flex()
@@ -1065,7 +1049,7 @@ impl Render for SessionImportDialog {
             )
             .child(popover::dialog_body(
                 &theme,
-                "Copy saved sessions into Zerun. Continue the copy; project files stay shared.",
+                "Copy saved sessions into Zerun. Imports go to Archived; project files stay shared.",
             ));
         if self.model.devices.len() > 1 && self.model.batch.is_none() {
             let device = &self.model.devices[self.model.device_index];
@@ -1237,6 +1221,44 @@ impl SessionImportDialog {
         }
         cx.notify();
     }
+}
+
+/// The filter row earns its space only when the scan has something to filter:
+/// a single-agent device does not need an agent picker, and a device with
+/// nothing imported does not need an import-status picker. A filter that is set
+/// to something other than the default stays visible so it can always be
+/// cleared again.
+fn needs_provider_filter(model: &ImportModel) -> bool {
+    model.provider.is_some()
+        || model.sessions.first().is_some_and(|first| {
+            model.sessions.iter().any(|row| row.provider != first.provider)
+        })
+}
+
+fn needs_status_filter(model: &ImportModel) -> bool {
+    model.status != ImportStatusFilter::All
+        || model
+            .sessions
+            .iter()
+            .any(|row| matches!(row.eligibility, ImportEligibility::AlreadyManaged { .. }))
+}
+
+/// The rounded selection box shared by session rows and project headers.
+fn selection_box(theme: &Theme, checked: bool) -> gpui::Div {
+    div()
+        .size(px(15.0))
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(if checked {
+            theme.text
+        } else {
+            theme.border_strong
+        })
+        .when(checked, |control| {
+            control
+                .bg(theme.text)
+                .child(icon(icons::CHECK).size(px(13.0)).text_color(theme.on_solid))
+        })
 }
 
 pub(super) fn path_within(path: &str, parent: &str) -> bool {
