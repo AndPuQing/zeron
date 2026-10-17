@@ -1409,6 +1409,30 @@ impl RegistryDoc {
         Ok(true)
     }
 
+    /// Publish cwd and checkout metadata in one registry operation so other
+    /// clients cannot observe the new folder with the old diff identity.
+    pub fn set_chat_worktree(
+        &mut self,
+        chat_id: &str,
+        context: &zeron_proto::ConversationSourceContext,
+    ) -> Result<bool, DocError> {
+        if !self.row_exists(KIND_CHATS, chat_id) {
+            return Ok(false);
+        }
+        self.write(
+            KIND_CHATS,
+            chat_id,
+            OpKind::Update,
+            fields([
+                ("cwd", json!(context.cwd)),
+                ("sourceContext", serde_json::to_value(context)?),
+                ("branch", json!(context.branch)),
+                ("checkoutId", json!(context.checkout_id)),
+            ]),
+        );
+        Ok(true)
+    }
+
     /// Retarget the chat onto another folder — the mid-session "switch to an
     /// existing worktree" move. Harness resume is cwd-scoped, so the next run
     /// in the new folder starts a fresh harness conversation by design.

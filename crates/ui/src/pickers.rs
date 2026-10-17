@@ -2114,12 +2114,8 @@ impl Pickers {
         Some((chat, cwd, space.path.clone(), busy))
     }
 
-    /// Mid-session ref switch: `git checkout` in the session's OWN folder on
-    /// its host device, then record the resulting branch on the chat row. A
-    /// ref checked out in another folder is never taken over — moving the
-    /// session there changes its cwd, and resume is cwd-scoped, so the next
-    /// turn would silently start a fresh agent conversation. A running turn
-    /// keeps its checkout until it ends.
+    /// Select another worktree for occupied refs, or check out free refs in
+    /// place. The host owns validation, runtime teardown and row updates.
     fn switch_session_ref(&mut self, row: RepoRef, cx: &mut Context<Self>) {
         if self.switching.is_some() {
             return; // one switch at a time
@@ -2138,15 +2134,7 @@ impl Pickers {
                 cx.notify();
                 return;
             }
-            RefPlace::Elsewhere => {
-                self.switch_error = Some(format!(
-                    "{} is checked out in another folder. Switch it there, or pick another branch.",
-                    row.name
-                ));
-                cx.notify();
-                return;
-            }
-            RefPlace::Free => {}
+            RefPlace::Elsewhere | RefPlace::Free => {}
         }
         let Some(engine) = self.engine(cx) else {
             return;
@@ -2156,8 +2144,6 @@ impl Pickers {
         self.switching = Some(row.name.clone());
         let ref_name = row.name.clone();
         self.switch_task = Some(cx.spawn(async move |this, cx| {
-            // `chatId` lets the host refuse a running turn and re-stamp the
-            // session's branch and source context for every device.
             let mut params = serde_json::json!({
                 "repoPath": cwd,
                 "refName": ref_name,
@@ -2166,26 +2152,11 @@ impl Pickers {
             if local.as_deref() != Some(chat.device_id.as_str()) {
                 params["targetDeviceId"] = chat.device_id.clone().into();
             }
-            let result = match engine.client().call(methods::SWITCH_REF, params).await {
-                // A detached HEAD reports no branch; keep the row's last name.
-                // Older hosts ignore `chatId`, so record the branch here too.
-                Ok(value) => match value["branch"].as_str().filter(|b| !b.is_empty()) {
-                    Some(branch) => engine
-                        .client()
-                        .call(
-                            methods::MUTATE,
-                            serde_json::json!({
-                                "op": "setChatBranch",
-                                "chatId": chat.id,
-                                "branch": branch,
-                            }),
-                        )
-                        .await
-                        .map(drop),
-                    None => Ok(()),
-                },
-                Err(err) => Err(err),
-            };
+            let result = engine
+                .client()
+                .call(methods::SWITCH_SESSION_REF, params)
+                .await
+                .map(drop);
             this.update(cx, |pickers, cx| {
                 pickers.switching = None;
                 match result {
@@ -4005,8 +3976,8 @@ impl Pickers {
         };
 
         if let Some(chat) = &session {
-            // A session keeps its folder (read-only checkout kind) but can
-            // switch that folder's branch; only when its project has git.
+            // A session can switch branches or move to an existing worktree.
+            // The checkout-kind label reflects its current folder.
             // The target (project @ device) lives in the titlebar now.
             let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
                 return None;
@@ -4412,7 +4383,7 @@ impl Pickers {
                                         Some(RefPlace::Elsewhere) if row.current => {
                                             Some("main checkout")
                                         }
-                                        Some(RefPlace::Elsewhere) => Some("other worktree"),
+                                        Some(RefPlace::Elsewhere) => Some("switch worktree"),
                                         Some(RefPlace::Free) => None,
                                         None if row.current => Some("current"),
                                         None if row.worktree_path.is_some() => Some("worktree"),
@@ -4428,8 +4399,6 @@ impl Pickers {
                                     )
                                     .id(("branch-row", ix))
                                     .when(switching.is_some(), |el| el.opacity(0.55))
-                                    // Held by another folder: shown, never switched to.
-                                    .when(place == Some(RefPlace::Elsewhere), |el| el.opacity(0.45))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.pick_ref(row.clone(), cx);
                                     }))
@@ -4469,6 +4438,18 @@ impl Pickers {
             .child(body);
         // Mid-session switch failure (dirty tree, ref checked out elsewhere):
         // git's own message, under a hairline.
+        if self.session_checkout(cx).is_some() {
+            popover = popover.child(
+                div()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child(
+                        "Switching worktrees keeps this chat; the agent may start a new session.",
+                    ),
+            );
+        }
         if let Some(error) = &self.switch_error {
             popover = popover.child(
                 popover::menu_section().child(
@@ -7671,7 +7652,7 @@ mod tests {
                 .unwrap()
                 .push((method.into(), params.clone()));
             match method {
-                methods::SWITCH_REF => {
+                methods::SWITCH_SESSION_REF => {
                     zeron_rpc::RpcReply::value(&serde_json::json!({ "branch": params["refName"] }))
                 }
                 methods::MUTATE => zeron_rpc::RpcReply::value(&serde_json::json!({ "ok": true })),
@@ -7682,7 +7663,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn session_branch_switch_checks_out_its_own_folder_on_its_host(cx: &mut gpui::TestAppContext) {
+    fn session_branch_switch_resolves_worktrees_on_its_host(cx: &mut gpui::TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -7727,49 +7708,35 @@ mod tests {
         };
         let calls = |host: &SwitchHost| host.calls.lock().unwrap().clone();
 
-        // The session's own branch and one held by another folder never run git.
+        // The current ref is a no-op. Both free and occupied refs go to
+        // the authoritative host; clients never mutate cwd on their own.
         pickers.update(cx, |pickers, cx| {
             pickers.refs = Loadable::Ready(refs.clone());
             pickers.refs_space = Some("a".into());
             pickers.pick_ref(refs[0].clone(), cx);
-            pickers.pick_ref(refs[2].clone(), cx);
-            assert!(
-                pickers
-                    .switch_error
-                    .as_deref()
-                    .unwrap()
-                    .contains("another folder")
-            );
         });
         assert!(calls(&host).is_empty());
-
-        // A free branch is checked out in the session's folder on its host,
-        // then recorded on the chat row.
-        pickers.update(cx, |pickers, cx| pickers.pick_ref(refs[1].clone(), cx));
-        settle(cx, &|| {
-            calls(&host)
-                .iter()
-                .any(|(method, _)| method == methods::MUTATE)
-        });
-        let sent = calls(&host);
-        let (method, switch) = &sent[0];
-        assert_eq!(method, methods::SWITCH_REF);
-        assert_eq!(switch["repoPath"], "/remote/a");
-        assert_eq!(switch["refName"], "feature");
-        assert_eq!(switch["targetDeviceId"], "remote");
-        assert_eq!(switch["chatId"], "c");
-        let (_, mutate) = sent
-            .iter()
-            .find(|(method, _)| method == methods::MUTATE)
-            .unwrap();
-        assert_eq!(
-            mutate,
-            &serde_json::json!({ "op": "setChatBranch", "chatId": "c", "branch": "feature" })
-        );
-        pickers.update(cx, |pickers, _| {
-            assert!(pickers.switching.is_none());
-            assert!(pickers.switch_error.is_none());
-        });
+        for reference in [&refs[1], &refs[2]] {
+            host.calls.lock().unwrap().clear();
+            pickers.update(cx, |pickers, cx| pickers.pick_ref(reference.clone(), cx));
+            settle(cx, &|| {
+                calls(&host)
+                    .iter()
+                    .any(|(method, _)| method == methods::LIST_REFS)
+            });
+            let sent = calls(&host);
+            let (method, switch) = &sent[0];
+            assert_eq!(method, methods::SWITCH_SESSION_REF);
+            assert_eq!(switch["repoPath"], "/remote/a");
+            assert_eq!(switch["refName"], reference.name);
+            assert_eq!(switch["targetDeviceId"], "remote");
+            assert_eq!(switch["chatId"], "c");
+            assert!(!sent.iter().any(|(method, _)| method == methods::MUTATE));
+            pickers.update(cx, |pickers, _| {
+                assert!(pickers.switching.is_none());
+                assert!(pickers.switch_error.is_none());
+            });
+        }
 
         // A running turn keeps its checkout.
         host.calls.lock().unwrap().clear();
@@ -7798,7 +7765,8 @@ mod tests {
         assert!(
             !calls(&host)
                 .iter()
-                .any(|(method, _)| method == methods::SWITCH_REF || method == methods::MUTATE)
+                .any(|(method, _)| method == methods::SWITCH_SESSION_REF
+                    || method == methods::MUTATE)
         );
     }
 

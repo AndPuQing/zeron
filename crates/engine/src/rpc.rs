@@ -1565,6 +1565,7 @@ fn forwardable(method: &str) -> bool {
             | methods::RESOLVE_GIT_AVATARS
             | methods::FETCH_ALL
             | methods::SWITCH_REF
+            | methods::SWITCH_SESSION_REF
             | methods::LIST_FOLDERS
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
@@ -3356,6 +3357,21 @@ impl RpcService for EngineRpc {
                 // the repair tick (some platforms do not report packed-refs).
                 self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "ok": true }))
+            }
+            methods::SWITCH_SESSION_REF => {
+                let p: SwitchRefParams = parse_params(params)?;
+                let chat_id = p
+                    .chat_id
+                    .as_deref()
+                    .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
+                let context = self
+                    .doc_host
+                    .switch_session_ref(chat_id, &p.repo_path, &p.ref_name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                self.voice.retire_chat(chat_id);
+                self.diff_sync.sync_all();
+                RpcReply::value(&context)
             }
             methods::SWITCH_REF => {
                 let p: SwitchRefParams = parse_params(params)?;

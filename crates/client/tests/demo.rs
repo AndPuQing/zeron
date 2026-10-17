@@ -623,7 +623,7 @@ fn block<T: Send + 'static>(
 }
 
 #[test]
-fn session_branch_switch_stays_in_the_session_folder() {
+fn session_branch_switch_selects_existing_worktrees() {
     let (client, _dir) = demo(fast());
     // chat-tabs is idle in the zeron project's main folder.
     let refs = block({
@@ -640,9 +640,15 @@ fn session_branch_switch_stays_in_the_session_folder() {
         let client = client.clone();
         block(async move { client.switch_session_ref(chat, name).await })
     };
-    // A ref another folder holds is never taken over.
-    let held = switch("chat-tabs", "veil-fade").unwrap_err();
-    assert!(held.to_string().contains("another folder"), "{held}");
+    let original = client.workspace().session("chat-tabs").unwrap().cwd.clone();
+    switch("chat-tabs", "veil-fade").unwrap();
+    wait_for("worktree directory", Duration::from_secs(5), || {
+        client.workspace().session("chat-tabs").unwrap().cwd != original
+    });
+    switch("chat-tabs", "main").unwrap();
+    wait_for("main directory", Duration::from_secs(5), || {
+        client.workspace().session("chat-tabs").unwrap().cwd == original
+    });
 
     // A free ref is checked out in place and recorded on the row.
     let switched = switch("chat-tabs", "feature/diff-pane").unwrap();

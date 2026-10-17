@@ -290,9 +290,8 @@ private fun coreMessage(e: Throwable): String =
     e.message?.removePrefix("message=")?.removePrefix("reason=")?.takeIf { it.isNotBlank() } ?: "Please try again."
 
 /**
- * The session's branches: picking one checks it out in the session's own
- * folder. A branch another folder holds is shown but never switched to, and
- * a running turn keeps its checkout.
+ * Occupied branches switch the session to their existing worktree; free
+ * branches are checked out in place. Running turns keep their checkout.
  */
 @Composable
 private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, open: Boolean, onDismiss: () -> Unit) {
@@ -320,9 +319,9 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
         loaded == null -> listOf(MenuChoice("Loading branches…") {})
         else -> loaded.map { ref ->
             val held = ref.place == RefPlace.ELSEWHERE
-            MenuChoice(ref.name, ref.place == RefPlace.HERE, if (held) "Checked out in another folder" else null) {
+            MenuChoice(ref.name, ref.place == RefPlace.HERE, if (held) "Switch worktree · agent may start a new session" else null) {
                 when (ref.place) {
-                    RefPlace.FREE -> scope.launch {
+                    RefPlace.FREE, RefPlace.ELSEWHERE -> scope.launch {
                         try {
                             client.switchSessionRef(chatId, ref.name)
                         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -331,13 +330,12 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
                             toast(coreMessage(e))
                         }
                     }
-                    RefPlace.ELSEWHERE -> toast("${ref.name} is checked out in another folder.")
                     RefPlace.HERE -> {}
                 }
             }
         }
     }
-    ChoiceMenu(open, onDismiss, listOf(MenuSection("Switch branch", choices)))
+    ChoiceMenu(open, onDismiss, listOf(MenuSection("Switch branch or worktree", choices)))
 }
 
 @Composable
@@ -382,7 +380,7 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
         ContextChip("#${pr.number}", leading = { ZIcon(ZIcons.PullRequest, null, Modifier.size(16.dp)) }, onClick = { menu = "pr" }) {
             ChoiceMenu(menu == "pr", { if (menu == "pr") menu = null }, listOf(MenuSection(pr.title, listOf(
                 MenuChoice("Open pull request") { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(pr.url)) },
-                MenuChoice("Switch branch", supporting = row?.branch) { menu = "branch" },
+                MenuChoice("Switch branch or worktree", supporting = row?.branch) { menu = "branch" },
             ))))
             BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
         }

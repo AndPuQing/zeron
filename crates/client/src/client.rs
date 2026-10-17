@@ -904,8 +904,8 @@ impl Client {
         Ok((row, cwd, root))
     }
 
-    /// The session's refs, each placed relative to its folder: the picker
-    /// switches only to [`RefPlace::Free`] refs.
+    /// The session's refs, placed relative to its folder. Occupied refs
+    /// select their existing worktrees; free refs are checked out in place.
     pub async fn session_refs(&self, chat_id: &str) -> Result<Vec<(RepoRef, RefPlace)>> {
         let (row, cwd, root) = self.session_checkout(chat_id)?;
         let refs = self.list_refs(&row.device_id, &root).await?;
@@ -918,12 +918,9 @@ impl Client {
             .collect())
     }
 
-    /// Mid-session ref switch: `git checkout` in the session's OWN folder on
-    /// its host, then record the resulting branch on the chat row. A ref held
-    /// by another folder is never taken over (moving the session changes its
-    /// cwd, and native resume is cwd-scoped), and a running turn keeps its
-    /// checkout. Returns the session's branch afterwards, `None` on a
-    /// detached HEAD.
+    /// Switch to a ref's existing worktree, or check out a free ref in place.
+    /// The host validates and updates cwd/branch/checkout identity together.
+    /// Visible history stays; native resume remains scoped to its original cwd.
     pub async fn switch_session_ref(
         &self,
         chat_id: &str,
@@ -935,33 +932,48 @@ impl Client {
             ChatIndicator::Working | ChatIndicator::AwaitingInput
         ) {
             return Err(ClientError::InvalidArgument(
-                "Stop the current turn before switching branches.".into(),
+                "Stop the current turn before switching branches or worktrees.".into(),
             ));
         }
-        let refs = self.list_refs(&row.device_id, &root).await?;
-        match refs
-            .iter()
-            .find(|reference| reference.name == ref_name)
-            .map(|reference| reference.place(&cwd, &root))
-        {
-            Some(RefPlace::Here) => return Ok(row.branch.clone()),
-            Some(RefPlace::Elsewhere) => {
-                return Err(ClientError::InvalidArgument(format!(
-                    "{ref_name} is checked out in another folder. Switch it there, or pick another branch."
-                )));
+        match self.inner.backend() {
+            Backend::Live(live) => {
+                // A distinct RPC prevents older hosts silently checking out a
+                // branch when the user intended to move to another worktree.
+                let value = live.relay.call(&row.device_id, zeron_rpc::methods::SWITCH_SESSION_REF,
+                    serde_json::json!({"chatId": chat_id, "repoPath": cwd, "refName": ref_name})).await?;
+                let context: zeron_proto::ConversationSourceContext = serde_json::from_value(value)
+                    .map_err(|e| ClientError::HostError(e.to_string()))?;
+                Ok((!context.branch.is_empty()).then_some(context.branch))
             }
-            // An unlisted ref (a remote-only branch) gets git's own verdict.
-            Some(RefPlace::Free) | None => {}
+            Backend::Demo(demo) => {
+                let refs = self.list_refs(&row.device_id, &root).await?;
+                let reference = refs
+                    .iter()
+                    .find(|r| r.name == ref_name)
+                    .ok_or_else(|| ClientError::NotFound(ref_name.into()))?;
+                let target = reference
+                    .worktree_path
+                    .as_deref()
+                    .or(reference.current.then_some(root.as_str()))
+                    .unwrap_or(&cwd)
+                    .to_owned();
+                if reference.place(&cwd, &root) == RefPlace::Free {
+                    demo.switch_ref(&cwd, ref_name).await?;
+                }
+                self.inner.registry_write(|doc| {
+                    let context = zeron_proto::ConversationSourceContext {
+                        checkout_id: format!("demo:{target}"),
+                        repo_root: root.clone(),
+                        cwd: target.clone(),
+                        branch: ref_name.into(),
+                        head_sha: None,
+                        observed_at: chrono::Utc::now(),
+                    };
+                    doc.set_chat_worktree(chat_id, &context).map(drop)
+                })?;
+                Ok(Some(ref_name.into()))
+            }
         }
-        let branch = self
-            .checkout_ref(&row.device_id, &cwd, ref_name, Some(chat_id))
-            .await?;
-        // The host re-stamps the row; older hosts ignore `chatId`.
-        if let Some(branch) = &branch {
-            self.inner
-                .registry_write(|doc| doc.set_chat_branch(chat_id, branch))?;
-        }
-        Ok(branch)
     }
 
     fn pin_change(&self, change: SidebarPinChange) -> Result<()> {

@@ -1196,7 +1196,7 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func sessionConfig(chatId: String)  -> ChatConfig?
     
     /**
-     * The session's branch picker rows: only `Free` refs can be picked.
+     * The session's refs: occupied refs select existing worktrees.
      */
     func sessionRefs(chatId: String) async throws  -> [SessionRef]
     
@@ -1225,9 +1225,8 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func switchRef(deviceId: String, repoPath: String, refName: String) async throws 
     
     /**
-     * Mid-session branch switch: `git checkout` in the session's own folder
-     * (never another worktree, never during a turn). Returns the session's
-     * branch afterwards; `None` on a detached HEAD.
+     * Switch to an existing worktree or check out a free branch in place.
+     * Never during a turn. Returns the session's branch afterwards.
      */
     func switchSessionRef(chatId: String, refName: String) async throws  -> String?
     
@@ -1927,7 +1926,7 @@ open func sessionConfig(chatId: String) -> ChatConfig?  {
 }
     
     /**
-     * The session's branch picker rows: only `Free` refs can be picked.
+     * The session's refs: occupied refs select existing worktrees.
      */
 open func sessionRefs(chatId: String)async throws  -> [SessionRef]  {
     return
@@ -2021,9 +2020,8 @@ open func switchRef(deviceId: String, repoPath: String, refName: String)async th
 }
     
     /**
-     * Mid-session branch switch: `git checkout` in the session's own folder
-     * (never another worktree, never during a turn). Returns the session's
-     * branch afterwards; `None` on a detached HEAD.
+     * Switch to an existing worktree or check out a free branch in place.
+     * Never during a turn. Returns the session's branch afterwards.
      */
 open func switchSessionRef(chatId: String, refName: String)async throws  -> String?  {
     return
@@ -17427,7 +17425,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_session_config() != 4276) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_session_refs() != 10696) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_session_refs() != 56491) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session_row() != 10938) {
@@ -17448,7 +17446,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_switch_ref() != 45706) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_ref() != 18212) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_ref() != 4719) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_unarchive_session() != 9932) {

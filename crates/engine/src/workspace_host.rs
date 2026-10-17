@@ -1212,6 +1212,14 @@ impl WorkspaceHost {
         Ok(self.mutate(|doc| doc.set_chat_source_context(chat_id, context))?)
     }
 
+    pub fn set_chat_worktree(
+        &self,
+        chat_id: &str,
+        context: &zeron_proto::ConversationSourceContext,
+    ) -> Result<bool, EngineError> {
+        Ok(self.mutate(|doc| doc.set_chat_worktree(chat_id, context))?)
+    }
+
     /// Retarget a chat onto another folder (mid-session switch to an existing
     /// worktree). Resume is cwd-scoped — the next run there starts fresh.
     pub fn set_chat_cwd(&self, chat_id: &str, cwd: &str) -> Result<bool, EngineError> {

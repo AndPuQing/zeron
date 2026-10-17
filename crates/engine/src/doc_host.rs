@@ -5744,6 +5744,109 @@ impl DocHost {
         })
     }
 
+    /// Resolve the ref on the host. Occupied refs move this conversation to
+    /// their existing checkout; free refs are checked out in its current cwd.
+    /// Serialize against prompt and queue delivery, including other devices.
+    pub(crate) async fn switch_session_ref(
+        &self,
+        chat_id: &str,
+        expected_cwd: &str,
+        ref_name: &str,
+    ) -> Result<ConversationSourceContext, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(
+                "Only the session host can switch its worktree.".into(),
+            ));
+        }
+        let handle = self.open(chat_id)?;
+        let _commands = handle.command_drain_lock.lock().await;
+        let _queue = handle.drain_lock.lock().await;
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
+        if sessions.turn_in_flight(chat_id) || sessions.holds_background_work(chat_id) {
+            return Err(EngineError::Other(
+                "Stop the current turn and background work before switching branches or worktrees."
+                    .into(),
+            ));
+        }
+        let workspace = self
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace unavailable".into()))?;
+        let chat = workspace
+            .chat(chat_id)?
+            .ok_or_else(|| EngineError::Other("Session no longer exists.".into()))?;
+        if chat.cwd.as_deref() != Some(expected_cwd) || !self.is_host(chat_id) {
+            return Err(EngineError::Other(
+                "The session's working folder changed. Reopen it and try again.".into(),
+            ));
+        }
+        let space = workspace
+            .space(chat.space_id.as_deref().unwrap_or(""))?
+            .filter(|space| space.git_detected)
+            .ok_or_else(|| EngineError::Other("Session is not in a git project.".into()))?;
+        let repos = self
+            .inner
+            .repos
+            .get()
+            .ok_or_else(|| EngineError::Other("repositories unavailable".into()))?;
+        let root = Path::new(&space.path);
+        let current = repos
+            .workspace_checkout(root, Path::new(expected_cwd))
+            .await
+            .ok_or_else(|| {
+                EngineError::Other("The current folder is no longer a project worktree.".into())
+            })?;
+        let refs = repos.refs(root).await?;
+        let reference = refs.iter().find(|r| r.name == ref_name);
+        let occupied = reference.and_then(|r| {
+            r.worktree_path
+                .as_deref()
+                .or(r.current.then_some(space.path.as_str()))
+        });
+        let target = match occupied {
+            Some(path) => repos
+                .workspace_checkout(root, Path::new(path))
+                .await
+                .ok_or_else(|| {
+                    EngineError::Other(
+                        "The selected worktree is no longer available. Reopen the menu.".into(),
+                    )
+                })?,
+            None => current.clone(),
+        };
+        let moving = target != current;
+        if moving && chat.import_source.is_some() {
+            return Err(EngineError::Other("Imported native sessions must stay in their original folder. Start a new session in the target worktree.".into()));
+        }
+        let cwd = if moving {
+            target.to_string_lossy().into_owned()
+        } else {
+            expected_cwd.to_owned()
+        };
+        if occupied.is_none() {
+            repos.switch_ref(&target, ref_name).await?;
+        }
+        let context = self
+            .capture_source_context(&cwd)
+            .await
+            .ok_or_else(|| EngineError::Other("Could not read the selected checkout.".into()))?;
+        if occupied.is_some() && context.branch != ref_name {
+            return Err(EngineError::Other(
+                "The selected worktree's branch changed. Reopen the menu.".into(),
+            ));
+        }
+        if moving {
+            // Never steer a subsequent prompt into a process launched in the
+            // old directory. Its stored native id retains its original cwd.
+            sessions.terminate(chat_id).await?;
+        }
+        if !workspace.set_chat_worktree(chat_id, &context)? {
+            return Err(EngineError::Other("Session no longer exists.".into()));
+        }
+        Ok(context)
+    }
+
     /// Re-stamp a session's checkout after its branch moved between turns
     /// (a mid-session switch), so every device names the branch the next
     /// turn will see instead of the one the last turn saw.
@@ -5777,6 +5880,23 @@ impl DocHost {
         request: zeron_proto::RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
+        // A delayed command from another device may still carry the folder
+        // used before a worktree switch. Never silently send it back there.
+        if let Some(workspace) = self.workspace()
+            && let Some(chat) = workspace.chat(chat_id)?
+            && let Some(cwd) = chat.cwd.as_deref()
+            && chat
+                .source_context
+                .as_ref()
+                .is_some_and(|context| context.cwd == cwd)
+            && cwd != request.cwd
+            && !(std::fs::canonicalize(cwd)
+                .is_ok_and(|a| std::fs::canonicalize(&request.cwd).is_ok_and(|b| a == b)))
+        {
+            return Err(EngineError::Other(
+                "The session's working folder changed. Reopen it and resend the message.".into(),
+            ));
+        }
         if let Some(workspace) = self.workspace()
             && let Some(context) = self.capture_source_context(&request.cwd).await
             && let Err(err) = workspace.set_chat_source_context(chat_id, &context)

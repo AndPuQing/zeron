@@ -253,23 +253,21 @@ final class CoreSessionSource: SessionSource {
                 }
             }])
         case "branch":
-            return branchMenu(title: "Switch Branch")
+            return branchMenu(title: "Switch Branch or Worktree")
         case "pr":
             guard let url = row.pullRequest.flatMap({ URL(string: $0.url) }) else { return nil }
             // The PR chip stands in for the branch chip, so it carries the switch.
             return UIMenu(title: row.pullRequest?.title ?? "", children: [
                 UIAction(title: "Open Pull Request", image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(url) },
                 UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in UIPasteboard.general.url = url },
-                branchMenu(title: "Switch Branch", image: BranchIcon.sized()),
+                branchMenu(title: "Switch Branch or Worktree", image: BranchIcon.sized()),
             ])
         default:
             return nil
         }
     }
 
-    /// The session's branches: picking one checks it out in the session's own
-    /// folder. A branch another folder holds is shown but can't be picked, and
-    /// a running turn keeps its checkout.
+    /// Occupied branches select their worktree; free branches check out in place.
     private func branchMenu(title: String, image: UIImage? = nil) -> UIMenu {
         UIMenu(title: title, image: image, children: [UIDeferredMenuElement.uncached { [weak self] done in
             guard let self else { return done([]) }
@@ -283,11 +281,10 @@ final class CoreSessionSource: SessionSource {
                         let held = ref.place == .elsewhere
                         return UIAction(
                             title: ref.name,
-                            subtitle: held ? "Checked out in another folder" : nil,
-                            attributes: held ? .disabled : [],
+                            subtitle: held ? "Switch worktree · agent may start a new session" : nil,
                             state: ref.place == .here ? .on : .off
                         ) { [weak self] _ in
-                            if ref.place == .free { self?.switchBranch(ref.name) }
+                            if ref.place != .here { self?.switchBranch(ref.name) }
                         }
                     })
                 } catch {

@@ -166,6 +166,7 @@ pub mod methods {
     /// Update remote-tracking refs without changing HEAD, the index, or files.
     pub const FETCH_ALL: &str = "FetchAll";
     pub const SWITCH_REF: &str = "SwitchRef";
+    pub const SWITCH_SESSION_REF: &str = "SwitchSessionRef";
     pub const LIST_FOLDERS: &str = "ListFolders";
     pub const GET_WORKTREE_SETTINGS: &str = "GetWorktreeSettings";
     pub const SET_WORKTREE_SETTINGS: &str = "SetWorktreeSettings";

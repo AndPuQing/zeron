@@ -342,10 +342,11 @@ pub struct Repo {
 #[serde(rename_all = "camelCase")]
 pub struct RepoRef {
     pub name: String,
-    /// Checked out in the repo's MAIN folder right now.
+    /// Checked out in the project folder used for this listing.
     #[serde(default)]
     pub current: bool,
-    /// Path of the linked worktree this branch is checked out in, if any.
+    /// Checkout path for an occupied branch; includes the main checkout when
+    /// listing from a linked worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
 }
@@ -356,7 +357,7 @@ pub struct RepoRef {
 pub enum RefPlace {
     /// The session's own folder is on it.
     Here,
-    /// Another folder (the main checkout or a linked worktree) holds it.
+    /// Another folder holds it; selecting it moves the session to that folder.
     Elsewhere,
     /// Not checked out anywhere: the session can switch to it.
     Free,
@@ -364,9 +365,8 @@ pub enum RefPlace {
 
 impl RepoRef {
     /// [`RefPlace`] of this ref for a session working in `cwd` of a repo whose
-    /// main checkout is `root`. A session switches only its own folder: a ref
-    /// held elsewhere is never taken over, because moving the session changes
-    /// its cwd and native resume is cwd-scoped.
+    /// main checkout is `root`. A ref held elsewhere selects that checkout
+    /// without changing either worktree's branch or files.
     pub fn place(&self, cwd: &str, root: &str) -> RefPlace {
         let same =
             |a: &str, b: &str| a.trim_end_matches(['/', '\\']) == b.trim_end_matches(['/', '\\']);

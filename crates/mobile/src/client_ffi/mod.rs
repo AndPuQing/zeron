@@ -345,7 +345,7 @@ impl CoreClient {
         Ok(self.client.delete_project(&space_id)?)
     }
 
-    /// The session's branch picker rows: only `Free` refs can be picked.
+    /// The session's refs: occupied refs select existing worktrees.
     pub async fn session_refs(&self, chat_id: String) -> CoreResult<Vec<SessionRef>> {
         let client = self.client.clone();
         let refs = on_runtime(async move { client.session_refs(&chat_id).await }).await?;
@@ -358,9 +358,8 @@ impl CoreClient {
             .collect())
     }
 
-    /// Mid-session branch switch: `git checkout` in the session's own folder
-    /// (never another worktree, never during a turn). Returns the session's
-    /// branch afterwards; `None` on a detached HEAD.
+    /// Switch to an existing worktree or check out a free branch in place.
+    /// Never during a turn. Returns the session's branch afterwards.
     pub async fn switch_session_ref(
         &self,
         chat_id: String,
