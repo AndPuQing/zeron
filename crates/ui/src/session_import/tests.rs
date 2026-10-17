@@ -387,3 +387,72 @@ fn native_narrow_layout_keeps_footer_visible_in_light_and_dark(cx: &mut gpui::Te
         assert!(list.size.width >= dialog.size.width - px(4.0));
     }
 }
+
+/// The dialog mounts as a priority-2 modal layer, so its device dropdown must
+/// use a higher deferred layer or it paints underneath the card. Paint order is
+/// not observable from the in-process test API; this covers the interaction
+/// path (open the dropdown, pick a device) that the layering bug broke in the
+/// running app.
+struct ImportModalHarness {
+    dialog: Entity<SessionImportDialog>,
+}
+
+impl Render for ImportModalHarness {
+    fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(popover::modal(
+            "import-modal-test",
+            window.viewport_size(),
+            self.dialog.clone().into_any_element(),
+        ))
+    }
+}
+
+#[gpui::test]
+fn device_menu_selects_a_device_inside_the_modal(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::motion::set_reduced_motion(cx, true);
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| ImportModalHarness {
+        dialog: cx.new(|cx| {
+            let mut dialog = SessionImportDialog::new(model().devices, "local", cx);
+            dialog.model.sessions = vec![session("ready", ImportEligibility::Available)];
+            dialog.model.discovery = Loadable::Ready(());
+            dialog
+        }),
+    });
+    cx.simulate_resize(gpui::size(px(720.0), px(640.0)));
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+    assert!(
+        cx.debug_bounds("session-import-dialog").is_some(),
+        "the dialog must render inside the modal wrapper"
+    );
+
+    let trigger = cx.debug_bounds("import-source-device").unwrap();
+    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    cx.update(|window, cx| {
+        window.refresh();
+        window.draw(cx).clear();
+    });
+    view.read_with(cx, |harness, cx| {
+        assert!(
+            harness.dialog.read(cx).device_menu.get().is_some(),
+            "clicking the trigger must open the device menu"
+        );
+    });
+    let remote = cx.debug_bounds("import-device-1").unwrap();
+    cx.simulate_click(remote.center(), gpui::Modifiers::default());
+
+    view.read_with(cx, |harness, cx| {
+        assert_eq!(
+            harness.dialog.read(cx).model.device_index,
+            1,
+            "clicking a row in the device dropdown must reach the menu"
+        );
+    });
+}

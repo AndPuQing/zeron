@@ -1071,6 +1071,7 @@ impl Render for SessionImportDialog {
             let device = &self.model.devices[self.model.device_index];
             let mut trigger = popover::btn_ghost(&theme, &device.name, "import-source-device")
                 .id("import-source-device")
+                .debug_selector(|| "import-source-device".into())
                 .role(gpui::Role::Button)
                 .aria_label("Source device")
                 .aria_expanded(self.device_menu.is_open())
@@ -1112,6 +1113,7 @@ impl Render for SessionImportDialog {
                                         format!("import-device-{index}"),
                                     )
                                     .id(("import-device", index))
+                                    .debug_selector(move || format!("import-device-{index}"))
                                     .role(gpui::Role::Button)
                                     .aria_label(device.name.clone())
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1121,10 +1123,15 @@ impl Render for SessionImportDialog {
                                 }),
                         )
                         .into_any_element();
-                trigger = trigger.child(popover::anchored_menu_below(
+                // The dialog is a priority-2 modal layer, so the default
+                // priority-1 menu would paint underneath the card; the
+                // dropdown must sit one layer above the dialog.
+                trigger = trigger.child(popover::anchored_menu_below_layer(
                     "import-device-menu",
                     menu,
                     self.device_menu.closing_since(),
+                    6.0,
+                    3,
                 ));
             }
             header = header.child(
@@ -1201,11 +1208,18 @@ impl SessionImportDialog {
                 .batch
                 .as_ref()
                 .is_some_and(|batch| !batch.running),
+            "device-menu" => {
+                self.model.discovery.ready().is_some() && self.device_menu.get().is_some()
+            }
             _ => self.model.discovery.ready().is_some(),
         }
     }
 
     pub(crate) fn fixture_prepare_scene(&mut self, scene: &str, cx: &mut Context<Self>) {
+        if scene == "device-menu" {
+            self.device_menu.open(());
+            self.device_menu_active = self.model.device_index;
+        }
         if matches!(scene, "selected" | "results" | "partial") {
             self.model.selected = self
                 .model
