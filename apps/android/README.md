@@ -210,6 +210,7 @@ process death.
 Debug builds accept `--ez demo true --ez voice-preview true` to show a scripted
 call without audio or networking. `VoiceMediaTest` checks cancellation, mute,
 permission failure and native SDP preparation without microphone capture;
+`VoiceLoopbackTest` checks local negotiation, deferred capture and audio release;
 `VoiceFlowTest` checks call UI, recreation, settings and background notification
 controls. These offline checks do not verify real-provider audio, ARM devices,
 Bluetooth hardware or cellular-network behavior.

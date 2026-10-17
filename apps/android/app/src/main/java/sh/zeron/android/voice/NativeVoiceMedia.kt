@@ -26,6 +26,7 @@ internal class NativeVoiceMedia(
     private val operations = mutableMapOf<ULong, Job>()
     private var closed = false
     private var activated = false
+    private var localMute: Boolean? = null
     var call: VoiceCallInterface? = null
 
     override fun onRequest(request: VoiceMediaRequest) {
@@ -41,11 +42,13 @@ internal class NativeVoiceMedia(
                         VoiceMediaOperation.PREPARE -> peer.prepare()
                         VoiceMediaOperation.OFFER -> sdp = peer.offer()
                         VoiceMediaOperation.APPLY_ANSWER -> peer.applyAnswer(checkNotNull(request.sdp))
-                        VoiceMediaOperation.SET_MUTED -> { peer.setMuted(request.muted); activated = true }
+                        VoiceMediaOperation.SET_MUTED -> { peer.setMuted(localMute ?: request.muted); activated = true }
                         VoiceMediaOperation.LEVELS -> levels = peer.levels()
                         VoiceMediaOperation.CLOSE -> Unit
                     }
                     if (!closed && isActive) call?.completeMedia(request.requestId, null, sdp, levels.first, levels.second)
+                } catch (_: TimeoutCancellationException) {
+                    if (!closed) call?.completeMedia(request.requestId, VoiceMediaFailure.UNAVAILABLE, null, 0.toUShort(), 0.toUShort())
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -61,7 +64,12 @@ internal class NativeVoiceMedia(
         }
     }
 
-    fun muteLocally(muted: Boolean) { if (!closed && activated) peer.muteLocally(muted) }
+    fun muteLocally(muted: Boolean) {
+        if (closed) return
+        // Retain an early mute so an already queued activation cannot reopen the track.
+        localMute = muted
+        if (activated) peer.muteLocally(muted)
+    }
     fun setSpeaker(enabled: Boolean) { if (!closed) peer.setSpeaker(enabled) }
     private fun failed() { if (!closed) { close(); onFailure() } }
     fun close() {

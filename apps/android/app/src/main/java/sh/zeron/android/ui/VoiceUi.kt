@@ -11,7 +11,6 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -27,8 +26,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -36,7 +39,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
@@ -77,7 +82,7 @@ fun VoiceEntry(model: AppModel, modifier: Modifier = Modifier) {
     if (!voice.available) return
     GlassSurface(onClick = start, modifier = modifier.size(44.dp).semantics { contentDescription = if (voice.live) "Open voice call" else "Start voice call" }) {
         Box(contentAlignment = Alignment.Center) {
-            if (voice.live) VoiceOrbView(voice, Modifier.size(28.dp))
+            if (voice.live) VoiceOrbView(voice, Modifier.size(28.dp), OrbPreset.INLINE, !voice.stageOpen)
             else ZIcon(ZIcons.Microphone, null, Modifier.size(24.dp))
         }
     }
@@ -88,7 +93,7 @@ fun VoiceCallStrip(model: AppModel, modifier: Modifier = Modifier) {
     val voice by model.voice.state.collectAsState()
     GlassSurface(onClick = model.voice::openStage, modifier = modifier.fillMaxWidth()) {
         Row(Modifier.padding(start = 16.dp, end = 6.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            VoiceOrbView(voice, Modifier.size(32.dp))
+            VoiceOrbView(voice, Modifier.size(32.dp), OrbPreset.INLINE, !voice.stageOpen)
             Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
                 Text("Codex voice · ${elapsed(voice.activeSince)}", style = MaterialTheme.typography.titleSmall)
                 Text(voice.status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
@@ -102,16 +107,12 @@ fun VoiceCallStrip(model: AppModel, modifier: Modifier = Modifier) {
 @Composable
 fun VoiceSettingsRow(model: AppModel) {
     val voice by model.voice.state.collectAsState()
-    GlassSurface(modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth().semantics { contentDescription = "Voice settings" }, shape = RoundedCornerShape(20.dp), onClick = model.voice::openSettings) {
-        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            ZIcon(ZIcons.Microphone, null, Modifier.size(24.dp))
-            Column(Modifier.weight(1f)) {
-                Text("Voice", style = MaterialTheme.typography.titleMedium)
-                Text(voice.startHost?.name ?: "Choose a device and voice", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            ZIcon(ZIcons.ChevronRight, null, Modifier.size(18.dp))
-        }
-    }
+    GroupedRow(0, 1, Modifier.padding(horizontal = 20.dp).semantics { contentDescription = "Voice settings" },
+        onClick = model.voice::openSettings,
+        leadingContent = { IconTile(ZIcons.Microphone) },
+        supportingContent = { Text(voice.startHost?.name ?: "Choose a device and voice") },
+        trailingContent = { ZIcon(ZIcons.ChevronRight, null, Modifier.size(18.dp)) },
+    ) { Text("Voice") }
 }
 
 @Composable
@@ -125,6 +126,16 @@ fun VoiceOverlays(model: AppModel, onTranscript: (String) -> Unit) {
 @Composable
 private fun VoiceDialog(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+        val view = LocalView.current
+        val dark = LocalDarkTheme.current
+        SideEffect {
+            (view.parent as? DialogWindowProvider)?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+        }
         androidx.compose.material3.Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { content() }
     }
 }
@@ -169,13 +180,14 @@ private fun VoiceSettings(model: AppModel, voice: VoiceUiState, start: () -> Uni
 
 @Composable
 private fun VoiceChoice(title: String, subtitle: String? = null, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).clickable(enabled = enabled, onClick = onClick).padding(horizontal = 16.dp, vertical = 14.dp),
+    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).pressable(enabled = enabled, onClick = onClick)
+        .semantics { this.selected = selected; role = Role.RadioButton }.padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.45f))
             subtitle?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
-        if (selected) ZIcon(ZIcons.Check, "Selected", Modifier.size(20.dp), MaterialTheme.colorScheme.primary)
+        if (selected) ZIcon(ZIcons.Check, null, Modifier.size(20.dp), MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -194,8 +206,8 @@ private fun VoiceStage(model: AppModel, voice: VoiceUiState, start: () -> Unit, 
                 voice.call?.chatId?.let { model.voice.closeStage(); onTranscript(it) }
             }
         }
-        Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-            VoiceOrbView(voice, Modifier.fillMaxWidth().sizeIn(maxWidth = 340.dp, maxHeight = 340.dp).aspectRatio(1f))
+        BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+            VoiceOrbView(voice, Modifier.size(minOf(maxWidth, maxHeight, 340.dp)))
         }
         Text(if (voice.endReason == null) voice.status else "Call ended", style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
         Text(voice.endReason?.let { voiceEndMessage(it, voice.hostName) } ?: voice.call?.caption.orEmpty().takeLast(240),
@@ -209,14 +221,14 @@ private fun VoiceStage(model: AppModel, voice: VoiceUiState, start: () -> Unit, 
                         tint = if (voice.muted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                     VoiceCircle(ZIcons.Speaker, if (voice.speaker) "Use earpiece" else "Use speaker", size = 60.dp, onClick = model.voice::toggleSpeaker,
                         tint = if (voice.speaker) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                    VoiceCircle(ZIcons.HangUp, "End call", size = 72.dp, tint = Color(0xFFFF453A), onClick = model.voice::stop)
+                    VoiceCircle(ZIcons.HangUp, "End call", size = 72.dp, tint = Color.White, container = Color(0xFFFF453A), onClick = model.voice::stop)
                 } else {
-                    Text("Close", Modifier.clip(CircleShape).clickable { model.voice.dismissReason(); model.voice.closeStage() }.padding(18.dp))
+                    Text("Close", Modifier.clip(CircleShape).pressable { model.voice.dismissReason(); model.voice.closeStage() }.padding(18.dp))
                     if (voice.endReason == VoiceEndReason.MICROPHONE_DENIED) {
-                        Text("Android Settings", Modifier.clip(CircleShape).clickable {
+                        Text("Android Settings", Modifier.clip(CircleShape).pressable {
                             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
                         }.padding(18.dp), color = MaterialTheme.colorScheme.primary)
-                    } else Text("Call again", Modifier.clip(CircleShape).clickable(onClick = start).padding(18.dp), color = MaterialTheme.colorScheme.primary)
+                    } else Text("Call again", Modifier.clip(CircleShape).pressable(onClick = start).padding(18.dp), color = MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -225,10 +237,10 @@ private fun VoiceStage(model: AppModel, voice: VoiceUiState, start: () -> Unit, 
 
 @Composable
 private fun VoiceCircle(icon: Int, label: String, modifier: Modifier = Modifier, size: Dp = 44.dp,
-    enabled: Boolean = true, tint: Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit) {
-    GlassSurface(onClick = onClick, enabled = enabled, contentColor = tint, modifier = modifier.size(size)) {
+    enabled: Boolean = true, tint: Color = MaterialTheme.colorScheme.onSurface, container: Color = Color.Transparent, onClick: () -> Unit) {
+    GlassSurface(onClick = onClick, enabled = enabled, tint = container, contentColor = tint, modifier = modifier.size(size)) {
         Box(contentAlignment = Alignment.Center) {
-            ZIcon(icon, label, Modifier.size(if (size >= 60.dp) 28.dp else 24.dp), tint.copy(alpha = if (enabled) 1f else 0.25f))
+            ZIcon(icon, label, Modifier.size(if (size >= 60.dp || icon == ZIcons.Close || icon == ZIcons.Back) 28.dp else 24.dp), tint.copy(alpha = if (enabled) 1f else 0.25f))
         }
     }
 }
@@ -244,15 +256,15 @@ private fun elapsed(since: Long?): String {
 
 /** Paint the shared Rust orb, with the same geometry and crossfades as iOS. */
 @Composable
-private fun VoiceOrbView(voice: VoiceUiState, modifier: Modifier) {
-    val renderer = remember { OrbRenderer(OrbPreset.HERO, voice.orb) }
+private fun VoiceOrbView(voice: VoiceUiState, modifier: Modifier, preset: OrbPreset = OrbPreset.HERO, animate: Boolean = true) {
+    val renderer = remember(preset) { OrbRenderer(preset, voice.orb) }
     val dark = LocalDarkTheme.current
     val lifecycle by LocalLifecycleOwner.current.lifecycle.currentStateFlow.collectAsState()
     var frame by remember { mutableStateOf(renderer.nextFrame(false, true)) }
     LaunchedEffect(voice.orb) { renderer.setOrb(voice.orb) }
     LaunchedEffect(voice.call?.microphone, voice.call?.speaker) { renderer.setAudioLevels(voice.call?.microphone ?: 0f, voice.call?.speaker ?: 0f) }
-    LaunchedEffect(renderer, lifecycle) {
-        if (lifecycle.isAtLeast(Lifecycle.State.STARTED)) {
+    LaunchedEffect(renderer, lifecycle, animate) {
+        if (animate && lifecycle.isAtLeast(Lifecycle.State.STARTED)) {
             var previous = 0L
             while (true) withFrameNanos { now -> if (now - previous > 33_000_000) {
                 frame = renderer.nextFrame(true, !ValueAnimator.areAnimatorsEnabled()); previous = now

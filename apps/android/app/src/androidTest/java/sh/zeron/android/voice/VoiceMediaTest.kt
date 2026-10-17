@@ -70,6 +70,32 @@ class VoiceMediaTest {
         } finally { withContext(Dispatchers.Main) { media.close() } }
     }
 
+    @Test fun negotiationTimeoutRepliesInsteadOfLeavingCoreWaiting() = runBlocking {
+        val peer = object : FakePeer() { override suspend fun offer(): String = withTimeout(20) { awaitCancellation() } }
+        val call = FakeCall()
+        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
+        try {
+            media.onRequest(request(1u, VoiceMediaOperation.OFFER))
+            assertEquals(VoiceMediaFailure.UNAVAILABLE, withTimeout(5_000) { call.reply.await() })
+        } finally { withContext(Dispatchers.Main) { media.close() } }
+    }
+
+    @Test fun earlyLocalMuteOverridesQueuedActivationAndLateMuteState() = runBlocking {
+        val peer = FakePeer()
+        val call = FakeCall()
+        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
+        try {
+            withContext(Dispatchers.Main) { media.muteLocally(true) }
+            media.onRequest(request(1u, VoiceMediaOperation.SET_MUTED))
+            withTimeout(5_000) { call.reply.await() }
+            withContext(Dispatchers.Main) {
+                assertTrue(peer.lastMute)
+                media.onRequest(request(2u, VoiceMediaOperation.SET_MUTED))
+                assertTrue(peer.lastMute)
+            }
+        } finally { withContext(Dispatchers.Main) { media.close() } }
+    }
+
     @Test fun nativeOfferDoesNotOpenMicrophoneAndCanBeRepeated() = runBlocking {
         InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
         val audio = context.getSystemService(AudioManager::class.java)
@@ -96,10 +122,11 @@ class VoiceMediaTest {
         var closes = 0
         var activations = 0
         var localMute = false
+        var lastMute = false
         override suspend fun prepare() = Unit
         override suspend fun offer() = "offer"
         override suspend fun applyAnswer(answer: String) = Unit
-        override fun setMuted(muted: Boolean) { activations++ }
+        override fun setMuted(muted: Boolean) { activations++; lastMute = muted }
         override fun muteLocally(muted: Boolean) { localMute = muted }
         override fun setSpeaker(enabled: Boolean) = Unit
         override suspend fun levels() = 0.toUShort() to 0.toUShort()

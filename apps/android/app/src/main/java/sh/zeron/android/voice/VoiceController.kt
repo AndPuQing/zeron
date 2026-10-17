@@ -142,7 +142,8 @@ class VoiceController(private val app: Application, private val client: () -> Co
         handle?.stop()
         (handle as? AutoCloseable)?.close()
         handle = null
-        _state.update { it.copy(live = false, call = null, activeSince = null, muted = false, endReason = reason) }
+        _state.update { it.copy(live = false, call = null, activeSince = null, muted = false, endReason = reason,
+            stageOpen = it.stageOpen || reason != null) }
         VoiceCallService.stop(app)
     }
 

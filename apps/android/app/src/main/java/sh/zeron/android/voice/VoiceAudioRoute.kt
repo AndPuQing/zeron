@@ -1,6 +1,7 @@
 package sh.zeron.android.voice
 
 import android.content.Context
+import android.annotation.SuppressLint
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
@@ -28,6 +29,8 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
     private var speaker = true
     private var previousMode = AudioManager.MODE_NORMAL
     private var previousSpeaker = false
+    private var previousSco = false
+    private var requestedSco = false
     private var previousDevice: AudioDeviceInfo? = null
     private val focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -47,6 +50,8 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
         previousMode = audio.mode
         @Suppress("DEPRECATION")
         previousSpeaker = audio.isSpeakerphoneOn
+        @Suppress("DEPRECATION")
+        if (Build.VERSION.SDK_INT < 31) previousSco = audio.isBluetoothScoOn
         if (Build.VERSION.SDK_INT >= 31) previousDevice = audio.communicationDevice
         active = true
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
@@ -60,6 +65,8 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
 
     fun setSpeaker(enabled: Boolean) { speaker = enabled; route() }
 
+    // A proximity screen lock follows the call, with release in close(), rather than a CPU timeout.
+    @SuppressLint("Wakelock", "WakelockTimeout")
     @Suppress("DEPRECATION")
     private fun route() {
         if (!active || audio == null) return
@@ -74,7 +81,18 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
                 if (audio.communicationDevice?.id != it.id) audio.setCommunicationDevice(it)
             }
         } else {
-            external = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { it.type in externalTypes }
+            val outputs = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            external = outputs.any { it.type in externalTypes }
+            val bluetooth = outputs.any { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+            if (bluetooth && !requestedSco && !previousSco && audio.isBluetoothScoAvailableOffCall) {
+                requestedSco = true
+                audio.startBluetoothSco()
+                audio.isBluetoothScoOn = true
+            } else if (!bluetooth && requestedSco) {
+                audio.isBluetoothScoOn = previousSco
+                audio.stopBluetoothSco()
+                requestedSco = false
+            }
             audio.isSpeakerphoneOn = !external && speaker && !near
         }
         val lock = wake
@@ -98,7 +116,11 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
         if (Build.VERSION.SDK_INT >= 31) {
             audio?.clearCommunicationDevice()
             previousDevice?.let { audio?.setCommunicationDevice(it) }
-        } else audio?.isSpeakerphoneOn = previousSpeaker
+        } else {
+            if (requestedSco) { audio?.isBluetoothScoOn = previousSco; audio?.stopBluetoothSco() }
+            requestedSco = false
+            audio?.isSpeakerphoneOn = previousSpeaker
+        }
         audio?.mode = previousMode
         audio?.abandonAudioFocusRequest(focus)
     }
@@ -106,6 +128,6 @@ internal class VoiceAudioRoute(context: Context, private val onInterruption: () 
     private companion object {
         val externalTypes = setOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
             AudioDeviceInfo.TYPE_USB_HEADSET, AudioDeviceInfo.TYPE_USB_DEVICE, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-            AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_HEARING_AID)
+            AudioDeviceInfo.TYPE_HEARING_AID) + if (Build.VERSION.SDK_INT >= 31) setOf(AudioDeviceInfo.TYPE_BLE_HEADSET) else emptySet()
     }
 }

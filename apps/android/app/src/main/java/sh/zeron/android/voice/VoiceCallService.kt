@@ -33,12 +33,15 @@ class VoiceCallService : Service() {
             })
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        sessionId = voice.state.value.sessionId
-        // Even a queued start after hang-up must satisfy Android's foreground deadline.
+        val current = voice.state.value
+        if (!current.live) { stopSelf(startId); return START_NOT_STICKY }
+        // An old notification must never change a later call or reopen a microphone service.
+        if (intent?.action != null && intent.getLongExtra("session", -1) != current.sessionId) return START_NOT_STICKY
+        sessionId = current.sessionId
         val types = if (Build.VERSION.SDK_INT >= 30) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
             ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK else 0
         ServiceCompat.startForeground(this, ID, notification(voice.state.value), types)
-        when (intent?.action?.takeIf { intent.getLongExtra("session", -1) == sessionId }) {
+        when (intent?.action) {
             END -> voice.stop()
             MUTE -> voice.toggleMute()
         }

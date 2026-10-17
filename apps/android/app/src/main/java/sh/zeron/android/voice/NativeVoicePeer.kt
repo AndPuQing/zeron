@@ -14,6 +14,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
 
@@ -147,7 +148,7 @@ internal class NativeVoicePeer(
     }
 
     private fun connection(): PeerConnection = checkNotNull(peer).also { check(!closed) }
-    private fun fail() { scope.launch { if (!closed) onFailure() } }
+    private fun fail() { scope.launch { yield(); if (!closed) onFailure() } }
     private suspend fun waitUntil(ready: () -> Boolean) = withTimeout(25_000) {
         while (!ready()) { check(!closed); delay(20) }
         check(!closed)

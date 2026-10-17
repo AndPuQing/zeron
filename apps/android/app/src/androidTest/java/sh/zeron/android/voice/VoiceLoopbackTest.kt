@@ -1,8 +1,12 @@
 package sh.zeron.android.voice
 
 import android.Manifest
+import android.content.Intent
 import android.media.AudioManager
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -13,12 +17,19 @@ import org.webrtc.*
 
 /** A real local WebRTC answerer validates the media contract without any provider. */
 class VoiceLoopbackTest {
-    @Test fun gatheredOfferConnectsWithEventsAndAudioRemainsDisabled() = runBlocking {
+    @Test fun negotiationDefersCaptureUntilActivationAndCloseReleasesAudio() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
+        context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra("demo", true).putExtra("fast", true))
+        val device = UiDevice.getInstance(instrumentation)
+        assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName)), 10_000))
+        device.waitForIdle()
         val audio = context.getSystemService(AudioManager::class.java)
         val before = audio.activeRecordingConfigurations.size
+        val previousMode = audio.mode
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
         val client = withContext(Dispatchers.Main) { NativeVoicePeer(context, scope) { fail("Unexpected media failure") } }
         var factory: PeerConnectionFactory? = null
@@ -57,6 +68,10 @@ class VoiceLoopbackTest {
             assertEquals(PeerConnection.PeerConnectionState.CONNECTED, remote.connectionState())
             assertEquals(before, audio.activeRecordingConfigurations.size)
             withContext(Dispatchers.Main) { client.levels() }
+            withContext(Dispatchers.Main) { client.setMuted(false) }
+            withTimeout(5_000) { while (audio.activeRecordingConfigurations.size <= before) delay(20) }
+            assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
+            withContext(Dispatchers.Main) { client.muteLocally(true) }
         } finally {
             withContext(Dispatchers.Main) {
                 client.close()
@@ -66,7 +81,7 @@ class VoiceLoopbackTest {
             }
             scope.cancel()
         }
-        assertEquals(before, audio.activeRecordingConfigurations.size)
+        withTimeout(5_000) { while (audio.activeRecordingConfigurations.size != before || audio.mode != previousMode) delay(20) }
     }
 
     private suspend fun description(create: Boolean, start: (SdpObserver) -> Unit): SessionDescription? = suspendCancellableCoroutine { c ->
