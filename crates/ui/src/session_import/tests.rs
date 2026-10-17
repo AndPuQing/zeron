@@ -257,6 +257,42 @@ fn project_filter_respects_directory_boundaries_and_remote_windows_paths() {
 }
 
 #[test]
+fn filter_row_hides_choices_the_scan_has_nothing_to_filter() {
+    let mut single = model();
+    single.sessions = vec![session("codex", ImportEligibility::Available)];
+    assert!(!needs_provider_filter(&single));
+    assert!(!needs_status_filter(&single));
+
+    let mut mixed = model();
+    let mut claude = session("claude", ImportEligibility::Available);
+    claude.provider = SessionProvider::ClaudeCode;
+    mixed.sessions = vec![session("codex", ImportEligibility::Available), claude];
+    assert!(needs_provider_filter(&mixed));
+    assert!(
+        !needs_status_filter(&mixed),
+        "nothing imported yet, so nothing to filter by status"
+    );
+
+    let mut imported = model();
+    imported.sessions = vec![session(
+        "managed",
+        ImportEligibility::AlreadyManaged {
+            chat_id: "chat".into(),
+        },
+    )];
+    assert!(needs_status_filter(&imported));
+
+    // A filter that is currently applied stays visible even when the scan no
+    // longer justifies it, so it can always be cleared again.
+    let mut applied = model();
+    applied.sessions = vec![session("codex", ImportEligibility::Available)];
+    applied.provider = Some(SessionProvider::ClaudeCode);
+    applied.status = ImportStatusFilter::Imported;
+    assert!(needs_provider_filter(&applied));
+    assert!(needs_status_filter(&applied));
+}
+
+#[test]
 fn mixed_project_import_preserves_the_choosers_group_order() {
     let mut model = model();
     let mut other = session("other-project", ImportEligibility::Available);
@@ -326,6 +362,123 @@ fn native_row_and_checkbox_click_toggle_selection_once(cx: &mut gpui::TestAppCon
     cx.simulate_keystrokes("enter");
     view.read_with(cx, |view, _| assert!(view.model.selected.contains("ready")));
     cx.simulate_keystrokes("space");
+    view.read_with(cx, |view, _| assert!(view.model.selected.is_empty()));
+}
+
+/// A dialog with two providers and one already imported session: enough for
+/// both pickers to be offered.
+fn filtered_dialog(cx: &mut gpui::Context<SessionImportDialog>) -> SessionImportDialog {
+    let mut dialog = SessionImportDialog::new(model().devices, "local", cx);
+    let mut claude = session("claude", ImportEligibility::Available);
+    claude.provider = SessionProvider::ClaudeCode;
+    dialog.model.sessions = vec![
+        session("ready", ImportEligibility::Available),
+        claude,
+        session(
+            "managed",
+            ImportEligibility::AlreadyManaged {
+                chat_id: "chat".into(),
+            },
+        ),
+    ];
+    dialog.model.discovery = Loadable::Ready(());
+    dialog
+}
+
+#[gpui::test]
+fn native_agent_filter_picks_a_provider_from_its_menu(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| filtered_dialog(cx));
+    let trigger = cx.debug_bounds("import-agent-filter-trigger").unwrap();
+    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.filter_menu.get(), Some(&FilterMenu::Agent))
+    });
+    let option = cx.debug_bounds("import-agent-option-2").unwrap();
+    cx.simulate_click(option.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.model.provider, Some(SessionProvider::ClaudeCode));
+        assert!(view.filter_menu.as_open().is_none());
+        assert_eq!(
+            view.model
+                .visible_sessions("")
+                .iter()
+                .map(|row| row.source_ref.as_str())
+                .collect::<Vec<_>>(),
+            ["claude"]
+        );
+    });
+}
+
+#[gpui::test]
+fn native_status_filter_picks_an_eligibility_from_its_menu(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| filtered_dialog(cx));
+    let trigger = cx.debug_bounds("import-status-filter-trigger").unwrap();
+    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.filter_menu.get(), Some(&FilterMenu::Status))
+    });
+    let option = cx.debug_bounds("import-status-option-1").unwrap();
+    cx.simulate_click(option.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.model.status, ImportStatusFilter::NotImported);
+        assert!(
+            view.model
+                .visible_sessions("")
+                .iter()
+                .all(|row| !matches!(
+                    row.eligibility,
+                    ImportEligibility::AlreadyManaged { .. }
+                ))
+        );
+    });
+}
+
+#[gpui::test]
+fn native_group_header_toggles_every_importable_session_in_its_project(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        let mut dialog = SessionImportDialog::new(model().devices, "local", cx);
+        dialog.model.sessions = vec![
+            session("ready", ImportEligibility::Available),
+            session("also-ready", ImportEligibility::Available),
+            session(
+                "managed",
+                ImportEligibility::AlreadyManaged {
+                    chat_id: "chat".into(),
+                },
+            ),
+        ];
+        dialog.model.discovery = Loadable::Ready(());
+        dialog
+    });
+    let header = cx.debug_bounds("import-group-0").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert!(view.model.selected.contains("ready"));
+        assert!(view.model.selected.contains("also-ready"));
+        assert!(
+            !view.model.selected.contains("managed"),
+            "an already imported session is not selectable"
+        );
+    });
+    let header = cx.debug_bounds("import-group-0").unwrap();
+    cx.simulate_click(header.center(), gpui::Modifiers::default());
     view.read_with(cx, |view, _| assert!(view.model.selected.is_empty()));
 }
 
