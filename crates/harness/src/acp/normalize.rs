@@ -9,7 +9,7 @@
 //! statuses are snake_case).
 
 use serde_json::Value;
-use zeron_proto::{AgentEvent, SlashCommand, TodoItem, TodoStatus, ToolCall, ToolDiff};
+use zeron_proto::{AgentEvent, HarnessId, SlashCommand, TodoItem, TodoStatus, ToolCall, ToolDiff};
 
 /// Byte cap applied to tool output text at the harness boundary. The doc-side
 /// fold applies its own (smaller) cap before anything persists; this one only
@@ -341,6 +341,22 @@ fn typed_call(update: &Value) -> ToolCall {
             input: raw.cloned(),
         },
     }
+}
+
+/// Provider-specific recovery of built-in tool kinds. Completion-only updates
+/// remain result-only, preserving the opening call and its arguments.
+pub(crate) fn map_update_for(harness: HarnessId, update: &Value) -> Vec<AgentEvent> {
+    let mut events = map_update(update);
+    if harness == HarnessId::Dsh
+        && let Some(typed) = super::dsh_tools::typed_call(update)
+    {
+        for event in &mut events {
+            if let AgentEvent::ToolCall { call, .. } = event {
+                *call = typed.clone();
+            }
+        }
+    }
+    events
 }
 
 /// Map one `session/update` payload's `update` object to events.

@@ -34,6 +34,7 @@
 mod antigravity_paths;
 mod devin_models;
 mod dsh_discovery;
+mod dsh_tools;
 mod normalize;
 mod prompt;
 mod subagent;
@@ -66,7 +67,7 @@ use crate::{
     CancellationToken, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
 };
 use child::Child;
-use normalize::{map_update, parse_commands, preferred_allow_option};
+use normalize::{map_update_for, parse_commands, preferred_allow_option};
 use prompt::Prompt;
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
@@ -3191,12 +3192,13 @@ impl SubagentObserver {
 }
 
 /// The events of one notification, session-filtered. `session/update` maps
-/// per [`map_update`]; `_x.ai/session_notification` is grok's extension
+/// per [`map_update_for`]; `_x.ai/session_notification` is grok's extension
 /// channel — same `{sessionId, update}` envelope, but its updates (the
 /// `subagent_*` lifecycle) render nothing directly. The subagent tracker sees
 /// both first (spawn/finished correlation + transcript tails); its tagged
 /// events flow from its own tasks, not this return value.
 fn session_update_events(
+    harness: HarnessId,
     method: &str,
     params: &Value,
     session_id: &str,
@@ -3211,7 +3213,7 @@ fn session_update_events(
             SubagentObserver::Devin(tracker) => tracker.map(update),
             _ => {
                 subagents.observe(update);
-                map_update(update)
+                map_update_for(harness, update)
             }
         },
         "_x.ai/session_notification" => {
@@ -4776,7 +4778,7 @@ async fn run_session(session: Session) {
                     match inc {
                         Incoming::Notification { method, params } => {
                             let events =
-                                session_update_events(&method, &params, &session_id, &mut subagents);
+                                session_update_events(harness, &method, &params, &session_id, &mut subagents);
                             for ev in events {
                                 if !send(&event_tx, ev).await {
                                     consumer_gone = true;
@@ -4991,7 +4993,7 @@ async fn run_session(session: Session) {
                     // Other notifications (other sessions, agent noise) are
                     // tolerated by design.
                     let events =
-                        session_update_events(&method, &params, &session_id, &mut subagents);
+                        session_update_events(harness, &method, &params, &session_id, &mut subagents);
                     for ev in events {
                         track_open_tools(&ev, &mut open_tools);
                         if !send(&event_tx, ev).await {
@@ -5112,7 +5114,7 @@ async fn run_session(session: Session) {
                             match inc {
                                 Incoming::Notification { method, params } => {
                                     let events =
-                                        session_update_events(&method, &params, &session_id, &mut subagents);
+                                        session_update_events(harness, &method, &params, &session_id, &mut subagents);
                                     for ev in events {
                                         if !send(&event_tx, ev).await {
                                             consumer_gone = true;

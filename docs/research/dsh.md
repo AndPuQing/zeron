@@ -30,6 +30,31 @@ Skills are discovered from `$DSH_HOME/skills`, `$DSH_AGENTS_HOME/skills`
 (`DSH_AGENTS_HOME` defaults to `~/.agents`), and the project's `.agents/skills`
 and `.dsh/skills` directories.
 
+## Tool call summaries
+
+The bundled ACP bridge in `@deepseek-ai/dsh-acp` 0.2.1-rc.2 emits generic
+`kind: "other"` tool calls with the native tool name as `title` and parsed
+arguments in `rawInput`. Zerun recognizes these built-in schemas for Dsh:
+
+| Tools | Visible call information |
+| --- | --- |
+| `bash`, `pwsh` | Command |
+| `read`, `write`, `edit` | File path and operation |
+| `str_replace_editor` | View/create/edit operation and path |
+| `grep`, `glob` | Search pattern (and grep scope when provided) |
+| `web_fetch`, `web_search` | URL or queries |
+| `todo_write` | Checklist and progress |
+
+This mapping runs before shared transcript sanitization, so desktop and mobile
+receive typed call summaries. Explicit ACP tool kinds remain authoritative.
+Unknown/custom tools and malformed arguments retain the generic fallback;
+Zerun does not expose arbitrary `rawInput` to recover their details. File bodies,
+edit replacement text and unknown inputs remain excluded from the synced doc.
+Tool outputs still follow the existing journal-only policy.
+
+An updated execution host is required. Previously saved calls whose arguments
+were already stripped are not retroactively reconstructed.
+
 ## Protocol mapping
 
 The model catalog comes from session config options. ACP select options may

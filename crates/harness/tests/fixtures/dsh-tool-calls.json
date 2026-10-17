@@ -1,0 +1,224 @@
+[
+  {
+    "name": "bash",
+    "input": {
+      "command": "git status --short",
+      "description": "Inspect changes"
+    },
+    "expected": {
+      "kind": "exec",
+      "command": "git status --short"
+    }
+  },
+  {
+    "name": "read",
+    "input": {
+      "file_path": "src/main.rs",
+      "offset": 2
+    },
+    "expected": {
+      "kind": "readFile",
+      "path": "src/main.rs"
+    }
+  },
+  {
+    "name": "write",
+    "input": {
+      "file_path": "notes.md",
+      "content": "fixture-secret-body"
+    },
+    "expected": {
+      "kind": "writeFile",
+      "path": "notes.md",
+      "content": "fixture-secret-body"
+    }
+  },
+  {
+    "name": "edit",
+    "input": {
+      "file_path": "src/main.rs",
+      "old_string": "fixture-secret-old",
+      "new_string": "fixture-secret-new"
+    },
+    "expected": {
+      "kind": "editFile",
+      "path": "src/main.rs",
+      "old_string": "fixture-secret-old",
+      "new_string": "fixture-secret-new"
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "input": {
+      "command": "view",
+      "path": "src/lib.rs",
+      "file_text": "fixture-secret-body",
+      "old_str": "fixture-secret-old",
+      "new_str": "fixture-secret-new"
+    },
+    "expected": {
+      "kind": "readFile",
+      "path": "src/lib.rs"
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "input": {
+      "command": "create",
+      "path": "src/lib.rs",
+      "file_text": "fixture-secret-body",
+      "old_str": "fixture-secret-old",
+      "new_str": "fixture-secret-new"
+    },
+    "expected": {
+      "kind": "writeFile",
+      "path": "src/lib.rs",
+      "content": "fixture-secret-body"
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "input": {
+      "command": "str_replace",
+      "path": "src/lib.rs",
+      "file_text": "fixture-secret-body",
+      "old_str": "fixture-secret-old",
+      "new_str": "fixture-secret-new"
+    },
+    "expected": {
+      "kind": "editFile",
+      "path": "src/lib.rs",
+      "old_string": "fixture-secret-old",
+      "new_string": "fixture-secret-new"
+    }
+  },
+  {
+    "name": "str_replace_editor",
+    "input": {
+      "command": "insert",
+      "path": "src/lib.rs",
+      "file_text": "fixture-secret-body",
+      "old_str": "fixture-secret-old",
+      "new_str": "fixture-secret-new"
+    },
+    "expected": {
+      "kind": "editFile",
+      "path": "src/lib.rs",
+      "old_string": "fixture-secret-old",
+      "new_string": "fixture-secret-new"
+    }
+  },
+  {
+    "name": "grep",
+    "input": {
+      "pattern": "TODO",
+      "path": "src"
+    },
+    "expected": {
+      "kind": "search",
+      "pattern": "TODO",
+      "path": "src"
+    }
+  },
+  {
+    "name": "glob",
+    "input": {
+      "pattern": "**/*.rs",
+      "path": "src"
+    },
+    "expected": {
+      "kind": "glob",
+      "pattern": "**/*.rs"
+    }
+  },
+  {
+    "name": "web_fetch",
+    "input": {
+      "url": "https://example.com/docs"
+    },
+    "expected": {
+      "kind": "webFetch",
+      "url": "https://example.com/docs"
+    }
+  },
+  {
+    "name": "web_search",
+    "input": {
+      "queries": [
+        "ACP tools",
+        "DSH ACP"
+      ]
+    },
+    "expected": {
+      "kind": "webSearch",
+      "query": "ACP tools\nDSH ACP"
+    }
+  },
+  {
+    "name": "todo_write",
+    "input": {
+      "todos": [
+        {
+          "content": "Inspect code",
+          "status": "completed"
+        },
+        {
+          "content": "Add tests",
+          "status": "in_progress"
+        }
+      ]
+    },
+    "expected": {
+      "kind": "todo",
+      "items": [
+        {
+          "text": "Inspect code",
+          "done": true
+        },
+        {
+          "text": "Add tests",
+          "done": false,
+          "status": "inProgress"
+        }
+      ]
+    }
+  },
+  {
+    "name": "custom_tool",
+    "input": {
+      "token": "fixture-secret-token"
+    },
+    "expected": {
+      "kind": "unknown",
+      "name": "custom_tool",
+      "input": {
+        "token": "fixture-secret-token"
+      }
+    }
+  },
+  {
+    "name": "read",
+    "input": {
+      "file_path": 42,
+      "token": "fixture-secret-token"
+    },
+    "expected": {
+      "kind": "unknown",
+      "name": "read",
+      "input": {
+        "file_path": 42,
+        "token": "fixture-secret-token"
+      }
+    }
+  },
+  {
+    "name": "pwsh",
+    "input": {
+      "command": "Get-ChildItem -Name"
+    },
+    "expected": {
+      "kind": "exec",
+      "command": "Get-ChildItem -Name"
+    }
+  }
+]
