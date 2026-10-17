@@ -37,7 +37,7 @@ Typing an unselected inline `/word` does not execute a local action.
 | Claude Code | Project-scoped commands from its initialize catalog |
 | OpenCode | Project-scoped server command catalog |
 | Pi | Native `get_commands`, including extension commands and `skill:*` invocations |
-| Devin, Grok, Hermes, Antigravity, DeepSeek Harness | Advertised ACP commands, including session command updates |
+| Copilot, Devin, Grok, Hermes, Antigravity, DeepSeek Harness | Advertised ACP commands, including session command updates |
 | Cursor | Workspace actions; its SDK adapter has no native command catalog |
 
 Codex's menu includes the documented CLI command names and aliases, including
@@ -128,6 +128,21 @@ stores its identity in the composer. Literal dollar signs, code, and unselected
 text retain their meaning.
 
 ## Discovery and delivery
+
+Provider catalogs are shared by desktop, iOS and Android; they are not limited
+to Codex. Claude Code reads its initialize command catalog, OpenCode queries
+`/command`, Pi uses `get_commands` plus supported RPC controls, and all six ACP
+adapters use their advertised catalogs. ACP discovery prefers `session/new`
+commands over initialize commands, then accepts an `available_commands_update`
+during its bounded discovery window. An explicit empty catalog clears the older
+catalog. This is a discovery snapshot, not continuous synchronization with a
+running session's changing command list.
+
+Protocol catalogs do not necessarily include every command from an agent's
+terminal UI. Cursor's current SDK exposes no command-listing API: its desktop
+menu provides Zerun workspace actions and discovered skills; mobile can show
+discovered skills, but has no native Cursor command catalog. Do not advertise
+terminal-only commands as executable provider commands.
 
 Discovery runs on the selected host in the project directory. Codex uses its
 native skill catalog. Other adapters discover standard project and user skill
