@@ -625,17 +625,21 @@ fn block<T: Send + 'static>(
 #[test]
 fn session_branch_switch_selects_existing_worktrees() {
     let (client, _dir) = demo(fast());
-    // chat-tabs is idle in the zeron project's main folder.
     let refs = block({
         let client = client.clone();
         async move { client.session_refs("chat-tabs").await }
     })
     .unwrap();
-    let place = |name: &str| refs.iter().find(|(r, _)| r.name == name).unwrap().1;
-    assert_eq!(place("main"), zeron_client::RefPlace::Here);
-    assert_eq!(place("veil-fade"), zeron_client::RefPlace::Elsewhere);
-    assert_eq!(place("feature/diff-pane"), zeron_client::RefPlace::Free);
-
+    assert!(refs.iter().all(|(r, _)| r.worktree_path.is_some()));
+    assert!(
+        !refs
+            .iter()
+            .any(|(r, _)| r.name == "main" || r.name == "feature/diff-pane")
+    );
+    assert!(
+        refs.iter()
+            .any(|(r, p)| r.name == "veil-fade" && *p == zeron_client::RefPlace::Elsewhere)
+    );
     let switch = |chat: &'static str, name: &'static str| {
         let client = client.clone();
         block(async move { client.switch_session_ref(chat, name).await })
@@ -645,25 +649,16 @@ fn session_branch_switch_selects_existing_worktrees() {
     wait_for("worktree directory", Duration::from_secs(5), || {
         client.workspace().session("chat-tabs").unwrap().cwd != original
     });
-    switch("chat-tabs", "main").unwrap();
-    wait_for("main directory", Duration::from_secs(5), || {
-        client.workspace().session("chat-tabs").unwrap().cwd == original
-    });
-
-    // A free ref is checked out in place and recorded on the row.
-    let switched = switch("chat-tabs", "feature/diff-pane").unwrap();
-    assert_eq!(switched.as_deref(), Some("feature/diff-pane"));
-    wait_for("the branch on the row", Duration::from_secs(5), || {
-        client
-            .workspace()
-            .session("chat-tabs")
-            .unwrap()
-            .branch
-            .as_deref()
-            == Some("feature/diff-pane")
-    });
-
-    // A running turn keeps its checkout.
-    let busy = switch("chat-veil", "feature/diff-pane").unwrap_err();
+    let target = client.workspace().session("chat-tabs").unwrap().cwd.clone();
+    for name in ["main", "feature/diff-pane"] {
+        assert!(
+            switch("chat-tabs", name)
+                .unwrap_err()
+                .to_string()
+                .contains("existing linked worktree")
+        );
+        assert_eq!(client.workspace().session("chat-tabs").unwrap().cwd, target);
+    }
+    let busy = switch("chat-veil", "veil-fade").unwrap_err();
     assert!(busy.to_string().contains("Stop the current turn"), "{busy}");
 }

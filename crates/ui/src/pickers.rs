@@ -2114,8 +2114,7 @@ impl Pickers {
         Some((chat, cwd, space.path.clone(), busy))
     }
 
-    /// Select another worktree for occupied refs, or check out free refs in
-    /// place. The host owns validation, runtime teardown and row updates.
+    /// Move to an existing linked worktree. The host validates the target.
     fn switch_session_ref(&mut self, row: RepoRef, cx: &mut Context<Self>) {
         if self.switching.is_some() {
             return; // one switch at a time
@@ -2124,7 +2123,12 @@ impl Pickers {
             return;
         };
         if busy {
-            self.switch_error = Some("Stop the current turn before switching branches.".into());
+            self.switch_error = Some("Stop the current turn before switching worktrees.".into());
+            cx.notify();
+            return;
+        }
+        if row.worktree_path.is_none() {
+            self.switch_error = Some("Select an existing linked worktree.".into());
             cx.notify();
             return;
         }
@@ -2632,6 +2636,12 @@ impl Pickers {
         let Some(refs) = self.refs.ready() else {
             return Vec::new();
         };
+        let refs: Vec<_> = refs
+            .iter()
+            .filter(|r| {
+                self.state.read(cx).selected_chat_row().is_none() || r.worktree_path.is_some()
+            })
+            .collect();
         let names: Vec<String> = refs.iter().map(|r| r.name.clone()).collect();
         let query = self.search.read(cx).text().to_string();
         popover::filter_indices(&query, &names)
@@ -3976,17 +3986,26 @@ impl Pickers {
         };
 
         if let Some(chat) = &session {
-            // A session can switch branches or move to an existing worktree.
+            // A session can move to an existing linked worktree.
             // The checkout-kind label reflects its current folder.
             // The target (project @ device) lives in the titlebar now.
             let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
                 return None;
             };
-            let branch_label = chat
-                .branch
-                .clone()
-                .map(SharedString::from)
-                .unwrap_or_else(|| SharedString::from("No ref"));
+            let is_worktree = self.refs.ready().is_some_and(|refs| {
+                refs.iter().any(|r| {
+                    r.worktree_path.is_some()
+                        && r.place(chat.cwd.as_deref().unwrap_or(""), &space.path) == RefPlace::Here
+                })
+            }) || chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
+            let branch_label = if is_worktree {
+                chat.branch
+                    .clone()
+                    .map(SharedString::from)
+                    .unwrap_or_else(|| "Select worktree".into())
+            } else {
+                "Select worktree".into()
+            };
             let branch: AnyElement = match self.session_checkout(cx) {
                 Some((_, _, _, false)) => {
                     let closing = (self.open.closing_since(), self.menu_geometry().below);
@@ -4023,17 +4042,12 @@ impl Pickers {
                 .id("composer-session-branch-locked")
                 .when(busy.is_some(), |label| {
                     label.tooltip(crate::settings::widgets::text_tooltip(
-                        "Stop the current turn to switch branches",
+                        "Stop the current turn to switch worktrees",
                     ))
                 })
                 .into_any_element(),
             };
-            let is_worktree = chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
-            let (icon_path, label) = if is_worktree {
-                (crate::icons::WORKTREE, "Worktree")
-            } else {
-                (crate::icons::FOLDER, "Local checkout")
-            };
+            let (icon_path, label) = (crate::icons::WORKTREE, "Worktree");
             // Keep the same reading order and leading edge as the draft.
             let left = div()
                 .flex()
@@ -4353,7 +4367,11 @@ impl Pickers {
                 .p(px(Theme::SPACE_SM))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
-                .child(SharedString::from("No refs found."))
+                .child(SharedString::from(if self.session_checkout(cx).is_some() {
+                    "No worktrees found."
+                } else {
+                    "No refs found."
+                }))
                 .into_any_element(),
             Loadable::Ready(_) => {
                 let active = self.active;
@@ -4380,9 +4398,6 @@ impl Pickers {
                                         .map(|(cwd, root)| row.place(cwd, root));
                                     let tag: Option<&'static str> = match place {
                                         Some(RefPlace::Here) => Some("current"),
-                                        Some(RefPlace::Elsewhere) if row.current => {
-                                            Some("main checkout")
-                                        }
                                         Some(RefPlace::Elsewhere) => Some("switch worktree"),
                                         Some(RefPlace::Free) => None,
                                         None if row.current => Some("current"),
@@ -7708,15 +7723,31 @@ mod tests {
         };
         let calls = |host: &SwitchHost| host.calls.lock().unwrap().clone();
 
-        // The current ref is a no-op. Both free and occupied refs go to
-        // the authoritative host; clients never mutate cwd on their own.
+        // Session menus expose only linked worktrees; neither a main ref
+        // nor a free branch can trigger a checkout.
         pickers.update(cx, |pickers, cx| {
             pickers.refs = Loadable::Ready(refs.clone());
             pickers.refs_space = Some("a".into());
+            assert_eq!(pickers.filtered_ref_rows(cx), vec![refs[2].clone()]);
             pickers.pick_ref(refs[0].clone(), cx);
+            assert!(
+                pickers
+                    .switch_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("existing linked worktree")
+            );
+            pickers.pick_ref(refs[1].clone(), cx);
+            assert!(
+                pickers
+                    .switch_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("existing linked worktree")
+            );
         });
         assert!(calls(&host).is_empty());
-        for reference in [&refs[1], &refs[2]] {
+        for reference in [&refs[2]] {
             host.calls.lock().unwrap().clear();
             pickers.update(cx, |pickers, cx| pickers.pick_ref(reference.clone(), cx));
             settle(cx, &|| {

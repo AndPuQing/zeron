@@ -598,7 +598,7 @@ async fn fetch_all_updates_only_remote_tracking_refs() {
 }
 
 #[tokio::test]
-async fn session_switch_ref_stays_in_its_folder_and_restamps_the_chat() {
+async fn session_switch_legacy_checkout_is_rejected() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo_dir = tmp.path().join("switch-repo");
     init_repo(&repo_dir).await;
@@ -619,50 +619,19 @@ async fn session_switch_ref_stays_in_its_folder_and_restamps_the_chat() {
         client.call(methods::MUTATE, op).await.expect("mutate");
     }
 
-    // A session only switches its own folder.
-    let elsewhere = client
+    let rejected = client
         .call(
             methods::SWITCH_REF,
             serde_json::json!({
-                "repoPath": tmp.path().join("other").to_string_lossy(),
-                "refName": "feature",
-                "chatId": "chat-switch",
+                "repoPath":repo_path, "refName":"feature", "chatId":"chat-switch"
             }),
         )
         .await
-        .expect_err("another folder is refused");
-    assert!(elsewhere.to_string().contains("working folder changed"));
+        .unwrap_err();
+    assert!(rejected.to_string().contains("existing worktrees"));
     assert_eq!(
         git_stdout(&repo_dir, &["branch", "--show-current"]).await,
         "main"
-    );
-
-    let switched = client
-        .call(
-            methods::SWITCH_REF,
-            serde_json::json!({
-                "repoPath": repo_path,
-                "refName": "feature",
-                "chatId": "chat-switch",
-            }),
-        )
-        .await
-        .expect("SwitchRef");
-    assert_eq!(switched["branch"], "feature");
-    assert_eq!(
-        git_stdout(&repo_dir, &["branch", "--show-current"]).await,
-        "feature"
-    );
-    // Every device now names the branch the next turn will see.
-    let chat = core
-        .workspace
-        .chat("chat-switch")
-        .expect("read chat")
-        .expect("chat row");
-    assert_eq!(chat.branch.as_deref(), Some("feature"));
-    assert_eq!(
-        chat.source_context.map(|context| context.branch).as_deref(),
-        Some("feature")
     );
 }
 
@@ -671,10 +640,16 @@ async fn session_switch_worktree_preserves_files_and_updates_checkout_identity()
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     let other = tmp.path().join("worktree with spaces");
+    let second = tmp.path().join("second-worktree");
     init_repo(&repo).await;
     git(
         &repo,
         &["worktree", "add", "-b", "feature", other.to_str().unwrap()],
+    )
+    .await;
+    git(
+        &repo,
+        &["worktree", "add", "-b", "second", second.to_str().unwrap()],
     )
     .await;
     git(&repo, &["branch", "free"]).await;
@@ -732,56 +707,91 @@ async fn session_switch_worktree_preserves_files_and_updates_checkout_identity()
         .await
         .unwrap_err();
     assert!(stale.to_string().contains("working folder changed"));
-    // A free ref still checks out in place, keeping this worktree's changes.
+    // Main checkout, free branches and unknown refs are never destinations.
+    for name in ["main", "free", "missing-ref"] {
+        let rejected = client
+            .call(
+                methods::SWITCH_SESSION_REF,
+                serde_json::json!({
+                    "chatId":"c", "repoPath":target, "refName":name
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(rejected.to_string().contains("existing linked worktree"));
+        let chat = core.workspace.chat("c").unwrap().unwrap();
+        assert_eq!(chat.cwd.as_deref(), target.to_str());
+        assert_eq!(chat.branch.as_deref(), Some("feature"));
+    }
+    // Exclusion also holds for projects whose root is a linked worktree.
+    let linked_refs = core.repos.refs(&other).await.unwrap();
+    assert!(
+        linked_refs
+            .iter()
+            .find(|r| r.name == "main")
+            .unwrap()
+            .worktree_path
+            .is_none()
+    );
+    for op in [
+        serde_json::json!({"op":"createSpace", "spaceId":"linked-project", "deviceId":core.device_id, "path":other, "gitDetected":true}),
+        serde_json::json!({"op":"createChat", "chatId":"linked-chat", "spaceId":"linked-project", "deviceId":core.device_id, "cwd":other, "branch":"feature"}),
+    ] {
+        client.call(methods::MUTATE, op).await.unwrap();
+    }
+    let main_rejected = client
+        .call(
+            methods::SWITCH_SESSION_REF,
+            serde_json::json!({
+                "chatId":"linked-chat", "repoPath":other, "refName":"main"
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        main_rejected
+            .to_string()
+            .contains("existing linked worktree")
+    );
+    let moved = client
+        .call(
+            methods::SWITCH_SESSION_REF,
+            serde_json::json!({
+                "chatId":"c", "repoPath":target, "refName":"second"
+            }),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        moved["cwd"],
+        std::fs::canonicalize(&second).unwrap().to_str().unwrap()
+    );
+    assert_ne!(moved["checkoutId"], switched["checkoutId"]);
     client
         .call(
             methods::SWITCH_SESSION_REF,
             serde_json::json!({
-                "chatId":"c", "repoPath":target, "refName":"free"
+                "chatId":"c", "repoPath":moved["cwd"], "refName":"feature"
             }),
         )
         .await
         .unwrap();
+    assert_eq!(
+        core.workspace.chat("c").unwrap().unwrap().cwd.as_deref(),
+        target.to_str()
+    );
+    assert_eq!(
+        git_stdout(&repo, &["branch", "--show-current"]).await,
+        "main"
+    );
     assert_eq!(
         git_stdout(&other, &["branch", "--show-current"]).await,
-        "free"
+        "feature"
     );
-    let back = client
-        .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"c", "repoPath":target, "refName":"main"
-            }),
-        )
-        .await
-        .unwrap();
     assert_eq!(
-        back["cwd"],
-        std::fs::canonicalize(&repo).unwrap().to_str().unwrap()
+        std::fs::read_to_string(other.join("a.txt")).unwrap(),
+        "worktree uncommitted"
     );
-    assert_ne!(back["checkoutId"], switched["checkoutId"]);
-    // Projects opened from a linked tree must still offer the main checkout.
-    let linked_refs = core.repos.refs(&other).await.unwrap();
-    let main = linked_refs.iter().find(|r| r.name == "main").unwrap();
-    assert_eq!(
-        std::fs::canonicalize(main.worktree_path.as_ref().unwrap()).unwrap(),
-        std::fs::canonicalize(&repo).unwrap()
-    );
-    // Missing refs fail without altering the session's directory or metadata.
-    assert!(
-        client
-            .call(
-                methods::SWITCH_SESSION_REF,
-                serde_json::json!({
-                    "chatId":"c", "repoPath":back["cwd"], "refName":"missing-ref"
-                })
-            )
-            .await
-            .is_err()
-    );
-    let chat = core.workspace.chat("c").unwrap().unwrap();
-    assert_eq!(chat.cwd.as_deref(), back["cwd"].as_str());
-    assert_eq!(chat.branch.as_deref(), Some("main"));
 }
 
 struct WorktreeProbe {
@@ -944,7 +954,7 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
         )
         .await
         .unwrap_err();
-    assert!(shared.to_string().contains("Another session is working"));
+    assert!(shared.to_string().contains("existing linked worktree"));
     assert_eq!(
         git_stdout(&repo, &["branch", "--show-current"]).await,
         "main"

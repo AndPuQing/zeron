@@ -904,13 +904,14 @@ impl Client {
         Ok((row, cwd, root))
     }
 
-    /// The session's refs, placed relative to its folder. Occupied refs
-    /// select their existing worktrees; free refs are checked out in place.
+    /// Existing linked worktrees for the session; excludes the main checkout
+    /// and branches without a worktree.
     pub async fn session_refs(&self, chat_id: &str) -> Result<Vec<(RepoRef, RefPlace)>> {
         let (row, cwd, root) = self.session_checkout(chat_id)?;
         let refs = self.list_refs(&row.device_id, &root).await?;
         Ok(refs
             .into_iter()
+            .filter(|reference| reference.worktree_path.is_some())
             .map(|reference| {
                 let place = reference.place(&cwd, &root);
                 (reference, place)
@@ -918,7 +919,7 @@ impl Client {
             .collect())
     }
 
-    /// Switch to a ref's existing worktree, or check out a free ref in place.
+    /// Switch to a ref's existing linked worktree without running checkout.
     /// The host validates and updates cwd/branch/checkout identity together.
     /// Visible history stays; native resume remains scoped to its original cwd.
     pub async fn switch_session_ref(
@@ -932,7 +933,7 @@ impl Client {
             ChatIndicator::Working | ChatIndicator::AwaitingInput
         ) {
             return Err(ClientError::InvalidArgument(
-                "Stop the current turn before switching branches or worktrees.".into(),
+                "Stop the current turn before switching worktrees.".into(),
             ));
         }
         match self.inner.backend() {
@@ -945,21 +946,15 @@ impl Client {
                     .map_err(|e| ClientError::HostError(e.to_string()))?;
                 Ok((!context.branch.is_empty()).then_some(context.branch))
             }
-            Backend::Demo(demo) => {
+            Backend::Demo(_) => {
                 let refs = self.list_refs(&row.device_id, &root).await?;
                 let reference = refs
                     .iter()
                     .find(|r| r.name == ref_name)
                     .ok_or_else(|| ClientError::NotFound(ref_name.into()))?;
-                let target = reference
-                    .worktree_path
-                    .as_deref()
-                    .or(reference.current.then_some(root.as_str()))
-                    .unwrap_or(&cwd)
-                    .to_owned();
-                if reference.place(&cwd, &root) == RefPlace::Free {
-                    demo.switch_ref(&cwd, ref_name).await?;
-                }
+                let target = reference.worktree_path.clone().ok_or_else(|| {
+                    ClientError::InvalidArgument("Select an existing linked worktree.".into())
+                })?;
                 self.inner.registry_write(|doc| {
                     let context = zeron_proto::ConversationSourceContext {
                         checkout_id: format!("demo:{target}"),
@@ -1522,36 +1517,21 @@ impl Client {
 
     /// `git checkout <ref>` in `repo_path` on the device.
     pub async fn switch_ref(&self, device_id: &str, repo_path: &str, ref_name: &str) -> Result<()> {
-        self.checkout_ref(device_id, repo_path, ref_name, None)
+        self.checkout_ref(device_id, repo_path, ref_name)
             .await
             .map(drop)
     }
 
-    /// [`Self::switch_ref`], returning the checkout's branch afterwards
-    /// (`None` on a detached HEAD). A `chat_id` lets the host refuse a
-    /// running turn and re-stamp that session's branch and source context.
+    /// [`Self::switch_ref`], returning the resulting branch, if attached.
     async fn checkout_ref(
         &self,
         device_id: &str,
         repo_path: &str,
         ref_name: &str,
-        chat_id: Option<&str>,
     ) -> Result<Option<String>> {
         let branch = match self.inner.backend() {
             Backend::Demo(demo) => {
                 demo.switch_ref(repo_path, ref_name).await?;
-                // Re-stamp the session's observed checkout like a live host.
-                if let Some(chat_id) = chat_id {
-                    self.inner.registry_write(|doc| {
-                        if let Some(mut context) =
-                            doc.chat(chat_id)?.and_then(|chat| chat.source_context)
-                        {
-                            context.branch = ref_name.to_owned();
-                            doc.set_chat_source_context(chat_id, &context)?;
-                        }
-                        Ok(())
-                    })?;
-                }
                 ref_name.to_owned()
             }
             Backend::Live(live) => {
@@ -1563,7 +1543,6 @@ impl Client {
                         serde_json::json!({
                             "repoPath": repo_path,
                             "refName": ref_name,
-                            "chatId": chat_id,
                         }),
                     )
                     .await?;

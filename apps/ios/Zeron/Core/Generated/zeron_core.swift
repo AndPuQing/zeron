@@ -1196,7 +1196,7 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func sessionConfig(chatId: String)  -> ChatConfig?
     
     /**
-     * The session's refs: occupied refs select existing worktrees.
+     * The session's existing linked worktrees, excluding the main checkout.
      */
     func sessionRefs(chatId: String) async throws  -> [SessionRef]
     
@@ -1225,7 +1225,7 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func switchRef(deviceId: String, repoPath: String, refName: String) async throws 
     
     /**
-     * Switch to an existing worktree or check out a free branch in place.
+     * Switch to an existing linked worktree; never run git checkout.
      * Never during a turn. Returns the session's branch afterwards.
      */
     func switchSessionRef(chatId: String, refName: String) async throws  -> String?
@@ -1926,7 +1926,7 @@ open func sessionConfig(chatId: String) -> ChatConfig?  {
 }
     
     /**
-     * The session's refs: occupied refs select existing worktrees.
+     * The session's existing linked worktrees, excluding the main checkout.
      */
 open func sessionRefs(chatId: String)async throws  -> [SessionRef]  {
     return
@@ -2020,7 +2020,7 @@ open func switchRef(deviceId: String, repoPath: String, refName: String)async th
 }
     
     /**
-     * Switch to an existing worktree or check out a free branch in place.
+     * Switch to an existing linked worktree; never run git checkout.
      * Never during a turn. Returns the session's branch afterwards.
      */
 open func switchSessionRef(chatId: String, refName: String)async throws  -> String?  {
@@ -17425,7 +17425,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_session_config() != 4276) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_session_refs() != 56491) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_session_refs() != 41813) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session_row() != 10938) {
@@ -17446,7 +17446,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_switch_ref() != 45706) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_ref() != 4719) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_ref() != 34118) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_unarchive_session() != 9932) {

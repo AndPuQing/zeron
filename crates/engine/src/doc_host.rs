@@ -5744,8 +5744,8 @@ impl DocHost {
         })
     }
 
-    /// Resolve the ref on the host. Occupied refs move this conversation to
-    /// their existing checkout; free refs are checked out in its current cwd.
+    /// Resolve an existing linked worktree on the host and move the session
+    /// there. Main-checkout and unoccupied branches are never destinations.
     /// Serialize against prompt and queue delivery, including other devices.
     pub(crate) async fn switch_session_ref(
         &self,
@@ -5766,8 +5766,7 @@ impl DocHost {
             .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
         if sessions.turn_in_flight(chat_id) || sessions.holds_background_work(chat_id) {
             return Err(EngineError::Other(
-                "Stop the current turn and background work before switching branches or worktrees."
-                    .into(),
+                "Stop the current turn and background work before switching worktrees.".into(),
             ));
         }
         let workspace = self
@@ -5798,23 +5797,17 @@ impl DocHost {
                 EngineError::Other("The current folder is no longer a project worktree.".into())
             })?;
         let refs = repos.refs(root).await?;
-        let reference = refs.iter().find(|r| r.name == ref_name);
-        let occupied = reference.and_then(|r| {
-            r.worktree_path
-                .as_deref()
-                .or(r.current.then_some(space.path.as_str()))
-        });
-        let target = match occupied {
-            Some(path) => repos
-                .workspace_checkout(root, Path::new(path))
-                .await
-                .ok_or_else(|| {
-                    EngineError::Other(
-                        "The selected worktree is no longer available. Reopen the menu.".into(),
-                    )
-                })?,
-            None => current.clone(),
-        };
+        let path = refs.iter().find(|r| r.name == ref_name)
+            .and_then(|r| r.worktree_path.as_deref())
+            .ok_or_else(|| EngineError::Other("Select an existing linked worktree. Main checkout and unoccupied branches are not supported.".into()))?;
+        let target = repos
+            .workspace_checkout(root, Path::new(path))
+            .await
+            .ok_or_else(|| {
+                EngineError::Other(
+                    "The selected worktree is no longer available. Reopen the menu.".into(),
+                )
+            })?;
         let moving = target != current;
         if moving && chat.import_source.is_some() {
             return Err(EngineError::Other("Imported native sessions must stay in their original folder. Start a new session in the target worktree.".into()));
@@ -5824,17 +5817,11 @@ impl DocHost {
         } else {
             expected_cwd.to_owned()
         };
-        if occupied.is_none() {
-            if sessions.checkout_has_active_run(&target) {
-                return Err(EngineError::Other("Another session is working in this folder. Stop it before checking out a different branch, or select an existing worktree.".into()));
-            }
-            repos.switch_ref(&target, ref_name).await?;
-        }
         let context = self
             .capture_source_context(&cwd)
             .await
             .ok_or_else(|| EngineError::Other("Could not read the selected checkout.".into()))?;
-        if occupied.is_some() && context.branch != ref_name {
+        if context.branch != ref_name {
             return Err(EngineError::Other(
                 "The selected worktree's branch changed. Reopen the menu.".into(),
             ));
@@ -5851,26 +5838,6 @@ impl DocHost {
             sessions.retarget_last_request(chat_id, &context.cwd);
         }
         Ok(context)
-    }
-
-    /// Re-stamp a session's checkout after its branch moved between turns
-    /// (a mid-session switch), so every device names the branch the next
-    /// turn will see instead of the one the last turn saw.
-    pub(crate) async fn restamp_checkout(&self, chat_id: &str, cwd: &str) {
-        let Some(workspace) = self.workspace() else {
-            return;
-        };
-        let Some(context) = self.capture_source_context(cwd).await else {
-            return;
-        };
-        if !context.branch.is_empty()
-            && let Err(err) = workspace.set_chat_branch(chat_id, &context.branch)
-        {
-            tracing::warn!(chat = %chat_id, error = %err, "switched branch stamp failed");
-        }
-        if let Err(err) = workspace.set_chat_source_context(chat_id, &context) {
-            tracing::warn!(chat = %chat_id, error = %err, "switched source stamp failed");
-        }
     }
 
     /// Every fresh harness dispatch crosses this boundary, including

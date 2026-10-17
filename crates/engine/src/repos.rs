@@ -744,8 +744,8 @@ impl Repos {
     pub async fn refs(&self, repo_path: &Path) -> Result<Vec<RepoRef>, EngineError> {
         let names = self.branches(repo_path).await?;
         let current = self.current_branch(repo_path).await.ok();
-        // Include the main checkout when the project itself was opened from
-        // a linked worktree. NUL records preserve spaces/newlines in paths.
+        // Only linked worktrees carry a worktree_path, even when the project
+        // is opened from one. NUL records preserve spaces/newlines in paths.
         let mut worktrees: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let listing = match self
@@ -767,7 +767,7 @@ impl Repos {
                     path = Some(p.to_owned());
                 } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
                     && let Some(path) = path.take()
-                    && (stanza > 1 || current.as_deref() != Some(branch))
+                    && stanza > 1
                 {
                     worktrees.insert(branch.to_string(), path);
                 }

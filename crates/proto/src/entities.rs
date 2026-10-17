@@ -335,7 +335,7 @@ pub struct Repo {
 }
 
 /// One row of `ListRefs`: a branch plus its checkout state — whether it is
-/// the repo's current (main-checkout) branch and whether it is materialized
+/// the project's current branch and whether it is materialized
 /// as a linked worktree. Drives the composer's ref picker (`current` /
 /// `worktree` tags) and the checkout-kind selector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -345,8 +345,7 @@ pub struct RepoRef {
     /// Checked out in the project folder used for this listing.
     #[serde(default)]
     pub current: bool,
-    /// Checkout path for an occupied branch; includes the main checkout when
-    /// listing from a linked worktree.
+    /// Path of a linked worktree holding this branch. Never the main checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
 }
@@ -359,7 +358,7 @@ pub enum RefPlace {
     Here,
     /// Another folder holds it; selecting it moves the session to that folder.
     Elsewhere,
-    /// Not checked out anywhere: the session can switch to it.
+    /// Not checked out in the project folder or a linked worktree.
     Free,
 }
 

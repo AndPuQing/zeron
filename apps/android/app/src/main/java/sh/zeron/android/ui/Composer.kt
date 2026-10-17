@@ -290,8 +290,7 @@ private fun coreMessage(e: Throwable): String =
     e.message?.removePrefix("message=")?.removePrefix("reason=")?.takeIf { it.isNotBlank() } ?: "Please try again."
 
 /**
- * Occupied branches switch the session to their existing worktree; free
- * branches are checked out in place. Running turns keep their checkout.
+ * Only existing linked worktrees are destinations. Running turns keep their folder.
  */
 @Composable
 private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, open: Boolean, onDismiss: () -> Unit) {
@@ -315,14 +314,15 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
     fun toast(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
     val loaded = refs
     val choices = when {
-        running -> listOf(MenuChoice("Stop the current turn to switch branches") {})
+        running -> listOf(MenuChoice("Stop the current turn to switch worktrees") {})
         failure != null -> listOf(MenuChoice(failure.orEmpty()) {})
-        loaded == null -> listOf(MenuChoice("Loading branches…") {})
+        loaded == null -> listOf(MenuChoice("Loading worktrees…") {})
+        loaded.isEmpty() -> listOf(MenuChoice("No worktrees available") {})
         else -> loaded.map { ref ->
             val held = ref.place == RefPlace.ELSEWHERE
             MenuChoice(ref.name, ref.place == RefPlace.HERE, if (held) "Switch worktree · agent may start a new session" else null) {
                 when (ref.place) {
-                    RefPlace.FREE, RefPlace.ELSEWHERE -> scope.launch {
+                    RefPlace.ELSEWHERE -> scope.launch {
                         try {
                             client.switchSessionRef(chatId, ref.name)
                         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -331,12 +331,12 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
                             toast(coreMessage(e))
                         }
                     }
-                    RefPlace.HERE -> {}
+                    RefPlace.HERE, RefPlace.FREE -> {}
                 }
             }
         }
     }
-    ChoiceMenu(open, onDismiss, listOf(MenuSection("Switch branch or worktree", choices)))
+    ChoiceMenu(open, onDismiss, listOf(MenuSection("Switch worktree", choices)))
 }
 
 @Composable
@@ -381,7 +381,7 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
         ContextChip("#${pr.number}", leading = { ZIcon(ZIcons.PullRequest, null, Modifier.size(16.dp)) }, onClick = { menu = "pr" }) {
             ChoiceMenu(menu == "pr", { if (menu == "pr") menu = null }, listOf(MenuSection(pr.title, listOf(
                 MenuChoice("Open pull request") { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(pr.url)) },
-                MenuChoice("Switch branch or worktree", supporting = row?.branch) { menu = "branch" },
+                MenuChoice("Switch worktree", supporting = row?.branch) { menu = "branch" },
             ))))
             BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
         }

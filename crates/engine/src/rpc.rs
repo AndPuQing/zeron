@@ -258,8 +258,7 @@ struct SwitchRefParams {
     /// The checkout to switch — a session's cwd (main folder or worktree).
     repo_path: String,
     ref_name: String,
-    /// The session switching its own checkout: refused under a running turn,
-    /// and its branch and source context are re-stamped on success.
+    /// Required for SwitchSessionRef; rejected by legacy SwitchRef.
     #[serde(default)]
     chat_id: Option<String>,
 }
@@ -3375,36 +3374,17 @@ impl RpcService for EngineRpc {
             }
             methods::SWITCH_REF => {
                 let p: SwitchRefParams = parse_params(params)?;
-                if let Some(chat_id) = p.chat_id.as_deref() {
-                    // Only the host switches a session, only in the session's
-                    // own folder, and never under the agent's running turn.
-                    let chat = self
-                        .workspace
-                        .chat(chat_id)
-                        .map_err(|e| RpcError::Failed(e.to_string()))?
-                        .ok_or_else(|| RpcError::Failed(format!("unknown chat {chat_id}")))?;
-                    if chat.device_id != self.doc_host.device_id()
-                        || chat.cwd.as_deref() != Some(p.repo_path.as_str())
-                    {
-                        return Err(RpcError::Failed(
-                            "The session's working folder changed. Reopen it and try again.".into(),
-                        ));
-                    }
-                    // A warm session parked between turns may switch.
-                    if self.sessions.turn_in_flight(chat_id) {
-                        return Err(RpcError::Failed(
-                            "Stop the current turn before switching branches.".into(),
-                        ));
-                    }
+                if p.chat_id.is_some() {
+                    return Err(RpcError::Failed(
+                        "Session switches only support existing worktrees. Use SwitchSessionRef."
+                            .into(),
+                    ));
                 }
                 let branch = self
                     .repos
                     .switch_ref(std::path::Path::new(&p.repo_path), &p.ref_name)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                if let Some(chat_id) = p.chat_id.as_deref() {
-                    self.doc_host.restamp_checkout(chat_id, &p.repo_path).await;
-                }
                 RpcReply::value(&serde_json::json!({ "branch": branch }))
             }
             methods::GET_WORKTREE_SETTINGS => RpcReply::value(&self.repos.worktree_settings()),

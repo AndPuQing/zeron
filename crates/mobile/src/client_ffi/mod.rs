@@ -345,7 +345,7 @@ impl CoreClient {
         Ok(self.client.delete_project(&space_id)?)
     }
 
-    /// The session's refs: occupied refs select existing worktrees.
+    /// The session's existing linked worktrees, excluding the main checkout.
     pub async fn session_refs(&self, chat_id: String) -> CoreResult<Vec<SessionRef>> {
         let client = self.client.clone();
         let refs = on_runtime(async move { client.session_refs(&chat_id).await }).await?;
@@ -358,7 +358,7 @@ impl CoreClient {
             .collect())
     }
 
-    /// Switch to an existing worktree or check out a free branch in place.
+    /// Switch to an existing linked worktree; never run git checkout.
     /// Never during a turn. Returns the session's branch afterwards.
     pub async fn switch_session_ref(
         &self,
