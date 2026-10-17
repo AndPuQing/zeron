@@ -985,32 +985,20 @@ impl From<zc::rpc::RepoRef> for RepoRef {
     }
 }
 
-/// Where a ref is checked out relative to a session's folder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
-pub enum RefPlace {
-    /// The session's own folder is on it.
-    Here,
-    /// Another folder holds it; the session cannot switch to it.
-    Elsewhere,
-    /// The session can switch to it.
-    Free,
+/// An existing linked worktree offered to a session, identified by its branch.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SessionWorktree {
+    pub name: String,
+    pub is_current: bool,
 }
 
-impl From<zeron_proto::RefPlace> for RefPlace {
-    fn from(place: zeron_proto::RefPlace) -> Self {
-        match place {
-            zeron_proto::RefPlace::Here => Self::Here,
-            zeron_proto::RefPlace::Elsewhere => Self::Elsewhere,
-            zeron_proto::RefPlace::Free => Self::Free,
+impl From<zeron_proto::SessionWorktree> for SessionWorktree {
+    fn from(worktree: zeron_proto::SessionWorktree) -> Self {
+        Self {
+            name: worktree.name,
+            is_current: worktree.is_current,
         }
     }
-}
-
-/// One row of a session's branch picker.
-#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct SessionRef {
-    pub name: String,
-    pub place: RefPlace,
 }
 
 impl From<RepoRef> for zc::rpc::RepoRef {

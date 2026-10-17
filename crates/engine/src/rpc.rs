@@ -3365,7 +3365,7 @@ impl RpcService for EngineRpc {
                     .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
                 let context = self
                     .doc_host
-                    .switch_session_ref(chat_id, &p.repo_path, &p.ref_name)
+                    .switch_session_worktree(chat_id, &p.repo_path, &p.ref_name)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 self.voice.retire_chat(chat_id);

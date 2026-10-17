@@ -10,7 +10,7 @@ use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
 use zeron_doc::RegistryDoc;
 use zeron_proto::{
-    Chat, ChatConfig, ChatIndicator, RefPlace, SidebarPinChange, SidebarSectionChange,
+    Chat, ChatConfig, ChatIndicator, SessionWorktree, SidebarPinChange, SidebarSectionChange,
 };
 
 use crate::attachments::{self, AttachmentCache};
@@ -880,7 +880,7 @@ impl Client {
         Ok(())
     }
 
-    /// The session's row, its folder and its project's main checkout. Only
+    /// The session's row, its folder and its project's directory. Only
     /// sessions in a git project have one.
     fn session_checkout(&self, chat_id: &str) -> Result<(Arc<SessionRow>, String, String)> {
         let ws = self.workspace();
@@ -906,23 +906,19 @@ impl Client {
 
     /// Existing linked worktrees for the session; excludes the main checkout
     /// and branches without a worktree.
-    pub async fn session_refs(&self, chat_id: &str) -> Result<Vec<(RepoRef, RefPlace)>> {
+    pub async fn session_worktrees(&self, chat_id: &str) -> Result<Vec<SessionWorktree>> {
         let (row, cwd, root) = self.session_checkout(chat_id)?;
         let refs = self.list_refs(&row.device_id, &root).await?;
         Ok(refs
             .into_iter()
-            .filter(|reference| reference.worktree_path.is_some())
-            .map(|reference| {
-                let place = reference.place(&cwd, &root);
-                (reference, place)
-            })
+            .filter_map(|reference| reference.session_worktree(&cwd))
             .collect())
     }
 
     /// Switch to a ref's existing linked worktree without running checkout.
     /// The host validates and updates cwd/branch/checkout identity together.
     /// Visible history stays; native resume remains scoped to its original cwd.
-    pub async fn switch_session_ref(
+    pub async fn switch_session_worktree(
         &self,
         chat_id: &str,
         ref_name: &str,
@@ -1517,39 +1513,18 @@ impl Client {
 
     /// `git checkout <ref>` in `repo_path` on the device.
     pub async fn switch_ref(&self, device_id: &str, repo_path: &str, ref_name: &str) -> Result<()> {
-        self.checkout_ref(device_id, repo_path, ref_name)
-            .await
-            .map(drop)
-    }
-
-    /// [`Self::switch_ref`], returning the resulting branch, if attached.
-    async fn checkout_ref(
-        &self,
-        device_id: &str,
-        repo_path: &str,
-        ref_name: &str,
-    ) -> Result<Option<String>> {
-        let branch = match self.inner.backend() {
-            Backend::Demo(demo) => {
-                demo.switch_ref(repo_path, ref_name).await?;
-                ref_name.to_owned()
-            }
-            Backend::Live(live) => {
-                let value = live
-                    .relay
-                    .call(
-                        device_id,
-                        zeron_rpc::methods::SWITCH_REF,
-                        serde_json::json!({
-                            "repoPath": repo_path,
-                            "refName": ref_name,
-                        }),
-                    )
-                    .await?;
-                value["branch"].as_str().unwrap_or_default().to_owned()
-            }
-        };
-        Ok((!branch.is_empty()).then_some(branch))
+        match self.inner.backend() {
+            Backend::Demo(demo) => demo.switch_ref(repo_path, ref_name).await,
+            Backend::Live(live) => live
+                .relay
+                .call(
+                    device_id,
+                    zeron_rpc::methods::SWITCH_REF,
+                    serde_json::json!({ "repoPath": repo_path, "refName": ref_name }),
+                )
+                .await
+                .map(|_| ()),
+        }
     }
 
     /// Create a worktree for `branch` (an existing ref); returns its path.

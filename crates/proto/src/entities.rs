@@ -350,34 +350,22 @@ pub struct RepoRef {
     pub worktree_path: Option<String>,
 }
 
-/// Where a ref is checked out relative to one session's folder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// An existing linked worktree offered to a session. The name is its branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub enum RefPlace {
-    /// The session's own folder is on it.
-    Here,
-    /// Another folder holds it; selecting it moves the session to that folder.
-    Elsewhere,
-    /// Not checked out in the project folder or a linked worktree.
-    Free,
+pub struct SessionWorktree {
+    pub name: String,
+    pub is_current: bool,
 }
 
 impl RepoRef {
-    /// [`RefPlace`] of this ref for a session working in `cwd` of a repo whose
-    /// main checkout is `root`. A ref held elsewhere selects that checkout
-    /// without changing either worktree's branch or files.
-    pub fn place(&self, cwd: &str, root: &str) -> RefPlace {
-        let same =
-            |a: &str, b: &str| a.trim_end_matches(['/', '\\']) == b.trim_end_matches(['/', '\\']);
-        match self
-            .worktree_path
-            .as_deref()
-            .or(self.current.then_some(root))
-        {
-            Some(path) if same(path, cwd) => RefPlace::Here,
-            Some(_) => RefPlace::Elsewhere,
-            None => RefPlace::Free,
-        }
+    /// Exclude main checkout and unoccupied branches at the catalog boundary.
+    pub fn session_worktree(&self, cwd: &str) -> Option<SessionWorktree> {
+        let path = self.worktree_path.as_deref()?;
+        Some(SessionWorktree {
+            name: self.name.clone(),
+            is_current: path.trim_end_matches(['/', '\\']) == cwd.trim_end_matches(['/', '\\']),
+        })
     }
 }
 
@@ -1555,22 +1543,25 @@ pub struct ChatConnectivity {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn ref_place_is_relative_to_the_session_folder() {
-        let r = |name: &str, current, worktree: Option<&str>| RepoRef {
+    fn session_worktrees_exclude_main_and_free_branches() {
+        let reference = |name: &str, current, path: Option<&str>| RepoRef {
             name: name.into(),
             current,
-            worktree_path: worktree.map(str::to_owned),
+            worktree_path: path.map(str::to_owned),
         };
-        let main = r("main", true, None);
-        let feature = r("feature", false, Some("/wt/feature/"));
-        let free = r("fix", false, None);
-        // A session in the main folder owns the main checkout's branch.
-        assert_eq!(main.place("/repo", "/repo"), RefPlace::Here);
-        assert_eq!(feature.place("/repo", "/repo"), RefPlace::Elsewhere);
-        assert_eq!(free.place("/repo", "/repo"), RefPlace::Free);
-        // A worktree session owns its worktree's branch, not the main one.
-        assert_eq!(feature.place("/wt/feature", "/repo"), RefPlace::Here);
-        assert_eq!(main.place("/wt/feature", "/repo"), RefPlace::Elsewhere);
+        assert!(
+            reference("main", true, None)
+                .session_worktree("/repo")
+                .is_none()
+        );
+        assert!(
+            reference("free", false, None)
+                .session_worktree("/repo")
+                .is_none()
+        );
+        let worktree = reference("feature", false, Some("/wt/feature/"));
+        assert!(!worktree.session_worktree("/repo").unwrap().is_current);
+        assert!(worktree.session_worktree("/wt/feature").unwrap().is_current);
     }
 
     use super::*;

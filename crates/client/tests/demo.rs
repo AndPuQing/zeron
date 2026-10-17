@@ -623,26 +623,22 @@ fn block<T: Send + 'static>(
 }
 
 #[test]
-fn session_branch_switch_selects_existing_worktrees() {
+fn session_worktree_switch_selects_existing_worktrees() {
     let (client, _dir) = demo(fast());
     let refs = block({
         let client = client.clone();
-        async move { client.session_refs("chat-tabs").await }
+        async move { client.session_worktrees("chat-tabs").await }
     })
     .unwrap();
-    assert!(refs.iter().all(|(r, _)| r.worktree_path.is_some()));
     assert!(
         !refs
             .iter()
-            .any(|(r, _)| r.name == "main" || r.name == "feature/diff-pane")
+            .any(|r| r.name == "main" || r.name == "feature/diff-pane")
     );
-    assert!(
-        refs.iter()
-            .any(|(r, p)| r.name == "veil-fade" && *p == zeron_client::RefPlace::Elsewhere)
-    );
+    assert!(refs.iter().any(|r| r.name == "veil-fade" && !r.is_current));
     let switch = |chat: &'static str, name: &'static str| {
         let client = client.clone();
-        block(async move { client.switch_session_ref(chat, name).await })
+        block(async move { client.switch_session_worktree(chat, name).await })
     };
     let original = client.workspace().session("chat-tabs").unwrap().cwd.clone();
     switch("chat-tabs", "veil-fade").unwrap();
@@ -650,6 +646,16 @@ fn session_branch_switch_selects_existing_worktrees() {
         client.workspace().session("chat-tabs").unwrap().cwd != original
     });
     let target = client.workspace().session("chat-tabs").unwrap().cwd.clone();
+    let worktrees = block({
+        let client = client.clone();
+        async move { client.session_worktrees("chat-tabs").await }
+    })
+    .unwrap();
+    assert!(
+        worktrees
+            .iter()
+            .any(|worktree| worktree.name == "veil-fade" && worktree.is_current)
+    );
     for name in ["main", "feature/diff-pane"] {
         assert!(
             switch("chat-tabs", name)

@@ -25,8 +25,8 @@ use gpui::{
 
 use zeron_engine::registry::{HarnessDescriptor, TitleSettings};
 use zeron_proto::{
-    Chat, ChatConfig, ChatIndicator, FolderListing, HarnessId, Model, ReasoningLevel, RefPlace,
-    RepoRef, SandboxLevel, Space,
+    Chat, ChatConfig, ChatIndicator, FolderListing, HarnessId, Model, ReasoningLevel, RepoRef,
+    SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -2022,7 +2022,7 @@ impl Pickers {
         // An existing session switches its own checkout instead of updating
         // the draft.
         if self.state.read(cx).selected_chat_row().is_some() {
-            self.switch_session_ref(row, cx);
+            self.switch_session_worktree(row, cx);
             return;
         }
         if row.worktree_path.is_some() {
@@ -2098,12 +2098,12 @@ impl Pickers {
         cx.notify();
     }
 
-    /// The selected session's checkout (`cwd`, project root) and whether a
+    /// The selected session's working directory and whether a
     /// turn is in flight; `None` when it has no folder in a git project.
-    fn session_checkout(&self, cx: &App) -> Option<(Chat, String, String, bool)> {
+    fn session_checkout(&self, cx: &App) -> Option<(Chat, String, bool)> {
         let state = self.state.read(cx);
         let chat = state.selected_chat_row()?.clone();
-        let space = state
+        state
             .selected_space_row()
             .filter(|space| space.git_detected)?;
         let cwd = chat.cwd.clone()?;
@@ -2111,15 +2111,15 @@ impl Pickers {
             state.display_status_for(&chat, chrono::Utc::now()),
             ChatIndicator::Working | ChatIndicator::AwaitingInput
         );
-        Some((chat, cwd, space.path.clone(), busy))
+        Some((chat, cwd, busy))
     }
 
     /// Move to an existing linked worktree. The host validates the target.
-    fn switch_session_ref(&mut self, row: RepoRef, cx: &mut Context<Self>) {
+    fn switch_session_worktree(&mut self, row: RepoRef, cx: &mut Context<Self>) {
         if self.switching.is_some() {
             return; // one switch at a time
         }
-        let Some((chat, cwd, root, busy)) = self.session_checkout(cx) else {
+        let Some((chat, cwd, busy)) = self.session_checkout(cx) else {
             return;
         };
         if busy {
@@ -2127,18 +2127,15 @@ impl Pickers {
             cx.notify();
             return;
         }
-        if row.worktree_path.is_none() {
+        let Some(worktree) = row.session_worktree(&cwd) else {
             self.switch_error = Some("Select an existing linked worktree.".into());
             cx.notify();
             return;
-        }
-        match row.place(&cwd, &root) {
-            RefPlace::Here => {
-                self.animate_close(cx);
-                cx.notify();
-                return;
-            }
-            RefPlace::Elsewhere | RefPlace::Free => {}
+        };
+        if worktree.is_current {
+            self.animate_close(cx);
+            cx.notify();
+            return;
         }
         let Some(engine) = self.engine(cx) else {
             return;
@@ -3762,16 +3759,7 @@ impl Pickers {
             )
     }
 
-    /// A read-only footer label (locked sessions — t3code's
-    /// `resolveLockedWorkspaceLabel` span).
-    fn footer_label(icon_path: &'static str, label: SharedString, theme: &Theme) -> gpui::Div {
-        Self::footer_label_shell(icon_path, theme)
-            .max_w(px(160.0))
-            .child(div().min_w_0().truncate().child(label))
-    }
-
-    /// A [`Self::footer_label`] that takes whatever width the row leaves it
-    /// and fades its tail only when that isn't enough.
+    /// A read-only footer label that uses the remaining width and fades overflow.
     fn footer_faded_label(
         id: &'static str,
         icon_path: &'static str,
@@ -3987,15 +3975,14 @@ impl Pickers {
 
         if let Some(chat) = &session {
             // A session can move to an existing linked worktree.
-            // The checkout-kind label reflects its current folder.
             // The target (project @ device) lives in the titlebar now.
             let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
                 return None;
             };
             let is_worktree = self.refs.ready().is_some_and(|refs| {
                 refs.iter().any(|r| {
-                    r.worktree_path.is_some()
-                        && r.place(chat.cwd.as_deref().unwrap_or(""), &space.path) == RefPlace::Here
+                    r.session_worktree(chat.cwd.as_deref().unwrap_or(""))
+                        .is_some_and(|worktree| worktree.is_current)
                 })
             }) || chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
             let branch_label = if is_worktree {
@@ -4007,7 +3994,7 @@ impl Pickers {
                 "Select worktree".into()
             };
             let branch: AnyElement = match self.session_checkout(cx) {
-                Some((_, _, _, false)) => {
+                Some((_, _, false)) => {
                     let closing = (self.open.closing_since(), self.menu_geometry().below);
                     let mut overlay = match self.mounted_kind() {
                         Some(PickerKind::Branch) => {
@@ -4331,9 +4318,7 @@ impl Pickers {
             .selected_chat_row()
             .and_then(|c| c.branch.clone());
         let switching = self.switching.clone();
-        let session_checkout = self
-            .session_checkout(cx)
-            .map(|(_, cwd, root, _)| (cwd, root));
+        let session_checkout = self.session_checkout(cx).map(|(_, cwd, _)| cwd);
         let scrollbar = popover::rail(self, "branch-scrollbar", &theme, cx);
         let body: AnyElement = match &self.refs {
             Loadable::Loading | Loadable::Idle => {
@@ -4373,13 +4358,12 @@ impl Pickers {
                                     // Right-aligned muted tag (t3code `text-[10px]
                                     // text-muted-foreground/45`): current beats worktree.
                                     // In a session, "current" is the session's folder.
-                                    let place = session_checkout
+                                    let worktree = session_checkout
                                         .as_ref()
-                                        .map(|(cwd, root)| row.place(cwd, root));
-                                    let tag: Option<&'static str> = match place {
-                                        Some(RefPlace::Here) => Some("current"),
-                                        Some(RefPlace::Elsewhere) => Some("switch worktree"),
-                                        Some(RefPlace::Free) => None,
+                                        .and_then(|cwd| row.session_worktree(cwd));
+                                    let tag: Option<&'static str> = match worktree {
+                                        Some(worktree) if worktree.is_current => Some("current"),
+                                        Some(_) => Some("switch worktree"),
                                         None if row.current => Some("current"),
                                         None if row.worktree_path.is_some() => Some("worktree"),
                                         None => None,
@@ -4431,8 +4415,6 @@ impl Pickers {
             .flex_col()
             .child(self.search_box(&theme))
             .child(body);
-        // Mid-session switch failure (dirty tree, ref checked out elsewhere):
-        // git's own message, under a hairline.
         if self.session_checkout(cx).is_some() {
             popover = popover.child(
                 div()
@@ -7658,7 +7640,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn session_branch_switch_resolves_worktrees_on_its_host(cx: &mut gpui::TestAppContext) {
+    fn session_worktree_switch_resolves_worktrees_on_its_host(cx: &mut gpui::TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

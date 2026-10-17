@@ -81,11 +81,10 @@ import uniffi.zeron_core.InputRequest
 import uniffi.zeron_core.ModelInfo
 import uniffi.zeron_core.QueueGate
 import uniffi.zeron_core.QueueItem
-import uniffi.zeron_core.RefPlace
 import uniffi.zeron_core.SandboxLevel
 import uniffi.zeron_core.SendRequest
 import uniffi.zeron_core.SessionHandle
-import uniffi.zeron_core.SessionRef
+import uniffi.zeron_core.SessionWorktree
 import uniffi.zeron_core.SessionRow
 import uniffi.zeron_core.UserInputAnswer
 import uniffi.zeron_core.fallbackModels
@@ -293,17 +292,17 @@ private fun coreMessage(e: Throwable): String =
  * Only existing linked worktrees are destinations. Running turns keep their folder.
  */
 @Composable
-private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, open: Boolean, onDismiss: () -> Unit) {
+private fun WorktreeMenu(client: CoreClient, chatId: String, running: Boolean, open: Boolean, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var refs by remember(chatId) { mutableStateOf<List<SessionRef>?>(null) }
+    var worktrees by remember(chatId) { mutableStateOf<List<SessionWorktree>?>(null) }
     var failure by remember(chatId) { mutableStateOf<String?>(null) }
     LaunchedEffect(open, chatId, running) {
         if (open && !running) {
-            refs = null
+            worktrees = null
             failure = null
             try {
-                refs = client.sessionRefs(chatId)
+                worktrees = client.sessionWorktrees(chatId)
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -312,26 +311,25 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
         }
     }
     fun toast(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
-    val loaded = refs
+    val loaded = worktrees
     val choices = when {
         running -> listOf(MenuChoice("Stop the current turn to switch worktrees") {})
         failure != null -> listOf(MenuChoice(failure.orEmpty()) {})
         loaded == null -> listOf(MenuChoice("Loading worktrees…") {})
         loaded.isEmpty() -> listOf(MenuChoice("No worktrees available") {})
-        else -> loaded.map { ref ->
-            val held = ref.place == RefPlace.ELSEWHERE
-            MenuChoice(ref.name, ref.place == RefPlace.HERE, if (held) "Switch worktree · agent may start a new session" else null) {
-                when (ref.place) {
-                    RefPlace.ELSEWHERE -> scope.launch {
+        else -> loaded.map { worktree ->
+            val moving = !worktree.isCurrent
+            MenuChoice(worktree.name, worktree.isCurrent, if (moving) "Switch worktree · agent may start a new session" else null) {
+                if (!worktree.isCurrent) {
+                    scope.launch {
                         try {
-                            client.switchSessionRef(chatId, ref.name)
+                            client.switchSessionWorktree(chatId, worktree.name)
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
                             toast(coreMessage(e))
                         }
                     }
-                    RefPlace.HERE, RefPlace.FREE -> {}
                 }
             }
         }
@@ -383,12 +381,12 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
                 MenuChoice("Open pull request") { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(pr.url)) },
                 MenuChoice("Switch worktree", supporting = row?.branch) { menu = "branch" },
             ))))
-            BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
+            WorktreeMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
         }
     } else {
         row?.branch?.takeIf { it.isNotEmpty() }?.let {
             ContextChip(it, leading = { ZIcon(ZIcons.Branch, null, Modifier.size(16.dp)) }, onClick = { menu = "branch" }) {
-                BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
+                WorktreeMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
             }
         }
     }

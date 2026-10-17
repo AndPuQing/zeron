@@ -346,27 +346,21 @@ impl CoreClient {
     }
 
     /// The session's existing linked worktrees, excluding the main checkout.
-    pub async fn session_refs(&self, chat_id: String) -> CoreResult<Vec<SessionRef>> {
+    pub async fn session_worktrees(&self, chat_id: String) -> CoreResult<Vec<SessionWorktree>> {
         let client = self.client.clone();
-        let refs = on_runtime(async move { client.session_refs(&chat_id).await }).await?;
-        Ok(refs
-            .into_iter()
-            .map(|(reference, place)| SessionRef {
-                name: reference.name,
-                place: place.into(),
-            })
-            .collect())
+        let refs = on_runtime(async move { client.session_worktrees(&chat_id).await }).await?;
+        Ok(refs.into_iter().map(SessionWorktree::from).collect())
     }
 
     /// Switch to an existing linked worktree; never run git checkout.
     /// Never during a turn. Returns the session's branch afterwards.
-    pub async fn switch_session_ref(
+    pub async fn switch_session_worktree(
         &self,
         chat_id: String,
         ref_name: String,
     ) -> CoreResult<Option<String>> {
         let client = self.client.clone();
-        on_runtime(async move { client.switch_session_ref(&chat_id, &ref_name).await }).await
+        on_runtime(async move { client.switch_session_worktree(&chat_id, &ref_name).await }).await
     }
 
     // ── sessions ───────────────────────────────────────────────────────────

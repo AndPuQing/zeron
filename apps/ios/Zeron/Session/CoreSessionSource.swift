@@ -253,14 +253,14 @@ final class CoreSessionSource: SessionSource {
                 }
             }])
         case "branch":
-            return branchMenu(title: "Switch Worktree")
+            return worktreeMenu(title: "Switch Worktree")
         case "pr":
             guard let url = row.pullRequest.flatMap({ URL(string: $0.url) }) else { return nil }
             // The PR chip stands in for the branch chip, so it carries the switch.
             return UIMenu(title: row.pullRequest?.title ?? "", children: [
                 UIAction(title: "Open Pull Request", image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(url) },
                 UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in UIPasteboard.general.url = url },
-                branchMenu(title: "Switch Worktree", image: BranchIcon.sized()),
+                worktreeMenu(title: "Switch Worktree", image: BranchIcon.sized()),
             ])
         default:
             return nil
@@ -268,7 +268,7 @@ final class CoreSessionSource: SessionSource {
     }
 
     /// Only existing linked worktrees are offered as destinations.
-    private func branchMenu(title: String, image: UIImage? = nil) -> UIMenu {
+    private func worktreeMenu(title: String, image: UIImage? = nil) -> UIMenu {
         UIMenu(title: title, image: image, children: [UIDeferredMenuElement.uncached { [weak self] done in
             guard let self else { return done([]) }
             if self.chrome.running {
@@ -276,18 +276,18 @@ final class CoreSessionSource: SessionSource {
             }
             Task { @MainActor in
                 do {
-                    let refs = try await self.client.sessionRefs(chatId: self.chatId)
-                    guard !refs.isEmpty else {
+                    let worktrees = try await self.client.sessionWorktrees(chatId: self.chatId)
+                    guard !worktrees.isEmpty else {
                         return done([UIAction(title: "No worktrees available", attributes: .disabled) { _ in }])
                     }
-                    done(refs.map { ref in
-                        let held = ref.place == .elsewhere
+                    done(worktrees.map { worktree in
+                        let moving = !worktree.isCurrent
                         return UIAction(
-                            title: ref.name,
-                            subtitle: held ? "Switch worktree · agent may start a new session" : nil,
-                            state: ref.place == .here ? .on : .off
+                            title: worktree.name,
+                            subtitle: moving ? "Switch worktree · agent may start a new session" : nil,
+                            state: worktree.isCurrent ? .on : .off
                         ) { [weak self] _ in
-                            if ref.place == .elsewhere { self?.switchBranch(ref.name) }
+                            if !worktree.isCurrent { self?.switchWorktree(worktree.name) }
                         }
                     })
                 } catch {
@@ -297,12 +297,12 @@ final class CoreSessionSource: SessionSource {
         }])
     }
 
-    private func switchBranch(_ name: String) {
+    private func switchWorktree(_ name: String) {
         let client = self.client
         let chatId = self.chatId
         Task { @MainActor in
             do {
-                _ = try await client.switchSessionRef(chatId: chatId, refName: name)
+                _ = try await client.switchSessionWorktree(chatId: chatId, refName: name)
             } catch {
                 let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
                 Toast.show(sideChatErrorMessage(error), in: window)

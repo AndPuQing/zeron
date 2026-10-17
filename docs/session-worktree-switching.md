@@ -37,7 +37,11 @@ context in one registry operation. Cached launch configuration is retargeted
 for steer/input fallbacks while preserving approval and sandbox settings;
 native-session provenance remains bound to its original directory.
 
-Clients filter the worktree catalog for mouse and keyboard navigation. The host
+The session catalog exposes `SessionWorktree { name, is_current }`; main
+checkout and unoccupied branches are excluded before presentation. Desktop and
+mobile share this conversion. Session APIs and menus use worktree naming; the
+existing wire method remains `SwitchSessionRef`. Clients filter the worktree
+catalog for mouse and keyboard navigation. The host
 also rejects main-checkout, unoccupied and missing refs. The legacy `SwitchRef`
 RPC rejects session-specific requests, preventing an older branch-switch client
 from falling back to an in-place checkout. Existing non-session Git operations

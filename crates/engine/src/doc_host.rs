@@ -5747,7 +5747,7 @@ impl DocHost {
     /// Resolve an existing linked worktree on the host and move the session
     /// there. Main-checkout and unoccupied branches are never destinations.
     /// Serialize against prompt and queue delivery, including other devices.
-    pub(crate) async fn switch_session_ref(
+    pub(crate) async fn switch_session_worktree(
         &self,
         chat_id: &str,
         expected_cwd: &str,
