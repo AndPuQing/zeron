@@ -33,6 +33,27 @@ pub struct SessionImportController {
     pub handle: SessionImportHandler,
 }
 
+/// The agent filter lists every provider the importer can read; a menu keeps
+/// the toolbar steady as harnesses are added.
+const AGENT_FILTERS: [Option<SessionProvider>; 3] = [
+    None,
+    Some(SessionProvider::Codex),
+    Some(SessionProvider::ClaudeCode),
+];
+
+const STATUS_FILTERS: [ImportStatusFilter; 3] = [
+    ImportStatusFilter::All,
+    ImportStatusFilter::NotImported,
+    ImportStatusFilter::Imported,
+];
+
+/// Which filter menu owns the shared popup — at most one is open at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FilterMenu {
+    Agent,
+    Status,
+}
+
 pub struct SessionImportDialog {
     rpc: rpc::Requests,
     model: ImportModel,
@@ -44,6 +65,8 @@ pub struct SessionImportDialog {
     list_scroll: ScrollHandle,
     device_menu: popover::Popup<()>,
     device_menu_active: usize,
+    filter_menu: popover::Popup<FilterMenu>,
+    filter_menu_active: usize,
     _search_events: Subscription,
 }
 
@@ -77,6 +100,8 @@ impl SessionImportDialog {
             list_scroll: ScrollHandle::new(),
             device_menu: popover::Popup::default(),
             device_menu_active: 0,
+            filter_menu: popover::Popup::default(),
+            filter_menu_active: 0,
             _search_events: events,
         }
     }
@@ -134,6 +159,7 @@ impl SessionImportDialog {
 
     fn choose_device(&mut self, index: usize, cx: &mut Context<Self>) {
         self.close_device_menu(cx);
+        self.close_filter_menu(cx);
         if index == self.model.device_index || self.is_importing() {
             cx.notify();
             return;
@@ -152,6 +178,7 @@ impl SessionImportDialog {
 
     fn start_import(&mut self, retry: bool, cx: &mut Context<Self>) {
         self.close_device_menu(cx);
+        self.close_filter_menu(cx);
         if let Some(event) = self.model.begin_import(retry) {
             // The submit/retry control unmounts in the next render. Transfer
             // its focus before the old handle leaves the dispatch tree.
@@ -177,6 +204,7 @@ impl SessionImportDialog {
         if self.is_importing() {
             return;
         }
+        self.close_filter_menu(cx);
         self.model.batch = None;
         self.model.selected.clear();
         self.focus_pending = true;
@@ -190,9 +218,52 @@ impl SessionImportDialog {
         }
     }
 
+    fn close_filter_menu(&mut self, cx: &mut Context<Self>) {
+        if self.filter_menu.begin_close() {
+            popover::reap_popup(cx, |dialog| &mut dialog.filter_menu);
+            cx.notify();
+        }
+    }
+
+    fn choose_filter(&mut self, kind: FilterMenu, index: usize, cx: &mut Context<Self>) {
+        self.close_filter_menu(cx);
+        match kind {
+            FilterMenu::Agent if index < AGENT_FILTERS.len() => {
+                self.model.provider = AGENT_FILTERS[index];
+            }
+            FilterMenu::Status if index < STATUS_FILTERS.len() => {
+                self.model.status = STATUS_FILTERS[index];
+            }
+            _ => return,
+        }
+        self.model.active = None;
+        cx.notify();
+    }
+
     fn on_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = event.keystroke.key.as_str();
-        if self.device_menu.is_open() {
+        if let Some(kind) = self.filter_menu.as_open().copied() {
+            let count = match kind {
+                FilterMenu::Agent => AGENT_FILTERS.len(),
+                FilterMenu::Status => STATUS_FILTERS.len(),
+            };
+            match key {
+                "escape" | "tab" => self.close_filter_menu(cx),
+                "up" | "down" => {
+                    self.filter_menu_active = popover::menu_step(
+                        Some(self.filter_menu_active),
+                        count,
+                        if key == "down" { 1 } else { -1 },
+                    )
+                    .unwrap_or(0)
+                }
+                "enter" => {
+                    let index = self.filter_menu_active;
+                    self.choose_filter(kind, index, cx);
+                }
+                _ => return,
+            }
+        } else if self.device_menu.is_open() {
             match key {
                 "escape" | "tab" => self.close_device_menu(cx),
                 "up" | "down" => {
@@ -291,69 +362,118 @@ impl SessionImportDialog {
         cx.notify();
     }
 
-    fn render_filters(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let mut providers = div().flex().items_center().gap(px(2.0));
-        for (index, provider) in [
-            None,
-            Some(SessionProvider::Codex),
-            Some(SessionProvider::ClaudeCode),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let selected = self.model.provider == provider;
-            providers = providers.child(
-                popover::btn_ghost(
-                    theme,
-                    provider.map_or("All agents", SessionProvider::label),
-                    format!("import-provider-{index}"),
-                )
-                .id(("import-provider", index))
-                .role(gpui::Role::Button)
-                .aria_selected(selected)
-                .tab_index(0)
-                .px(px(8.0))
-                .when(selected, |button| {
-                    button
-                        .bg(crate::theme::card_selected_bg())
-                        .text_color(theme.text)
-                })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.model.provider = provider;
-                    this.model.active = None;
+    /// One filter dropdown: the trigger reports the active choice, the menu
+    /// lists every choice with the current one checked. A menu, not a row of
+    /// chips, so added harnesses do not crowd the toolbar.
+    fn render_filter_picker(
+        &self,
+        theme: &Theme,
+        kind: FilterMenu,
+        id: &'static str,
+        menu_id: &'static str,
+        labels: &[&str],
+        selected: usize,
+        aria_label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let owns_menu = self.filter_menu.get() == Some(&kind);
+        let mut trigger = popover::btn_ghost(theme, labels[selected], id)
+            .id(id)
+            .debug_selector(move || format!("{id}-trigger"))
+            .role(gpui::Role::Button)
+            .aria_label(aria_label)
+            .aria_expanded(owns_menu && self.filter_menu.is_open())
+            .tab_index(0)
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    this.filter_menu
+                        .note_trigger_press_matching(|open| *open == kind);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                if this.filter_menu.take_press_was_open() {
+                    this.close_filter_menu(cx);
+                } else {
+                    this.filter_menu.open(kind);
+                    this.filter_menu_active = selected;
+                    window.focus(&this.focus, cx);
                     cx.notify();
-                })),
+                }
+            }))
+            .child(
+                icon(icons::ALT_ARROW_DOWN)
+                    .size(px(12.0))
+                    .flex_none()
+                    .text_color(theme.text_muted.opacity(0.5)),
             );
-        }
-        let mut statuses = div().flex().items_center().gap(px(2.0));
-        for (index, status) in [
-            ImportStatusFilter::All,
-            ImportStatusFilter::NotImported,
-            ImportStatusFilter::Imported,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            let selected = self.model.status == status;
-            statuses = statuses.child(
-                popover::btn_ghost(theme, status.label(), format!("import-status-{index}"))
-                    .id(("import-status", index))
+        if owns_menu {
+            let menu = popover::popover_card(theme)
+                .w(px(180.0))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.close_filter_menu(cx);
+                }))
+                .children(labels.iter().enumerate().map(|(index, label)| {
+                    popover::menu_row_nav(
+                        theme,
+                        index == selected,
+                        index == self.filter_menu_active,
+                        format!("{menu_id}-{index}"),
+                    )
+                    .id((menu_id, index))
+                    .debug_selector(move || format!("{menu_id}-{index}"))
                     .role(gpui::Role::Button)
-                    .aria_selected(selected)
-                    .tab_index(0)
-                    .px(px(8.0))
-                    .when(selected, |button| {
-                        button
-                            .bg(crate::theme::card_selected_bg())
-                            .text_color(theme.text)
-                    })
+                    .aria_selected(index == selected)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.model.status = status;
-                        this.model.active = None;
-                        cx.notify();
-                    })),
-            );
+                        this.choose_filter(kind, index, cx);
+                    }))
+                    .child(
+                        div()
+                            .flex_none()
+                            .size(px(14.0))
+                            .flex()
+                            .items_center()
+                            .when(index == selected, |slot| {
+                                slot.child(
+                                    icon(icons::CHECK)
+                                        .size(px(12.0))
+                                        .text_color(theme.text),
+                                )
+                            }),
+                    )
+                    .child(SharedString::from((*label).to_string()))
+                }))
+                .into_any_element();
+            trigger = trigger.child(popover::anchored_menu_below_layer(
+                menu_id,
+                menu,
+                self.filter_menu.closing_since(),
+                6.0,
+                // The dialog is a priority-2 modal layer, so the default
+                // priority-1 menu would paint underneath the card.
+                3,
+            ));
         }
+        trigger.into_any_element()
+    }
+
+    fn render_filters(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let agent_labels = AGENT_FILTERS.map(|provider| {
+            provider.map_or("All agents", SessionProvider::label)
+        });
+        let agent_selected = AGENT_FILTERS
+            .iter()
+            .position(|provider| *provider == self.model.provider)
+            .unwrap_or(0);
+        let status_labels = STATUS_FILTERS.map(ImportStatusFilter::label);
+        let status_selected = STATUS_FILTERS
+            .iter()
+            .position(|status| *status == self.model.status)
+            .unwrap_or(0);
         let has_project = self
             .model
             .devices
@@ -400,23 +520,37 @@ impl SessionImportDialog {
                     .justify_between()
                     .flex_wrap()
                     .gap(px(4.0))
-                    .child({
-                        let show_providers = needs_provider_filter(&self.model);
-                        let show_statuses = needs_status_filter(&self.model);
-                        let mut groups = div().flex().items_center().flex_wrap().gap(px(4.0));
-                        if show_providers {
-                            groups = groups.child(providers);
-                        }
-                        if show_providers && show_statuses {
-                            groups = groups.child(
-                                div().w(px(1.0)).h(px(14.0)).mx(px(4.0)).bg(theme.border),
-                            );
-                        }
-                        if show_statuses {
-                            groups = groups.child(statuses);
-                        }
-                        groups
-                    })
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .flex_wrap()
+                            .gap(px(4.0))
+                            .when(needs_provider_filter(&self.model), |row| {
+                                row.child(self.render_filter_picker(
+                                    theme,
+                                    FilterMenu::Agent,
+                                    "import-agent-filter",
+                                    "import-agent-option",
+                                    &agent_labels,
+                                    agent_selected,
+                                    "Agent filter",
+                                    cx,
+                                ))
+                            })
+                            .when(needs_status_filter(&self.model), |row| {
+                                row.child(self.render_filter_picker(
+                                    theme,
+                                    FilterMenu::Status,
+                                    "import-status-filter",
+                                    "import-status-option",
+                                    &status_labels,
+                                    status_selected,
+                                    "Import status filter",
+                                    cx,
+                                ))
+                            }),
+                    )
                     .when(has_project, |row| row.child(scope)),
             )
             .into_any_element()

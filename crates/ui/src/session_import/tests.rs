@@ -365,6 +365,84 @@ fn native_row_and_checkbox_click_toggle_selection_once(cx: &mut gpui::TestAppCon
     view.read_with(cx, |view, _| assert!(view.model.selected.is_empty()));
 }
 
+/// A dialog with two providers and one already imported session: enough for
+/// both pickers to be offered.
+fn filtered_dialog(cx: &mut gpui::Context<SessionImportDialog>) -> SessionImportDialog {
+    let mut dialog = SessionImportDialog::new(model().devices, "local", cx);
+    let mut claude = session("claude", ImportEligibility::Available);
+    claude.provider = SessionProvider::ClaudeCode;
+    dialog.model.sessions = vec![
+        session("ready", ImportEligibility::Available),
+        claude,
+        session(
+            "managed",
+            ImportEligibility::AlreadyManaged {
+                chat_id: "chat".into(),
+            },
+        ),
+    ];
+    dialog.model.discovery = Loadable::Ready(());
+    dialog
+}
+
+#[gpui::test]
+fn native_agent_filter_picks_a_provider_from_its_menu(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| filtered_dialog(cx));
+    let trigger = cx.debug_bounds("import-agent-filter-trigger").unwrap();
+    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.filter_menu.get(), Some(&FilterMenu::Agent))
+    });
+    let option = cx.debug_bounds("import-agent-option-2").unwrap();
+    cx.simulate_click(option.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.model.provider, Some(SessionProvider::ClaudeCode));
+        assert!(view.filter_menu.as_open().is_none());
+        assert_eq!(
+            view.model
+                .visible_sessions("")
+                .iter()
+                .map(|row| row.source_ref.as_str())
+                .collect::<Vec<_>>(),
+            ["claude"]
+        );
+    });
+}
+
+#[gpui::test]
+fn native_status_filter_picks_an_eligibility_from_its_menu(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        gpui_base::init(cx);
+        cx.set_global(Theme::default());
+        crate::composer::init(cx, Default::default());
+    });
+    let (view, cx) = cx.add_window_view(|_, cx| filtered_dialog(cx));
+    let trigger = cx.debug_bounds("import-status-filter-trigger").unwrap();
+    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.filter_menu.get(), Some(&FilterMenu::Status))
+    });
+    let option = cx.debug_bounds("import-status-option-1").unwrap();
+    cx.simulate_click(option.center(), gpui::Modifiers::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.model.status, ImportStatusFilter::NotImported);
+        assert!(
+            view.model
+                .visible_sessions("")
+                .iter()
+                .all(|row| !matches!(
+                    row.eligibility,
+                    ImportEligibility::AlreadyManaged { .. }
+                ))
+        );
+    });
+}
+
 #[gpui::test]
 fn native_group_header_toggles_every_importable_session_in_its_project(
     cx: &mut gpui::TestAppContext,
