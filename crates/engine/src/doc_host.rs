@@ -5825,6 +5825,9 @@ impl DocHost {
             expected_cwd.to_owned()
         };
         if occupied.is_none() {
+            if sessions.checkout_has_active_run(&target) {
+                return Err(EngineError::Other("Another session is working in this folder. Stop it before checking out a different branch, or select an existing worktree.".into()));
+            }
             repos.switch_ref(&target, ref_name).await?;
         }
         let context = self
@@ -5843,6 +5846,9 @@ impl DocHost {
         }
         if !workspace.set_chat_worktree(chat_id, &context)? {
             return Err(EngineError::Other("Session no longer exists.".into()));
+        }
+        if moving {
+            sessions.retarget_last_request(chat_id, &context.cwd);
         }
         Ok(context)
     }

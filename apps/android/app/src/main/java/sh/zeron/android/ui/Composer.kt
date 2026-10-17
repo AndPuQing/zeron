@@ -299,8 +299,9 @@ private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, ope
     val scope = rememberCoroutineScope()
     var refs by remember(chatId) { mutableStateOf<List<SessionRef>?>(null) }
     var failure by remember(chatId) { mutableStateOf<String?>(null) }
-    LaunchedEffect(open, chatId) {
+    LaunchedEffect(open, chatId, running) {
         if (open && !running) {
+            refs = null
             failure = null
             try {
                 refs = client.sessionRefs(chatId)

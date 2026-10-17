@@ -24,6 +24,8 @@ native sessions remain bound to their copied native session's original folder
 and cannot move through this action.
 
 A running turn or background agent work blocks switching. Stop it first.
+An in-place branch checkout also checks for active work in other sessions
+sharing the same folder; selecting an existing worktree leaves that folder alone.
 Requests from stale clients with the old directory are rejected, including
 messages that would otherwise run in the old directory. Switching does not
 create, delete, reset, stash or merge worktrees.
@@ -34,6 +36,9 @@ create, delete, reset, stash or merge worktrees.
 membership and the expected current cwd, and serializes against prompt and queue
 delivery. It publishes cwd, branch, checkout id and conversation source context
 in one registry operation. Clients do not independently patch these fields.
+Cached launch configuration is retargeted for steer/input fallbacks while
+preserving approval and sandbox settings; native-session provenance remains
+bound to its original directory.
 
 The separate RPC is intentional: older hosts report an unsupported method
 instead of executing legacy `SwitchRef` checkout behavior. Update the execution

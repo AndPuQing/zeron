@@ -868,6 +868,7 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
         &["worktree", "add", "-b", "feature", other.to_str().unwrap()],
     )
     .await;
+    git(&repo, &["branch", "free"]).await;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let finish = Arc::new(tokio::sync::Notify::new());
     let registry = HarnessRegistry::new();
@@ -899,7 +900,7 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
         reasoning: None,
         model_options: Default::default(),
         sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
-        auto_approve: true,
+        auto_approve: false,
         resume: None,
         require_native_resume: false,
         attachments: vec![],
@@ -930,6 +931,23 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
     assert_eq!(
         core.workspace.chat("c").unwrap().unwrap().cwd.as_deref(),
         repo.to_str()
+    );
+    client.call(methods::MUTATE, serde_json::json!({
+        "op":"createChat", "chatId":"other-chat", "spaceId":"s", "deviceId":core.device_id, "cwd":repo, "branch":"main"
+    })).await.unwrap();
+    let shared = client
+        .call(
+            methods::SWITCH_SESSION_REF,
+            serde_json::json!({
+                "chatId":"other-chat", "repoPath":repo, "refName":"free"
+            }),
+        )
+        .await
+        .unwrap_err();
+    assert!(shared.to_string().contains("Another session is working"));
+    assert_eq!(
+        git_stdout(&repo, &["branch", "--show-current"]).await,
+        "main"
     );
     finish.notify_one();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -996,9 +1014,9 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
                 id: "after-switch".into(),
                 issued_at: chrono::Utc::now().timestamp_millis(),
                 issued_by: core.device_id.clone(),
-                payload: zeron_doc::SessionCommandPayload::Run {
-                    request: request(moved["cwd"].as_str().unwrap().into()),
-                    message_id: "after-switch-user".into(),
+                payload: zeron_doc::SessionCommandPayload::Steer {
+                    prompt: "continue after switching worktrees".into(),
+                    message_id: Some("after-switch-user".into()),
                 },
                 status: zeron_doc::SessionCommandStatus::Pending,
                 resolution: None,
@@ -1014,6 +1032,10 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
         .unwrap();
     assert_eq!(next.cwd, moved["cwd"].as_str().unwrap());
     assert!(next.resume.is_none());
+    assert!(
+        !next.auto_approve,
+        "switching must retain approval settings"
+    );
     finish.notify_one();
     core.sessions.terminate("c").await.unwrap();
 }
