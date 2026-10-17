@@ -208,6 +208,7 @@ impl PullRequestDetailPage {
                             page.target.clone(),
                             page.url.clone(),
                             DetailSnapshot {
+                                preview: None,
                                 detail: detail.clone(),
                                 body: parsed.clone(),
                                 activity: page.activity_bodies.clone(),
@@ -731,6 +732,7 @@ mod tests {
                 None,
                 url.into(),
                 DetailSnapshot {
+                    preview: None,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),
@@ -820,6 +822,7 @@ mod tests {
                 target.clone(),
                 url.into(),
                 DetailSnapshot {
+                    preview: None,
                     detail: ChangeRequestDetail::default(),
                     body: crate::markdown::parse_full(""),
                     activity: Vec::new(),

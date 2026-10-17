@@ -216,6 +216,13 @@ impl Shell {
                     .update(cx, |page, cx| page.update_board_preview(preview, cx));
             }
         }
+        // Closed/merged PRs may no longer appear in the board's filtered list.
+        // Activation must still revalidate the open detail tab in that case.
+        if self.pull_request_pane.open
+            && let Some(page) = self.active_pull_request_page()
+        {
+            page.update(cx, |page, cx| page.revalidate_if_stale(cx));
+        }
         let selected = self
             .pull_request_pane
             .open

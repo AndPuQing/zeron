@@ -442,13 +442,19 @@ impl GitHubCli {
         url: &str,
         refresh: bool,
     ) -> Result<zeron_proto::ChangeRequestDetail, ChangeRequestError> {
-        serde_json::from_value(self.detail_request(url, false, refresh, None, None).await?)
-            .map_err(|_| ChangeRequestError::Decode)
+        serde_json::from_value(
+            self.detail_request(url, false, refresh, None, None, None)
+                .await?,
+        )
+        .map_err(|_| ChangeRequestError::Decode)
     }
 
     pub async fn diff(&self, url: &str, refresh: bool) -> Result<String, ChangeRequestError> {
-        serde_json::from_value(self.detail_request(url, true, refresh, None, None).await?)
-            .map_err(|_| ChangeRequestError::Decode)
+        serde_json::from_value(
+            self.detail_request(url, true, refresh, None, None, None)
+                .await?,
+        )
+        .map_err(|_| ChangeRequestError::Decode)
     }
 
     pub(crate) async fn detail_request(
@@ -458,6 +464,7 @@ impl GitHubCli {
         refresh: bool,
         head: Option<&str>,
         base: Option<&str>,
+        updated_at: Option<&str>,
     ) -> Result<serde_json::Value, ChangeRequestError> {
         let url = validated_pull_request_url(url)?;
         for oid in [head, base].into_iter().flatten() {
@@ -468,11 +475,19 @@ impl GitHubCli {
         let github = self.clone();
         // A board that observed a new revision must never join an older
         // in-flight read or reuse its five-minute (or refresh) cache entry.
-        let key = format!(
+        let mut key = format!(
             "{diff}:{url}:{}:{}",
             head.unwrap_or_default(),
             base.unwrap_or_default()
         );
+        // Metadata can change without a new commit. Do not join a read or
+        // reuse a response for an older board observation. Diffs remain keyed
+        // only by revisions, and identical observations still coalesce.
+        if !diff && let Some(updated_at) = updated_at {
+            let version = chrono::DateTime::parse_from_rfc3339(updated_at)
+                .map_err(|_| ChangeRequestError::Decode)?;
+            key.push_str(&format!(":{}", version.to_rfc3339()));
+        }
         let revisions = head
             .zip(base)
             .map(|(head, base)| (head.to_owned(), base.to_owned()));
@@ -2592,6 +2607,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pr_metadata_version_bypasses_recent_same_commit_cache() {
+        use serde_json::json;
+        let url = "https://github.com/a/b/pull/1";
+        let head = "a".repeat(40);
+        let old_version = "2026-10-17T14:00:00+00:00";
+        let new_version = "2026-10-17T14:00:01+00:00";
+        let runner = FakeProcessRunner::with_responses([
+            command_success(serde_json::to_vec(&json!({"headRefOid":head,"state":"CLOSED","number":1,"comments":[{"body":"new comment"}]})).unwrap()),
+            command_failure("metadata unavailable"),
+            command_success(br#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}}"#.to_vec()),
+        ]);
+        let github = GitHubCli::with_runner(runner.clone());
+        for suffix in [String::new(), format!(":{old_version}")] {
+            github.pr_cache.lock().await.entries.push((
+                format!("false:{url}:{head}:{suffix}"),
+                Instant::now(),
+                Ok(json!({"headRefOid":head,"state":"OPEN"})),
+            ));
+        }
+        for _ in 0..2 {
+            let detail = github
+                .detail_request(url, false, true, Some(&head), None, Some(new_version))
+                .await
+                .unwrap();
+            assert_eq!(detail["state"], "CLOSED");
+            assert_eq!(detail["comments"][0]["body"], "new comment");
+        }
+        assert_eq!(
+            runner.requests().len(),
+            3,
+            "same observation reuses the new response"
+        );
+        assert!(
+            github
+                .detail_request(url, false, true, Some(&head), None, Some("invalid"))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn pr_known_revision_bypasses_recent_detail_cache_and_pins_diff() {
         use serde_json::json;
         let url = "https://github.com/a/b/pull/1";
@@ -2617,12 +2673,12 @@ mod tests {
             ));
         }
         let detail = github
-            .detail_request(url, false, true, Some(&head), None)
+            .detail_request(url, false, true, Some(&head), None, None)
             .await
             .unwrap();
         assert_eq!(detail["headRefOid"], head);
         let diff = github
-            .detail_request(url, true, true, Some(&head), Some(&base))
+            .detail_request(url, true, true, Some(&head), Some(&base), None)
             .await
             .unwrap();
         assert_eq!(diff, "new patch");
@@ -2639,7 +2695,7 @@ mod tests {
         );
         assert!(
             github
-                .detail_request(url, true, false, Some("--help"), None)
+                .detail_request(url, true, false, Some("--help"), None, None)
                 .await
                 .is_err()
         );
