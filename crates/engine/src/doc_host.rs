@@ -5526,6 +5526,15 @@ impl DocHost {
                 if sessions.respond_input(chat_id, request_id, answers.clone())? {
                     return Ok((SessionCommandStatus::Applied, None));
                 }
+                // An orphaned answer starts a runtime, so it shares queue/checkout
+                // serialization. Live answers above must bypass this lock: a
+                // prompt holding it may itself be waiting for user input.
+                // Do not acquire command_drain_lock here: the normal command
+                // drain may already own it (or be waiting for this control).
+                let _transition = handle.drain_lock.lock().await;
+                if sessions.respond_input(chat_id, request_id, answers.clone())? {
+                    return Ok((SessionCommandStatus::Applied, None));
+                }
                 // No live resolver. Only a request id the doc shows as an
                 // OPEN question on a SETTLED entry gets the orphan fallback:
                 // a mismatched or already-resolved id is a stale/buggy answer
@@ -5574,14 +5583,14 @@ impl DocHost {
                 request.prompt = respond_input_prompt(&questions, answers);
                 request.resume = None; // dispatch re-derives the harness session
                 request.attachments = Vec::new();
-                if let Err(err) = handle.doc.resolve_input(request_id) {
-                    tracing::warn!(chat = %chat_id, request = %request_id, error = %err,
-                        "orphaned input resolve failed");
-                }
                 let harness = self.harness_for_request(chat_id, &request);
                 sessions.prepare_imported_run(chat_id, harness, &mut request)?;
                 self.dispatch_with_source_context(sessions, chat_id, harness, request, None)
                     .await?;
+                if let Err(err) = handle.doc.resolve_input(request_id) {
+                    tracing::warn!(chat = %chat_id, request = %request_id, error = %err,
+                        "orphaned input resolve failed");
+                }
                 Ok((
                     SessionCommandStatus::Applied,
                     Some("answered as new turn".into()),
@@ -5742,6 +5751,73 @@ impl DocHost {
             head_sha,
             observed_at: chrono::Utc::now(),
         })
+    }
+
+    /// Check out a branch in this session's existing directory. Serialize
+    /// against prompt delivery, queue delivery and orphaned-input recovery.
+    pub(crate) async fn switch_session_branch(
+        &self,
+        chat_id: &str,
+        expected_cwd: &str,
+        ref_name: &str,
+    ) -> Result<ConversationSourceContext, EngineError> {
+        if !self.is_host(chat_id) {
+            return Err(EngineError::Other(
+                "Only the session host can switch its branch.".into(),
+            ));
+        }
+        let handle = self.open(chat_id)?;
+        let _commands = handle.command_drain_lock.lock().await;
+        let _queue = handle.drain_lock.lock().await;
+        let sessions = self
+            .sessions()
+            .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
+        let workspace = self
+            .workspace()
+            .ok_or_else(|| EngineError::Other("workspace unavailable".into()))?;
+        let chat = workspace
+            .chat(chat_id)?
+            .ok_or_else(|| EngineError::Other("Session no longer exists.".into()))?;
+        if chat.cwd.as_deref() != Some(expected_cwd) || !self.is_host(chat_id) {
+            return Err(EngineError::Other(
+                "The session's working folder changed. Reopen it and try again.".into(),
+            ));
+        }
+        let space = workspace
+            .space(chat.space_id.as_deref().unwrap_or(""))?
+            .filter(|space| space.git_detected)
+            .ok_or_else(|| EngineError::Other("Session is not in a git project.".into()))?;
+        let repos = self
+            .inner
+            .repos
+            .get()
+            .ok_or_else(|| EngineError::Other("repositories unavailable".into()))?;
+        let cwd = repos
+            .workspace_checkout(Path::new(&space.path), Path::new(expected_cwd))
+            .await
+            .ok_or_else(|| {
+                EngineError::Other("The current folder is no longer a project checkout.".into())
+            })?;
+        if sessions.turn_in_flight(chat_id)
+            || sessions.holds_background_work(chat_id)
+            || sessions.checkout_has_active_run(&cwd)
+        {
+            return Err(EngineError::Other(
+                "Stop the current turn and other work in this checkout before switching branches."
+                    .into(),
+            ));
+        }
+        // Git refuses occupied branches and conflicting local changes. Never
+        // force, stash, reset, or move this chat to the branch's other checkout.
+        repos.switch_ref(&cwd, ref_name).await?;
+        let context = self
+            .capture_source_context(expected_cwd)
+            .await
+            .ok_or_else(|| EngineError::Other("Could not read the selected branch.".into()))?;
+        if !workspace.set_chat_source_context(chat_id, &context)? {
+            return Err(EngineError::Other("Session no longer exists.".into()));
+        }
+        Ok(context)
     }
 
     /// Every fresh harness dispatch crosses this boundary, including
@@ -6715,3 +6791,7 @@ mod sync_lifecycle_tests;
 
 #[path = "doc_host_delivery.rs"]
 mod remote_delivery;
+
+#[cfg(test)]
+#[path = "doc_host_checkout_tests.rs"]
+mod checkout_transition_tests;

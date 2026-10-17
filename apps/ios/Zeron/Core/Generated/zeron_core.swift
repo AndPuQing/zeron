@@ -1203,6 +1203,11 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func session(chatId: String)  -> SessionHandle?
     
+    /**
+     * Branches available for checkout in the session's current directory.
+     */
+    func sessionBranches(chatId: String) async throws  -> [SessionBranch]
+    
     func sessionConfig(chatId: String)  -> ChatConfig?
     
     /**
@@ -1230,9 +1235,10 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func switchRef(deviceId: String, repoPath: String, refName: String) async throws 
     
     /**
-     * Mid-session ref switch (worktree retarget or `git checkout`).
+     * Check out a branch in the session’s current directory.
+     * Never during a turn. Returns the session's branch afterwards.
      */
-    func switchSessionRef(chatId: String, reference: RepoRef) async throws 
+    func switchSessionBranch(chatId: String, refName: String) async throws  -> String?
     
     func unarchiveSession(chatId: String) throws 
     
@@ -1957,6 +1963,25 @@ open func session(chatId: String) -> SessionHandle?  {
 })
 }
     
+    /**
+     * Branches available for checkout in the session's current directory.
+     */
+open func sessionBranches(chatId: String)async throws  -> [SessionBranch]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_session_branches(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeSessionBranch.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
 open func sessionConfig(chatId: String) -> ChatConfig?  {
     return try!  FfiConverterOptionTypeChatConfig.lift(try! rustCall() {
         uniffiCallStatus in
@@ -2043,20 +2068,21 @@ open func switchRef(deviceId: String, repoPath: String, refName: String)async th
 }
     
     /**
-     * Mid-session ref switch (worktree retarget or `git checkout`).
+     * Check out a branch in the session’s current directory.
+     * Never during a turn. Returns the session's branch afterwards.
      */
-open func switchSessionRef(chatId: String, reference: RepoRef)async throws   {
+open func switchSessionBranch(chatId: String, refName: String)async throws  -> String?  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
-                uniffi_zeron_mobile_fn_method_coreclient_switch_session_ref(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterTypeRepoRef_lower(reference)
+                uniffi_zeron_mobile_fn_method_coreclient_switch_session_branch(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(refName)
                 )
             },
-            pollFunc: ffi_zeron_mobile_rust_future_poll_void,
-            completeFunc: ffi_zeron_mobile_rust_future_complete_void,
-            freeFunc: ffi_zeron_mobile_rust_future_free_void,
-            liftFunc: { $0 },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionString.lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -9395,6 +9421,63 @@ public func FfiConverterTypeSendRequest_lower(_ value: SendRequest) -> RustBuffe
 
 
 /**
+ * A branch offered for checkout in the session’s current directory.
+ */
+public struct SessionBranch: Equatable, Hashable {
+    public var name: String
+    public var isCurrent: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, isCurrent: Bool) {
+        self.name = name
+        self.isCurrent = isCurrent
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionBranch: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionBranch: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionBranch {
+        return
+            try SessionBranch(
+                name: FfiConverterString.read(from: &buf), 
+                isCurrent: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionBranch, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterBool.write(value.isCurrent, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionBranch_lift(_ buf: RustBuffer) throws -> SessionBranch {
+    return try FfiConverterTypeSessionBranch.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionBranch_lower(_ value: SessionBranch) -> RustBuffer {
+    return FfiConverterTypeSessionBranch.lower(value)
+}
+
+
+/**
  * One session row, as every list renders it.
  */
 public struct SessionRow: Equatable, Hashable {
@@ -16557,6 +16640,31 @@ fileprivate struct FfiConverterSequenceTypeSectionView: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSessionBranch: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionBranch]
+
+    public static func write(_ value: [SessionBranch], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionBranch.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionBranch] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionBranch]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionBranch.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSessionRow: FfiConverterRustBuffer {
     typealias SwiftType = [SessionRow]
 
@@ -17560,6 +17668,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_session() != 12772) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_session_branches() != 48348) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session_config() != 4276) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17581,7 +17692,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_switch_ref() != 45706) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_ref() != 42409) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_switch_session_branch() != 34082) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_unarchive_session() != 9932) {

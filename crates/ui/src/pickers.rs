@@ -25,7 +25,8 @@ use gpui::{
 
 use zeron_engine::registry::{HarnessDescriptor, TitleSettings};
 use zeron_proto::{
-    ChatConfig, FolderListing, HarnessId, Model, ReasoningLevel, RepoRef, SandboxLevel, Space,
+    Chat, ChatConfig, ChatIndicator, FolderListing, HarnessId, Model, ReasoningLevel, RepoRef,
+    SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -2018,10 +2019,10 @@ impl Pickers {
     // ---- selections ----
 
     fn pick_ref(&mut self, row: RepoRef, cx: &mut Context<Self>) {
-        // Refs are fixed at creation: an existing session can never move
-        // (wing's rule — the footer renders read-only labels there, so this
-        // is a belt-and-braces guard).
+        // An existing session switches its own checkout instead of updating
+        // the draft.
         if self.state.read(cx).selected_chat_row().is_some() {
+            self.switch_session_branch(row, cx);
             return;
         }
         if row.worktree_path.is_some() {
@@ -2086,6 +2087,78 @@ impl Pickers {
                     Ok(_) => {
                         pickers.config.branch = Some(ref_name);
                         pickers.animate_close(cx);
+                        pickers.ensure_refs(true, cx);
+                    }
+                    Err(err) => pickers.switch_error = Some(err.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        }));
+        cx.notify();
+    }
+
+    /// The selected session's working directory and whether a
+    /// turn is in flight; `None` when it has no folder in a git project.
+    fn session_checkout(&self, cx: &App) -> Option<(Chat, String, bool)> {
+        let state = self.state.read(cx);
+        let chat = state.selected_chat_row()?.clone();
+        state
+            .selected_space_row()
+            .filter(|space| space.git_detected)?;
+        let cwd = chat.cwd.clone()?;
+        let busy = matches!(
+            state.display_status_for(&chat, chrono::Utc::now()),
+            ChatIndicator::Working | ChatIndicator::AwaitingInput
+        );
+        Some((chat, cwd, busy))
+    }
+
+    /// Check out a branch in the current folder. The host validates the operation.
+    fn switch_session_branch(&mut self, row: RepoRef, cx: &mut Context<Self>) {
+        if self.switching.is_some() {
+            return; // one switch at a time
+        }
+        let Some((chat, cwd, busy)) = self.session_checkout(cx) else {
+            return;
+        };
+        if busy {
+            self.switch_error = Some("Stop the current turn before switching branches.".into());
+            cx.notify();
+            return;
+        }
+        if chat.branch.as_deref() == Some(row.name.as_str()) {
+            self.animate_close(cx);
+            cx.notify();
+            return;
+        }
+        let Some(engine) = self.engine(cx) else {
+            return;
+        };
+        let local = self.state.read(cx).local_device_id.clone();
+        self.switch_error = None;
+        self.switching = Some(row.name.clone());
+        let ref_name = row.name.clone();
+        self.switch_task = Some(cx.spawn(async move |this, cx| {
+            let mut params = serde_json::json!({
+                "repoPath": cwd,
+                "refName": ref_name,
+                "chatId": chat.id,
+            });
+            if local.as_deref() != Some(chat.device_id.as_str()) {
+                params["targetDeviceId"] = chat.device_id.clone().into();
+            }
+            let result = engine
+                .client()
+                .call(methods::CHECKOUT_SESSION_BRANCH, params)
+                .await
+                .map(drop);
+            this.update(cx, |pickers, cx| {
+                pickers.switching = None;
+                match result {
+                    Ok(()) => {
+                        pickers.animate_close(cx);
+                        // Checkout state changed: refresh current/worktree tags.
                         pickers.ensure_refs(true, cx);
                     }
                     Err(err) => pickers.switch_error = Some(err.to_string()),
@@ -3675,16 +3748,7 @@ impl Pickers {
             )
     }
 
-    /// A read-only footer label (locked sessions — t3code's
-    /// `resolveLockedWorkspaceLabel` span).
-    fn footer_label(icon_path: &'static str, label: SharedString, theme: &Theme) -> gpui::Div {
-        Self::footer_label_shell(icon_path, theme)
-            .max_w(px(160.0))
-            .child(div().min_w_0().truncate().child(label))
-    }
-
-    /// A [`Self::footer_label`] that takes whatever width the row leaves it
-    /// and fades its tail only when that isn't enough.
+    /// A read-only footer label that uses the remaining width and fades overflow.
     fn footer_faded_label(
         id: &'static str,
         icon_path: &'static str,
@@ -3899,51 +3963,60 @@ impl Pickers {
         };
 
         if let Some(chat) = &session {
-            // Sessions never move: read-only checkout-kind + ref labels,
-            // LEFT-aligned, only when the session's project has git. The
-            // target (project @ device) lives in the titlebar now.
-            let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
-                return None;
-            };
-            let is_worktree = chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
-            let (icon_path, label) = if is_worktree {
-                (crate::icons::WORKTREE, "Worktree")
-            } else {
-                (crate::icons::FOLDER, "Local checkout")
-            };
-            // Keep the same reading order and leading edge as the draft.
-            let left = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .min_w_0()
-                .child(Self::footer_label(
-                    icon_path,
-                    SharedString::from(label),
-                    &theme,
-                ));
-            let right = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .min_w_0()
-                .child(Self::footer_faded_label(
+            // An existing session stays in its checkout; only its branch changes.
+            space.as_ref().filter(|s| s.git_detected)?;
+            let branch_label = chat
+                .branch
+                .clone()
+                .map(SharedString::from)
+                .unwrap_or_else(|| "Select branch".into());
+            let branch: AnyElement = match self.session_checkout(cx) {
+                Some((_, _, false)) => {
+                    let closing = (self.open.closing_since(), self.menu_geometry().below);
+                    let mut overlay = match self.mounted_kind() {
+                        Some(PickerKind::Branch) => {
+                            let content = self.render_branch_popover(cx);
+                            Some((PickerKind::Branch, self.popover_frame(320.0, content, cx)))
+                        }
+                        _ => None,
+                    };
+                    let chip = self.footer_chip(
+                        PickerKind::Branch,
+                        "composer-session-branch",
+                        crate::icons::GIT_BRANCH,
+                        branch_label,
+                        &theme,
+                        cx,
+                    );
+                    attach_overlay(
+                        chip,
+                        &mut overlay,
+                        PickerKind::Branch,
+                        "branch-popover",
+                        closing,
+                    )
+                    .into_any_element()
+                }
+                busy => Self::footer_faded_label(
                     "composer-session-branch",
                     crate::icons::GIT_BRANCH,
-                    chat.branch
-                        .clone()
-                        .map(SharedString::from)
-                        .unwrap_or_else(|| SharedString::from("No ref")),
+                    branch_label,
                     &theme,
-                ));
-            // Checkout + branch stay together. PR and usage form the trailing
-            // status group, independently of the branch label's length.
+                )
+                .id("composer-session-branch-locked")
+                .when(busy.is_some(), |label| {
+                    label.tooltip(crate::settings::widgets::text_tooltip(
+                        "Stop the current turn to switch branches",
+                    ))
+                })
+                .into_any_element(),
+            };
+            // The selector alone identifies the worktree. PR and usage stay
+            // in the trailing status group.
             return Some(
                 row()
                     .pr_0()
-                    .child(left)
-                    .child(right)
+                    .child(branch)
                     .child(div().flex_1().min_w_0())
                     .when_some(change_request, |el, summary| {
                         el.child(div().flex_none().child(
@@ -4222,6 +4295,7 @@ impl Pickers {
             .selected_chat_row()
             .and_then(|c| c.branch.clone());
         let switching = self.switching.clone();
+        let session_checkout = self.session_checkout(cx).map(|(_, cwd, _)| cwd);
         let scrollbar = popover::rail(self, "branch-scrollbar", &theme, cx);
         let body: AnyElement = match &self.refs {
             Loadable::Loading | Loadable::Idle => {
@@ -4235,7 +4309,11 @@ impl Pickers {
                 .p(px(Theme::SPACE_SM))
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
-                .child(SharedString::from("No refs found."))
+                .child(SharedString::from(if self.session_checkout(cx).is_some() {
+                    "No branches found."
+                } else {
+                    "No refs found."
+                }))
                 .into_any_element(),
             Loadable::Ready(_) => {
                 let active = self.active;
@@ -4256,7 +4334,16 @@ impl Pickers {
                                         selected.as_deref() == Some(row.name.as_str());
                                     // Right-aligned muted tag (t3code `text-[10px]
                                     // text-muted-foreground/45`): current beats worktree.
-                                    let tag: Option<&'static str> = if row.current {
+                                    // In a session, "current" is the session's folder.
+                                    let tag = if session_checkout.is_some() {
+                                        if is_selected {
+                                            Some("current")
+                                        } else if row.worktree_path.is_some() {
+                                            Some("in another worktree")
+                                        } else {
+                                            None
+                                        }
+                                    } else if row.current {
                                         Some("current")
                                     } else if row.worktree_path.is_some() {
                                         Some("worktree")
@@ -4310,8 +4397,18 @@ impl Pickers {
             .flex_col()
             .child(self.search_box(&theme))
             .child(body);
-        // Mid-session switch failure (dirty tree, ref checked out elsewhere):
-        // git's own message, under a hairline.
+        if self.session_checkout(cx).is_some() {
+            popover = popover.child(
+                div()
+                    .px(px(12.0))
+                    .py(px(6.0))
+                    .text_size(crate::typography::ui_rems(11.0))
+                    .text_color(theme.text_muted)
+                    .child(
+                        "Checks out a branch in this folder. This chat stays in its current checkout.",
+                    ),
+            );
+        }
         if let Some(error) = &self.switch_error {
             popover = popover.child(
                 popover::menu_section().child(
@@ -7495,6 +7592,140 @@ mod tests {
             current,
             worktree_path: worktree.map(str::to_string),
         }
+    }
+
+    #[derive(Default)]
+    struct SwitchHost {
+        calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl zeron_rpc::RpcService for SwitchHost {
+        async fn handle(
+            &self,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<zeron_rpc::RpcReply, zeron_rpc::RpcError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((method.into(), params.clone()));
+            match method {
+                methods::CHECKOUT_SESSION_BRANCH => {
+                    zeron_rpc::RpcReply::value(&serde_json::json!({ "branch": params["refName"] }))
+                }
+                methods::MUTATE => zeron_rpc::RpcReply::value(&serde_json::json!({ "ok": true })),
+                methods::LIST_REFS => zeron_rpc::RpcReply::value(&Vec::<RepoRef>::new()),
+                _ => Err(zeron_rpc::RpcError::UnknownMethod(method.into())),
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn session_branch_switch_uses_its_host(cx: &mut gpui::TestAppContext) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let host = std::sync::Arc::new(SwitchHost::default());
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.local_device_id = Some("local".into());
+            state.apply_spaces(vec![git_space("a", "remote")]);
+            state.selected_space = Some("a".into());
+            state.chats = vec![
+                serde_json::from_value(serde_json::json!({
+                    "id": "c", "deviceId": "remote", "spaceId": "a", "cwd": "/remote/a",
+                    "branch": "main", "archived": false, "createdAt": chrono::Utc::now(),
+                }))
+                .unwrap(),
+            ];
+            state.selected_chat = Some("c".into());
+            state.set_test_engine(EngineHandle::from_test_client(zeron_rpc::memory_client(
+                host.clone(),
+            )));
+            state
+        });
+        let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+        let refs = vec![
+            repo_ref("main", true, None),
+            repo_ref("feature", false, None),
+            repo_ref("held", false, Some("/wt/held")),
+        ];
+        let settle = |cx: &mut gpui::TestAppContext, done: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while !done() {
+                runtime.block_on(tokio::task::yield_now());
+                cx.run_until_parked();
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "switch did not settle"
+                );
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        let calls = |host: &SwitchHost| host.calls.lock().unwrap().clone();
+
+        pickers.update(cx, |pickers, cx| {
+            pickers.refs = Loadable::Ready(refs.clone());
+            pickers.refs_space = Some("a".into());
+            assert_eq!(pickers.filtered_ref_rows(cx), refs);
+            pickers.pick_ref(refs[0].clone(), cx); // already on main
+        });
+        assert!(calls(&host).is_empty());
+        for reference in [&refs[1]] {
+            host.calls.lock().unwrap().clear();
+            pickers.update(cx, |pickers, cx| pickers.pick_ref(reference.clone(), cx));
+            settle(cx, &|| {
+                calls(&host)
+                    .iter()
+                    .any(|(method, _)| method == methods::LIST_REFS)
+            });
+            let sent = calls(&host);
+            let (method, switch) = &sent[0];
+            assert_eq!(method, methods::CHECKOUT_SESSION_BRANCH);
+            assert_eq!(switch["repoPath"], "/remote/a");
+            assert_eq!(switch["refName"], reference.name);
+            assert_eq!(switch["targetDeviceId"], "remote");
+            assert_eq!(switch["chatId"], "c");
+            assert!(!sent.iter().any(|(method, _)| method == methods::MUTATE));
+            pickers.update(cx, |pickers, _| {
+                assert!(pickers.switching.is_none());
+                assert!(pickers.switch_error.is_none());
+            });
+        }
+
+        // A running turn keeps its checkout.
+        host.calls.lock().unwrap().clear();
+        state.update(cx, |state, _| {
+            state.sessions = vec![zeron_proto::Session {
+                last_completed_turn: None,
+                chat_id: "c".into(),
+                device_id: "remote".into(),
+                status: zeron_proto::SessionStatus::Working,
+                started_at: Some(chrono::Utc::now()),
+                updated_at: chrono::Utc::now(),
+                running_subagents: 0,
+            }];
+        });
+        pickers.update(cx, |pickers, cx| {
+            pickers.pick_ref(refs[1].clone(), cx);
+            assert!(
+                pickers
+                    .switch_error
+                    .as_deref()
+                    .unwrap()
+                    .contains("Stop the current turn")
+            );
+        });
+        cx.run_until_parked();
+        assert!(
+            !calls(&host)
+                .iter()
+                .any(|(method, _)| method == methods::CHECKOUT_SESSION_BRANCH
+                    || method == methods::MUTATE)
+        );
     }
 
     #[gpui::test]

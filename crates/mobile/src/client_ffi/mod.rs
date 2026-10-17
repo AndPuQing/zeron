@@ -345,10 +345,22 @@ impl CoreClient {
         Ok(self.client.delete_project(&space_id)?)
     }
 
-    /// Mid-session ref switch (worktree retarget or `git checkout`).
-    pub async fn switch_session_ref(&self, chat_id: String, reference: RepoRef) -> CoreResult<()> {
+    /// Branches available for checkout in the session's current directory.
+    pub async fn session_branches(&self, chat_id: String) -> CoreResult<Vec<SessionBranch>> {
         let client = self.client.clone();
-        on_runtime(async move { client.switch_session_ref(&chat_id, reference.into()).await }).await
+        let refs = on_runtime(async move { client.session_branches(&chat_id).await }).await?;
+        Ok(refs.into_iter().map(SessionBranch::from).collect())
+    }
+
+    /// Check out a branch in the session’s current directory.
+    /// Never during a turn. Returns the session's branch afterwards.
+    pub async fn switch_session_branch(
+        &self,
+        chat_id: String,
+        ref_name: String,
+    ) -> CoreResult<Option<String>> {
+        let client = self.client.clone();
+        on_runtime(async move { client.switch_session_branch(&chat_id, &ref_name).await }).await
     }
 
     // ── sessions ───────────────────────────────────────────────────────────

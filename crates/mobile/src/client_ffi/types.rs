@@ -985,6 +985,22 @@ impl From<zc::rpc::RepoRef> for RepoRef {
     }
 }
 
+/// A branch offered for checkout in the session’s current directory.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SessionBranch {
+    pub name: String,
+    pub is_current: bool,
+}
+
+impl From<zeron_proto::SessionBranch> for SessionBranch {
+    fn from(worktree: zeron_proto::SessionBranch) -> Self {
+        Self {
+            name: worktree.name,
+            is_current: worktree.is_current,
+        }
+    }
+}
+
 impl From<RepoRef> for zc::rpc::RepoRef {
     fn from(r: RepoRef) -> Self {
         Self {

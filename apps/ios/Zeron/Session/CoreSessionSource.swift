@@ -137,7 +137,7 @@ final class CoreSessionSource: SessionSource {
     func send(text: String, images: [StagedImage], mode: DeliveryMode) -> Bool {
         do {
             if mode == .interrupt, chrome.running { try handle.interrupt() }
-            _ = try handle.send(request: SendRequest(text: text, attachments: images.map(\.outgoing), worktree: nil, busy: mode == .steer ? .steer : .queue))
+            _ = try handle.send(request: SendRequest(text: text, attachments: images.map(\.outgoing), branch: nil, busy: mode == .steer ? .steer : .queue))
             app?.noteDeliveryActivity()
             sendFailure = nil
             return true
@@ -252,14 +252,60 @@ final class CoreSessionSource: SessionSource {
                     })
                 }
             }])
+        case "branch":
+            return branchMenu(title: "Switch Branch")
         case "pr":
             guard let url = row.pullRequest.flatMap({ URL(string: $0.url) }) else { return nil }
+            // The PR chip stands in for the branch chip, so it carries the switch.
             return UIMenu(title: row.pullRequest?.title ?? "", children: [
                 UIAction(title: "Open Pull Request", image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(url) },
                 UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in UIPasteboard.general.url = url },
+                branchMenu(title: "Switch Branch", image: BranchIcon.sized()),
             ])
         default:
             return nil
+        }
+    }
+
+    /// Branches are checked out in the session’s existing directory.
+    private func branchMenu(title: String, image: UIImage? = nil) -> UIMenu {
+        UIMenu(title: title, image: image, children: [UIDeferredMenuElement.uncached { [weak self] done in
+            guard let self else { return done([]) }
+            if self.chrome.running {
+                return done([UIAction(title: "Stop the current turn to switch branches", attributes: .disabled) { _ in }])
+            }
+            Task { @MainActor in
+                do {
+                    let branches = try await self.client.sessionBranches(chatId: self.chatId)
+                    guard !branches.isEmpty else {
+                        return done([UIAction(title: "No branches available", attributes: .disabled) { _ in }])
+                    }
+                    done(branches.map { branch in
+                        return UIAction(
+                            title: branch.name,
+                            subtitle: nil,
+                            state: branch.isCurrent ? .on : .off
+                        ) { [weak self] _ in
+                            if !branch.isCurrent { self?.switchBranch(branch.name) }
+                        }
+                    })
+                } catch {
+                    done([UIAction(title: sideChatErrorMessage(error), attributes: .disabled) { _ in }])
+                }
+            }
+        }])
+    }
+
+    private func switchBranch(_ name: String) {
+        let client = self.client
+        let chatId = self.chatId
+        Task { @MainActor in
+            do {
+                _ = try await client.switchSessionBranch(chatId: chatId, refName: name)
+            } catch {
+                let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+                Toast.show(sideChatErrorMessage(error), in: window)
+            }
         }
     }
 

@@ -615,3 +615,57 @@ fn sends_to_an_offline_host_park_as_queued_not_working() {
     assert_eq!(row.send_state, Some(zeron_client::SendState::Queued));
     assert_eq!(row.host_indicator, ChatIndicator::Idle);
 }
+
+fn block<T: Send + 'static>(
+    future: impl std::future::Future<Output = Result<T, zeron_client::ClientError>> + Send + 'static,
+) -> Result<T, zeron_client::ClientError> {
+    zeron_client::runtime::shared().block_on(zeron_client::runtime::run(future))
+}
+
+#[test]
+fn session_branch_switch_keeps_its_directory() {
+    let (client, _dir) = demo(fast());
+    let refs = block({
+        let client = client.clone();
+        async move { client.session_branches("chat-tabs").await }
+    })
+    .unwrap();
+    assert!(refs.iter().any(|r| r.name == "main" && r.is_current));
+    assert!(refs.iter().any(|r| r.name == "feature/diff-pane"));
+    let switch = |chat: &'static str, name: &'static str| {
+        let client = client.clone();
+        block(async move { client.switch_session_branch(chat, name).await })
+    };
+    let original = client.workspace().session("chat-tabs").unwrap().cwd.clone();
+    switch("chat-tabs", "feature/diff-pane").unwrap();
+    wait_for("branch", Duration::from_secs(5), || {
+        client
+            .workspace()
+            .session("chat-tabs")
+            .unwrap()
+            .branch
+            .as_deref()
+            == Some("feature/diff-pane")
+    });
+    assert_eq!(
+        client.workspace().session("chat-tabs").unwrap().cwd,
+        original
+    );
+    assert!(
+        switch("chat-tabs", "veil-fade")
+            .unwrap_err()
+            .to_string()
+            .contains("another worktree")
+    );
+    switch("chat-tabs", "main").unwrap();
+    assert_eq!(
+        client.workspace().session("chat-tabs").unwrap().cwd,
+        original
+    );
+    assert!(
+        switch("chat-veil", "main")
+            .unwrap_err()
+            .to_string()
+            .contains("Stop the current turn")
+    );
+}

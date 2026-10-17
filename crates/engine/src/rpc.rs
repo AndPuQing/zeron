@@ -258,6 +258,9 @@ struct SwitchRefParams {
     /// The checkout to switch — a session's cwd (main folder or worktree).
     repo_path: String,
     ref_name: String,
+    /// Required for CheckoutSessionBranch; rejected by legacy SwitchRef.
+    #[serde(default)]
+    chat_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1561,6 +1564,8 @@ fn forwardable(method: &str) -> bool {
             | methods::RESOLVE_GIT_AVATARS
             | methods::FETCH_ALL
             | methods::SWITCH_REF
+            | methods::SWITCH_SESSION_REF
+            | methods::CHECKOUT_SESSION_BRANCH
             | methods::LIST_FOLDERS
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
@@ -3353,8 +3358,31 @@ impl RpcService for EngineRpc {
                 self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
+            methods::SWITCH_SESSION_REF => Err(RpcError::Failed(
+                "Session directory migration is no longer supported. Use CheckoutSessionBranch for in-place checkout.".into(),
+            )),
+            methods::CHECKOUT_SESSION_BRANCH => {
+                let p: SwitchRefParams = parse_params(params)?;
+                let chat_id = p
+                    .chat_id
+                    .as_deref()
+                    .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
+                let context = self
+                    .doc_host
+                    .switch_session_branch(chat_id, &p.repo_path, &p.ref_name)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                self.diff_sync.sync_all();
+                RpcReply::value(&context)
+            }
             methods::SWITCH_REF => {
                 let p: SwitchRefParams = parse_params(params)?;
+                if p.chat_id.is_some() {
+                    return Err(RpcError::Failed(
+                        "Session branch changes must use CheckoutSessionBranch."
+                            .into(),
+                    ));
+                }
                 let branch = self
                     .repos
                     .switch_ref(std::path::Path::new(&p.repo_path), &p.ref_name)

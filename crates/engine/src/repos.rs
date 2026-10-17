@@ -744,24 +744,30 @@ impl Repos {
     pub async fn refs(&self, repo_path: &Path) -> Result<Vec<RepoRef>, EngineError> {
         let names = self.branches(repo_path).await?;
         let current = self.current_branch(repo_path).await.ok();
-        // `git worktree list --porcelain`: stanzas of `worktree <path>` /
-        // `HEAD <sha>` / `branch refs/heads/<name>`. The first stanza is the
-        // main checkout — excluded (it's `current`, not a linked worktree).
+        // Only linked worktrees carry a worktree_path, even when the project
+        // is opened from one. NUL records preserve spaces/newlines in paths.
         let mut worktrees: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        if let Ok(out) = self
-            .git(&["worktree", "list", "--porcelain"], Some(repo_path))
+        let listing = match self
+            .git(&["worktree", "list", "--porcelain", "-z"], Some(repo_path))
             .await
         {
+            Ok(out) => Ok(out),
+            Err(_) => self
+                .git(&["worktree", "list", "--porcelain"], Some(repo_path))
+                .await
+                .map(|out| out.replace('\n', "\0")),
+        };
+        if let Ok(out) = listing {
             let mut stanza = 0usize;
             let mut path: Option<String> = None;
-            for line in out.lines().map(str::trim) {
+            for line in out.split('\0') {
                 if let Some(p) = line.strip_prefix("worktree ") {
                     stanza += 1;
-                    // The first stanza is the main checkout, not a linked tree.
-                    path = (stanza > 1).then(|| p.to_string());
+                    path = Some(p.to_owned());
                 } else if let Some(branch) = line.strip_prefix("branch refs/heads/")
                     && let Some(path) = path.take()
+                    && stanza > 1
                 {
                     worktrees.insert(branch.to_string(), path);
                 }

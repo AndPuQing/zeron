@@ -9,7 +9,9 @@ use zeron_sync::edge_route::RequestExt;
 use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
 use zeron_doc::RegistryDoc;
-use zeron_proto::{Chat, ChatConfig, SidebarPinChange, SidebarSectionChange};
+use zeron_proto::{
+    Chat, ChatConfig, ChatIndicator, SessionBranch, SidebarPinChange, SidebarSectionChange,
+};
 
 use crate::attachments::{self, AttachmentCache};
 use crate::auth::TokenProvider;
@@ -24,7 +26,7 @@ use crate::events::{ClientEvent, ClientListener, EventPump};
 use crate::live::LiveBackend;
 use crate::rpc::{FolderListing, ProgressFn, QUEUED_ATTACHMENTS_MIN, RepoRef, capability};
 use crate::session::{HostCapabilities, OutgoingAttachment, RoomState, SessionCore, SessionHandle};
-use crate::workspace::{SearchHit, WorkspaceSnapshot, WorkspaceStore};
+use crate::workspace::{SearchHit, SessionRow, WorkspaceSnapshot, WorkspaceStore};
 use crate::{lock, now_ms, read, write};
 
 /// Attachment read cache budget.
@@ -878,32 +880,95 @@ impl Client {
         Ok(())
     }
 
-    /// Mid-session ref switch: retarget onto the ref's existing worktree (row
-    /// writes only), else `git checkout` in the session's own folder.
-    pub async fn switch_session_ref(&self, chat_id: &str, reference: RepoRef) -> Result<()> {
-        let chat = self
-            .inner
-            .workspace
-            .chat(chat_id)
+    /// The session's row and fixed working folder. Only
+    /// sessions in a git project have one.
+    fn session_checkout(&self, chat_id: &str) -> Result<(Arc<SessionRow>, String)> {
+        let ws = self.workspace();
+        let row = ws
+            .session(chat_id)
+            .cloned()
             .ok_or_else(|| ClientError::NotFound(chat_id.to_owned()))?;
-        let cwd = chat
+        row.project
+            .as_ref()
+            .and_then(|project| ws.project(&project.id))
+            .filter(|project| project.git_detected)
+            .ok_or_else(|| {
+                ClientError::InvalidArgument("session is not in a git project".into())
+            })?;
+        let cwd = row
             .cwd
             .clone()
             .ok_or_else(|| ClientError::InvalidArgument("session has no working folder".into()))?;
-        if let Some(worktree) = reference.worktree_path.clone() {
-            if worktree != cwd {
-                self.inner.registry_write(|doc| {
-                    doc.set_chat_cwd(chat_id, &worktree)?;
-                    doc.set_chat_branch(chat_id, &reference.name)
-                })?;
-            }
-            return Ok(());
+        Ok((row, cwd))
+    }
+
+    /// Branches of the session's checkout, including Git's current branch.
+    pub async fn session_branches(&self, chat_id: &str) -> Result<Vec<SessionBranch>> {
+        let (row, cwd) = self.session_checkout(chat_id)?;
+        Ok(self
+            .list_refs(&row.device_id, &cwd)
+            .await?
+            .into_iter()
+            .map(|reference| SessionBranch {
+                name: reference.name,
+                is_current: reference.current,
+            })
+            .collect())
+    }
+
+    /// Check out a branch in place; the session and native context keep their cwd.
+    pub async fn switch_session_branch(
+        &self,
+        chat_id: &str,
+        ref_name: &str,
+    ) -> Result<Option<String>> {
+        let (row, cwd) = self.session_checkout(chat_id)?;
+        if matches!(
+            row.host_indicator,
+            ChatIndicator::Working | ChatIndicator::AwaitingInput
+        ) {
+            return Err(ClientError::InvalidArgument(
+                "Stop the current turn before switching branches.".into(),
+            ));
         }
-        self.switch_ref(&chat.device_id, &cwd, &reference.name)
-            .await?;
-        self.inner
-            .registry_write(|doc| doc.set_chat_branch(chat_id, &reference.name))?;
-        Ok(())
+        match self.inner.backend() {
+            Backend::Live(live) => {
+                let value = live.relay.call(&row.device_id, zeron_rpc::methods::CHECKOUT_SESSION_BRANCH,
+                    serde_json::json!({"chatId": chat_id, "repoPath": cwd, "refName": ref_name})).await?;
+                let context: zeron_proto::ConversationSourceContext = serde_json::from_value(value)
+                    .map_err(|e| ClientError::HostError(e.to_string()))?;
+                Ok((!context.branch.is_empty()).then_some(context.branch))
+            }
+            Backend::Demo(demo) => {
+                let refs = self.list_refs(&row.device_id, &cwd).await?;
+                let reference = refs
+                    .iter()
+                    .find(|r| r.name == ref_name)
+                    .ok_or_else(|| ClientError::NotFound(ref_name.into()))?;
+                if reference
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|path| path != cwd)
+                {
+                    return Err(ClientError::InvalidArgument(
+                        "Branch is checked out in another worktree.".into(),
+                    ));
+                }
+                demo.switch_ref(&cwd, ref_name).await?;
+                self.inner.registry_write(|doc| {
+                    if let Some(mut context) =
+                        doc.chat(chat_id)?.and_then(|chat| chat.source_context)
+                    {
+                        context.branch = ref_name.into();
+                        context.observed_at = chrono::Utc::now();
+                        doc.set_chat_source_context(chat_id, &context)
+                    } else {
+                        doc.set_chat_branch(chat_id, ref_name)
+                    }
+                })?;
+                Ok(Some(ref_name.into()))
+            }
+        }
     }
 
     fn pin_change(&self, change: SidebarPinChange) -> Result<()> {

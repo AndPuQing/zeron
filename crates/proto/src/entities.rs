@@ -335,19 +335,27 @@ pub struct Repo {
 }
 
 /// One row of `ListRefs`: a branch plus its checkout state — whether it is
-/// the repo's current (main-checkout) branch and whether it is materialized
+/// the project's current branch and whether it is materialized
 /// as a linked worktree. Drives the composer's ref picker (`current` /
 /// `worktree` tags) and the checkout-kind selector.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoRef {
     pub name: String,
-    /// Checked out in the repo's MAIN folder right now.
+    /// Checked out in the project folder used for this listing.
     #[serde(default)]
     pub current: bool,
-    /// Path of the linked worktree this branch is checked out in, if any.
+    /// Path of a linked worktree holding this branch. Never the main checkout.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_path: Option<String>,
+}
+
+/// A branch offered for checkout in a session's existing directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionBranch {
+    pub name: String,
+    pub is_current: bool,
 }
 
 /// Public Git reference attached to a commit in the history graph.
