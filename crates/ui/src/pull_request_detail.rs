@@ -2127,192 +2127,165 @@ impl Render for PullRequestDetailPage {
                                     ),
                             );
                         }
-                        let viewer_login = detail.viewer_login.as_deref().or_else(|| {
-                            detail
-                                .activity_comments()
-                                .find(|comment| {
-                                    comment.viewer_did_author && !comment.author.login.is_empty()
-                                })
-                                .map(|comment| comment.author.login.as_str())
-                        });
                         for (index, comment) in activity {
-                            let own = comment.viewer_did_author
-                                || viewer_login.is_some_and(|login| {
-                                    login.eq_ignore_ascii_case(&comment.author.login)
-                                });
                             thread = thread.child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .mb(px(24.0))
-                                    .when(own, |el| el.justify_end())
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("pr-message-{index}")))
-                                            .debug_selector(move || format!("pr-message-{index}"))
-                                            .min_w_0()
-                                            .w(gpui::relative(0.9))
-                                            .when(own, |el| {
-                                                el.max_w(gpui::relative(0.8))
-                                                    .px(px(16.0))
-                                                    .py(px(10.0))
-                                                    .rounded(px(Theme::BUBBLE_RADIUS))
-                                                    .bg(crate::theme::user_bubble_bg())
-                                            })
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(8.0))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                    .child(super::pull_request_media::avatar(
-                                                        &comment.author.login,
-                                                        format!("pr-actor-{index}").into(),
-                                                        24.0,
-                                                        &theme,
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .child(
-                                                                if comment.author.login.is_empty() {
-                                                                    "Deleted account".to_owned()
-                                                                } else {
-                                                                    comment.author.login.clone()
-                                                                },
-                                                            ),
-                                                    )
-                                                    .when(!comment.state.is_empty(), |el| {
-                                                        el.child(status_chip(
-                                                            &comment.state,
-                                                            &theme,
-                                                        ))
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .text_size(crate::typography::ui_rems(
-                                                                11.0,
-                                                            ))
-                                                            .text_color(theme.text_muted)
-                                                            .child(activity_time(
-                                                                if comment.created_at.is_empty() {
-                                                                    &comment.submitted_at
-                                                                } else {
-                                                                    &comment.created_at
-                                                                },
-                                                            )),
-                                                    ),
-                                            )
-                                            .children(inline_thread(detail, index).map(|review| {
-                                                let location = review
-                                                    .line
-                                                    .or(review.original_line)
-                                                    .map(|line| format!("{}:{line}", review.path))
-                                                    .unwrap_or_else(|| review.path.clone());
-                                                let status = if review.is_resolved {
-                                                    "Resolved"
-                                                } else {
-                                                    "Unresolved"
-                                                };
-                                                // One quiet line: where the comment sits (a link
-                                                // to it on GitHub), then its state.
-                                                let link = url::Url::parse(&comment.url)
-                                                    .ok()
-                                                    .filter(|url| {
-                                                        url.scheme() == "https"
-                                                            && url.host_str() == Some("github.com")
-                                                    });
-                                                let mut details = vec![status];
-                                                if review.is_outdated {
-                                                    details.push("Outdated");
-                                                }
-                                                if comment.reply_to.is_some() {
-                                                    details.push("Reply");
-                                                }
-                                                div()
-                                                    .debug_selector(move || {
-                                                        format!("pr-inline-thread-{index}")
-                                                    })
-                                                    .min_w_0()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                    .text_size(crate::typography::ui_rems(12.0))
-                                                    .text_color(theme.text_muted)
-                                                    .child(
-                                                        div()
-                                                            .id(SharedString::from(format!(
-                                                                "pr-inline-location-{index}"
-                                                            )))
-                                                            .min_w_0()
-                                                            .h(px(22.0))
-                                                            .px(px(6.0))
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap(px(4.0))
-                                                            .rounded(px(6.0))
-                                                            .bg(theme.ink(0.035))
-                                                            .font_family(theme.font_mono.clone())
-                                                            .text_size(px(11.5))
-                                                            .tooltip(widgets::text_tooltip(
-                                                                location.clone(),
-                                                            ))
-                                                            .child(
-                                                                div().min_w_0().truncate().child(location),
-                                                            )
-                                                            .when_some(link, |el, url| {
-                                                                el.debug_selector(move || {
-                                                                    format!("pr-inline-link-{index}")
-                                                                })
-                                                                .role(gpui::Role::Link)
-                                                                .aria_label(
-                                                                    "Open review comment on GitHub",
-                                                                )
-                                                                .tab_index(0)
-                                                                .cursor_pointer()
-                                                                .hover(|style| {
-                                                                    style
-                                                                        .bg(theme.ink(0.07))
-                                                                        .text_color(theme.text)
-                                                                })
-                                                                .child(
-                                                                    crate::icons::icon(
-                                                                        crate::icons::ARROW_UP_RIGHT,
-                                                                    )
-                                                                    .size(px(11.0))
-                                                                    .flex_none()
-                                                                    .text_color(theme.text_muted),
-                                                                )
-                                                                .on_click(move |_, _, cx| {
-                                                                    cx.open_url(url.as_str())
-                                                                })
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_none()
-                                                            .child(details.join(" · ")),
-                                                    )
-                                            }))
-                                            .children(self.activity_bodies.get(index).map(
-                                                |body| {
-                                                    div().child(rich_text(
-                                                        body,
-                                                        format!(
-                                                            "{}activity-{index}",
-                                                            self.selection_prefix
+                                div().w_full().flex().mb(px(24.0)).child(
+                                    div()
+                                        .id(SharedString::from(format!("pr-message-{index}")))
+                                        .debug_selector(move || format!("pr-message-{index}"))
+                                        .min_w_0()
+                                        .w_full()
+                                        .px(px(16.0))
+                                        .py(px(12.0))
+                                        .rounded(px(10.0))
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .bg(theme.ink(0.025))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(8.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_wrap()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .child(super::pull_request_media::avatar(
+                                                    &comment.author.login,
+                                                    format!("pr-actor-{index}").into(),
+                                                    24.0,
+                                                    &theme,
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child(
+                                                            if comment.author.login.is_empty() {
+                                                                "Deleted account".to_owned()
+                                                            } else {
+                                                                comment.author.login.clone()
+                                                            },
                                                         ),
-                                                        &self.url,
-                                                        &theme,
-                                                        window,
-                                                        cx.weak_entity(),
-                                                    ))
-                                                },
-                                            )),
-                                    ),
+                                                )
+                                                .when(!comment.state.is_empty(), |el| {
+                                                    el.child(status_chip(&comment.state, &theme))
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_size(crate::typography::ui_rems(11.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child(activity_time(
+                                                            if comment.created_at.is_empty() {
+                                                                &comment.submitted_at
+                                                            } else {
+                                                                &comment.created_at
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                        .children(inline_thread(detail, index).map(|review| {
+                                            let location = review
+                                                .line
+                                                .or(review.original_line)
+                                                .map(|line| format!("{}:{line}", review.path))
+                                                .unwrap_or_else(|| review.path.clone());
+                                            let status = if review.is_resolved {
+                                                "Resolved"
+                                            } else {
+                                                "Unresolved"
+                                            };
+                                            // One quiet line: where the comment sits (a link
+                                            // to it on GitHub), then its state.
+                                            let link =
+                                                url::Url::parse(&comment.url).ok().filter(|url| {
+                                                    url.scheme() == "https"
+                                                        && url.host_str() == Some("github.com")
+                                                });
+                                            let mut details = vec![status];
+                                            if review.is_outdated {
+                                                details.push("Outdated");
+                                            }
+                                            if comment.reply_to.is_some() {
+                                                details.push("Reply");
+                                            }
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!("pr-inline-thread-{index}")
+                                                })
+                                                .min_w_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .text_size(crate::typography::ui_rems(12.0))
+                                                .text_color(theme.text_muted)
+                                                .child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "pr-inline-location-{index}"
+                                                        )))
+                                                        .min_w_0()
+                                                        .h(px(22.0))
+                                                        .px(px(6.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(4.0))
+                                                        .rounded(px(6.0))
+                                                        .bg(theme.ink(0.035))
+                                                        .font_family(theme.font_mono.clone())
+                                                        .text_size(px(11.5))
+                                                        .tooltip(widgets::text_tooltip(
+                                                            location.clone(),
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .child(location),
+                                                        )
+                                                        .when_some(link, |el, url| {
+                                                            el.debug_selector(move || {
+                                                                format!("pr-inline-link-{index}")
+                                                            })
+                                                            .role(gpui::Role::Link)
+                                                            .aria_label(
+                                                                "Open review comment on GitHub",
+                                                            )
+                                                            .tab_index(0)
+                                                            .cursor_pointer()
+                                                            .hover(|style| {
+                                                                style
+                                                                    .bg(theme.ink(0.07))
+                                                                    .text_color(theme.text)
+                                                            })
+                                                            .child(
+                                                                crate::icons::icon(
+                                                                    crate::icons::ARROW_UP_RIGHT,
+                                                                )
+                                                                .size(px(11.0))
+                                                                .flex_none()
+                                                                .text_color(theme.text_muted),
+                                                            )
+                                                            .on_click(move |_, _, cx| {
+                                                                cx.open_url(url.as_str())
+                                                            })
+                                                        }),
+                                                )
+                                                .child(div().flex_none().child(details.join(" · ")))
+                                        }))
+                                        .children(self.activity_bodies.get(index).map(|body| {
+                                            div().child(rich_text(
+                                                body,
+                                                format!(
+                                                    "{}activity-{index}",
+                                                    self.selection_prefix
+                                                ),
+                                                &self.url,
+                                                &theme,
+                                                window,
+                                                cx.weak_entity(),
+                                            ))
+                                        })),
+                                ),
                             );
                         }
                         column = column.child(thread);
@@ -4309,10 +4282,14 @@ mod tests {
             }
             assert_eq!(mine.right(), composer.right());
             assert_eq!(other.left(), composer.left() + px(8.0), "title's text edge");
-            assert!(mine.left() > other.left());
+            assert_eq!(
+                mine.left(),
+                other.left(),
+                "all authors share one full-width column"
+            );
+            assert_eq!(mine.right(), other.right());
         }
-        // Yours even when GitHub marks none of your comments: the engine
-        // reports who you are, which covers reviews too.
+        // Viewer metadata must not change the shared, full-width layout.
         page.update(cx, |page, cx| {
             let detail = page.detail.as_mut().unwrap();
             detail.comments[0].viewer_did_author = false;

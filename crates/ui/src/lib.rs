@@ -138,6 +138,14 @@ struct ReopenState {
 
 impl gpui::Global for ReopenState {}
 
+/// Use the production image transport in the native PR screenshot harness.
+#[cfg(feature = "pull-request-fixture")]
+pub fn pull_request_fixture_http_client(
+    runtime: tokio::runtime::Handle,
+) -> std::sync::Arc<dyn gpui::http_client::HttpClient> {
+    asset_http::AssetHttpClient::new(runtime)
+}
+
 /// Run the headed app: tokio bridge up, engine bootstrap kicked off (probe →
 /// connect-or-embed), 1320×880 window (min 900×600) with [`shell::Shell`] as the
 /// root view, boot splash overlaid until the engine reports ready.

@@ -517,7 +517,7 @@ pub(super) fn render_description(
     output.into_any_element()
 }
 
-/// GitHub redirects this public profile image endpoint to its avatar CDN.
+/// Load from GitHub’s public avatar CDN without a github.com redirect.
 /// Stable sizing lets repeated authors share GPUI's image cache.
 pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) -> AnyElement {
     let initial = login
@@ -542,11 +542,9 @@ pub(super) fn avatar(login: &str, id: SharedString, size: f32, theme: &Theme) ->
     if login.is_empty() {
         return fallback();
     }
-    let mut url = url::Url::parse("https://github.com/").unwrap();
-    url.path_segments_mut()
-        .unwrap()
-        .push(&format!("{login}.png"));
-    url.set_query(Some("size=64"));
+    let mut url = url::Url::parse("https://avatars.githubusercontent.com/").unwrap();
+    url.path_segments_mut().unwrap().push(login);
+    url.set_query(Some("s=64"));
     div()
         .id(id.clone())
         .size(px(size))
