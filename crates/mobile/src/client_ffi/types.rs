@@ -985,15 +985,15 @@ impl From<zc::rpc::RepoRef> for RepoRef {
     }
 }
 
-/// An existing linked worktree offered to a session, identified by its branch.
+/// A branch offered for checkout in the session’s current directory.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
-pub struct SessionWorktree {
+pub struct SessionBranch {
     pub name: String,
     pub is_current: bool,
 }
 
-impl From<zeron_proto::SessionWorktree> for SessionWorktree {
-    fn from(worktree: zeron_proto::SessionWorktree) -> Self {
+impl From<zeron_proto::SessionBranch> for SessionBranch {
+    fn from(worktree: zeron_proto::SessionBranch) -> Self {
         Self {
             name: worktree.name,
             is_current: worktree.is_current,

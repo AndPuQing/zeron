@@ -628,7 +628,11 @@ async fn session_switch_legacy_checkout_is_rejected() {
         )
         .await
         .unwrap_err();
-    assert!(rejected.to_string().contains("existing worktrees"));
+    assert!(rejected.to_string().contains("CheckoutSessionBranch"));
+    let obsolete = client.call(methods::SWITCH_SESSION_REF, serde_json::json!({
+        "repoPath": repo_path, "refName": "feature", "chatId": "chat-switch"
+    })).await.unwrap_err();
+    assert!(obsolete.to_string().contains("no longer supported"));
     assert_eq!(
         git_stdout(&repo_dir, &["branch", "--show-current"]).await,
         "main"
@@ -636,161 +640,125 @@ async fn session_switch_legacy_checkout_is_rejected() {
 }
 
 #[tokio::test]
-async fn session_switch_worktree_preserves_files_and_updates_checkout_identity() {
+async fn session_switch_branch_keeps_cwd_and_preserves_dirty_files() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
-    let other = tmp.path().join("worktree with spaces");
-    let second = tmp.path().join("second-worktree");
+    let other = tmp.path().join("other");
     init_repo(&repo).await;
     git(
         &repo,
         &["worktree", "add", "-b", "feature", other.to_str().unwrap()],
     )
     .await;
-    git(
-        &repo,
-        &["worktree", "add", "-b", "second", second.to_str().unwrap()],
-    )
-    .await;
     git(&repo, &["branch", "free"]).await;
-    std::fs::write(repo.join("a.txt"), "main uncommitted").unwrap();
-    std::fs::write(other.join("a.txt"), "worktree uncommitted").unwrap();
+    git(&repo, &["checkout", "-b", "conflict"]).await;
+    std::fs::write(repo.join("a.txt"), "conflicting branch contents").unwrap();
+    git(&repo, &["add", "a.txt"]).await;
+    git(&repo, &["commit", "-m", "conflict fixture"]).await;
+    git(&repo, &["checkout", "main"]).await;
+    std::fs::write(repo.join("a.txt"), "local uncommitted").unwrap();
     let core = assemble(&tmp.path().join("data"));
     let client = zeron_rpc::memory_client(core.rpc_service());
     for op in [
         serde_json::json!({"op":"createSpace", "spaceId":"s", "deviceId":core.device_id, "path":repo, "gitDetected":true}),
         serde_json::json!({"op":"createChat", "chatId":"c", "spaceId":"s", "deviceId":core.device_id, "cwd":repo, "branch":"main"}),
+        serde_json::json!({"op":"createChat", "chatId":"linked", "spaceId":"s", "deviceId":core.device_id, "cwd":other, "branch":"feature"}),
     ] {
         client.call(methods::MUTATE, op).await.unwrap();
     }
+    // Imported sessions may change branch without changing their native copy or cwd.
+    let mut imported = core.workspace.chat("c").unwrap().unwrap();
+    imported.import_source = Some(zeron_proto::SessionImportSource {
+        harness: zeron_proto::HarnessId::Codex,
+        device_id: core.device_id.clone(),
+        store_id: "store".into(),
+        original_native_id: "original".into(),
+        copied_native_id: "copy".into(),
+        imported_at_ms: 1,
+        history_notice: None,
+    });
+    imported.harness_session_id = Some("copy".into());
+    imported.harness_session_cwd = Some(repo.to_string_lossy().into_owned());
+    core.workspace.import_chat_row(&imported).unwrap();
     let switched = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"c", "repoPath":repo, "refName":"feature"
-            }),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"free"}),
         )
         .await
         .unwrap();
-    let target = std::fs::canonicalize(&other).unwrap();
-    assert_eq!(switched["cwd"], target.to_str().unwrap());
-    assert_eq!(switched["branch"], "feature");
-    let chat = core.workspace.chat("c").unwrap().unwrap();
-    assert_eq!(chat.cwd.as_deref(), target.to_str());
-    assert_eq!(chat.checkout_id.as_deref(), switched["checkoutId"].as_str());
-    assert_eq!(chat.source_context.unwrap().cwd, target.to_str().unwrap());
-    // No checkout operation in either occupied folder; dirty edits stay put.
-    assert_eq!(
-        std::fs::read_to_string(repo.join("a.txt")).unwrap(),
-        "main uncommitted"
-    );
-    assert_eq!(
-        std::fs::read_to_string(other.join("a.txt")).unwrap(),
-        "worktree uncommitted"
-    );
-    assert_eq!(
-        git_stdout(&repo, &["branch", "--show-current"]).await,
-        "main"
-    );
-    assert_eq!(
-        git_stdout(&other, &["branch", "--show-current"]).await,
-        "feature"
-    );
-    // A second device using the old cwd cannot override the completed move.
+    assert_eq!(switched["cwd"], repo.to_str().unwrap());
+    assert_eq!(switched["branch"], "free");
+    let identity = switched["checkoutId"].clone();
+    let row = core.workspace.chat("c").unwrap().unwrap();
+    assert_eq!(row.cwd.as_deref(), repo.to_str());
+    assert_eq!(row.import_source, imported.import_source);
+    assert_eq!(row.harness_session_id.as_deref(), Some("copy"));
+    assert_eq!(row.harness_session_cwd.as_deref(), repo.to_str());
+    assert_eq!(row.branch.as_deref(), Some("free"));
+    assert_eq!(row.source_context.unwrap().branch, "free");
+    // Neither occupied refs nor conflicting edits can move or overwrite files.
+    for branch in ["feature", "conflict", "missing-ref"] {
+        assert!(
+            client
+                .call(
+                    methods::CHECKOUT_SESSION_BRANCH,
+                    serde_json::json!({"chatId":"c", "repoPath":repo, "refName":branch})
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            git_stdout(&repo, &["branch", "--show-current"]).await,
+            "free"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("a.txt")).unwrap(),
+            "local uncommitted"
+        );
+        assert_eq!(
+            core.workspace.chat("c").unwrap().unwrap().cwd.as_deref(),
+            repo.to_str()
+        );
+    }
     let stale = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"c", "repoPath":repo, "refName":"free"
-            }),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"c", "repoPath":other, "refName":"main"}),
         )
         .await
         .unwrap_err();
     assert!(stale.to_string().contains("working folder changed"));
-    // Main checkout, free branches and unknown refs are never destinations.
-    for name in ["main", "free", "missing-ref"] {
-        let rejected = client
-            .call(
-                methods::SWITCH_SESSION_REF,
-                serde_json::json!({
-                    "chatId":"c", "repoPath":target, "refName":name
-                }),
-            )
-            .await
-            .unwrap_err();
-        assert!(rejected.to_string().contains("existing linked worktree"));
-        let chat = core.workspace.chat("c").unwrap().unwrap();
-        assert_eq!(chat.cwd.as_deref(), target.to_str());
-        assert_eq!(chat.branch.as_deref(), Some("feature"));
-    }
-    // Exclusion also holds for projects whose root is a linked worktree.
-    let linked_refs = core.repos.refs(&other).await.unwrap();
-    assert!(
-        linked_refs
-            .iter()
-            .find(|r| r.name == "main")
-            .unwrap()
-            .worktree_path
-            .is_none()
-    );
-    for op in [
-        serde_json::json!({"op":"createSpace", "spaceId":"linked-project", "deviceId":core.device_id, "path":other, "gitDetected":true}),
-        serde_json::json!({"op":"createChat", "chatId":"linked-chat", "spaceId":"linked-project", "deviceId":core.device_id, "cwd":other, "branch":"feature"}),
-    ] {
-        client.call(methods::MUTATE, op).await.unwrap();
-    }
-    let main_rejected = client
+    let back = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"linked-chat", "repoPath":other, "refName":"main"
-            }),
-        )
-        .await
-        .unwrap_err();
-    assert!(
-        main_rejected
-            .to_string()
-            .contains("existing linked worktree")
-    );
-    let moved = client
-        .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"c", "repoPath":target, "refName":"second"
-            }),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"main"}),
         )
         .await
         .unwrap();
-    assert_eq!(
-        moved["cwd"],
-        std::fs::canonicalize(&second).unwrap().to_str().unwrap()
-    );
-    assert_ne!(moved["checkoutId"], switched["checkoutId"]);
-    client
+    assert_eq!(back["checkoutId"], identity);
+    // A session created in a linked worktree also changes only its own branch.
+    let linked = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({
-                "chatId":"c", "repoPath":moved["cwd"], "refName":"feature"
-            }),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"linked", "repoPath":other, "refName":"free"}),
         )
         .await
         .unwrap();
-    assert_eq!(
-        core.workspace.chat("c").unwrap().unwrap().cwd.as_deref(),
-        target.to_str()
-    );
+    assert_eq!(linked["cwd"], other.to_str().unwrap());
+    assert_eq!(linked["branch"], "free");
     assert_eq!(
         git_stdout(&repo, &["branch", "--show-current"]).await,
         "main"
     );
     assert_eq!(
-        git_stdout(&other, &["branch", "--show-current"]).await,
-        "feature"
-    );
-    assert_eq!(
-        std::fs::read_to_string(other.join("a.txt")).unwrap(),
-        "worktree uncommitted"
+        core.workspace
+            .chat("linked")
+            .unwrap()
+            .unwrap()
+            .cwd
+            .as_deref(),
+        other.to_str()
     );
 }
 
@@ -868,7 +836,7 @@ impl zeron_harness::Harness for WorktreeProbe {
 }
 
 #[tokio::test]
-async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_directory() {
+async fn session_switch_branch_rejects_busy_turn_and_keeps_native_context() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = tmp.path().join("repo");
     let other = tmp.path().join("other");
@@ -932,8 +900,8 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
         .unwrap();
     let blocked = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"feature"}),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"free"}),
         )
         .await
         .unwrap_err();
@@ -947,14 +915,14 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
     })).await.unwrap();
     let shared = client
         .call(
-            methods::SWITCH_SESSION_REF,
+            methods::CHECKOUT_SESSION_BRANCH,
             serde_json::json!({
                 "chatId":"other-chat", "repoPath":repo, "refName":"free"
             }),
         )
         .await
         .unwrap_err();
-    assert!(shared.to_string().contains("existing linked worktree"));
+    assert!(shared.to_string().contains("Stop the current turn"));
     assert_eq!(
         git_stdout(&repo, &["branch", "--show-current"]).await,
         "main"
@@ -967,86 +935,33 @@ async fn session_switch_worktree_rejects_busy_turn_and_restarts_in_target_direct
     })
     .await
     .unwrap();
-    let moved = client
+    let native_before = core.workspace.chat_harness_session("c").unwrap();
+    let request_before = core.sessions.last_request("c").unwrap();
+    let changed = client
         .call(
-            methods::SWITCH_SESSION_REF,
-            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"feature"}),
+            methods::CHECKOUT_SESSION_BRANCH,
+            serde_json::json!({"chatId":"c", "repoPath":repo, "refName":"free"}),
         )
         .await
         .unwrap();
-    // The switch preserves visible transcript and the old native id's cwd.
-    assert!(
-        !core
-            .doc_host
-            .open("c")
-            .unwrap()
-            .doc()
-            .read_entries()
-            .unwrap()
-            .is_empty()
+    assert_eq!(changed["cwd"], repo.to_str().unwrap());
+    assert_eq!(changed["branch"], "free");
+    assert_eq!(
+        core.workspace.chat_harness_session("c").unwrap(),
+        native_before
     );
     assert_eq!(
-        core.workspace
-            .chat_harness_session("c")
-            .unwrap()
-            .1
-            .as_deref(),
-        repo.to_str()
+        core.sessions.last_request("c").unwrap().cwd,
+        request_before.cwd
     );
-    let stale = core
-        .doc_host
-        .ingest_relayed_command(
-            "c",
-            zeron_doc::SessionCommandEntry {
-                id: "stale-directory".into(),
-                issued_at: chrono::Utc::now().timestamp_millis(),
-                issued_by: core.device_id.clone(),
-                payload: zeron_doc::SessionCommandPayload::Run {
-                    request: request(repo.to_string_lossy().into_owned()),
-                    message_id: "stale-user".into(),
-                },
-                status: zeron_doc::SessionCommandStatus::Pending,
-                resolution: None,
-                based_on: None,
-                expires_at: None,
-            },
-        )
-        .await
-        .unwrap_err();
-    assert!(stale.to_string().contains("working folder changed"));
-    assert!(rx.try_recv().is_err());
-    // Deliver through the command plane, as a phone/desktop does. The new
-    // process must use the new cwd and must not resume the old cwd's native id.
-    core.doc_host
-        .ingest_relayed_command(
-            "c",
-            zeron_doc::SessionCommandEntry {
-                id: "after-switch".into(),
-                issued_at: chrono::Utc::now().timestamp_millis(),
-                issued_by: core.device_id.clone(),
-                payload: zeron_doc::SessionCommandPayload::Steer {
-                    prompt: "continue after switching worktrees".into(),
-                    message_id: Some("after-switch-user".into()),
-                },
-                status: zeron_doc::SessionCommandStatus::Pending,
-                resolution: None,
-                based_on: None,
-                expires_at: None,
-            },
-        )
-        .await
-        .unwrap();
-    let next = tokio::time::timeout(Duration::from_secs(5), rx.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(next.cwd, moved["cwd"].as_str().unwrap());
-    assert!(next.resume.is_none());
+    assert_eq!(
+        core.sessions.last_request("c").unwrap().auto_approve,
+        request_before.auto_approve
+    );
     assert!(
-        !next.auto_approve,
-        "switching must retain approval settings"
+        rx.try_recv().is_err(),
+        "checkout must not start a different native conversation"
     );
-    finish.notify_one();
     core.sessions.terminate("c").await.unwrap();
 }
 

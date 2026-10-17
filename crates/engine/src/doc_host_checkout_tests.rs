@@ -1,4 +1,4 @@
-//! Deterministic races at the worktree switch's existing critical section.
+//! Deterministic races at the checkout switch's existing critical section.
 use super::*;
 use futures::{StreamExt, stream::BoxStream};
 use std::time::Duration;
@@ -145,7 +145,7 @@ fn seed_orphan(core: &crate::EngineCore, handle: &ChatDocHandle) {
 }
 
 #[tokio::test]
-async fn orphaned_answer_waits_for_worktree_publication_without_relocking_commands() {
+async fn orphaned_answer_waits_for_checkout_publication_without_relocking_commands() {
     let (dir, core, mut requests) = fixture(false);
     let handle = core.doc_host.open("chat").unwrap();
     seed_orphan(&core, &handle);
@@ -160,10 +160,9 @@ async fn orphaned_answer_waits_for_worktree_publication_without_relocking_comman
     assert!(futures::poll!(&mut reply).is_pending());
     assert_eq!(pending_question(&handle).as_deref(), Some("old-question"));
     assert!(requests.try_recv().is_err());
-    let target = dir.path().join("target");
-    std::fs::create_dir(&target).unwrap();
+    let target = dir.path();
     core.workspace
-        .set_chat_worktree(
+        .set_chat_source_context(
             "chat",
             &ConversationSourceContext {
                 checkout_id: "target-checkout".into(),
@@ -172,6 +171,19 @@ async fn orphaned_answer_waits_for_worktree_publication_without_relocking_comman
                 branch: "feature".into(),
                 head_sha: None,
                 observed_at: chrono::Utc::now(),
+            },
+        )
+        .unwrap();
+    // A config update while waiting makes a pre-lock request snapshot observable.
+    core.workspace
+        .set_chat_config(
+            "chat",
+            &zeron_proto::ChatConfig {
+                harness: HarnessId::Mock,
+                model: Some("after-checkout".into()),
+                reasoning: None,
+                model_options: Default::default(),
+                sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
             },
         )
         .unwrap();
@@ -190,6 +202,7 @@ async fn orphaned_answer_waits_for_worktree_publication_without_relocking_comman
         .unwrap()
         .unwrap();
     assert_eq!(request.cwd, target.to_string_lossy());
+    assert_eq!(request.model.as_deref(), Some("after-checkout"));
     assert!(request.prompt.contains("yes"));
     assert!(pending_question(&handle).is_none());
     drop(commands);
@@ -197,7 +210,7 @@ async fn orphaned_answer_waits_for_worktree_publication_without_relocking_comman
 }
 
 #[tokio::test]
-async fn live_answer_bypasses_worktree_and_command_locks() {
+async fn live_answer_bypasses_checkout_and_command_locks() {
     let (_dir, core, mut requests) = fixture(true);
     let handle = core.doc_host.open("chat").unwrap();
     let request = core.doc_host.request_from_chat_row("chat", "ask").unwrap();

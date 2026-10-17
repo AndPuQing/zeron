@@ -5526,7 +5526,7 @@ impl DocHost {
                 if sessions.respond_input(chat_id, request_id, answers.clone())? {
                     return Ok((SessionCommandStatus::Applied, None));
                 }
-                // An orphaned answer starts a runtime, so it shares queue/worktree
+                // An orphaned answer starts a runtime, so it shares queue/checkout
                 // serialization. Live answers above must bypass this lock: a
                 // prompt holding it may itself be waiting for user input.
                 // Do not acquire command_drain_lock here: the normal command
@@ -5753,10 +5753,9 @@ impl DocHost {
         })
     }
 
-    /// Resolve an existing linked worktree on the host and move the session
-    /// there. Main-checkout and unoccupied branches are never destinations.
-    /// Serialize against prompt and queue delivery, including other devices.
-    pub(crate) async fn switch_session_worktree(
+    /// Check out a branch in this session's existing directory. Serialize
+    /// against prompt delivery, queue delivery and orphaned-input recovery.
+    pub(crate) async fn switch_session_branch(
         &self,
         chat_id: &str,
         expected_cwd: &str,
@@ -5764,7 +5763,7 @@ impl DocHost {
     ) -> Result<ConversationSourceContext, EngineError> {
         if !self.is_host(chat_id) {
             return Err(EngineError::Other(
-                "Only the session host can switch its worktree.".into(),
+                "Only the session host can switch its branch.".into(),
             ));
         }
         let handle = self.open(chat_id)?;
@@ -5773,11 +5772,6 @@ impl DocHost {
         let sessions = self
             .sessions()
             .ok_or_else(|| EngineError::Other("executor unavailable".into()))?;
-        if sessions.turn_in_flight(chat_id) || sessions.holds_background_work(chat_id) {
-            return Err(EngineError::Other(
-                "Stop the current turn and background work before switching worktrees.".into(),
-            ));
-        }
         let workspace = self
             .workspace()
             .ok_or_else(|| EngineError::Other("workspace unavailable".into()))?;
@@ -5798,53 +5792,30 @@ impl DocHost {
             .repos
             .get()
             .ok_or_else(|| EngineError::Other("repositories unavailable".into()))?;
-        let root = Path::new(&space.path);
-        let current = repos
-            .workspace_checkout(root, Path::new(expected_cwd))
+        let cwd = repos
+            .workspace_checkout(Path::new(&space.path), Path::new(expected_cwd))
             .await
             .ok_or_else(|| {
-                EngineError::Other("The current folder is no longer a project worktree.".into())
+                EngineError::Other("The current folder is no longer a project checkout.".into())
             })?;
-        let refs = repos.refs(root).await?;
-        let path = refs.iter().find(|r| r.name == ref_name)
-            .and_then(|r| r.worktree_path.as_deref())
-            .ok_or_else(|| EngineError::Other("Select an existing linked worktree. Main checkout and unoccupied branches are not supported.".into()))?;
-        let target = repos
-            .workspace_checkout(root, Path::new(path))
-            .await
-            .ok_or_else(|| {
-                EngineError::Other(
-                    "The selected worktree is no longer available. Reopen the menu.".into(),
-                )
-            })?;
-        let moving = target != current;
-        if moving && chat.import_source.is_some() {
-            return Err(EngineError::Other("Imported native sessions must stay in their original folder. Start a new session in the target worktree.".into()));
-        }
-        let cwd = if moving {
-            target.to_string_lossy().into_owned()
-        } else {
-            expected_cwd.to_owned()
-        };
-        let context = self
-            .capture_source_context(&cwd)
-            .await
-            .ok_or_else(|| EngineError::Other("Could not read the selected checkout.".into()))?;
-        if context.branch != ref_name {
+        if sessions.turn_in_flight(chat_id)
+            || sessions.holds_background_work(chat_id)
+            || sessions.checkout_has_active_run(&cwd)
+        {
             return Err(EngineError::Other(
-                "The selected worktree's branch changed. Reopen the menu.".into(),
+                "Stop the current turn and other work in this checkout before switching branches."
+                    .into(),
             ));
         }
-        if moving {
-            // Never steer a subsequent prompt into a process launched in the
-            // old directory. Its stored native id retains its original cwd.
-            sessions.terminate(chat_id).await?;
-        }
-        if !workspace.set_chat_worktree(chat_id, &context)? {
+        // Git refuses occupied branches and conflicting local changes. Never
+        // force, stash, reset, or move this chat to the branch's other checkout.
+        repos.switch_ref(&cwd, ref_name).await?;
+        let context = self
+            .capture_source_context(expected_cwd)
+            .await
+            .ok_or_else(|| EngineError::Other("Could not read the selected branch.".into()))?;
+        if !workspace.set_chat_source_context(chat_id, &context)? {
             return Err(EngineError::Other("Session no longer exists.".into()));
-        }
-        if moving {
-            sessions.retarget_last_request(chat_id, &context.cwd);
         }
         Ok(context)
     }
@@ -5862,23 +5833,6 @@ impl DocHost {
         request: zeron_proto::RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
-        // A delayed command from another device may still carry the folder
-        // used before a worktree switch. Never silently send it back there.
-        if let Some(workspace) = self.workspace()
-            && let Some(chat) = workspace.chat(chat_id)?
-            && let Some(cwd) = chat.cwd.as_deref()
-            && chat
-                .source_context
-                .as_ref()
-                .is_some_and(|context| context.cwd == cwd)
-            && cwd != request.cwd
-            && !(std::fs::canonicalize(cwd)
-                .is_ok_and(|a| std::fs::canonicalize(&request.cwd).is_ok_and(|b| a == b)))
-        {
-            return Err(EngineError::Other(
-                "The session's working folder changed. Reopen it and resend the message.".into(),
-            ));
-        }
         if let Some(workspace) = self.workspace()
             && let Some(context) = self.capture_source_context(&request.cwd).await
             && let Err(err) = workspace.set_chat_source_context(chat_id, &context)
@@ -6839,5 +6793,5 @@ mod sync_lifecycle_tests;
 mod remote_delivery;
 
 #[cfg(test)]
-#[path = "doc_host_worktree_tests.rs"]
-mod worktree_transition_tests;
+#[path = "doc_host_checkout_tests.rs"]
+mod checkout_transition_tests;

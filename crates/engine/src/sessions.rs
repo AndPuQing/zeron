@@ -586,17 +586,25 @@ impl SessionsEngine {
         lock(&self.inner.last_requests).get(chat_id).cloned()
     }
 
-    /// After a host-approved move, fallback steers must launch in the new
-    /// folder while retaining the previous run's approval/sandbox settings.
-    /// Native resume provenance remains unchanged and independently cwd-gated.
-    pub(crate) fn retarget_last_request(&self, chat_id: &str, cwd: &str) {
-        if let Some(request) = lock(&self.inner.last_requests).get_mut(chat_id) {
-            request.cwd = cwd.to_owned();
-            request.resume = None;
-            request.worktree = None;
-            request.attachments.clear();
-            request.mcp = None;
-        }
+    /// A branch checkout affects every session using this directory.
+    pub(crate) fn checkout_has_active_run(&self, cwd: &std::path::Path) -> bool {
+        let active: std::collections::HashSet<_> = lock(&self.inner.statuses)
+            .iter()
+            .filter(|(_, status)| is_active(status))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let folders: Vec<_> = lock(&self.inner.runs)
+            .iter()
+            .filter(|(id, run)| active.contains(*id) || run.turn.background_live())
+            .map(|(_, run)| run.runtime_config.request.cwd.clone())
+            .collect();
+        let canonical = std::fs::canonicalize(cwd).ok();
+        folders.iter().any(|folder| {
+            std::path::Path::new(folder) == cwd
+                || canonical
+                    .as_ref()
+                    .is_some_and(|cwd| std::fs::canonicalize(folder).ok().as_ref() == Some(cwd))
+        })
     }
 
     /// Subscribe to a chat's live event stream: returns the journal replay after

@@ -345,22 +345,22 @@ impl CoreClient {
         Ok(self.client.delete_project(&space_id)?)
     }
 
-    /// The session's existing linked worktrees, excluding the main checkout.
-    pub async fn session_worktrees(&self, chat_id: String) -> CoreResult<Vec<SessionWorktree>> {
+    /// Branches available for checkout in the session's current directory.
+    pub async fn session_branches(&self, chat_id: String) -> CoreResult<Vec<SessionBranch>> {
         let client = self.client.clone();
-        let refs = on_runtime(async move { client.session_worktrees(&chat_id).await }).await?;
-        Ok(refs.into_iter().map(SessionWorktree::from).collect())
+        let refs = on_runtime(async move { client.session_branches(&chat_id).await }).await?;
+        Ok(refs.into_iter().map(SessionBranch::from).collect())
     }
 
-    /// Switch to an existing linked worktree; never run git checkout.
+    /// Check out a branch in the session’s current directory.
     /// Never during a turn. Returns the session's branch afterwards.
-    pub async fn switch_session_worktree(
+    pub async fn switch_session_branch(
         &self,
         chat_id: String,
         ref_name: String,
     ) -> CoreResult<Option<String>> {
         let client = self.client.clone();
-        on_runtime(async move { client.switch_session_worktree(&chat_id, &ref_name).await }).await
+        on_runtime(async move { client.switch_session_branch(&chat_id, &ref_name).await }).await
     }
 
     // ── sessions ───────────────────────────────────────────────────────────

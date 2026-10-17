@@ -2022,7 +2022,7 @@ impl Pickers {
         // An existing session switches its own checkout instead of updating
         // the draft.
         if self.state.read(cx).selected_chat_row().is_some() {
-            self.switch_session_worktree(row, cx);
+            self.switch_session_branch(row, cx);
             return;
         }
         if row.worktree_path.is_some() {
@@ -2114,8 +2114,8 @@ impl Pickers {
         Some((chat, cwd, busy))
     }
 
-    /// Move to an existing linked worktree. The host validates the target.
-    fn switch_session_worktree(&mut self, row: RepoRef, cx: &mut Context<Self>) {
+    /// Check out a branch in the current folder. The host validates the operation.
+    fn switch_session_branch(&mut self, row: RepoRef, cx: &mut Context<Self>) {
         if self.switching.is_some() {
             return; // one switch at a time
         }
@@ -2123,16 +2123,11 @@ impl Pickers {
             return;
         };
         if busy {
-            self.switch_error = Some("Stop the current turn before switching worktrees.".into());
+            self.switch_error = Some("Stop the current turn before switching branches.".into());
             cx.notify();
             return;
         }
-        let Some(worktree) = row.session_worktree(&cwd) else {
-            self.switch_error = Some("Select an existing linked worktree.".into());
-            cx.notify();
-            return;
-        };
-        if worktree.is_current {
+        if chat.branch.as_deref() == Some(row.name.as_str()) {
             self.animate_close(cx);
             cx.notify();
             return;
@@ -2155,7 +2150,7 @@ impl Pickers {
             }
             let result = engine
                 .client()
-                .call(methods::SWITCH_SESSION_REF, params)
+                .call(methods::CHECKOUT_SESSION_BRANCH, params)
                 .await
                 .map(drop);
             this.update(cx, |pickers, cx| {
@@ -2633,12 +2628,6 @@ impl Pickers {
         let Some(refs) = self.refs.ready() else {
             return Vec::new();
         };
-        let refs: Vec<_> = refs
-            .iter()
-            .filter(|r| {
-                self.state.read(cx).selected_chat_row().is_none() || r.worktree_path.is_some()
-            })
-            .collect();
         let names: Vec<String> = refs.iter().map(|r| r.name.clone()).collect();
         let query = self.search.read(cx).text().to_string();
         popover::filter_indices(&query, &names)
@@ -3974,25 +3963,13 @@ impl Pickers {
         };
 
         if let Some(chat) = &session {
-            // A session can move to an existing linked worktree.
-            // The target (project @ device) lives in the titlebar now.
-            let Some(space) = space.as_ref().filter(|s| s.git_detected) else {
-                return None;
-            };
-            let is_worktree = self.refs.ready().is_some_and(|refs| {
-                refs.iter().any(|r| {
-                    r.session_worktree(chat.cwd.as_deref().unwrap_or(""))
-                        .is_some_and(|worktree| worktree.is_current)
-                })
-            }) || chat.cwd.as_deref().is_some_and(|cwd| cwd != space.path);
-            let branch_label = if is_worktree {
-                chat.branch
-                    .clone()
-                    .map(SharedString::from)
-                    .unwrap_or_else(|| "Select worktree".into())
-            } else {
-                "Select worktree".into()
-            };
+            // An existing session stays in its checkout; only its branch changes.
+            space.as_ref().filter(|s| s.git_detected)?;
+            let branch_label = chat
+                .branch
+                .clone()
+                .map(SharedString::from)
+                .unwrap_or_else(|| "Select branch".into());
             let branch: AnyElement = match self.session_checkout(cx) {
                 Some((_, _, false)) => {
                     let closing = (self.open.closing_since(), self.menu_geometry().below);
@@ -4029,7 +4006,7 @@ impl Pickers {
                 .id("composer-session-branch-locked")
                 .when(busy.is_some(), |label| {
                     label.tooltip(crate::settings::widgets::text_tooltip(
-                        "Stop the current turn to switch worktrees",
+                        "Stop the current turn to switch branches",
                     ))
                 })
                 .into_any_element(),
@@ -4333,7 +4310,7 @@ impl Pickers {
                 .text_size(crate::typography::ui_rems(12.0))
                 .text_color(theme.text_faint)
                 .child(SharedString::from(if self.session_checkout(cx).is_some() {
-                    "No worktrees found."
+                    "No branches found."
                 } else {
                     "No refs found."
                 }))
@@ -4358,15 +4335,20 @@ impl Pickers {
                                     // Right-aligned muted tag (t3code `text-[10px]
                                     // text-muted-foreground/45`): current beats worktree.
                                     // In a session, "current" is the session's folder.
-                                    let worktree = session_checkout
-                                        .as_ref()
-                                        .and_then(|cwd| row.session_worktree(cwd));
-                                    let tag: Option<&'static str> = match worktree {
-                                        Some(worktree) if worktree.is_current => Some("current"),
-                                        Some(_) => Some("switch worktree"),
-                                        None if row.current => Some("current"),
-                                        None if row.worktree_path.is_some() => Some("worktree"),
-                                        None => None,
+                                    let tag = if session_checkout.is_some() {
+                                        if is_selected {
+                                            Some("current")
+                                        } else if row.worktree_path.is_some() {
+                                            Some("in another worktree")
+                                        } else {
+                                            None
+                                        }
+                                    } else if row.current {
+                                        Some("current")
+                                    } else if row.worktree_path.is_some() {
+                                        Some("worktree")
+                                    } else {
+                                        None
                                     };
                                     let is_switching =
                                         switching.as_deref() == Some(row.name.as_str());
@@ -4423,7 +4405,7 @@ impl Pickers {
                     .text_size(crate::typography::ui_rems(11.0))
                     .text_color(theme.text_muted)
                     .child(
-                        "Switching worktrees keeps this chat; the agent may start a new session.",
+                        "Checks out a branch in this folder. This chat stays in its current checkout.",
                     ),
             );
         }
@@ -7629,7 +7611,7 @@ mod tests {
                 .unwrap()
                 .push((method.into(), params.clone()));
             match method {
-                methods::SWITCH_SESSION_REF => {
+                methods::CHECKOUT_SESSION_BRANCH => {
                     zeron_rpc::RpcReply::value(&serde_json::json!({ "branch": params["refName"] }))
                 }
                 methods::MUTATE => zeron_rpc::RpcReply::value(&serde_json::json!({ "ok": true })),
@@ -7640,7 +7622,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn session_worktree_switch_resolves_worktrees_on_its_host(cx: &mut gpui::TestAppContext) {
+    fn session_branch_switch_uses_its_host(cx: &mut gpui::TestAppContext) {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -7685,31 +7667,14 @@ mod tests {
         };
         let calls = |host: &SwitchHost| host.calls.lock().unwrap().clone();
 
-        // Session menus expose only linked worktrees; neither a main ref
-        // nor a free branch can trigger a checkout.
         pickers.update(cx, |pickers, cx| {
             pickers.refs = Loadable::Ready(refs.clone());
             pickers.refs_space = Some("a".into());
-            assert_eq!(pickers.filtered_ref_rows(cx), vec![refs[2].clone()]);
-            pickers.pick_ref(refs[0].clone(), cx);
-            assert!(
-                pickers
-                    .switch_error
-                    .as_deref()
-                    .unwrap()
-                    .contains("existing linked worktree")
-            );
-            pickers.pick_ref(refs[1].clone(), cx);
-            assert!(
-                pickers
-                    .switch_error
-                    .as_deref()
-                    .unwrap()
-                    .contains("existing linked worktree")
-            );
+            assert_eq!(pickers.filtered_ref_rows(cx), refs);
+            pickers.pick_ref(refs[0].clone(), cx); // already on main
         });
         assert!(calls(&host).is_empty());
-        for reference in [&refs[2]] {
+        for reference in [&refs[1]] {
             host.calls.lock().unwrap().clear();
             pickers.update(cx, |pickers, cx| pickers.pick_ref(reference.clone(), cx));
             settle(cx, &|| {
@@ -7719,7 +7684,7 @@ mod tests {
             });
             let sent = calls(&host);
             let (method, switch) = &sent[0];
-            assert_eq!(method, methods::SWITCH_SESSION_REF);
+            assert_eq!(method, methods::CHECKOUT_SESSION_BRANCH);
             assert_eq!(switch["repoPath"], "/remote/a");
             assert_eq!(switch["refName"], reference.name);
             assert_eq!(switch["targetDeviceId"], "remote");
@@ -7758,7 +7723,7 @@ mod tests {
         assert!(
             !calls(&host)
                 .iter()
-                .any(|(method, _)| method == methods::SWITCH_SESSION_REF
+                .any(|(method, _)| method == methods::CHECKOUT_SESSION_BRANCH
                     || method == methods::MUTATE)
         );
     }

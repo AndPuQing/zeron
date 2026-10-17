@@ -62,7 +62,7 @@ pub use workspace::{
 pub use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 pub use zeron_proto::{
     ChangeRequestState, ChangeRequestSummary, ChatConfig, ChatIndicator, ContextUsage,
-    SessionWorktree, UserInputAnswer, UserInputQuestion, WorktreeSpec,
+    SessionBranch, UserInputAnswer, UserInputQuestion, WorktreeSpec,
 };
 
 /// Wall clock in epoch millis.

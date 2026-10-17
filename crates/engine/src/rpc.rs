@@ -258,7 +258,7 @@ struct SwitchRefParams {
     /// The checkout to switch — a session's cwd (main folder or worktree).
     repo_path: String,
     ref_name: String,
-    /// Required for SwitchSessionRef; rejected by legacy SwitchRef.
+    /// Required for CheckoutSessionBranch; rejected by legacy SwitchRef.
     #[serde(default)]
     chat_id: Option<String>,
 }
@@ -1565,6 +1565,7 @@ fn forwardable(method: &str) -> bool {
             | methods::FETCH_ALL
             | methods::SWITCH_REF
             | methods::SWITCH_SESSION_REF
+            | methods::CHECKOUT_SESSION_BRANCH
             | methods::LIST_FOLDERS
             | methods::GET_WORKTREE_SETTINGS
             | methods::SET_WORKTREE_SETTINGS
@@ -3357,7 +3358,10 @@ impl RpcService for EngineRpc {
                 self.diff_sync.sync_all();
                 RpcReply::value(&serde_json::json!({ "ok": true }))
             }
-            methods::SWITCH_SESSION_REF => {
+            methods::SWITCH_SESSION_REF => Err(RpcError::Failed(
+                "Session directory migration is no longer supported. Use CheckoutSessionBranch for in-place checkout.".into(),
+            )),
+            methods::CHECKOUT_SESSION_BRANCH => {
                 let p: SwitchRefParams = parse_params(params)?;
                 let chat_id = p
                     .chat_id
@@ -3365,10 +3369,9 @@ impl RpcService for EngineRpc {
                     .ok_or_else(|| RpcError::BadParams("chatId is required".into()))?;
                 let context = self
                     .doc_host
-                    .switch_session_worktree(chat_id, &p.repo_path, &p.ref_name)
+                    .switch_session_branch(chat_id, &p.repo_path, &p.ref_name)
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
-                self.voice.retire_chat(chat_id);
                 self.diff_sync.sync_all();
                 RpcReply::value(&context)
             }
@@ -3376,7 +3379,7 @@ impl RpcService for EngineRpc {
                 let p: SwitchRefParams = parse_params(params)?;
                 if p.chat_id.is_some() {
                     return Err(RpcError::Failed(
-                        "Session switches only support existing worktrees. Use SwitchSessionRef."
+                        "Session branch changes must use CheckoutSessionBranch."
                             .into(),
                     ));
                 }

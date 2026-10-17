@@ -10,7 +10,7 @@ use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
 use zeron_doc::RegistryDoc;
 use zeron_proto::{
-    Chat, ChatConfig, ChatIndicator, SessionWorktree, SidebarPinChange, SidebarSectionChange,
+    Chat, ChatConfig, ChatIndicator, SessionBranch, SidebarPinChange, SidebarSectionChange,
 };
 
 use crate::attachments::{self, AttachmentCache};
@@ -880,16 +880,15 @@ impl Client {
         Ok(())
     }
 
-    /// The session's row, its folder and its project's directory. Only
+    /// The session's row and fixed working folder. Only
     /// sessions in a git project have one.
-    fn session_checkout(&self, chat_id: &str) -> Result<(Arc<SessionRow>, String, String)> {
+    fn session_checkout(&self, chat_id: &str) -> Result<(Arc<SessionRow>, String)> {
         let ws = self.workspace();
         let row = ws
             .session(chat_id)
             .cloned()
             .ok_or_else(|| ClientError::NotFound(chat_id.to_owned()))?;
-        let project = row
-            .project
+        row.project
             .as_ref()
             .and_then(|project| ws.project(&project.id))
             .filter(|project| project.git_detected)
@@ -900,67 +899,72 @@ impl Client {
             .cwd
             .clone()
             .ok_or_else(|| ClientError::InvalidArgument("session has no working folder".into()))?;
-        let root = project.path.clone();
-        Ok((row, cwd, root))
+        Ok((row, cwd))
     }
 
-    /// Existing linked worktrees for the session; excludes the main checkout
-    /// and branches without a worktree.
-    pub async fn session_worktrees(&self, chat_id: &str) -> Result<Vec<SessionWorktree>> {
-        let (row, cwd, root) = self.session_checkout(chat_id)?;
-        let refs = self.list_refs(&row.device_id, &root).await?;
-        Ok(refs
+    /// Branches of the session's checkout, including Git's current branch.
+    pub async fn session_branches(&self, chat_id: &str) -> Result<Vec<SessionBranch>> {
+        let (row, cwd) = self.session_checkout(chat_id)?;
+        Ok(self
+            .list_refs(&row.device_id, &cwd)
+            .await?
             .into_iter()
-            .filter_map(|reference| reference.session_worktree(&cwd))
+            .map(|reference| SessionBranch {
+                name: reference.name,
+                is_current: reference.current,
+            })
             .collect())
     }
 
-    /// Switch to a ref's existing linked worktree without running checkout.
-    /// The host validates and updates cwd/branch/checkout identity together.
-    /// Visible history stays; native resume remains scoped to its original cwd.
-    pub async fn switch_session_worktree(
+    /// Check out a branch in place; the session and native context keep their cwd.
+    pub async fn switch_session_branch(
         &self,
         chat_id: &str,
         ref_name: &str,
     ) -> Result<Option<String>> {
-        let (row, cwd, root) = self.session_checkout(chat_id)?;
+        let (row, cwd) = self.session_checkout(chat_id)?;
         if matches!(
             row.host_indicator,
             ChatIndicator::Working | ChatIndicator::AwaitingInput
         ) {
             return Err(ClientError::InvalidArgument(
-                "Stop the current turn before switching worktrees.".into(),
+                "Stop the current turn before switching branches.".into(),
             ));
         }
         match self.inner.backend() {
             Backend::Live(live) => {
-                // A distinct RPC prevents older hosts silently checking out a
-                // branch when the user intended to move to another worktree.
-                let value = live.relay.call(&row.device_id, zeron_rpc::methods::SWITCH_SESSION_REF,
+                let value = live.relay.call(&row.device_id, zeron_rpc::methods::CHECKOUT_SESSION_BRANCH,
                     serde_json::json!({"chatId": chat_id, "repoPath": cwd, "refName": ref_name})).await?;
                 let context: zeron_proto::ConversationSourceContext = serde_json::from_value(value)
                     .map_err(|e| ClientError::HostError(e.to_string()))?;
                 Ok((!context.branch.is_empty()).then_some(context.branch))
             }
-            Backend::Demo(_) => {
-                let refs = self.list_refs(&row.device_id, &root).await?;
+            Backend::Demo(demo) => {
+                let refs = self.list_refs(&row.device_id, &cwd).await?;
                 let reference = refs
                     .iter()
                     .find(|r| r.name == ref_name)
                     .ok_or_else(|| ClientError::NotFound(ref_name.into()))?;
-                let target = reference.worktree_path.clone().ok_or_else(|| {
-                    ClientError::InvalidArgument("Select an existing linked worktree.".into())
-                })?;
+                if reference
+                    .worktree_path
+                    .as_deref()
+                    .is_some_and(|path| path != cwd)
+                {
+                    return Err(ClientError::InvalidArgument(
+                        "Branch is checked out in another worktree.".into(),
+                    ));
+                }
+                demo.switch_ref(&cwd, ref_name).await?;
                 self.inner.registry_write(|doc| {
-                    let context = zeron_proto::ConversationSourceContext {
-                        checkout_id: format!("demo:{target}"),
-                        repo_root: root.clone(),
-                        cwd: target.clone(),
-                        branch: ref_name.into(),
-                        head_sha: None,
-                        observed_at: chrono::Utc::now(),
-                    };
-                    doc.set_chat_worktree(chat_id, &context).map(drop)
+                    if let Some(mut context) =
+                        doc.chat(chat_id)?.and_then(|chat| chat.source_context)
+                    {
+                        context.branch = ref_name.into();
+                        context.observed_at = chrono::Utc::now();
+                        doc.set_chat_source_context(chat_id, &context)
+                    } else {
+                        doc.set_chat_branch(chat_id, ref_name)
+                    }
                 })?;
                 Ok(Some(ref_name.into()))
             }

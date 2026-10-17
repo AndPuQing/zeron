@@ -350,23 +350,12 @@ pub struct RepoRef {
     pub worktree_path: Option<String>,
 }
 
-/// An existing linked worktree offered to a session. The name is its branch.
+/// A branch offered for checkout in a session's existing directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionWorktree {
+pub struct SessionBranch {
     pub name: String,
     pub is_current: bool,
-}
-
-impl RepoRef {
-    /// Exclude main checkout and unoccupied branches at the catalog boundary.
-    pub fn session_worktree(&self, cwd: &str) -> Option<SessionWorktree> {
-        let path = self.worktree_path.as_deref()?;
-        Some(SessionWorktree {
-            name: self.name.clone(),
-            is_current: path.trim_end_matches(['/', '\\']) == cwd.trim_end_matches(['/', '\\']),
-        })
-    }
 }
 
 /// Public Git reference attached to a commit in the history graph.
@@ -1542,28 +1531,6 @@ pub struct ChatConnectivity {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn session_worktrees_exclude_main_and_free_branches() {
-        let reference = |name: &str, current, path: Option<&str>| RepoRef {
-            name: name.into(),
-            current,
-            worktree_path: path.map(str::to_owned),
-        };
-        assert!(
-            reference("main", true, None)
-                .session_worktree("/repo")
-                .is_none()
-        );
-        assert!(
-            reference("free", false, None)
-                .session_worktree("/repo")
-                .is_none()
-        );
-        let worktree = reference("feature", false, Some("/wt/feature/"));
-        assert!(!worktree.session_worktree("/repo").unwrap().is_current);
-        assert!(worktree.session_worktree("/wt/feature").unwrap().is_current);
-    }
-
     use super::*;
     use chrono::TimeZone;
 

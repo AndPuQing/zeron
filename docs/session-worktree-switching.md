@@ -1,55 +1,50 @@
-# Switching a session's worktree
+# Branch checkout and new-session worktrees
 
-On desktop, iOS and Android, open the worktree picker in the session composer.
-On mobile, when a pull request replaces the branch chip, use its menu's
-**Switch Worktree** action.
+Existing desktop, iOS and Android sessions keep their working directory. Use
+**Switch Branch** in the composer (or the pull request chip menu on phones) to
+check out a branch in that directory. The session may be in the main checkout
+or a linked worktree. Choosing a branch never moves the chat to another folder.
 
-The picker lists only existing linked worktrees, identified by their branches.
-The current worktree is marked selected. The main checkout and branches without
-a worktree are excluded, even when the project itself was opened from a linked
-worktree. An empty list displays a message instead of offering a checkout action.
+Git rejects branches checked out elsewhere and local edits that would be
+overwritten. Non-conflicting local edits remain in the checkout. Zerun does not
+force checkout, reset files, stash changes or remove worktrees.
 
-Selecting a worktree moves the current Zerun session into that folder. The chat
-id and visible transcript stay intact; subsequent file searches, diffs and agent
-runs use the selected directory. No `git checkout` runs and no files, branches,
-worktrees or uncommitted changes are created, removed, reset, stashed or merged.
-A session currently in the main directory can move into an existing worktree,
-but this picker does not offer the main directory as a destination. Existing
-editor/terminal tabs retain their own paths. Detached worktrees without branch
-names are not listed.
+A running turn, pending live question or background work blocks checkout.
+The host also refuses checkout when another live Zerun session is working in
+the same directory. Native session ids, import provenance and cwd stay intact;
+imported sessions can switch branches in their original directory. Checkout
+does not terminate an idle agent or create a replacement native conversation.
 
-Native agent resume is directory-scoped. Moving worktrees stops the old idle
-runtime, and the next turn may start a fresh native conversation. Retaining the
-Zerun transcript does not guarantee that earlier context is replayed to the
-provider. Menus disclose this. Imported native sessions remain bound to their
-native copy's original folder and cannot move through this action.
+## New sessions
 
-Running turns and background agent work block switching. Requests carrying a
-stale session directory are rejected, including delayed messages that would
-otherwise run in the previous directory.
+The existing Local / Worktree controls remain available when creating a chat.
+Choose the local checkout, select an existing linked worktree, or create a new
+worktree from a base branch. Once the chat starts, its directory stays fixed.
+For complex multi-worktree work, instruct the agent to use its Git tools, or
+start another chat in the other worktree. There is no automatic cross-worktree
+conversation migration, context copying, or Handoff operation.
 
-## Implementation and compatibility
+## Host contract
 
-`SwitchSessionRef` resolves only a linked worktree on the owning device,
-validates project membership and expected current cwd, and serializes against
-prompt and queue delivery. It publishes cwd, branch, checkout id and source
-context in one registry operation. Cached launch configuration is retargeted
-for steer/input fallbacks while preserving approval and sandbox settings;
-native-session provenance remains bound to its original directory.
+`CheckoutSessionBranch` validates ownership, expected cwd and project membership,
+serializes against this chat's prompt/queue delivery, runs checkout in that cwd,
+and publishes branch, checkout identity and source context together. The
+`SessionBranch { name, is_current }` catalog uses the session directory rather
+than assuming that the project's root is the current checkout.
 
-The session catalog exposes `SessionWorktree { name, is_current }`; main
-checkout and unoccupied branches are excluded before presentation. Desktop and
-mobile share this conversion. Session APIs and menus use worktree naming; the
-existing wire method remains `SwitchSessionRef`. Clients filter the worktree
-catalog for mouse and keyboard navigation. The host
-also rejects main-checkout, unoccupied and missing refs. The legacy `SwitchRef`
-RPC rejects session-specific requests, preventing an older branch-switch client
-from falling back to an in-place checkout. Existing non-session Git operations
-remain available elsewhere in the application. Update execution hosts with the
-clients; older hosts without `SwitchSessionRef` reject the new request.
+Legacy `SwitchRef` rejects session-specific requests, and the previous
+`SwitchSessionRef` migration method is rejected. Older hosts that lack
+`CheckoutSessionBranch` fail explicitly, so a new client cannot accidentally
+invoke directory migration on an older execution host.
 
-Regression coverage uses real temporary Git worktrees and an offline persistent
-agent probe. It covers worktree-to-worktree round trips, dirty-file preservation,
-checkout identity, rejection of main/free/missing refs, stale requests, busy
-turns, post-switch steer delivery and preservation of approval settings. Shared
-client and GPUI tests cover catalog filtering and host routing.
+An orphaned question answer which must start a new run waits for the same
+checkout/queue lock and rereads state after waiting. Normal live answers bypass
+that lock. Failed recovery leaves the question unanswered.
+
+## Verification
+
+Real temporary Git repositories cover checkout in the main directory and a
+linked worktree, occupied and missing refs, dirty-file conflicts, stale cwd,
+busy sessions sharing a checkout, and preservation of native/import metadata.
+Shared-client and native GPUI tests cover branch selection and host routing.
+The orphaned-answer tests cover serialization, live answers and recovery failure.

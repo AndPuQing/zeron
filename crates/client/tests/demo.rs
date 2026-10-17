@@ -623,48 +623,49 @@ fn block<T: Send + 'static>(
 }
 
 #[test]
-fn session_worktree_switch_selects_existing_worktrees() {
+fn session_branch_switch_keeps_its_directory() {
     let (client, _dir) = demo(fast());
     let refs = block({
         let client = client.clone();
-        async move { client.session_worktrees("chat-tabs").await }
+        async move { client.session_branches("chat-tabs").await }
     })
     .unwrap();
-    assert!(
-        !refs
-            .iter()
-            .any(|r| r.name == "main" || r.name == "feature/diff-pane")
-    );
-    assert!(refs.iter().any(|r| r.name == "veil-fade" && !r.is_current));
+    assert!(refs.iter().any(|r| r.name == "main" && r.is_current));
+    assert!(refs.iter().any(|r| r.name == "feature/diff-pane"));
     let switch = |chat: &'static str, name: &'static str| {
         let client = client.clone();
-        block(async move { client.switch_session_worktree(chat, name).await })
+        block(async move { client.switch_session_branch(chat, name).await })
     };
     let original = client.workspace().session("chat-tabs").unwrap().cwd.clone();
-    switch("chat-tabs", "veil-fade").unwrap();
-    wait_for("worktree directory", Duration::from_secs(5), || {
-        client.workspace().session("chat-tabs").unwrap().cwd != original
+    switch("chat-tabs", "feature/diff-pane").unwrap();
+    wait_for("branch", Duration::from_secs(5), || {
+        client
+            .workspace()
+            .session("chat-tabs")
+            .unwrap()
+            .branch
+            .as_deref()
+            == Some("feature/diff-pane")
     });
-    let target = client.workspace().session("chat-tabs").unwrap().cwd.clone();
-    let worktrees = block({
-        let client = client.clone();
-        async move { client.session_worktrees("chat-tabs").await }
-    })
-    .unwrap();
-    assert!(
-        worktrees
-            .iter()
-            .any(|worktree| worktree.name == "veil-fade" && worktree.is_current)
+    assert_eq!(
+        client.workspace().session("chat-tabs").unwrap().cwd,
+        original
     );
-    for name in ["main", "feature/diff-pane"] {
-        assert!(
-            switch("chat-tabs", name)
-                .unwrap_err()
-                .to_string()
-                .contains("existing linked worktree")
-        );
-        assert_eq!(client.workspace().session("chat-tabs").unwrap().cwd, target);
-    }
-    let busy = switch("chat-veil", "veil-fade").unwrap_err();
-    assert!(busy.to_string().contains("Stop the current turn"), "{busy}");
+    assert!(
+        switch("chat-tabs", "veil-fade")
+            .unwrap_err()
+            .to_string()
+            .contains("another worktree")
+    );
+    switch("chat-tabs", "main").unwrap();
+    assert_eq!(
+        client.workspace().session("chat-tabs").unwrap().cwd,
+        original
+    );
+    assert!(
+        switch("chat-veil", "main")
+            .unwrap_err()
+            .to_string()
+            .contains("Stop the current turn")
+    );
 }
