@@ -61,7 +61,7 @@ pub use workspace::{
 /// transcript carries without a direct `zeron-doc` dependency.
 pub use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
 pub use zeron_proto::{
-    ChangeRequestState, ChangeRequestSummary, ChatConfig, ChatIndicator, ContextUsage,
+    ChangeRequestState, ChangeRequestSummary, ChatConfig, ChatIndicator, ContextUsage, RefPlace,
     UserInputAnswer, UserInputQuestion, WorktreeSpec,
 };
 

@@ -25,8 +25,8 @@ use gpui::{
 
 use zeron_engine::registry::{HarnessDescriptor, TitleSettings};
 use zeron_proto::{
-    Chat, ChatConfig, ChatIndicator, FolderListing, HarnessId, Model, ReasoningLevel, RepoRef,
-    SandboxLevel, Space,
+    Chat, ChatConfig, ChatIndicator, FolderListing, HarnessId, Model, ReasoningLevel, RefPlace,
+    RepoRef, SandboxLevel, Space,
 };
 use zeron_rpc::methods;
 
@@ -2132,7 +2132,7 @@ impl Pickers {
             cx.notify();
             return;
         }
-        match ref_place(&row, &cwd, &root) {
+        match row.place(&cwd, &root) {
             RefPlace::Here => {
                 self.animate_close(cx);
                 cx.notify();
@@ -2156,12 +2156,19 @@ impl Pickers {
         self.switching = Some(row.name.clone());
         let ref_name = row.name.clone();
         self.switch_task = Some(cx.spawn(async move |this, cx| {
-            let mut params = serde_json::json!({ "repoPath": cwd, "refName": ref_name });
+            // `chatId` lets the host refuse a running turn and re-stamp the
+            // session's branch and source context for every device.
+            let mut params = serde_json::json!({
+                "repoPath": cwd,
+                "refName": ref_name,
+                "chatId": chat.id,
+            });
             if local.as_deref() != Some(chat.device_id.as_str()) {
                 params["targetDeviceId"] = chat.device_id.clone().into();
             }
             let result = match engine.client().call(methods::SWITCH_REF, params).await {
                 // A detached HEAD reports no branch; keep the row's last name.
+                // Older hosts ignore `chatId`, so record the branch here too.
                 Ok(value) => match value["branch"].as_str().filter(|b| !b.is_empty()) {
                     Some(branch) => engine
                         .client()
@@ -4399,7 +4406,7 @@ impl Pickers {
                                     // In a session, "current" is the session's folder.
                                     let place = session_checkout
                                         .as_ref()
-                                        .map(|(cwd, root)| ref_place(&row, cwd, root));
+                                        .map(|(cwd, root)| row.place(cwd, root));
                                     let tag: Option<&'static str> = match place {
                                         Some(RefPlace::Here) => Some("current"),
                                         Some(RefPlace::Elsewhere) if row.current => {
@@ -6437,27 +6444,6 @@ fn attach_overlay(
 }
 
 /// Attach the (single) open popover below a selector trigger.
-/// Where a ref is checked out relative to a session's folder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RefPlace {
-    /// The session's own folder is on it.
-    Here,
-    /// Another folder (the main checkout or a linked worktree) holds it.
-    Elsewhere,
-    /// Not checked out anywhere: the session can switch to it.
-    Free,
-}
-
-fn ref_place(row: &RepoRef, cwd: &str, root: &str) -> RefPlace {
-    let same =
-        |a: &str, b: &str| a.trim_end_matches(['/', '\\']) == b.trim_end_matches(['/', '\\']);
-    match row.worktree_path.as_deref().or(row.current.then_some(root)) {
-        Some(path) if same(path, cwd) => RefPlace::Here,
-        Some(_) => RefPlace::Elsewhere,
-        None => RefPlace::Free,
-    }
-}
-
 fn attach_overlay_below(
     chip: gpui::Stateful<gpui::Div>,
     overlay: &mut Option<(PickerKind, AnyElement)>,
@@ -7668,23 +7654,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn ref_place_is_relative_to_the_session_folder() {
-        let main = repo_ref("main", true, None);
-        let feature = repo_ref("feature", false, Some("/wt/feature/"));
-        let free = repo_ref("fix", false, None);
-        // A session in the main folder owns the main checkout's branch.
-        assert_eq!(ref_place(&main, "/repo", "/repo"), RefPlace::Here);
-        assert_eq!(ref_place(&feature, "/repo", "/repo"), RefPlace::Elsewhere);
-        assert_eq!(ref_place(&free, "/repo", "/repo"), RefPlace::Free);
-        // A worktree session owns its worktree's branch, not the main one.
-        assert_eq!(ref_place(&feature, "/wt/feature", "/repo"), RefPlace::Here);
-        assert_eq!(
-            ref_place(&main, "/wt/feature", "/repo"),
-            RefPlace::Elsewhere
-        );
-    }
-
     #[derive(Default)]
     struct SwitchHost {
         calls: std::sync::Mutex<Vec<(String, serde_json::Value)>>,
@@ -7788,6 +7757,7 @@ mod tests {
         assert_eq!(switch["repoPath"], "/remote/a");
         assert_eq!(switch["refName"], "feature");
         assert_eq!(switch["targetDeviceId"], "remote");
+        assert_eq!(switch["chatId"], "c");
         let (_, mutate) = sent
             .iter()
             .find(|(method, _)| method == methods::MUTATE)

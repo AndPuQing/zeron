@@ -5744,6 +5744,26 @@ impl DocHost {
         })
     }
 
+    /// Re-stamp a session's checkout after its branch moved between turns
+    /// (a mid-session switch), so every device names the branch the next
+    /// turn will see instead of the one the last turn saw.
+    pub(crate) async fn restamp_checkout(&self, chat_id: &str, cwd: &str) {
+        let Some(workspace) = self.workspace() else {
+            return;
+        };
+        let Some(context) = self.capture_source_context(cwd).await else {
+            return;
+        };
+        if !context.branch.is_empty()
+            && let Err(err) = workspace.set_chat_branch(chat_id, &context.branch)
+        {
+            tracing::warn!(chat = %chat_id, error = %err, "switched branch stamp failed");
+        }
+        if let Err(err) = workspace.set_chat_source_context(chat_id, &context) {
+            tracing::warn!(chat = %chat_id, error = %err, "switched source stamp failed");
+        }
+    }
+
     /// Every fresh harness dispatch crosses this boundary, including
     /// steer/input fallbacks and crash recovery. Capture immediately before
     /// dispatch so the conversation records the checkout the harness will

@@ -267,18 +267,33 @@ async fn repository_identity_spans_worktrees_and_clones() {
     assert_eq!(repos.repository_identity(&linked).await.unwrap(), identity);
     git(
         &repo,
-        &["remote", "add", "origin", "git@github-alias:zeronsh/old-name.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "git@github-alias:zeronsh/old-name.git",
+        ],
     )
     .await;
     let clone = temp.path().join("clone");
     git(
         temp.path(),
-        &["clone", "-q", repo.to_str().unwrap(), clone.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            repo.to_str().unwrap(),
+            clone.to_str().unwrap(),
+        ],
     )
     .await;
     git(
         &clone,
-        &["remote", "set-url", "origin", "https://github.com/zeronsh/new-name"],
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/zeronsh/new-name",
+        ],
     )
     .await;
     assert_eq!(repos.repository_identity(&repo).await.unwrap(), identity);
@@ -352,7 +367,12 @@ async fn repository_identity_spans_worktrees_and_clones() {
     .await;
     git(
         &shallow,
-        &["remote", "set-url", "origin", "https://GitHub.com/ZeronSH/Zeron.git"],
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://GitHub.com/ZeronSH/Zeron.git",
+        ],
     )
     .await;
     assert_eq!(
@@ -369,7 +389,12 @@ async fn repository_identity_spans_worktrees_and_clones() {
     assert!(local.starts_with("local:"), "{local}");
     git(
         &empty,
-        &["remote", "add", "upstream", "git@github.com:Anara/Comet.git"],
+        &[
+            "remote",
+            "add",
+            "upstream",
+            "git@github.com:Anara/Comet.git",
+        ],
     )
     .await;
     assert_eq!(
@@ -569,6 +594,75 @@ async fn fetch_all_updates_only_remote_tracking_refs() {
     assert_eq!(
         git_stdout(&repo_dir, &["status", "--porcelain=v1"]).await,
         status_before
+    );
+}
+
+#[tokio::test]
+async fn session_switch_ref_stays_in_its_folder_and_restamps_the_chat() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo_dir = tmp.path().join("switch-repo");
+    init_repo(&repo_dir).await;
+    git(&repo_dir, &["branch", "feature"]).await;
+    let repo_path = repo_dir.to_string_lossy().into_owned();
+    let core = assemble(&tmp.path().join("data"));
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    for op in [
+        serde_json::json!({
+            "op": "createSpace", "spaceId": "space-switch", "deviceId": core.device_id,
+            "path": repo_path, "gitDetected": true,
+        }),
+        serde_json::json!({
+            "op": "createChat", "chatId": "chat-switch", "spaceId": "space-switch",
+            "deviceId": core.device_id, "cwd": repo_path, "branch": "main",
+        }),
+    ] {
+        client.call(methods::MUTATE, op).await.expect("mutate");
+    }
+
+    // A session only switches its own folder.
+    let elsewhere = client
+        .call(
+            methods::SWITCH_REF,
+            serde_json::json!({
+                "repoPath": tmp.path().join("other").to_string_lossy(),
+                "refName": "feature",
+                "chatId": "chat-switch",
+            }),
+        )
+        .await
+        .expect_err("another folder is refused");
+    assert!(elsewhere.to_string().contains("working folder changed"));
+    assert_eq!(
+        git_stdout(&repo_dir, &["branch", "--show-current"]).await,
+        "main"
+    );
+
+    let switched = client
+        .call(
+            methods::SWITCH_REF,
+            serde_json::json!({
+                "repoPath": repo_path,
+                "refName": "feature",
+                "chatId": "chat-switch",
+            }),
+        )
+        .await
+        .expect("SwitchRef");
+    assert_eq!(switched["branch"], "feature");
+    assert_eq!(
+        git_stdout(&repo_dir, &["branch", "--show-current"]).await,
+        "feature"
+    );
+    // Every device now names the branch the next turn will see.
+    let chat = core
+        .workspace
+        .chat("chat-switch")
+        .expect("read chat")
+        .expect("chat row");
+    assert_eq!(chat.branch.as_deref(), Some("feature"));
+    assert_eq!(
+        chat.source_context.map(|context| context.branch).as_deref(),
+        Some("feature")
     );
 }
 

@@ -9,7 +9,9 @@ use zeron_sync::edge_route::RequestExt;
 use chrono::{TimeZone, Utc};
 use tokio_util::sync::CancellationToken;
 use zeron_doc::RegistryDoc;
-use zeron_proto::{Chat, ChatConfig, SidebarPinChange, SidebarSectionChange};
+use zeron_proto::{
+    Chat, ChatConfig, ChatIndicator, RefPlace, SidebarPinChange, SidebarSectionChange,
+};
 
 use crate::attachments::{self, AttachmentCache};
 use crate::auth::TokenProvider;
@@ -24,7 +26,7 @@ use crate::events::{ClientEvent, ClientListener, EventPump};
 use crate::live::LiveBackend;
 use crate::rpc::{FolderListing, ProgressFn, QUEUED_ATTACHMENTS_MIN, RepoRef, capability};
 use crate::session::{HostCapabilities, OutgoingAttachment, RoomState, SessionCore, SessionHandle};
-use crate::workspace::{SearchHit, WorkspaceSnapshot, WorkspaceStore};
+use crate::workspace::{SearchHit, SessionRow, WorkspaceSnapshot, WorkspaceStore};
 use crate::{lock, now_ms, read, write};
 
 /// Attachment read cache budget.
@@ -878,32 +880,88 @@ impl Client {
         Ok(())
     }
 
-    /// Mid-session ref switch: retarget onto the ref's existing worktree (row
-    /// writes only), else `git checkout` in the session's own folder.
-    pub async fn switch_session_ref(&self, chat_id: &str, reference: RepoRef) -> Result<()> {
-        let chat = self
-            .inner
-            .workspace
-            .chat(chat_id)
+    /// The session's row, its folder and its project's main checkout. Only
+    /// sessions in a git project have one.
+    fn session_checkout(&self, chat_id: &str) -> Result<(Arc<SessionRow>, String, String)> {
+        let ws = self.workspace();
+        let row = ws
+            .session(chat_id)
+            .cloned()
             .ok_or_else(|| ClientError::NotFound(chat_id.to_owned()))?;
-        let cwd = chat
+        let project = row
+            .project
+            .as_ref()
+            .and_then(|project| ws.project(&project.id))
+            .filter(|project| project.git_detected)
+            .ok_or_else(|| {
+                ClientError::InvalidArgument("session is not in a git project".into())
+            })?;
+        let cwd = row
             .cwd
             .clone()
             .ok_or_else(|| ClientError::InvalidArgument("session has no working folder".into()))?;
-        if let Some(worktree) = reference.worktree_path.clone() {
-            if worktree != cwd {
-                self.inner.registry_write(|doc| {
-                    doc.set_chat_cwd(chat_id, &worktree)?;
-                    doc.set_chat_branch(chat_id, &reference.name)
-                })?;
-            }
-            return Ok(());
+        let root = project.path.clone();
+        Ok((row, cwd, root))
+    }
+
+    /// The session's refs, each placed relative to its folder: the picker
+    /// switches only to [`RefPlace::Free`] refs.
+    pub async fn session_refs(&self, chat_id: &str) -> Result<Vec<(RepoRef, RefPlace)>> {
+        let (row, cwd, root) = self.session_checkout(chat_id)?;
+        let refs = self.list_refs(&row.device_id, &root).await?;
+        Ok(refs
+            .into_iter()
+            .map(|reference| {
+                let place = reference.place(&cwd, &root);
+                (reference, place)
+            })
+            .collect())
+    }
+
+    /// Mid-session ref switch: `git checkout` in the session's OWN folder on
+    /// its host, then record the resulting branch on the chat row. A ref held
+    /// by another folder is never taken over (moving the session changes its
+    /// cwd, and native resume is cwd-scoped), and a running turn keeps its
+    /// checkout. Returns the session's branch afterwards, `None` on a
+    /// detached HEAD.
+    pub async fn switch_session_ref(
+        &self,
+        chat_id: &str,
+        ref_name: &str,
+    ) -> Result<Option<String>> {
+        let (row, cwd, root) = self.session_checkout(chat_id)?;
+        if matches!(
+            row.host_indicator,
+            ChatIndicator::Working | ChatIndicator::AwaitingInput
+        ) {
+            return Err(ClientError::InvalidArgument(
+                "Stop the current turn before switching branches.".into(),
+            ));
         }
-        self.switch_ref(&chat.device_id, &cwd, &reference.name)
+        let refs = self.list_refs(&row.device_id, &root).await?;
+        match refs
+            .iter()
+            .find(|reference| reference.name == ref_name)
+            .map(|reference| reference.place(&cwd, &root))
+        {
+            Some(RefPlace::Here) => return Ok(row.branch.clone()),
+            Some(RefPlace::Elsewhere) => {
+                return Err(ClientError::InvalidArgument(format!(
+                    "{ref_name} is checked out in another folder. Switch it there, or pick another branch."
+                )));
+            }
+            // An unlisted ref (a remote-only branch) gets git's own verdict.
+            Some(RefPlace::Free) | None => {}
+        }
+        let branch = self
+            .checkout_ref(&row.device_id, &cwd, ref_name, Some(chat_id))
             .await?;
-        self.inner
-            .registry_write(|doc| doc.set_chat_branch(chat_id, &reference.name))?;
-        Ok(())
+        // The host re-stamps the row; older hosts ignore `chatId`.
+        if let Some(branch) = &branch {
+            self.inner
+                .registry_write(|doc| doc.set_chat_branch(chat_id, branch))?;
+        }
+        Ok(branch)
     }
 
     fn pin_change(&self, change: SidebarPinChange) -> Result<()> {
@@ -1452,18 +1510,55 @@ impl Client {
 
     /// `git checkout <ref>` in `repo_path` on the device.
     pub async fn switch_ref(&self, device_id: &str, repo_path: &str, ref_name: &str) -> Result<()> {
-        match self.inner.backend() {
-            Backend::Demo(demo) => demo.switch_ref(repo_path, ref_name).await,
-            Backend::Live(live) => live
-                .relay
-                .call(
-                    device_id,
-                    zeron_rpc::methods::SWITCH_REF,
-                    serde_json::json!({ "repoPath": repo_path, "refName": ref_name }),
-                )
-                .await
-                .map(|_| ()),
-        }
+        self.checkout_ref(device_id, repo_path, ref_name, None)
+            .await
+            .map(drop)
+    }
+
+    /// [`Self::switch_ref`], returning the checkout's branch afterwards
+    /// (`None` on a detached HEAD). A `chat_id` lets the host refuse a
+    /// running turn and re-stamp that session's branch and source context.
+    async fn checkout_ref(
+        &self,
+        device_id: &str,
+        repo_path: &str,
+        ref_name: &str,
+        chat_id: Option<&str>,
+    ) -> Result<Option<String>> {
+        let branch = match self.inner.backend() {
+            Backend::Demo(demo) => {
+                demo.switch_ref(repo_path, ref_name).await?;
+                // Re-stamp the session's observed checkout like a live host.
+                if let Some(chat_id) = chat_id {
+                    self.inner.registry_write(|doc| {
+                        if let Some(mut context) =
+                            doc.chat(chat_id)?.and_then(|chat| chat.source_context)
+                        {
+                            context.branch = ref_name.to_owned();
+                            doc.set_chat_source_context(chat_id, &context)?;
+                        }
+                        Ok(())
+                    })?;
+                }
+                ref_name.to_owned()
+            }
+            Backend::Live(live) => {
+                let value = live
+                    .relay
+                    .call(
+                        device_id,
+                        zeron_rpc::methods::SWITCH_REF,
+                        serde_json::json!({
+                            "repoPath": repo_path,
+                            "refName": ref_name,
+                            "chatId": chat_id,
+                        }),
+                    )
+                    .await?;
+                value["branch"].as_str().unwrap_or_default().to_owned()
+            }
+        };
+        Ok((!branch.is_empty()).then_some(branch))
     }
 
     /// Create a worktree for `branch` (an existing ref); returns its path.

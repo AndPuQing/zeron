@@ -252,14 +252,61 @@ final class CoreSessionSource: SessionSource {
                     })
                 }
             }])
+        case "branch":
+            return branchMenu(title: "Switch Branch")
         case "pr":
             guard let url = row.pullRequest.flatMap({ URL(string: $0.url) }) else { return nil }
+            // The PR chip stands in for the branch chip, so it carries the switch.
             return UIMenu(title: row.pullRequest?.title ?? "", children: [
                 UIAction(title: "Open Pull Request", image: UIImage(systemName: "safari")) { _ in UIApplication.shared.open(url) },
                 UIAction(title: "Copy Link", image: UIImage(systemName: "link")) { _ in UIPasteboard.general.url = url },
+                branchMenu(title: "Switch Branch", image: BranchIcon.sized()),
             ])
         default:
             return nil
+        }
+    }
+
+    /// The session's branches: picking one checks it out in the session's own
+    /// folder. A branch another folder holds is shown but can't be picked, and
+    /// a running turn keeps its checkout.
+    private func branchMenu(title: String, image: UIImage? = nil) -> UIMenu {
+        UIMenu(title: title, image: image, children: [UIDeferredMenuElement.uncached { [weak self] done in
+            guard let self else { return done([]) }
+            if self.chrome.running {
+                return done([UIAction(title: "Stop the current turn to switch branches", attributes: .disabled) { _ in }])
+            }
+            Task { @MainActor in
+                do {
+                    let refs = try await self.client.sessionRefs(chatId: self.chatId)
+                    done(refs.map { ref in
+                        let held = ref.place == .elsewhere
+                        return UIAction(
+                            title: ref.name,
+                            subtitle: held ? "Checked out in another folder" : nil,
+                            attributes: held ? .disabled : [],
+                            state: ref.place == .here ? .on : .off
+                        ) { [weak self] _ in
+                            if ref.place == .free { self?.switchBranch(ref.name) }
+                        }
+                    })
+                } catch {
+                    done([UIAction(title: sideChatErrorMessage(error), attributes: .disabled) { _ in }])
+                }
+            }
+        }])
+    }
+
+    private func switchBranch(_ name: String) {
+        let client = self.client
+        let chatId = self.chatId
+        Task { @MainActor in
+            do {
+                _ = try await client.switchSessionRef(chatId: chatId, refName: name)
+            } catch {
+                let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+                Toast.show(sideChatErrorMessage(error), in: window)
+            }
         }
     }
 

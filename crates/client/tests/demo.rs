@@ -615,3 +615,49 @@ fn sends_to_an_offline_host_park_as_queued_not_working() {
     assert_eq!(row.send_state, Some(zeron_client::SendState::Queued));
     assert_eq!(row.host_indicator, ChatIndicator::Idle);
 }
+
+fn block<T: Send + 'static>(
+    future: impl std::future::Future<Output = Result<T, zeron_client::ClientError>> + Send + 'static,
+) -> Result<T, zeron_client::ClientError> {
+    zeron_client::runtime::shared().block_on(zeron_client::runtime::run(future))
+}
+
+#[test]
+fn session_branch_switch_stays_in_the_session_folder() {
+    let (client, _dir) = demo(fast());
+    // chat-tabs is idle in the zeron project's main folder.
+    let refs = block({
+        let client = client.clone();
+        async move { client.session_refs("chat-tabs").await }
+    })
+    .unwrap();
+    let place = |name: &str| refs.iter().find(|(r, _)| r.name == name).unwrap().1;
+    assert_eq!(place("main"), zeron_client::RefPlace::Here);
+    assert_eq!(place("veil-fade"), zeron_client::RefPlace::Elsewhere);
+    assert_eq!(place("feature/diff-pane"), zeron_client::RefPlace::Free);
+
+    let switch = |chat: &'static str, name: &'static str| {
+        let client = client.clone();
+        block(async move { client.switch_session_ref(chat, name).await })
+    };
+    // A ref another folder holds is never taken over.
+    let held = switch("chat-tabs", "veil-fade").unwrap_err();
+    assert!(held.to_string().contains("another folder"), "{held}");
+
+    // A free ref is checked out in place and recorded on the row.
+    let switched = switch("chat-tabs", "feature/diff-pane").unwrap();
+    assert_eq!(switched.as_deref(), Some("feature/diff-pane"));
+    wait_for("the branch on the row", Duration::from_secs(5), || {
+        client
+            .workspace()
+            .session("chat-tabs")
+            .unwrap()
+            .branch
+            .as_deref()
+            == Some("feature/diff-pane")
+    });
+
+    // A running turn keeps its checkout.
+    let busy = switch("chat-veil", "feature/diff-pane").unwrap_err();
+    assert!(busy.to_string().contains("Stop the current turn"), "{busy}");
+}

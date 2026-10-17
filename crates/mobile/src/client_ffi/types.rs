@@ -985,6 +985,34 @@ impl From<zc::rpc::RepoRef> for RepoRef {
     }
 }
 
+/// Where a ref is checked out relative to a session's folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum RefPlace {
+    /// The session's own folder is on it.
+    Here,
+    /// Another folder holds it; the session cannot switch to it.
+    Elsewhere,
+    /// The session can switch to it.
+    Free,
+}
+
+impl From<zeron_proto::RefPlace> for RefPlace {
+    fn from(place: zeron_proto::RefPlace) -> Self {
+        match place {
+            zeron_proto::RefPlace::Here => Self::Here,
+            zeron_proto::RefPlace::Elsewhere => Self::Elsewhere,
+            zeron_proto::RefPlace::Free => Self::Free,
+        }
+    }
+}
+
+/// One row of a session's branch picker.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SessionRef {
+    pub name: String,
+    pub place: RefPlace,
+}
+
 impl From<RepoRef> for zc::rpc::RepoRef {
     fn from(r: RepoRef) -> Self {
         Self {

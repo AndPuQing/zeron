@@ -36,6 +36,7 @@ import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.GlassMetrics
 import sh.zeron.android.transcript.TranscriptState
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.focus.FocusRequester
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -80,9 +81,11 @@ import uniffi.zeron_core.InputRequest
 import uniffi.zeron_core.ModelInfo
 import uniffi.zeron_core.QueueGate
 import uniffi.zeron_core.QueueItem
+import uniffi.zeron_core.RefPlace
 import uniffi.zeron_core.SandboxLevel
 import uniffi.zeron_core.SendRequest
 import uniffi.zeron_core.SessionHandle
+import uniffi.zeron_core.SessionRef
 import uniffi.zeron_core.SessionRow
 import uniffi.zeron_core.UserInputAnswer
 import uniffi.zeron_core.fallbackModels
@@ -282,6 +285,61 @@ private fun DeliveryChip(current: Delivery, canSteer: Boolean, onChange: (Delive
     }
 }
 
+/** The core's error text, without the generated `field=` prefix. */
+private fun coreMessage(e: Throwable): String =
+    e.message?.removePrefix("message=")?.removePrefix("reason=")?.takeIf { it.isNotBlank() } ?: "Please try again."
+
+/**
+ * The session's branches: picking one checks it out in the session's own
+ * folder. A branch another folder holds is shown but never switched to, and
+ * a running turn keeps its checkout.
+ */
+@Composable
+private fun BranchMenu(client: CoreClient, chatId: String, running: Boolean, open: Boolean, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var refs by remember(chatId) { mutableStateOf<List<SessionRef>?>(null) }
+    var failure by remember(chatId) { mutableStateOf<String?>(null) }
+    LaunchedEffect(open, chatId) {
+        if (open && !running) {
+            failure = null
+            try {
+                refs = client.sessionRefs(chatId)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failure = coreMessage(e)
+            }
+        }
+    }
+    fun toast(text: String) = android.widget.Toast.makeText(context, text, android.widget.Toast.LENGTH_SHORT).show()
+    val loaded = refs
+    val choices = when {
+        running -> listOf(MenuChoice("Stop the current turn to switch branches") {})
+        failure != null -> listOf(MenuChoice(failure.orEmpty()) {})
+        loaded == null -> listOf(MenuChoice("Loading branches…") {})
+        else -> loaded.map { ref ->
+            val held = ref.place == RefPlace.ELSEWHERE
+            MenuChoice(ref.name, ref.place == RefPlace.HERE, if (held) "Checked out in another folder" else null) {
+                when (ref.place) {
+                    RefPlace.FREE -> scope.launch {
+                        try {
+                            client.switchSessionRef(chatId, ref.name)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            toast(coreMessage(e))
+                        }
+                    }
+                    RefPlace.ELSEWHERE -> toast("${ref.name} is checked out in another folder.")
+                    RefPlace.HERE -> {}
+                }
+            }
+        }
+    }
+    ChoiceMenu(open, onDismiss, listOf(MenuSection("Switch branch", choices)))
+}
+
 @Composable
 private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?) {
     val scope = rememberCoroutineScope()
@@ -320,12 +378,19 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
     }
     val pr = row?.pullRequest
     if (pr != null) {
-        ContextChip("#${pr.number}", leading = { ZIcon(ZIcons.PullRequest, null, Modifier.size(16.dp)) }, onClick = {
-            CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(pr.url))
-        })
+        // The PR chip stands in for the branch chip, so it carries the switch.
+        ContextChip("#${pr.number}", leading = { ZIcon(ZIcons.PullRequest, null, Modifier.size(16.dp)) }, onClick = { menu = "pr" }) {
+            ChoiceMenu(menu == "pr", { if (menu == "pr") menu = null }, listOf(MenuSection(pr.title, listOf(
+                MenuChoice("Open pull request") { CustomTabsIntent.Builder().build().launchUrl(context, Uri.parse(pr.url)) },
+                MenuChoice("Switch branch", supporting = row?.branch) { menu = "branch" },
+            ))))
+            BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
+        }
     } else {
         row?.branch?.takeIf { it.isNotEmpty() }?.let {
-            ContextChip(it, leading = { ZIcon(ZIcons.Branch, null, Modifier.size(16.dp)) }, onClick = {})
+            ContextChip(it, leading = { ZIcon(ZIcons.Branch, null, Modifier.size(16.dp)) }, onClick = { menu = "branch" }) {
+                BranchMenu(client, c.chatId, c.live.turnRunning, menu == "branch") { menu = null }
+            }
         }
     }
     val tokens = c.contextUsage?.tokens

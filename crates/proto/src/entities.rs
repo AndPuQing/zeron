@@ -350,6 +350,38 @@ pub struct RepoRef {
     pub worktree_path: Option<String>,
 }
 
+/// Where a ref is checked out relative to one session's folder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RefPlace {
+    /// The session's own folder is on it.
+    Here,
+    /// Another folder (the main checkout or a linked worktree) holds it.
+    Elsewhere,
+    /// Not checked out anywhere: the session can switch to it.
+    Free,
+}
+
+impl RepoRef {
+    /// [`RefPlace`] of this ref for a session working in `cwd` of a repo whose
+    /// main checkout is `root`. A session switches only its own folder: a ref
+    /// held elsewhere is never taken over, because moving the session changes
+    /// its cwd and native resume is cwd-scoped.
+    pub fn place(&self, cwd: &str, root: &str) -> RefPlace {
+        let same =
+            |a: &str, b: &str| a.trim_end_matches(['/', '\\']) == b.trim_end_matches(['/', '\\']);
+        match self
+            .worktree_path
+            .as_deref()
+            .or(self.current.then_some(root))
+        {
+            Some(path) if same(path, cwd) => RefPlace::Here,
+            Some(_) => RefPlace::Elsewhere,
+            None => RefPlace::Free,
+        }
+    }
+}
+
 /// Public Git reference attached to a commit in the history graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1523,6 +1555,25 @@ pub struct ChatConnectivity {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ref_place_is_relative_to_the_session_folder() {
+        let r = |name: &str, current, worktree: Option<&str>| RepoRef {
+            name: name.into(),
+            current,
+            worktree_path: worktree.map(str::to_owned),
+        };
+        let main = r("main", true, None);
+        let feature = r("feature", false, Some("/wt/feature/"));
+        let free = r("fix", false, None);
+        // A session in the main folder owns the main checkout's branch.
+        assert_eq!(main.place("/repo", "/repo"), RefPlace::Here);
+        assert_eq!(feature.place("/repo", "/repo"), RefPlace::Elsewhere);
+        assert_eq!(free.place("/repo", "/repo"), RefPlace::Free);
+        // A worktree session owns its worktree's branch, not the main one.
+        assert_eq!(feature.place("/wt/feature", "/repo"), RefPlace::Here);
+        assert_eq!(main.place("/wt/feature", "/repo"), RefPlace::Elsewhere);
+    }
+
     use super::*;
     use chrono::TimeZone;
 
