@@ -101,14 +101,13 @@ class AppModel(private val app: Application) {
     private val _appearance = MutableStateFlow(
         Appearance(
             runCatching { ThemeMode.valueOf(settings.getString("theme", "System")!!) }.getOrDefault(ThemeMode.System),
-            settings.getBoolean("dynamicColor", false),
         ),
     )
     val appearance: StateFlow<Appearance> = _appearance.asStateFlow()
 
     fun setAppearance(value: Appearance) {
         _appearance.value = value
-        settings.edit().putString("theme", value.mode.name).putBoolean("dynamicColor", value.dynamicColor).apply()
+        settings.edit().putString("theme", value.mode.name).remove("dynamicColor").apply()
     }
 
     var lastDraft: NewSessionDraft = NewSessionDraft(

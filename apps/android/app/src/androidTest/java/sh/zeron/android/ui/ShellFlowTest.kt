@@ -1,0 +1,120 @@
+package sh.zeron.android.ui
+
+import android.content.Intent
+import android.os.SystemClock
+import androidx.core.view.WindowCompat
+import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
+import org.junit.Assert.*
+import org.junit.Test
+import sh.zeron.android.ZeronApplication
+import sh.zeron.android.design.ThemeMode
+
+/** Shell controls must keep their behavior across menus, sheets and recreation. */
+class ShellFlowTest {
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val device = UiDevice.getInstance(instrumentation)
+    private val model get() = (instrumentation.targetContext.applicationContext as ZeronApplication).model
+
+    @Test
+    fun appearanceSelectionSurvivesRecreation() {
+        launch("settings")
+        val original = model.appearance.value
+        try {
+            for (mode in listOf(ThemeMode.Dark, ThemeMode.Light)) {
+                findText(mode.name).click()
+                await { model.appearance.value.mode == mode }
+                device.waitForIdle()
+                assertSystemBars(mode)
+                launch("settings")
+                assertEquals(mode, model.appearance.value.mode)
+                assertTrue(device.wait(Until.hasObject(By.text(mode.name)), 5_000))
+                assertSystemBars(mode)
+            }
+        } finally {
+            instrumentation.runOnMainSync { model.setAppearance(original) }
+        }
+    }
+
+    @Test
+    fun renameAlertSavesAndCancels() {
+        launch("home")
+        val original = requireNotNull(model.row("chat-deploy")).title
+        findText(original).longClick()
+        requireNotNull(device.wait(Until.findObject(By.text("Rename")), 5_000)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Rename session")), 5_000))
+        requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).text = "Renamed from Android"
+        device.findObject(By.text("Rename")).click()
+        await { model.row("chat-deploy")?.title == "Renamed from Android" }
+        assertTrue(device.wait(Until.gone(By.text("Rename session")), 5_000))
+        findText("Renamed from Android").longClick()
+        requireNotNull(device.wait(Until.findObject(By.text("Rename")), 5_000)).click()
+        requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).text = "Discard this"
+        device.findObject(By.text("Cancel")).click()
+        assertTrue(device.wait(Until.gone(By.text("Rename session")), 5_000))
+        assertEquals("Renamed from Android", model.row("chat-deploy")?.title)
+        instrumentation.runOnMainSync { model.rename("chat-deploy", original) }
+    }
+
+    @Test
+    fun projectSheetReturnsSelectionToComposer() {
+        launch("new")
+        val projects = model.workspace.value!!.projects
+        val project = projects.firstOrNull { it.id == model.lastDraft.projectId }
+            ?: projects.firstOrNull { it.deviceOnline } ?: projects.first()
+        assertTrue(device.wait(Until.hasObject(By.text(project.name)), 5_000))
+        // The picker remains usable while the composer owns the keyboard.
+        device.findObject(By.text(project.name)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Project")), 5_000))
+        findText("No project").click()
+        assertTrue(device.wait(Until.gone(By.text("Project")), 5_000))
+        assertTrue(device.wait(Until.hasObject(By.text("No project")), 5_000))
+        device.findObject(By.text("No project")).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Project")), 5_000))
+        device.findObject(By.text("Close")).click()
+        assertTrue(device.wait(Until.gone(By.text("Project")), 5_000))
+        assertTrue(device.hasObject(By.text("No project")))
+    }
+
+    private fun launch(route: String) {
+        val context = instrumentation.targetContext
+        context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra("demo", true).putExtra("fast", true).putExtra("route", route))
+        assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName)), 20_000))
+        await { model.isDemo && model.workspace.value != null }
+        device.waitForIdle()
+    }
+
+    private fun findText(text: String): androidx.test.uiautomator.UiObject2 {
+        repeat(5) {
+            device.wait(Until.findObject(By.text(text)), 1_000)?.let { return it }
+            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+                device.displayWidth / 2, device.displayHeight / 3, 20)
+            device.waitForIdle()
+        }
+        error("No visible control: $text")
+    }
+
+    private fun await(condition: () -> Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            if (condition()) return
+            SystemClock.sleep(50)
+        }
+        fail("Timed out waiting for shell state")
+    }
+
+    private fun assertSystemBars(mode: ThemeMode) {
+        instrumentation.runOnMainSync {
+            val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+            val bars = WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+            assertEquals(mode == ThemeMode.Light, bars.isAppearanceLightStatusBars)
+            assertEquals(mode == ThemeMode.Light, bars.isAppearanceLightNavigationBars)
+        }
+    }
+}

@@ -77,7 +77,7 @@ class SideChatFlowTest {
         launch(source)
         val before = model.children(source).map { it.id }.toSet()
         device.findObject(By.desc("Side chats")).click()
-        requireNotNull(device.wait(Until.findObject(By.text("New side chat")), 5_000)).click()
+        requireNotNull(device.wait(Until.findObject(By.desc("New side chat")), 5_000)).click()
         await { model.children(source).any { it.id !in before } }
         val empty = model.children(source).single { it.id !in before }
         assertEquals(source, empty.parentChatId)

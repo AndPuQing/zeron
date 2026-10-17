@@ -56,15 +56,18 @@ class VisualFlowTest {
         val context = instrumentation.targetContext
         val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            .putExtra("demo", true).putExtra("route", "chat:chat-visuals")
+            .putExtra("demo", true).putExtra("fast", true).putExtra("route", "chat:chat-visuals")
         context.startActivity(intent)
-        val toggle = requireNotNull(device.wait(Until.findObject(By.desc("Show table")), 20_000)) {
+        requireNotNull(device.wait(Until.findObject(By.desc("Show table")), 20_000)) {
             "The visual must load from its host and expose native controls"
         }
+        device.waitForIdle()
+        val toggle = device.findObject(By.desc("Show table"))
         assertFalse(toggle.isChecked)
-        toggle.click()
+        // A zero-duration synthetic tap can be lost by a busy native visual.
+        toggle.click(100)
         assertTrue(device.wait(Until.hasObject(By.desc("Show table").checked(true)), 5_000))
-        device.findObject(By.desc("Show table")).click()
+        device.findObject(By.desc("Show table")).click(100)
         assertTrue(device.wait(Until.hasObject(By.desc("Show table").checked(false)), 5_000))
 
         val slider = device.wait(Until.findObject(By.desc("Smoothing window")), 5_000)!!
@@ -72,11 +75,11 @@ class VisualFlowTest {
         val bounds = slider.visibleBounds
         device.click(bounds.left + (bounds.width() * 0.84).toInt(), bounds.centerY())
         awaitRange(6f)
-        device.findObject(By.desc("Reset")).click()
+        device.findObject(By.desc("Reset")).click(100)
         awaitRange(3f)
 
         val tab = device.wait(Until.findObject(By.desc("30d")), 5_000)!!
-        tab.click()
+        tab.click(100)
         assertTrue(device.wait(Until.hasObject(By.desc("30d").selected(true)), 5_000))
 
         // A drag changes the slider without handing the gesture to the transcript.
@@ -96,9 +99,16 @@ class VisualFlowTest {
         awaitRange(7f)
 
         // Offscreen visuals detach their listener and resume the same script when revisited.
-        repeat(3) { device.swipe(30, 450, 30, device.displayHeight - 450, 20) }
+        // Scroll to visibility rather than assuming a fixed number of swipes for every layout.
+        for (attempt in 0 until 8) {
+            device.swipe(30, 450, 30, device.displayHeight - 450, 20)
+            if (device.wait(Until.gone(By.desc("Smoothing window")), 500)) break
+        }
         assertFalse(device.hasObject(By.desc("Smoothing window")))
-        repeat(3) { device.swipe(30, device.displayHeight - 450, 30, 450, 20) }
+        for (attempt in 0 until 8) {
+            device.swipe(30, device.displayHeight - 450, 30, 450, 20)
+            if (device.wait(Until.hasObject(By.desc("Smoothing window")), 500)) break
+        }
         assertTrue(device.wait(Until.hasObject(By.desc("Smoothing window")), 5_000))
         awaitRange(7f)
     }

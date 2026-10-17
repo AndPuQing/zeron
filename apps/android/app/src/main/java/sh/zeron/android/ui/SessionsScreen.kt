@@ -22,24 +22,17 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedListItem
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
@@ -54,6 +47,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
@@ -144,11 +139,10 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
             state = pull,
             modifier = Modifier.fillMaxSize(),
             indicator = {
-                PullToRefreshDefaults.LoadingIndicator(
-                    state = pull,
-                    isRefreshing = refreshing,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(WindowInsets.statusBars.asPaddingValues()),
-                )
+                if (refreshing || pull.distanceFraction > 0f) {
+                    Box(Modifier.align(Alignment.TopCenter).padding(WindowInsets.statusBars.asPaddingValues()).padding(top = 12.dp).size(32.dp),
+                        contentAlignment = Alignment.Center) { sh.zeron.android.design.ActivityIndicator(Modifier.size(20.dp)) }
+                }
             },
         ) {
             LazyColumn(
@@ -210,7 +204,7 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
                 if (empty) item("empty") { EmptyState(filter) }
             }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 180.dp))
+        AppSnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 180.dp))
         StatusBarScrim(scrolled = list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0)
     }
 }
@@ -228,7 +222,7 @@ private fun LazyListScope.group(
     if (title != null) {
         item("h-$id") {
             Row(
-                Modifier.animateItem().fillMaxWidth().padding(start = 28.dp, end = 12.dp, top = 20.dp, bottom = 8.dp),
+                Modifier.animateItem().fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 16.dp, bottom = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(title, style = MaterialTheme.typography.titleSmallEmphasized, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -247,7 +241,7 @@ private fun LazyListScope.group(
     }
     if (collapsed) return
     itemsIndexed(rows, key = { _, r -> "$id/${r.id}" }) { i, row ->
-        Box(Modifier.animateItem().padding(horizontal = 16.dp).padding(bottom = ListItemDefaults.SegmentedGap)) {
+        Box(Modifier.animateItem().padding(horizontal = 8.dp)) {
             SwipeableSessionRow(row, i, rows.size, model, onOpen, archive)
         }
     }
@@ -264,7 +258,7 @@ private fun SwipeableSessionRow(
     archive: (SessionRow) -> Unit,
 ) {
     val state = rememberSwipeToDismissBoxState()
-    val shape = segmentedShapes(index, count).shape
+    val shape = RoundedCornerShape(16.dp)
     SwipeToDismissBox(
         state = state,
         enableDismissFromStartToEnd = false,
@@ -284,7 +278,7 @@ private fun SwipeableSessionRow(
 
 /** The list card colour: paper-white in light, raised in dark. */
 @Composable
-fun cardColor() = if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainer else MaterialTheme.colorScheme.surfaceContainerLowest
+fun cardColor() = if (LocalDarkTheme.current) Color(0xFF111113) else Color.White
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -300,39 +294,35 @@ fun SessionItem(
     var renaming by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
     Box {
-        SegmentedListItem(
-            onClick = { onOpen(row.id) },
-            onLongClick = {
-                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                menu = true
-            },
-            shapes = ListItemDefaults.shapes(shape = RoundedCornerShape(16.dp)),
-            colors = ListItemDefaults.segmentedColors(containerColor = MaterialTheme.colorScheme.background),
-            leadingContent = { HarnessTile(row) },
-            supportingContent = {
-                val parentId = row.parentChatId
-                if (parentId != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        ZIcon(ZIcons.Branch, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            "Side chat of ${model.row(parentId)?.title ?: "main chat"}",
-                            modifier = Modifier.padding(start = 6.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                } else Subline(row)
-            },
-            trailingContent = {
-                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .pressable(onLongClick = {
+                    haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                    menu = true
+                }, onClick = { onOpen(row.id) })
+                .heightIn(min = 62.dp).padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            HarnessMark(row.harness, 20.dp, tint = MaterialTheme.colorScheme.onSurface)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(row.title, style = if (row.unseen) MaterialTheme.typography.titleMediumEmphasized else MaterialTheme.typography.titleMedium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                     StatusLabel(row)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(Modifier.weight(1f)) {
+                        val parentId = row.parentChatId
+                        if (parentId != null) {
+                            Text("Side chat of ${model.row(parentId)?.title ?: "main chat"}",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        } else Subline(row)
+                    }
                     row.pullRequest?.let { PrBadge(it.number, it.state) }
                 }
-            },
-        ) {
-            Text(row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
         ActionMenu(
             menu,
@@ -347,16 +337,6 @@ fun SessionItem(
     if (renaming) RenameDialog(row.title, onDismiss = { renaming = false }) { model.rename(row.id, it) }
 }
 
-/** The harness mark on a tile toned by the session's project. */
-@Composable
-private fun HarnessTile(row: SessionRow) {
-    val tone = ProjectColors.color(row.colorIndex(), LocalDarkTheme.current)
-    Box(
-        Modifier.size(48.dp).clip(RoundedCornerShape(16.dp)).background(tone.copy(alpha = if (LocalDarkTheme.current) 0.18f else 0.12f)),
-        contentAlignment = Alignment.Center,
-    ) { HarnessMark(row.harness, 24.dp, tint = MaterialTheme.colorScheme.onSurface) }
-}
-
 /** Project monogram + name, then the branch — the desktop sidebar subline. */
 @Composable
 private fun Subline(row: SessionRow) {
@@ -364,12 +344,12 @@ private fun Subline(row: SessionRow) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         val project = row.project
         if (project != null) {
-            ProjectTile(project.name, project.colorIndex.toInt(), 16.dp)
+            ProjectTile(project.name, project.colorIndex.toInt(), 14.dp)
             Spacer(Modifier.width(6.dp))
         }
         Text(
             project?.name ?: row.deviceName ?: "No project",
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = muted,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -379,7 +359,7 @@ private fun Subline(row: SessionRow) {
             Spacer(Modifier.width(10.dp))
             ZIcon(ZIcons.Branch, null, Modifier.size(14.dp), tint = muted.copy(alpha = 0.7f))
             Spacer(Modifier.width(3.dp))
-            Text(branch, style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(branch, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -403,16 +383,15 @@ fun PrBadge(number: ULong, state: PullRequestState) {
 @Composable
 fun RenameDialog(current: String, onDismiss: () -> Unit, onRename: (String) -> Unit) {
     var text by remember { mutableStateOf(current) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = { ZIcon(ZIcons.Rename, null) },
-        title = { Text("Rename session") },
-        text = { OutlinedTextField(text, { text = it }, singleLine = true, shape = RoundedCornerShape(16.dp)) },
-        confirmButton = {
-            TextButton(onClick = { onRename(text.trim()); onDismiss() }, enabled = text.isNotBlank()) { Text("Rename") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    AppAlert(
+        title = "Rename session", onDismiss = onDismiss,
+        actions = listOf(
+            AlertAction("Cancel", onClick = onDismiss),
+            AlertAction("Rename", enabled = text.isNotBlank()) { onRename(text.trim()); onDismiss() },
+        ),
+    ) {
+        AppTextField(text, { text = it }, singleLine = true, modifier = Modifier.fillMaxWidth())
+    }
 }
 
 @Composable

@@ -31,17 +31,22 @@ The following libraries inform the rendering and component choices.
 | Composer | 25pt / 25dp radius, capsule when resting and card when active |
 | Question card | 26pt / 26dp radius |
 | Inner control wash | Foreground at 7.5% opacity |
-| Selection | Neutral tab pill; quiet violet filter and project accents |
+| Selection | Neutral tab/filter wash; violet checkmarks and project accents |
 | User bubble | `#FFFFFF` light / `#19191C` dark |
 
 iOS stores geometry in `Glass.Metrics`, Android in `GlassMetrics`. Keep these
-values together when evolving components. Android's optional wallpaper-derived
-accent remains a user preference; default colors match iOS.
+values together when evolving components. Both shells keep the shared accent
+across system, light and dark appearance; wallpaper images do not recolor controls.
 
 Glass is used for floating navigation, search, toolbar actions, composers,
 queued-message panels and agent questions. Transcript text, code blocks and
 lists retain stable readable fills. Inline controls inside a captured page use
-the same material colors without sampling their own layer.
+the same material colors without sampling their own layer. Menus use compact
+46dp rows, trailing action glyphs and checkmarks without filled selection tiles.
+Settings use inset groups with 12dp corners and hairline separators. Session
+rows use 20dp harness marks and a 62dp minimum height, growing with larger text.
+Sheets share a compact header with Close and trailing actions. Alert actions
+sit below a separator; loading states use a twelve-spoke activity glyph.
 
 ## Android rendering
 
@@ -50,7 +55,7 @@ Sibling `GlassSurface` controls sample it at their own coordinates; their text,
 icons and input fields are drawn afterward and remain sharp. Background content
 gets no access to its own capture source, preventing recursive sampling.
 
-The regular material combines an 18dp blur with subtle 10dp/14dp edge lens
+The regular material combines an 18dp blur with subtle 6dp/8dp edge lens
 parameters, a neutral wash, a soft shadow and a fine specular edge. These are an
 Android approximation of UIKit's system material, not pixel-identical optics.
 API 31–32 render the blur without the lens; API 29–30 use an opaque light/dark

@@ -94,10 +94,10 @@ fun GlassSurface(
         shape = { shape },
         effects = {
             blur(18.dp.toPx())
-            lens(10.dp.toPx(), 14.dp.toPx())
+            lens(6.dp.toPx(), 8.dp.toPx())
         },
-        highlight = { Highlight(width = 0.75.dp, alpha = if (dark) 0.45f else 0.7f) },
-        shadow = { Shadow(radius = 12.dp, color = Color.Black.copy(alpha = if (dark) 0.2f else 0.08f)) },
+        highlight = { Highlight(width = 0.5.dp, alpha = if (dark) 0.3f else 0.35f) },
+        shadow = { Shadow(radius = 8.dp, color = Color.Black.copy(alpha = if (dark) 0.16f else 0.06f)) },
         onDrawSurface = { drawRect(wash); drawRect(tint) },
     ) else Modifier
     val surfaceModifier = modifier

@@ -11,23 +11,14 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.CallSplit
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Computer
-import androidx.compose.material.icons.outlined.Inbox
-import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -46,6 +37,8 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.selected
 import kotlinx.coroutines.launch
 import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.HarnessMark
@@ -134,13 +127,11 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     ) {
         Scaffold(
             containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            snackbarHost = { SnackbarHost(snackbar) },
+            snackbarHost = { AppSnackbarHost(snackbar) },
             topBar = {
-                TopAppBar(
-                    title = { Text("New session", style = MaterialTheme.typography.titleLargeEmphasized, modifier = Modifier.padding(start = 12.dp)) },
-                    navigationIcon = { TonalCircleButton(ZIcons.Close, "Close", onClick = onClose, modifier = Modifier.padding(start = 8.dp), size = 44.dp) },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
-                )
+                Box(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
+                    TonalCircleButton(ZIcons.Close, "Close", onClick = onClose)
+                }
             },
         ) { padding ->
             Column(
@@ -232,20 +223,8 @@ private fun ProjectSheet(
     onDismiss: () -> Unit,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
-    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    androidx.compose.material3.ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheet,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        androidx.compose.foundation.lazy.LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
-            item {
-                Text(
-                    "Project",
-                    style = MaterialTheme.typography.headlineSmallEmphasized,
-                    modifier = Modifier.padding(start = 24.dp, bottom = 8.dp),
-                )
-            }
+    AppSheet("Project", onDismiss) {
+        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f, fill = false), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
             val byDevice = projects.groupBy { it.deviceId }.values.sortedByDescending { it.first().deviceOnline }
             for (group in byDevice) {
                 val host = group.first()
@@ -310,34 +289,18 @@ private fun ProjectRow(
     mono: Boolean,
     onClick: () -> Unit,
 ) {
-    androidx.compose.material3.SegmentedListItem(
-        onClick = onClick,
-        shapes = segmentedShapes(index, count),
-        colors = androidx.compose.material3.ListItemDefaults.segmentedColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else cardColor(),
-        ),
-        leadingContent = leading,
+    GroupedRow(index, count,
+        modifier = Modifier.padding(horizontal = 20.dp).semantics { this.selected = selected },
+        onClick = onClick, leadingContent = leading,
         supportingContent = {
-            Text(
-                supporting,
-                style = MaterialTheme.typography.bodySmall,
+            Text(supporting, style = MaterialTheme.typography.bodySmall,
                 fontFamily = if (mono) sh.zeron.android.design.GeistMono else null,
-                maxLines = 1,
-                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-            )
+                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
         },
-        trailingContent = if (selected) {
-            {
-                Box(
-                    Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.primary),
-                    contentAlignment = Alignment.Center,
-                ) { ZIcon(ZIcons.Check, "Selected", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary) }
-            }
-        } else {
-            null
+        trailingContent = {
+            if (selected) ZIcon(ZIcons.Check, "Selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
         },
-        modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = androidx.compose.material3.ListItemDefaults.SegmentedGap),
-    ) { Text(title, style = MaterialTheme.typography.titleMedium) }
+    ) { Text(title) }
 }
 
 @Composable

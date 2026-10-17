@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -60,7 +59,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
             LazyColumn(
                 source.fillMaxSize().background(MaterialTheme.colorScheme.background),
                 contentPadding = PaddingValues(top = searchHeight, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(ListItemDefaults.SegmentedGap),
+                verticalArrangement = Arrangement.spacedBy(0.dp),
             ) {
                 item {
                     Text(
@@ -71,7 +70,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
                     )
                 }
                 itemsIndexed(results, key = { _, r -> r.id }) { i, row ->
-                    Box(Modifier.padding(horizontal = 16.dp)) {
+                    Box(Modifier.padding(horizontal = 8.dp)) {
                         SessionItem(row, i, results.size, model, onOpen) { model.archive(it.id) }
                     }
                 }
@@ -87,7 +86,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
             Spacer(Modifier.width(10.dp))
             // The search field: a full pill.
             GlassSurface(modifier = Modifier.weight(1f)) {
-                Row(Modifier.heightIn(min = 56.dp).padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.heightIn(min = 44.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                     ZIcon(ZIcons.Search, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.width(12.dp))
                     Box(Modifier.weight(1f)) {
