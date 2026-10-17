@@ -304,6 +304,8 @@ impl ParsedDiff {
 
 #[derive(Clone)]
 struct DetailSnapshot {
+    /// Board observation used to fetch this snapshot, never a later preview.
+    preview: Option<ChangeRequestListItem>,
     detail: ChangeRequestDetail,
     body: crate::markdown::BlockTree,
     activity: Vec<crate::markdown::BlockTree>,
@@ -597,6 +599,14 @@ impl PullRequestDetailPage {
                 page.comment_event(event, cx)
             }));
         let cached = page.cache.borrow_mut().get(&page.target, &page.url);
+        let metadata_stale = cached.as_ref().is_some_and(|snapshot| {
+            page.preview.as_ref().is_some_and(|preview| {
+                snapshot
+                    .preview
+                    .as_ref()
+                    .is_none_or(|old| metadata_changed(old, preview))
+            })
+        });
         let stale = cached.as_ref().is_some_and(|snapshot| {
             page.preview.as_ref().is_some_and(|preview| {
                 !preview.head_ref_oid.is_empty()
@@ -639,6 +649,10 @@ impl PullRequestDetailPage {
         }
         if page.detail.is_none() {
             page.load(stale, cx);
+        } else if metadata_stale && page.state.read(cx).engine().is_some() {
+            page.board_refresh_owed = true;
+            page.board_metadata_refresh_owed = true;
+            page.refresh_from_board(cx);
         } else {
             page.revalidate_if_stale(cx);
         }
@@ -808,12 +822,10 @@ impl PullRequestDetailPage {
             .preview
             .as_ref()
             .is_none_or(|old| old.head_ref_oid != preview.head_ref_oid);
-        let metadata_changed = self.preview.as_ref().is_some_and(|old| {
-            old.updated_at != preview.updated_at
-                || old.state != preview.state
-                || old.is_draft != preview.is_draft
-                || old.review_decision != preview.review_decision
-        });
+        let metadata_changed = self
+            .preview
+            .as_ref()
+            .is_some_and(|old| metadata_changed(old, &preview));
         self.preview = Some(preview);
         if changed || metadata_changed {
             self.board_metadata_refresh_owed |= metadata_changed;
@@ -900,6 +912,9 @@ impl PullRequestDetailPage {
 
     fn params(&self, refresh: bool) -> serde_json::Value {
         let mut params = serde_json::json!({"url": self.url, "refresh": refresh});
+        if let Some(preview) = &self.preview {
+            params["updatedAt"] = preview.updated_at.to_rfc3339().into();
+        }
         if let Some(target) = &self.target {
             params["targetDeviceId"] = target.clone().into();
         }
@@ -937,6 +952,7 @@ impl PullRequestDetailPage {
         };
         self.loading = true;
         self.error = None;
+        let observed_preview = self.preview.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::GET_CHANGE_REQUEST, params).await
                 .map_err(|error| format!("Couldn’t load this pull request. {}", failure_reason(&error)))
@@ -944,6 +960,7 @@ impl PullRequestDetailPage {
             // Large descriptions and review threads must not stall the UI thread.
             let result = cx.background_executor().spawn(async move {
                 result.map(|detail| DetailSnapshot {
+                    preview: observed_preview,
                     body: super::pull_request_media::parse_description(&detail.body),
                     activity: detail.activity_comments()
                         .map(|comment| super::pull_request_media::parse_description(&comment.body)).collect(),
@@ -1508,6 +1525,13 @@ fn status_chip(raw: &str, theme: &Theme) -> AnyElement {
 
 /// Space between the Summary's stacked cards; the header sits 2× further.
 const CARD_GAP: f32 = 12.0;
+
+fn metadata_changed(old: &ChangeRequestListItem, new: &ChangeRequestListItem) -> bool {
+    old.updated_at != new.updated_at
+        || old.state != new.state
+        || old.is_draft != new.is_draft
+        || old.review_decision != new.review_decision
+}
 
 // A closed draft is closed; draft only qualifies an open pull request.
 fn pr_state_label(state: &str, is_draft: bool) -> &'static str {
@@ -2498,6 +2522,7 @@ mod tests {
 
     fn snapshot(title: &str) -> DetailSnapshot {
         DetailSnapshot {
+            preview: None,
             detail: ChangeRequestDetail {
                 title: title.into(),
                 ..Default::default()
@@ -2837,6 +2862,56 @@ mod tests {
     }
 
     #[gpui::test]
+    fn pull_request_reopening_reconciles_recent_cached_metadata(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let mut preview = board_preview(&"a".repeat(40));
+        let mut cached = snapshot("Old metadata");
+        cached.detail.head_ref_oid = preview.head_ref_oid.clone();
+        cached.detail.state = "OPEN".into();
+        cached.preview = Some(preview.clone());
+        preview.updated_at += chrono::Duration::seconds(1);
+        preview.state = zeron_proto::ChangeRequestState::Closed;
+        let version = preview.updated_at.to_rfc3339();
+        let rpc = ScriptedRpc::new(move |method, params| {
+            let version = version.clone();
+            async move {
+                assert_eq!(method, methods::GET_CHANGE_REQUEST);
+                assert_eq!(params["updatedAt"], version);
+                assert_eq!(params["refresh"], true);
+                zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                    head_ref_oid: "a".repeat(40),
+                    state: "CLOSED".into(),
+                    ..Default::default()
+                })
+            }
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = preview.url.clone();
+        cache.borrow_mut().put(None, url.clone(), cached);
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url,
+                None,
+                cache.clone(),
+                Some(preview.clone()),
+                window,
+                cx,
+            )
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.detail.as_ref().unwrap().state, "CLOSED")
+        });
+        assert_eq!(rpc.completed(), 1);
+        assert_eq!(cache.borrow().entries[0].1.preview.as_ref(), Some(&preview));
+    }
+
+    #[gpui::test]
     fn pull_request_same_head_activity_refresh_keeps_diff_and_draft(cx: &mut gpui::TestAppContext) {
         let runtime = fixture::runtime();
         let _guard = runtime.enter();
@@ -2858,6 +2933,7 @@ mod tests {
         let url = "https://github.com/a/b/pull/1";
         let mut cached = snapshot("Before comment");
         cached.detail.head_ref_oid = "a".repeat(40);
+        cached.preview = Some(board_preview(&"a".repeat(40)));
         cached.diff = Some(ParsedDiff::new("same patch".into()));
         cache.borrow_mut().put(None, url.into(), cached);
         let preview = board_preview(&"a".repeat(40));

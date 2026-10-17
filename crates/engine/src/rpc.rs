@@ -2863,6 +2863,8 @@ impl RpcService for EngineRpc {
                     head_ref_oid: Option<String>,
                     #[serde(default)]
                     base_ref_oid: Option<String>,
+                    #[serde(default)]
+                    updated_at: Option<String>,
                 }
                 let p: P = parse_params(params)?;
                 let value = self
@@ -2873,6 +2875,7 @@ impl RpcService for EngineRpc {
                         p.refresh,
                         p.head_ref_oid.as_deref(),
                         p.base_ref_oid.as_deref(),
+                        p.updated_at.as_deref(),
                     )
                     .await
                     .map_err(change_request_rpc_error)?;
