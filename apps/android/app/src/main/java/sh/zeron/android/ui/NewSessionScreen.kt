@@ -97,6 +97,7 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
         }
     }
     val deviceId = project?.deviceId ?: draft.hostId ?: ""
+    composer.commandContext = "$deviceId:${draft.harness}:${project?.id}"
 
     // Models for the draft's host: cached (or the built-in catalog) at once, then the host's own list.
     var models by remember(deviceId) { mutableStateOf(modelCache[deviceId] ?: catalogModels()) }
@@ -162,6 +163,10 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
                             modifier = Modifier.padding(horizontal = 32.dp),
                         )
                     }
+                }
+                CommandSuggestions(composer, "new:${project?.id}", draft.harness, deviceId) {
+                    val c = client ?: error("Sign in before loading commands")
+                    c.newSessionComposerCatalog(deviceId, draft.harness, project?.id)
                 }
                 MentionSuggestions(
                     composer,

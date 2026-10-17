@@ -29,3 +29,33 @@ provider request, account mutation or live release is needed for these checks.
 Official references:
 - https://developers.openai.com/codex/cli/slash-commands/
 - https://developers.openai.com/codex/app-server/
+
+## Mobile clients
+
+The iOS and Android session and new-session composers load `ListCommands` and
+`ListSkills` from the selected execution host, scoped to the chat or project.
+They share the Rust client catalog and UniFFI records, rather than duplicating
+Codex's static CLI catalog in Swift/Kotlin. A leading `/` opens a scrollable,
+searchable menu with descriptions, argument hints and unavailable reasons.
+Selection preserves the remaining draft and does not immediately execute it.
+Selected skills retain their canonical identity, including their path and
+provider command; same-name skills receive distinct display tokens.
+
+Provider/host/project changes invalidate the open catalog and selected mappings.
+Each opening reloads the host catalog, while typing filters it locally. Cancelled
+loads cannot replace a later context. Partial catalog failures preserve successful
+results and expose retry controls; an unsupported older host reports the missing
+RPC instead of showing a fabricated local catalog. `ListCommands` uses the same
+100-second cold-agent deadline as the desktop request.
+
+Codex desktop actions are unavailable in the wire catalog by default; the desktop
+composer enables only the actions it actually handles. Mobile displays those
+entries with the desktop requirement and retains its existing model chips,
+navigation and stop button. Native commands such as `/goal` execute on the host.
+This does not port Codex's terminal UI or desktop workspace actions to phones.
+
+Validation covers catalog filtering, partial failures, selected-reference
+encoding, UTF-16 cursor ranges, completion inside a token, argument preservation,
+and unavailable commands. iOS XCTest and Android model regressions are checked
+in for the existing platform CI jobs. Generated Swift bindings must match the
+Rust facade; Android bindings are generated during its build.

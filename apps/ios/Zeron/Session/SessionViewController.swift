@@ -108,6 +108,10 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         }
         composer.onStop = { [weak self] in self?.source.stop() }
         composer.text = Drafts.load(chatId)
+        composer.commandCatalog = { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.source.commandCatalog()
+        }
         composer.mentionSearch = { [weak self] q in await self?.source.searchFiles(q) ?? [] }
         composer.onHeightChange = { [weak self] in self?.view.setNeedsLayout() }
         questions.onSubmit = { [weak self] answers in
@@ -396,7 +400,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     /// The user's own draft (never a queued message being edited).
     private func saveDraft() {
-        Drafts.save(chatId, stashed ? stashedDraft : composer.text)
+        Drafts.save(chatId, stashed ? stashedDraft : composer.encodedDraft)
     }
 
     /// An edit lease is being requested (taps on other rows wait).
@@ -429,7 +433,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
                 return
             }
             if !stashed {
-                stashedDraft = composer.text
+                stashedDraft = composer.encodedDraft
                 stashedImages = composer.images
                 stashed = true
             }
@@ -495,6 +499,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         composer.running = c.running
         composer.canSteer = c.canSteer
         composer.placeholder = c.placeholder
+        composer.commandContext = source.commandContext
         composer.chips = c.chips
         composer.chipMenus = Dictionary(uniqueKeysWithValues: c.chips.map { chip in
             (chip.id, { [weak self] in self?.source.chipMenu(chip.id) })

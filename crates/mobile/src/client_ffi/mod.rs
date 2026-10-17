@@ -441,6 +441,30 @@ impl CoreClient {
         Ok(refs.into_iter().map(Into::into).collect())
     }
 
+    /// Commands and skills for this session, resolved by its owning host.
+    pub async fn composer_catalog(&self, chat_id: String) -> CoreResult<ComposerCatalog> {
+        let client = self.client.clone();
+        let catalog = on_runtime(async move { client.composer_catalog(&chat_id).await }).await?;
+        Ok(catalog.into())
+    }
+
+    /// Commands and skills before a conversation exists.
+    pub async fn new_session_composer_catalog(
+        &self,
+        device_id: String,
+        harness: String,
+        space_id: Option<String>,
+    ) -> CoreResult<ComposerCatalog> {
+        let client = self.client.clone();
+        let catalog = on_runtime(async move {
+            client
+                .new_session_composer_catalog(&device_id, &harness, space_id)
+                .await
+        })
+        .await?;
+        Ok(catalog.into())
+    }
+
     /// Files matching `query` in the chat's (or project's) workspace, for
     /// composer `@` mentions.
     pub async fn search_files(

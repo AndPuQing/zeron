@@ -222,7 +222,8 @@ pub fn catalog() -> Vec<SlashCommand> {
             input_hint: entry.hint.map(str::to_owned),
             unavailable_reason: match entry.delivery {
                 Unavailable(reason) => Some(reason.into()),
-                _ => None,
+                Desktop => Some("Use this action in Zeron’s desktop / menu.".into()),
+                Native => None,
             },
         })
         .collect()
@@ -587,7 +588,7 @@ mod tests {
             assert!(unique.contains(name), "missing /{name}");
         }
         for row in rows {
-            if matches!(entry(&row.name).unwrap().delivery, Unavailable(_)) {
+            if !matches!(entry(&row.name).unwrap().delivery, Native) {
                 assert!(row.unavailable_reason.is_some());
                 assert!(request(&row.name, "", "thread").is_err());
             }

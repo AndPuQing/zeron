@@ -1039,6 +1039,11 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func closeSession(chatId: String) 
     
+    /**
+     * Commands and skills for this session, resolved by its owning host.
+     */
+    func composerCatalog(chatId: String) async throws  -> ComposerCatalog
+    
     func connectivity()  -> Connectivity
     
     /**
@@ -1121,6 +1126,11 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * Reorder a pin between neighbours (`None` at either end).
      */
     func movePin(chatId: String, after: String?, before: String?) throws 
+    
+    /**
+     * Commands and skills before a conversation exists.
+     */
+    func newSessionComposerCatalog(deviceId: String, harness: String, spaceId: String?) async throws  -> ComposerCatalog
     
     /**
      * App is backgrounding: persist now; pause time-driven work.
@@ -1388,6 +1398,25 @@ open func closeSession(chatId: String)  {try! rustCall() {
         FfiConverterString.lower(chatId),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Commands and skills for this session, resolved by its owning host.
+     */
+open func composerCatalog(chatId: String)async throws  -> ComposerCatalog  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_composer_catalog(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeComposerCatalog_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
 open func connectivity() -> Connectivity  {
@@ -1675,6 +1704,25 @@ open func movePin(chatId: String, after: String?, before: String?)throws   {try 
         FfiConverterOptionString.lower(before),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Commands and skills before a conversation exists.
+     */
+open func newSessionComposerCatalog(deviceId: String, harness: String, spaceId: String?)async throws  -> ComposerCatalog  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_new_session_composer_catalog(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(deviceId),FfiConverterString.lower(harness),FfiConverterOptionString.lower(spaceId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeComposerCatalog_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -5865,6 +5913,186 @@ public func FfiConverterTypeChatConfig_lift(_ buf: RustBuffer) throws -> ChatCon
 #endif
 public func FfiConverterTypeChatConfig_lower(_ value: ChatConfig) -> RustBuffer {
     return FfiConverterTypeChatConfig.lower(value)
+}
+
+
+public struct ComposerCatalog: Equatable, Hashable {
+    public var commands: [ComposerCommand]
+    public var warning: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(commands: [ComposerCommand], warning: String?) {
+        self.commands = commands
+        self.warning = warning
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposerCatalog: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposerCatalog: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposerCatalog {
+        return
+            try ComposerCatalog(
+                commands: FfiConverterSequenceTypeComposerCommand.read(from: &buf), 
+                warning: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposerCatalog, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeComposerCommand.write(value.commands, into: &buf)
+        FfiConverterOptionString.write(value.warning, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCatalog_lift(_ buf: RustBuffer) throws -> ComposerCatalog {
+    return try FfiConverterTypeComposerCatalog.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCatalog_lower(_ value: ComposerCatalog) -> RustBuffer {
+    return FfiConverterTypeComposerCatalog.lower(value)
+}
+
+
+/**
+ * A host-advertised command or skill. Unavailable entries remain discoverable.
+ */
+public struct ComposerCommand: Equatable, Hashable {
+    public var token: String
+    public var description: String
+    public var inputHint: String?
+    public var insertion: String
+    public var unavailableReason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(token: String, description: String, inputHint: String?, insertion: String, unavailableReason: String?) {
+        self.token = token
+        self.description = description
+        self.inputHint = inputHint
+        self.insertion = insertion
+        self.unavailableReason = unavailableReason
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposerCommand: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposerCommand: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposerCommand {
+        return
+            try ComposerCommand(
+                token: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                inputHint: FfiConverterOptionString.read(from: &buf), 
+                insertion: FfiConverterString.read(from: &buf), 
+                unavailableReason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposerCommand, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.token, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterOptionString.write(value.inputHint, into: &buf)
+        FfiConverterString.write(value.insertion, into: &buf)
+        FfiConverterOptionString.write(value.unavailableReason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCommand_lift(_ buf: RustBuffer) throws -> ComposerCommand {
+    return try FfiConverterTypeComposerCommand.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCommand_lower(_ value: ComposerCommand) -> RustBuffer {
+    return FfiConverterTypeComposerCommand.lower(value)
+}
+
+
+/**
+ * Visible draft and selected reference metadata restored from persisted text.
+ */
+public struct ComposerDraft: Equatable, Hashable {
+    public var text: String
+    public var selections: [ComposerCommand]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, selections: [ComposerCommand]) {
+        self.text = text
+        self.selections = selections
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposerDraft: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposerDraft: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposerDraft {
+        return
+            try ComposerDraft(
+                text: FfiConverterString.read(from: &buf), 
+                selections: FfiConverterSequenceTypeComposerCommand.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposerDraft, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterSequenceTypeComposerCommand.write(value.selections, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerDraft_lift(_ buf: RustBuffer) throws -> ComposerDraft {
+    return try FfiConverterTypeComposerDraft.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerDraft_lower(_ value: ComposerDraft) -> RustBuffer {
+    return FfiConverterTypeComposerDraft.lower(value)
 }
 
 
@@ -15804,6 +16032,31 @@ fileprivate struct FfiConverterSequenceTypeCaptionSpan: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeComposerCommand: FfiConverterRustBuffer {
+    typealias SwiftType = [ComposerCommand]
+
+    public static func write(_ value: [ComposerCommand], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeComposerCommand.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [ComposerCommand] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [ComposerCommand]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeComposerCommand.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeDebugEntry: FfiConverterRustBuffer {
     typealias SwiftType = [DebugEntry]
 
@@ -16892,6 +17145,18 @@ public func workosAuthorizeUrl(state: String) -> String  {
 })
 }
 /**
+ * Encode selected composer references without changing ordinary typed text.
+ */
+public func encodeComposerSelections(text: String, selections: [ComposerCommand]) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_encode_composer_selections(
+        FfiConverterString.lower(text),
+        FfiConverterSequenceTypeComposerCommand.lower(selections),uniffiCallStatus
+    )
+})
+}
+/**
  * The canonical mention link the host understands (`[name](zeron-file:path)`).
  */
 public func fileMentionLink(path: String, isDir: Bool) -> String  {
@@ -16900,6 +17165,14 @@ public func fileMentionLink(path: String, isDir: Bool) -> String  {
     uniffi_zeron_mobile_fn_func_file_mention_link(
         FfiConverterString.lower(path),
         FfiConverterBool.lower(isDir),uniffiCallStatus
+    )
+})
+}
+public func restoreComposerDraft(text: String) -> ComposerDraft  {
+    return try!  FfiConverterTypeComposerDraft_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_restore_composer_draft(
+        FfiConverterString.lower(text),uniffiCallStatus
     )
 })
 }
@@ -17067,7 +17340,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_func_workos_authorize_url() != 35994) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_func_encode_composer_selections() != 27413) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_func_file_mention_link() != 14340) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_restore_composer_draft() != 22567) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_default_voice_styles() != 30650) {
@@ -17107,6 +17386,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_close_session() != 11270) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_composer_catalog() != 26626) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_connectivity() != 51284) {
@@ -17170,6 +17452,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_move_pin() != 26081) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_new_session_composer_catalog() != 57300) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_on_background() != 34188) {

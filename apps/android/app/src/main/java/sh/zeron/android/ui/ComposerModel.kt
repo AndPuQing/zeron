@@ -39,18 +39,59 @@ class ComposerModel(initial: String = "") {
     val images = mutableStateListOf<StagedImage>()
     /** `@name` shown in the composer → the file it stands for. */
     private val tokens = LinkedHashMap<String, FileMatch>()
+    var commandContext: String = ""
+        set(value) {
+            if (field.isNotEmpty() && field != value) commands.clear()
+            field = value
+        }
+    private val commands = LinkedHashMap<String, uniffi.zeron_core.ComposerCommand>()
+
+    /** Only the leading / token opens completion; replace the entire token at the cursor. */
+    fun slashQuery(): Pair<IntRange, String>? {
+        if (!value.selection.collapsed || value.composition != null) return null
+        val cursor = value.selection.start
+        val prefix = text.substring(0, cursor)
+        val trimmed = prefix.trimStart()
+        if (!trimmed.startsWith("/") || trimmed.any { it.isWhitespace() }) return null
+        val start = prefix.length - trimmed.length
+        val indent = prefix.take(start).substringAfterLast('\n')
+        if (indent.length >= 4 || '\t' in indent) return null
+        val end = (start until text.length).firstOrNull { text[it].isWhitespace() } ?: text.length
+        return (start until end) to trimmed.drop(1)
+    }
+
+    fun insertCommand(command: uniffi.zeron_core.ComposerCommand) {
+        if (command.unavailableReason != null) return
+        val (range, _) = slashQuery() ?: return
+        val end = range.last + 1
+        val hasSeparator = text.getOrNull(end)?.isWhitespace() == true
+        val replacement = command.token + if (hasSeparator) "" else " "
+        val next = text.replaceRange(range, replacement)
+        commands[command.token] = command
+        value = TextFieldValue(next, TextRange(range.first + replacement.length + if (hasSeparator) 1 else 0))
+    }
 
     val text: String get() = value.text
     val hasContent: Boolean get() = value.text.isNotBlank() || images.isNotEmpty()
 
     fun setText(s: String) {
-        value = TextFieldValue(s, TextRange(s.length))
+        commands.clear()
+        val text = if (s.contains("zeron-invoke:")) {
+            val restored = uniffi.zeron_core.restoreComposerDraft(s)
+            restored.selections.forEach { commands[it.token] = it }
+            restored.text
+        } else s
+        value = TextFieldValue(text, TextRange(text.length))
     }
+
+    fun encodedDraft(): String = if (commands.isEmpty()) value.text else
+        uniffi.zeron_core.encodeComposerSelections(value.text, commands.values.toList())
 
     fun clear() {
         setText("")
         images.clear()
         tokens.clear()
+        commands.clear()
     }
 
     /** The `@query` being typed at the cursor: its start offset and query. */
@@ -87,7 +128,7 @@ class ComposerModel(initial: String = "") {
 
     /** The text to send: live tokens become canonical `zeron-file:` links. */
     fun encoded(): String {
-        var out = value.text
+        var out = encodedDraft()
         for ((token, file) in tokens.entries.sortedByDescending { it.key.length }) {
             if (out.contains(token)) out = out.replace(token, fileMentionLink(file.path, file.isDir))
         }

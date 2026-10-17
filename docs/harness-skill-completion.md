@@ -80,6 +80,27 @@ maintain project AGENTS.md; `/recap` asks for a conversation summary. Those two
 commands intentionally start model turns. Read-only native command responses
 show labels/status rather than dumping arbitrary configuration secrets.
 
+## iOS and Android
+
+Type `/` at the beginning of a draft in a session or on the new-session screen.
+Both mobile clients load the selected host's provider commands and enabled
+skills, show a scrollable menu, and filter it as you type. Select an entry to
+complete its token, then enter any arguments and send. Existing arguments are
+preserved when completing a token in the middle of a draft. Skills appear as
+`$name` selections and retain their exact path/provider identity on send.
+
+The menu shows descriptions, argument hints and unavailable reasons. Native
+Codex commands, including `/goal`, run through the updated execution host.
+Codex desktop actions remain disabled on mobile: use the mobile model chips,
+conversation navigation and stop button for those existing controls. The
+`/zeron:*` workspace menu belongs to the desktop client. Terminal-only actions
+remain unavailable on every client.
+
+Changing agent, host or project reloads the catalog. Loading errors include a
+retry control; a partial failure still shows the catalog that loaded. Older
+hosts without the catalog RPCs require an update. Installing a new phone build
+alone does not add native Codex methods to an older execution host.
+
 ## Skill preferences
 
 Settings → Shortcuts → Composer completion has two independent controls for

@@ -5798,6 +5798,9 @@ fn with_provider_commands(
             "quit" | "exit" => Some(WorkspaceCommand::Quit),
             _ => None,
         };
+        if row.workspace_command.is_some() {
+            row.unavailable_reason = None;
+        }
         if side_chat && row.workspace_command.is_some() {
             row.unavailable_reason =
                 Some("Use this action from the main conversation’s menu.".into());
@@ -12546,8 +12549,9 @@ mod tests {
                 zeron_harness::codex::commands::Delivery::Desktop
             ) {
                 assert!(
-                    rows.iter()
-                        .any(|row| row.name == entry.name && row.workspace_command.is_some()),
+                    rows.iter().any(|row| row.name == entry.name
+                        && row.workspace_command.is_some()
+                        && row.unavailable_reason.is_none()),
                     "unmapped desktop command: {}",
                     entry.name
                 );

@@ -1090,3 +1090,74 @@ pub struct PushPrefs {
     pub input: bool,
     pub failed: bool,
 }
+
+/// A host-advertised command or skill. Unavailable entries remain discoverable.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerCommand {
+    pub token: String,
+    pub description: String,
+    pub input_hint: Option<String>,
+    pub insertion: String,
+    pub unavailable_reason: Option<String>,
+}
+
+impl From<zc::composer::ComposerCommand> for ComposerCommand {
+    fn from(c: zc::composer::ComposerCommand) -> Self {
+        Self {
+            token: c.token,
+            description: c.description,
+            input_hint: c.input_hint,
+            insertion: c.insertion,
+            unavailable_reason: c.unavailable_reason,
+        }
+    }
+}
+impl From<ComposerCommand> for zc::composer::ComposerCommand {
+    fn from(c: ComposerCommand) -> Self {
+        Self {
+            token: c.token,
+            description: c.description,
+            input_hint: c.input_hint,
+            insertion: c.insertion,
+            unavailable_reason: c.unavailable_reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerCatalog {
+    pub commands: Vec<ComposerCommand>,
+    pub warning: Option<String>,
+}
+
+/// Encode selected composer references without changing ordinary typed text.
+#[uniffi::export]
+pub fn encode_composer_selections(text: String, selections: Vec<ComposerCommand>) -> String {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::encode_selections(&text, &selections)
+}
+
+impl From<zc::composer::ComposerCatalog> for ComposerCatalog {
+    fn from(c: zc::composer::ComposerCatalog) -> Self {
+        Self {
+            commands: c.commands.into_iter().map(Into::into).collect(),
+            warning: c.warning,
+        }
+    }
+}
+
+/// Visible draft and selected reference metadata restored from persisted text.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerDraft {
+    pub text: String,
+    pub selections: Vec<ComposerCommand>,
+}
+
+#[uniffi::export]
+pub fn restore_composer_draft(text: String) -> ComposerDraft {
+    let (text, selections) = zc::composer::restore_draft(&text);
+    ComposerDraft {
+        text,
+        selections: selections.into_iter().map(Into::into).collect(),
+    }
+}

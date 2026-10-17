@@ -87,7 +87,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
     private func rememberDraft() {
         guard !created else { return }
         app.lastDraft = draft
-        app.newSessionText = composer.text
+        app.newSessionText = composer.encodedDraft
         app.newSessionImages = composer.images
     }
 
@@ -141,6 +141,10 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             return AttachmentPicker.menu(host: self, limit: 8 - self.composer.images.count) { [weak self] in self?.composer.addImages($0) }
         }
         composer.onChipTap = { _, _ in }
+        composer.commandCatalog = { [weak self] in
+            guard let self, let client = self.app.client else { throw CancellationError() }
+            return try await client.newSessionComposerCatalog(deviceId: self.deviceId, harness: self.draft.harness, spaceId: self.project?.id)
+        }
         composer.mentionSearch = { [weak self] q in
             guard let self, let p = self.project else { return [] }
             return await self.app.searchFiles(deviceId: p.device, spaceId: p.id, query: q)
@@ -245,6 +249,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
     }
 
     private func refreshChips() {
+        composer.commandContext = "\(deviceId):\(draft.harness):\(project?.id ?? "")"
         var chips: [ComposerChip] = []
         if let p = project {
             // The project, then the host it runs on.

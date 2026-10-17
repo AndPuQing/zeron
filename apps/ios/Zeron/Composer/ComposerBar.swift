@@ -66,6 +66,17 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     /// `@` file search (nil disables mentions).
     var mentionSearch: ((String) async -> [FileMatch])?
 
+    var commandCatalog: (() async throws -> ComposerCatalog)?
+    var commandContext = "" {
+        didSet {
+            if commandContext != oldValue {
+                if !oldValue.isEmpty { selectedCommands.removeAll() }
+                closeCommands()
+                if textView.isFirstResponder { updateMentionQuery() }
+            }
+        }
+    }
+
     // State
     var running = false { didSet { if running != oldValue { refreshAction(animated: true) } } }
     var canSteer = false { didSet { refreshAction(animated: false) } }
@@ -81,10 +92,23 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     var text: String {
         get { textView.text }
         set {
-            textView.text = newValue
+            selectedCommands.removeAll()
+            if newValue.contains("zeron-invoke:") {
+                let restored = restoreComposerDraft(text: newValue)
+                textView.text = restored.text
+                for command in restored.selections { selectedCommands[command.token] = command }
+            } else {
+                textView.text = newValue
+            }
+            closeCommands()
             textChanged()
             updateMode(animated: false)
         }
+    }
+
+    /// Persist selected identity across navigation and queue-edit stashing.
+    var encodedDraft: String {
+        selectedCommands.isEmpty ? textView.text : encodeComposerSelections(text: textView.text, selections: Array(selectedCommands.values))
     }
 
     let textView = UITextView()
@@ -106,6 +130,11 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     private var currentAction: Action = .send
     private var mentions = MentionIndex()
     private let suggestions = MentionSuggestions()
+    private let commandSuggestions = CommandSuggestions()
+    private var loadedCommands: ComposerCatalog?
+    private var commandError: String?
+    private var commandTask: Task<Void, Never>?
+    private var selectedCommands: [String: ComposerCommand] = [:]
     private var mentionQuery: (range: NSRange, query: String)?
     private var mentionTask: Task<Void, Never>?
 
@@ -293,6 +322,20 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard let root = findViewController()?.view, suggestions.superview !== root else { return }
+        commandSuggestions.isHidden = true
+        commandSuggestions.translatesAutoresizingMaskIntoConstraints = false
+        commandSuggestions.onPick = { [weak self] in self?.insertCommand($0) }
+        commandSuggestions.onRetry = { [weak self] in
+            self?.closeCommands()
+            self?.updateMentionQuery()
+        }
+        root.addSubview(commandSuggestions)
+        NSLayoutConstraint.activate([
+            commandSuggestions.topAnchor.constraint(greaterThanOrEqualTo: root.safeAreaLayoutGuide.topAnchor),
+            commandSuggestions.leadingAnchor.constraint(equalTo: leadingAnchor),
+            commandSuggestions.trailingAnchor.constraint(equalTo: trailingAnchor),
+            commandSuggestions.bottomAnchor.constraint(equalTo: topAnchor, constant: -8),
+        ])
         root.addSubview(suggestions)
         NSLayoutConstraint.activate([
             suggestions.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -336,6 +379,14 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     // MARK: Mentions
 
     private func updateMentionQuery() {
+        if commandCatalog != nil, let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange), textView.markedTextRange == nil {
+            mentionTask?.cancel()
+            mentionQuery = nil
+            setSuggestionsVisible(false)
+            updateCommands(q)
+            return
+        }
+        closeCommands()
         guard mentionSearch != nil else { return }
         mentionQuery = MentionIndex.activeQuery(in: textView.text, cursor: textView.selectedRange.location)
         mentionTask?.cancel()
@@ -351,6 +402,51 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             self.suggestions.show(files)
             self.setSuggestionsVisible(!files.isEmpty)
         }
+    }
+
+    private func closeCommands() {
+        commandTask?.cancel()
+        commandTask = nil
+        loadedCommands = nil
+        commandError = nil
+        commandSuggestions.isHidden = true
+    }
+
+    private func updateCommands(_ query: SlashQuery) {
+        commandSuggestions.show(loadedCommands, query: query.query, error: commandError)
+        guard loadedCommands == nil, commandError == nil, commandTask == nil, let load = commandCatalog else { return }
+        commandTask = Task { [weak self] in
+            do {
+                let catalog = try await load()
+                guard !Task.isCancelled, let self else { return }
+                self.loadedCommands = catalog
+                self.commandTask = nil
+                if let q = SlashQuery.active(in: self.textView.text, selection: self.textView.selectedRange) {
+                    self.commandSuggestions.show(catalog, query: q.query)
+                }
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.commandTask = nil
+                self.commandError = error.localizedDescription
+                if let q = SlashQuery.active(in: self.textView.text, selection: self.textView.selectedRange) {
+                    self.commandSuggestions.show(nil, query: q.query, error: self.commandError)
+                }
+            }
+        }
+    }
+
+    private func insertCommand(_ command: ComposerCommand) {
+        guard command.unavailableReason == nil,
+              let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange) else { return }
+        let ns = textView.text as NSString
+        let suffix = ns.substring(from: NSMaxRange(q.range))
+        let replacement = command.token + (suffix.first?.isWhitespace == true ? "" : " ")
+        selectedCommands[command.token] = command
+        textView.text = ns.replacingCharacters(in: q.range, with: replacement)
+        textView.selectedRange = NSRange(location: q.range.location + (replacement as NSString).length + (suffix.first?.isWhitespace == true ? 1 : 0), length: 0)
+        closeCommands()
+        textChanged()
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private func setSuggestionsVisible(_ visible: Bool) {
@@ -408,11 +504,13 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     override func resignFirstResponder() -> Bool { textView.resignFirstResponder() }
 
     func textViewDidBeginEditing(_ textView: UITextView) {
+        updateMentionQuery()
         updateMode(animated: true)
         onFocusChange?(true)
     }
 
     func textViewDidEndEditing(_ textView: UITextView) {
+        closeCommands()
         setSuggestionsVisible(false)
         updateMode(animated: true)
         textView.setContentOffset(.zero, animated: false)
@@ -525,7 +623,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     func textViewDidChangeSelection(_ textView: UITextView) {
-        if mentionQuery != nil { updateMentionQuery() }
+        updateMentionQuery()
     }
 
     private func recomputeTextHeight() {
@@ -651,7 +749,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     private func send(_ mode: DeliveryMode) {
         guard hasContent else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        let body = mentions.encode(textView.text.trimmingCharacters(in: .whitespacesAndNewlines))
+        let body = mentions.encode(encodedDraft.trimmingCharacters(in: .whitespacesAndNewlines))
         let staged = images
         let result = onSend?(body, staged, mode) ?? .sent
         guard result != .kept else { return }
@@ -659,6 +757,8 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         // `.replaced` put a draft back: its @file mentions must still resolve.
         guard result == .sent else { return }
         mentions.reset()
+        selectedCommands.removeAll()
+        closeCommands()
         textView.text = ""
         images = []
         textChanged()
