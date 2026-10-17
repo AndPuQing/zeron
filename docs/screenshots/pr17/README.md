@@ -1,28 +1,26 @@
-# PR #17 worktree switching — native desktop captures
+# PR #17 — existing worktrees only
 
-These images use the real GPUI `Composer` and branch picker from `71c9eda6`.
-The review fixes in `6eec3b09` do not change desktop rendering. They are native
-macOS text/Metal renders, not HTML mockups or live provider-session captures.
+Native macOS GPUI `Composer` and picker captures from `cb74623f`, rendered with
+the platform text system and Metal. The menu contains only existing linked
+worktrees. Main checkout and unoccupied branches are absent.
 
-An isolated worktree supplies fixed synthetic chat and branch data. The three
-scenes show the same chat in the main checkout, in an existing `feat/search`
-worktree, and with the menu closed after selecting that worktree. Scene state is
-seeded directly; the pictures do not assert that a UI click performed a real Git
-operation. Separate engine integration tests exercise actual worktree switching.
-No real accounts, conversations or provider requests were used.
+An isolated worktree supplies fixed synthetic chat/branch data. The scenes show
+choosing a worktree, the same chat with `feat/search` selected, and its closed
+menu. State is seeded directly; these images do not assert that a UI click ran
+Git. Real worktree-to-worktree switching and rejection of invalid destinations
+are verified separately by engine integration tests. No real accounts,
+conversations or provider requests were used.
 
-- Viewport: 680 × 460 logical pixels, 2× native capture, dark appearance.
-- Menu images: identical crop `(x=0, y=280, width=1360, height=620)`.
-- Closed menu: crop `(x=0, y=660, width=1360, height=240)`.
-- Colors, labels and controls were not edited after capture. Animations were
-  allowed to settle. Output uses `HeadlessAppContext::capture_screenshot()`.
-- These are desktop screenshots. iOS/Android code and shared backend were
-  reviewed, but no phone-device/simulator screenshots were captured locally.
+- Viewport: 680 × 460 logical pixels, native 2× rendering, dark appearance.
+- Both open-menu images use crop `(x=0, y=440, width=1360, height=460)`.
+- Closed-menu image uses crop `(x=0, y=660, width=1360, height=240)`.
+- Animations were allowed to settle. Colors, labels and controls were not edited
+  after capture. Output uses `HeadlessAppContext::capture_screenshot()`.
+- These are desktop screenshots; phone-device/simulator screenshots were not
+  captured locally.
 
-| Main checkout menu | Existing worktree menu |
+| Choose an existing worktree | Current worktree and another destination |
 | --- | --- |
-| ![Main checkout](main-menu.png) | ![Worktree selected](worktree-menu.png) |
+| ![Choose worktree](choose-worktree.png) | ![Worktree menu](worktree-menu.png) |
 
-The selected worktree with the menu closed:
-
-![Composer after worktree selection](worktree-selected.png)
+![Selected worktree, menu closed](worktree-selected.png)
