@@ -12,7 +12,7 @@ operation. Separate engine integration tests exercise actual worktree switching.
 No real accounts, conversations or provider requests were used.
 
 - Viewport: 680 × 460 logical pixels, 2× native capture, dark appearance.
-- Menu images: identical crop `(x=0, y=300, width=1360, height=620)`.
+- Menu images: identical crop `(x=0, y=280, width=1360, height=620)`.
 - Closed menu: crop `(x=0, y=660, width=1360, height=240)`.
 - Colors, labels and controls were not edited after capture. Animations were
   allowed to settle. Output uses `HeadlessAppContext::capture_screenshot()`.
