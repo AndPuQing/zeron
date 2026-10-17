@@ -63,6 +63,7 @@ data class LaunchOptions(
     val route: String? = null,
     val wallpaper: String? = null,
     val wallpaperEffect: String? = null,
+    val voicePreview: Boolean = false,
 )
 
 /**
@@ -79,6 +80,7 @@ class AppModel(private val app: Application) {
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()
+    val voice = sh.zeron.android.voice.VoiceController(app) { _client.value }
 
     private val _workspace = MutableStateFlow<WorkspaceSnapshot?>(null)
     val workspace: StateFlow<WorkspaceSnapshot?> = _workspace.asStateFlow()
@@ -200,6 +202,7 @@ class AppModel(private val app: Application) {
     }
 
     private fun start(credentials: Credentials): Boolean {
+        voice.reset()
         val demo = credentials is Credentials.Demo
         val dir = if (demo) File(app.filesDir, "demo") else coreDir
         if (!demo) claimCoreDir(credentials)
@@ -294,6 +297,7 @@ class AppModel(private val app: Application) {
     }
 
     fun signOut() {
+        voice.reset()
         signInState.clear()
         val wasDemo = isDemo
         _client.value?.shutdown()
@@ -344,6 +348,7 @@ class AppModel(private val app: Application) {
     fun refreshWorkspace() {
         val client = _client.value ?: return
         _workspace.value = client.workspace()
+        voice.refresh()
     }
 
     fun onForeground() {

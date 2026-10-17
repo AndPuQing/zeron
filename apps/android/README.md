@@ -184,6 +184,36 @@ The tests launch the offline demo and exercise controls, state retention,
 pixel formats and drawing at device density. Debug and production installations
 must use separate test devices when their signing certificates differ.
 
+## Voice calls
+
+Open **Settings → Voice** to choose an online execution device and a voice.
+The microphone at the end of the New session bar starts a call; the same
+control in a session opens the ongoing call. During a call the bottom bar
+shows the call clock, mute and hang-up. Minimize the full-screen call to keep
+using the app, or open its canonical transcript to answer a pending question.
+
+The execution device must advertise remote voice support and have standalone
+Codex installed and signed in with ChatGPT. Android uses the native WebRTC SDK
+for capture and playback; it contains no Codex executable or provider credentials.
+Audio is sent to OpenAI; the selected execution device owns tools and the synced
+transcript. Device and voice preferences are scoped to the signed-in workspace.
+
+Microphone permission is requested when placing a call. Notification permission
+is optional; allow it to access call controls from the notification drawer.
+An ongoing foreground service keeps the call alive while the screen is locked.
+Mute and hang-up act locally first. Audio-focus loss ends the call without an
+automatic retry. A connected headset takes priority; otherwise the speaker
+control and proximity sensor choose the loudspeaker or earpiece. Removing the
+app from Recents ends the call, and the service never restarts a call after
+process death.
+
+Debug builds accept `--ez demo true --ez voice-preview true` to show a scripted
+call without audio or networking. `VoiceMediaTest` checks cancellation, mute,
+permission failure and native SDP preparation without microphone capture;
+`VoiceFlowTest` checks call UI, recreation, settings and background notification
+controls. These offline checks do not verify real-provider audio, ARM devices,
+Bluetooth hardware or cellular-network behavior.
+
 ## Shared core and assets
 
 The `buildCore` task runs `scripts/android/build-core.sh`, which builds
@@ -207,7 +237,9 @@ transcript/  TranscriptState (layout engine + viewport: anchoring, follow the
              (canvas painter for Rust display lists, streaming veil, fades),
              Widgets (copy, disclosures, tool rail, shimmer, images…)
 ui/          Sign-in, sessions, session + composer, new session, search,
-             settings
+             settings and voice call UI
+voice/       Native WebRTC media, audio routing, app-wide call ownership,
+             foreground call service
 ```
 
 ## Launch extras
@@ -225,6 +257,7 @@ adb shell am start -n work.puqing.zerun.android/sh.zeron.android.MainActivity \
 | `--ez fast true` / `--ez longreply true` | Demo stream speed / reply length |
 | `--ez big true` / `--ez huge true` | Demo transcripts with 120 / 600 turns |
 | `--es route chat:<id>` / `new` / `search` / `settings` | Open a screen at launch |
+| `--ez voice-preview true` | Debug-only scripted voice call; requires the offline demo |
 | `--ez signedout true` | Clear stored credentials |
 | `--es wallpaper <path>` / `none` | Set (or clear) the wallpaper from a file the app can read, e.g. `adb push art.jpg /data/local/tmp/ && adb shell run-as work.puqing.zerun.android cp /data/local/tmp/art.jpg files/` then `--es wallpaper /data/user/0/work.puqing.zerun.android/files/art.jpg` |
 | `--es wallpaper-effect <none\|dither\|ascii\|halftone\|scanlines>` | Wallpaper effect |

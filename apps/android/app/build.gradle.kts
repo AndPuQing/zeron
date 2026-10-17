@@ -156,6 +156,7 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons)
     implementation(libs.compose.backdrop)
+    implementation(libs.webrtc)
     implementation(libs.kotlinx.coroutines.android)
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)

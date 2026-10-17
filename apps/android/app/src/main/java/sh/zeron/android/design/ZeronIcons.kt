@@ -61,6 +61,10 @@ object ZIcons {
     val Text = R.drawable.zi_document
     val Image = R.drawable.zi_file_image
     val Link = R.drawable.zi_arrow_up_right
+    val Microphone = R.drawable.zi_microphone
+    val MicrophoneOff = R.drawable.zi_microphone_off
+    val HangUp = R.drawable.zi_phone_hang_up
+    val Speaker = R.drawable.zi_volume_loud
 }
 
 @Composable

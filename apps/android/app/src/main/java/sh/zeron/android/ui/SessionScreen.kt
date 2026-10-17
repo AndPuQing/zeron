@@ -221,6 +221,7 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                         modifier = Modifier.padding(top = 1.dp),
                     )
                 }
+                VoiceEntry(model, Modifier.padding(end = 8.dp))
                 val sideChatTone = if (children.any { it.indicator == ChatIndicator.WORKING || it.indicator == ChatIndicator.AWAITING_INPUT })
                     MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 GlassSurface(onClick = { showSideChats = true }, contentColor = sideChatTone) {
