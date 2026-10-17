@@ -1338,6 +1338,23 @@ impl SessionImportDialog {
             self.device_menu.open(());
             self.device_menu_active = self.model.device_index;
         }
+        let open_menu = match scene {
+            "filter-agent" => Some(FilterMenu::Agent),
+            "filter-status" => Some(FilterMenu::Status),
+            _ => None,
+        };
+        if let Some(kind) = open_menu {
+            self.filter_menu.open(kind);
+            self.filter_menu_active = match kind {
+                FilterMenu::Agent => AGENT_FILTERS
+                    .iter()
+                    .position(|provider| *provider == self.model.provider),
+                FilterMenu::Status => STATUS_FILTERS
+                    .iter()
+                    .position(|status| *status == self.model.status),
+            }
+            .unwrap_or(0);
+        }
         if matches!(scene, "selected" | "results" | "partial") {
             self.model.selected = self
                 .model
