@@ -4047,32 +4047,12 @@ impl Pickers {
                 })
                 .into_any_element(),
             };
-            let (icon_path, label) = (crate::icons::WORKTREE, "Worktree");
-            // Keep the same reading order and leading edge as the draft.
-            let left = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .min_w_0()
-                .child(Self::footer_label(
-                    icon_path,
-                    SharedString::from(label),
-                    &theme,
-                ));
-            let right = div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .gap(px(4.0))
-                .min_w_0()
-                .child(branch);
-            // Checkout + branch stay together. PR and usage form the trailing
-            // status group, independently of the branch label's length.
+            // The selector alone identifies the worktree. PR and usage stay
+            // in the trailing status group.
             return Some(
                 row()
                     .pr_0()
-                    .child(left)
-                    .child(right)
+                    .child(branch)
                     .child(div().flex_1().min_w_0())
                     .when_some(change_request, |el, summary| {
                         el.child(div().flex_none().child(
