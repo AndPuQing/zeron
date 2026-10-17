@@ -269,6 +269,12 @@ final class CoreSessionSource: SessionSource {
         try? client.setSessionConfig(chatId: chatId, config: config)
     }
 
+    var commandContext: String { "\(hostDevice):\(client.sessionConfig(chatId: chatId)?.harness ?? ""):\(chatId)" }
+
+    func commandCatalog() async throws -> ComposerCatalog {
+        try await client.composerCatalog(chatId: chatId)
+    }
+
     func searchFiles(_ query: String) async -> [FileMatch] {
         (try? await client.searchFiles(deviceId: hostDevice, chatId: chatId, spaceId: nil, query: query)) ?? []
     }

@@ -281,6 +281,7 @@ impl TurnWire {
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_millis(50),
             known_commands: Some(vec![SlashCommand {
+                unavailable_reason: None,
                 name: if native_command_reply.is_some() {
                     "project-review"
                 } else {

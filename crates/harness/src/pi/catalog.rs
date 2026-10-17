@@ -74,6 +74,7 @@ pub(super) fn commands(data: &Value) -> Vec<SlashCommand> {
         .filter_map(|v| {
             let name = v["name"].as_str()?;
             Some(SlashCommand {
+                unavailable_reason: None,
                 name: name.into(),
                 description: string(v, "description").into(),
                 input_hint: None,
@@ -91,6 +92,7 @@ pub(super) fn commands(data: &Value) -> Vec<SlashCommand> {
     ] {
         if !commands.iter().any(|c| c.name == name) {
             commands.push(SlashCommand {
+                unavailable_reason: None,
                 name: name.into(),
                 description: description.into(),
                 input_hint: None,

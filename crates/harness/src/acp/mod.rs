@@ -1028,6 +1028,7 @@ fn skill_commands(dirs: &[PathBuf]) -> Vec<SlashCommand> {
                 continue;
             }
             commands.push(SlashCommand {
+                unavailable_reason: None,
                 name,
                 description: first_sentence(&description),
                 input_hint: None,
@@ -2030,7 +2031,12 @@ impl AcpHarness {
                 let session = client
                     .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
                     .await;
-                if session.is_ok() {
+                if let Ok(session) = session {
+                    // Some ACP providers advertise commands only in session/new.
+                    // An explicit empty catalog clears the initialize fallback.
+                    if let Some(session_commands) = available_commands_in_response(&session) {
+                        commands = session_commands;
+                    }
                     // The update usually arrives within milliseconds of the
                     // session response; 2s bounds a quiet agent.
                     let deadline = tokio::time::sleep(Duration::from_secs(2));
@@ -2851,6 +2857,10 @@ fn steering_supported(init: &Value) -> bool {
 /// (agents differ on where the handshake advertises them: top level, inside
 /// `agentCapabilities`, or `_meta`).
 fn scan_available_commands(value: &Value) -> Vec<SlashCommand> {
+    available_commands_in_response(value).unwrap_or_default()
+}
+
+fn available_commands_in_response(value: &Value) -> Option<Vec<SlashCommand>> {
     fn scan(value: &Value, depth: u8) -> Option<&Value> {
         if depth == 0 {
             return None;
@@ -2861,7 +2871,7 @@ fn scan_available_commands(value: &Value) -> Vec<SlashCommand> {
         }
         obj.values().find_map(|v| scan(v, depth - 1))
     }
-    parse_commands(scan(value, 4))
+    scan(value, 4).map(|commands| parse_commands(Some(commands)))
 }
 
 fn new_message_id() -> String {
@@ -4409,12 +4419,8 @@ async fn run_session(session: Session) {
                 "session/new returned no sessionId".into(),
             ));
         }
-        let session_commands = scan_available_commands(&session_response);
-        let init_commands = if session_commands.is_empty() {
-            init_commands
-        } else {
-            session_commands
-        };
+        let init_commands =
+            available_commands_in_response(&session_response).unwrap_or(init_commands);
         let session_options = select_session_config(
             &client,
             &mut incoming,

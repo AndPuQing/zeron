@@ -1090,3 +1090,99 @@ pub struct PushPrefs {
     pub input: bool,
     pub failed: bool,
 }
+
+/// A host-advertised command or skill. Unavailable entries remain discoverable.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerCommand {
+    pub token: String,
+    pub description: String,
+    pub input_hint: Option<String>,
+    pub insertion: String,
+    pub unavailable_reason: Option<String>,
+}
+
+impl From<zc::composer::ComposerCommand> for ComposerCommand {
+    fn from(c: zc::composer::ComposerCommand) -> Self {
+        Self {
+            token: c.token,
+            description: c.description,
+            input_hint: c.input_hint,
+            insertion: c.insertion,
+            unavailable_reason: c.unavailable_reason,
+        }
+    }
+}
+impl From<ComposerCommand> for zc::composer::ComposerCommand {
+    fn from(c: ComposerCommand) -> Self {
+        Self {
+            token: c.token,
+            description: c.description,
+            input_hint: c.input_hint,
+            insertion: c.insertion,
+            unavailable_reason: c.unavailable_reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerCatalog {
+    pub commands: Vec<ComposerCommand>,
+    pub warning: Option<String>,
+}
+
+/// Encode selected composer references without changing ordinary typed text.
+#[uniffi::export]
+pub fn encode_composer_selections(text: String, selections: Vec<ComposerCommand>) -> String {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::encode_selections(&text, &selections)
+}
+
+/// Reserve an insertion token without rebinding existing references or literal text.
+#[uniffi::export]
+pub fn prepare_composer_selection(
+    text: String,
+    selections: Vec<ComposerCommand>,
+    command: ComposerCommand,
+) -> ComposerCommand {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::prepare_selection(&text, &selections, command.into()).into()
+}
+
+impl From<zc::composer::ComposerCatalog> for ComposerCatalog {
+    fn from(c: zc::composer::ComposerCatalog) -> Self {
+        Self {
+            commands: c.commands.into_iter().map(Into::into).collect(),
+            warning: c.warning,
+        }
+    }
+}
+
+/// Visible draft and selected reference metadata restored from persisted text.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ComposerDraft {
+    pub text: String,
+    pub selections: Vec<ComposerCommand>,
+}
+
+#[uniffi::export]
+pub fn restore_composer_draft(text: String) -> ComposerDraft {
+    let (text, selections) = zc::composer::restore_draft(&text);
+    ComposerDraft {
+        text,
+        selections: selections.into_iter().map(Into::into).collect(),
+    }
+}
+
+/// Explain invalid selected references still present in the draft before sending.
+#[uniffi::export]
+pub fn composer_selection_error(text: String, selections: Vec<ComposerCommand>) -> Option<String> {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::selection_error(&text, &selections)
+}
+
+/// Persist draft text together with invalid-selection state, never for sending.
+#[uniffi::export]
+pub fn save_composer_draft(text: String, selections: Vec<ComposerCommand>) -> String {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::save_draft(&text, &selections)
+}

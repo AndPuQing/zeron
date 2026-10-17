@@ -86,6 +86,7 @@ impl Harness for RecordingHarness {
     ) -> Result<Vec<zeron_proto::SlashCommand>, HarnessError> {
         self.discovery(cwd).await;
         Ok(vec![zeron_proto::SlashCommand {
+            unavailable_reason: None,
             name: "probe".into(),
             description: cwd.to_string_lossy().into_owned(),
             input_hint: None,

@@ -2,16 +2,16 @@
 
 ## Workspace commands
 
-Every harness gets Zeron actions in the `/` picker. Selecting one runs the action
-immediately; it does not create a model turn. Actions that require a conversation
-are shown only in an existing chat.
+Every harness gets Zerun actions in the desktop `/` picker. Selecting one runs
+the action immediately; it does not create a model turn. Actions that require a
+conversation are shown only in an existing chat.
 
 | Command | Action |
 | --- | --- |
 | `/model` | Choose agent, model, and reasoning |
 | `/new` | Start a new conversation |
 | `/resume` | Search and open conversations |
-| `/settings` | Open Zeron settings |
+| `/settings` | Open Zerun settings |
 | `/diff` | Open a changes tab |
 | `/files` | Open project files |
 | `/terminal` | Open a terminal tab |
@@ -19,11 +19,11 @@ are shown only in an existing chat.
 | `/stop` | Interrupt the current run |
 
 Provider commands remain available alongside these actions. When a provider owns
-the same name, its command keeps the name and the Zeron action gets a `zeron:`
+the same name, its command keeps the name and the Zerun action gets a `zeron:`
 prefix, for example `/zeron:model`. A provider command and a workspace action are
-distinct entries, even when they have the same purpose. `/` completion works at
-any word boundary in the draft, including later lines, just like `@` and `$`.
-Code, URLs and paths remain literal.
+distinct entries, even when they have the same purpose. Desktop `/` completion
+works at any word boundary in the draft, including later lines, just like `@`
+and `$`. Code, URLs and paths remain literal.
 
 Selecting a workspace action consumes only its trigger, preserving surrounding
 text, attachments and queued edits. Removing the trigger is undoable. Provider
@@ -33,18 +33,82 @@ Typing an unselected inline `/word` does not execute a local action.
 
 | Harness | Additional provider commands |
 | --- | --- |
-| Codex | Native `/compact` and `/review`; eleven total entries in an existing chat before skills |
+| Codex | Versioned CLI menu, native app-server operations, desktop actions, and visibly unavailable CLI-only entries |
 | Claude Code | Project-scoped commands from its initialize catalog |
 | OpenCode | Project-scoped server command catalog |
 | Pi | Native `get_commands`, including extension commands and `skill:*` invocations |
-| Devin, Grok, Hermes, Antigravity, DeepSeek Harness | Advertised ACP commands, including session command updates |
+| Copilot, Devin, Grok, Hermes, Antigravity, DeepSeek Harness | Advertised ACP commands, including session command updates |
 | Cursor | Workspace actions; its SDK adapter has no native command catalog |
 
-This does not imply that every command in a provider's terminal UI can execute
-through its SDK. Provider-only operations without a corresponding protocol or
-Zeron action are not advertised as executable commands.
+Codex's menu includes the documented CLI command names and aliases, including
+`/goal`, `/plan`, `/status`, `/usage`, `/ps`, `/mcp`, `/apps`, `/plugins`,
+`/hooks`, `/skills`, `/memories`, `/init`, and `/recap`. The catalog is versioned
+in `crates/harness/src/codex/commands.rs`; app-server has no slash-menu discovery
+method. The catalog targets codex-cli 0.161.0 and its experimental app-server
+protocol schemas.
 
-## Skill preferences
+Commands requiring the Codex terminal UI or a configuration editor that Zerun
+does not provide remain visible with an explanation. Selecting one preserves
+the draft; typing it manually produces a clear error rather than sending it to
+the model. An older Codex app-server may reject newer native methods; update
+Codex on the execution device. The integration never falls back to treating a
+failed native command as ordinary prompt text.
+
+Codex client commands use Zerun's desktop controls: `/model` and `/fast` open
+the model/service-tier picker; `/new` and `/clear` open a new conversation;
+`/resume` and `/agents` open conversation search; `/fork`, `/side` and `/btw`
+create a Zerun side-chat fork; `/archive` archives the Zerun conversation;
+`/logout` opens account settings rather than immediately signing out.
+`/copy` copies the latest completed assistant message. `/theme` and `/keymap`
+open appearance and shortcut settings. These actions take no inline arguments;
+select them from the menu to use their controls. Native `/stop` and `/clean`
+stop background terminals, while `/zeron:stop` interrupts the active turn.
+Codex desktop aliases are unavailable inside a side-chat composer to avoid
+acting on the main conversation by mistake.
+
+`/goal <objective>` sets a native persisted goal. `/goal` (or `/goal status`)
+shows its status and usage; `/goal pause`, `/goal resume`, `/goal clear`, and
+`/goal edit <objective>` manage it. An optional explicit budget uses
+`/goal --budget 40000 <objective>`. Pausing/resuming preserves existing usage
+and budget. Mutations carry `origin: user`. Operations are serialized at the
+same turn boundaries as other native commands. Synchronous replies finish
+immediately without waiting for a nonexistent model turn completion.
+
+`/plan` enables plan mode for subsequent turns; `/plan off` exits it;
+`/plan <request>` starts a planning turn. `/init` explicitly asks Codex to
+maintain project AGENTS.md; `/recap` asks for a conversation summary. Those two
+commands intentionally start model turns. Read-only native command responses
+show labels/status rather than dumping arbitrary configuration secrets.
+
+## iOS and Android
+
+Type `/` at the beginning of a draft in a session or on the new-session screen.
+Both mobile clients load the selected host's provider commands and enabled
+skills, show a scrollable menu, and filter it as you type. Select an entry to
+complete its token, then enter any arguments and send. Existing arguments are
+preserved when completing partway through the leading token. Skills appear as
+`$name` selections and retain their exact path/provider identity on send.
+Same-name skills use distinct display tokens, such as `$review` and `$review:2`.
+Inserting another selection preserves existing bindings and literal tokens,
+including after restoring a saved draft or stashing a draft to edit the queue.
+
+The menu shows descriptions, argument hints and unavailable reasons. Native
+Codex commands, including `/goal`, run through the updated execution host.
+Codex desktop actions remain disabled on mobile: use the mobile model chips,
+conversation navigation and stop button for those existing controls. The
+`/zeron:*` workspace menu belongs to the desktop client. Terminal-only actions
+remain unavailable on every client.
+
+Changing agent, host or project reloads the catalog and marks existing selections
+as invalid. A visible message lists the affected tokens, and sending stays blocked
+until they are removed or reselected. Saving or reopening a draft preserves this
+state. Prepending prose to a selected skill keeps its exact identity; code blocks,
+escaped tokens and existing Markdown links remain literal. Loading errors include
+a retry control; a partial failure still shows the catalog that loaded. Older
+hosts without the catalog RPCs require an update. Installing a new phone build
+alone does not add native Codex methods to an older execution host.
+
+## Desktop skill preferences
 
 Settings → Shortcuts → Composer completion has two independent controls for
 each installed, enabled agent on this device. Agents that are disabled or not
@@ -64,6 +128,21 @@ stores its identity in the composer. Literal dollar signs, code, and unselected
 text retain their meaning.
 
 ## Discovery and delivery
+
+Provider catalogs are shared by desktop, iOS and Android; they are not limited
+to Codex. Claude Code reads its initialize command catalog, OpenCode queries
+`/command`, Pi uses `get_commands` plus supported RPC controls, and all six ACP
+adapters use their advertised catalogs. ACP discovery prefers `session/new`
+commands over initialize commands, then accepts an `available_commands_update`
+during its bounded discovery window. An explicit empty catalog clears the older
+catalog. This is a discovery snapshot, not continuous synchronization with a
+running session's changing command list.
+
+Protocol catalogs do not necessarily include every command from an agent's
+terminal UI. Cursor's current SDK exposes no command-listing API: its desktop
+menu provides Zerun workspace actions and discovered skills; mobile can show
+discovered skills, but has no native Cursor command catalog. Do not advertise
+terminal-only commands as executable provider commands.
 
 Discovery runs on the selected host in the project directory. Codex uses its
 native skill catalog. Other adapters discover standard project and user skill
@@ -98,6 +177,8 @@ do not require this capability.
 
 Provider references:
 
+- [Codex CLI commands](https://developers.openai.com/codex/cli/slash-commands/)
+- [Codex app-server](https://developers.openai.com/codex/app-server/)
 - [Claude Code skills](https://code.claude.com/docs/en/skills)
 - [OpenCode skills](https://opencode.ai/v2/docs/skills)
 - [OpenCode command source and skill classification](https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/command/index.ts)
@@ -105,3 +186,25 @@ Provider references:
 - [Grok skills](https://docs.x.ai/build/features/skills-plugins-marketplaces)
 - [Hermes skills](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills)
 - [Pi skills](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/skills.md)
+
+## Maintaining the Codex catalog
+
+Classify each catalog entry as a native app-server operation, a desktop action,
+or unavailable with a reason. Desktop actions stay unavailable in the shared
+catalog until a client supplies a handler. Keep server-side rejection for
+unavailable commands, including commands entered manually.
+
+Native operations that return without starting a model turn must emit a reply
+and completion immediately, keep the session available, and drain accepted
+messages. The subprocess fixtures in `crates/harness/tests/codex.rs` cover this
+protocol behavior without requiring a live provider account.
+
+Mobile catalogs use the shared Rust client's `ListCommands` and `ListSkills`
+requests on the selected execution host. Preserve successful results when only
+one request fails, and cancel stale loads on context changes. Draft persistence
+keeps invalid selections in a versioned local envelope; provider encoding must
+remain separate so that envelope is never sent as a prompt. Reserve insertion
+tokens through the shared client before updating platform selection maps.
+
+Changes to the UniFFI facade require regenerating the committed Swift bindings.
+Android's build generates its Kotlin bindings from the same facade.

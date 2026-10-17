@@ -2812,3 +2812,69 @@ async fn a_stopped_turn_keeps_the_agent_for_the_next_prompt() {
     drop(steer);
     assert!(next_event(&mut stream).await.is_none());
 }
+
+/// Each ACP adapter must expose the workspace/session catalog, not just initialize.
+#[tokio::test]
+async fn command_discovery_uses_session_catalog_across_acp_providers() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("catalog.py");
+    std::fs::write(&script, include_str!("fixtures/acp-command-catalog.py")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let workspace = dir.path().join("session");
+    std::fs::create_dir(&workspace).unwrap();
+    for harness in [
+        AcpHarness::copilot(),
+        AcpHarness::devin(),
+        AcpHarness::grok(),
+        AcpHarness::hermes(),
+        AcpHarness::antigravity(),
+        AcpHarness::dsh(),
+    ] {
+        let id = harness.id();
+        let commands = harness
+            .with_executable(&script)
+            .commands_for(&workspace)
+            .await
+            .unwrap();
+        let command = commands
+            .iter()
+            .find(|c| c.name == "workspace-command")
+            .unwrap_or_else(|| panic!("{id:?} lost session/new commands"));
+        assert_eq!(command.input_hint.as_deref(), Some("project arguments"));
+        assert!(
+            !commands.iter().any(|c| c.name == "initialize-command"),
+            "{id:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn command_discovery_respects_empty_session_and_notification_precedence() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("catalog.py");
+    std::fs::write(&script, include_str!("fixtures/acp-command-catalog.py")).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let harness = AcpHarness::grok().with_executable(&script);
+    for (mode, expected) in [
+        ("initialize", Some("initialize-command")),
+        ("empty", None),
+        ("notification", Some("updated-command")),
+        ("notification-empty", None),
+    ] {
+        let workspace = dir.path().join(mode);
+        std::fs::create_dir(&workspace).unwrap();
+        let commands = harness.commands_for(&workspace).await.unwrap();
+        let advertised: Vec<_> = commands
+            .iter()
+            .filter(|c| c.name.ends_with("-command"))
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(
+            advertised,
+            expected.into_iter().collect::<Vec<_>>(),
+            "{mode}"
+        );
+    }
+}

@@ -34,6 +34,13 @@ GitHub Actions uses the official Gradle distribution and sets
 Plugin Portal directly. CI also installs the SDK/NDK and Rust from official
 sources.
 
+JVM unit tests load the host Rust library from `target/debug` via
+`jna.library.path`. `buildCore` builds it alongside the Kotlin bindings, and the
+test runtime includes the matching JNA JAR for desktop `jnidispatch` binaries.
+The app and device tests continue using the Android JNA AAR and Android ABI
+libraries. `-PzeronSkipCore` only skips rebuilding when both host and Android
+libraries exist.
+
 The application ID is `work.puqing.zerun.android`, the display name is `Zerun`,
 and WorkOS returns to `zerun-dev://callback`. Endpoints and WorkOS settings
 come from the shared Rust core. Kotlin packages retain `sh.zeron.android`.

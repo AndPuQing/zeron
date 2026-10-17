@@ -1357,15 +1357,11 @@ async fn live_real_app_server_single_turn() {
 #[tokio::test]
 async fn skills_are_not_advertised_as_commands() {
     let h = harness();
-    assert_eq!(
-        h.commands()
-            .await
-            .unwrap()
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["compact", "review"]
-    );
+    let commands = h.commands().await.unwrap();
+    for name in ["compact", "review", "goal", "plan", "status", "model"] {
+        assert!(commands.iter().any(|command| command.name == name));
+    }
+    assert!(!commands.iter().any(|command| command.name == "imagegen"));
     let cwd = tempfile::tempdir().unwrap();
     let skills = h
         .skills(cwd.path())
@@ -1377,15 +1373,7 @@ async fn skills_are_not_advertised_as_commands() {
     assert_eq!(skills[0].path, "/skills/imagegen/SKILL.md");
     assert_eq!(skills[0].description, "Generate or edit images");
     assert_eq!(skills[1].description, "No interface block");
-    assert_eq!(
-        h.commands()
-            .await
-            .unwrap()
-            .iter()
-            .map(|c| c.name.as_str())
-            .collect::<Vec<_>>(),
-        vec!["compact", "review"]
-    );
+    assert_eq!(h.commands().await.unwrap(), commands);
 }
 
 /// Live smoke against the real CLI: `cargo test -p zeron-harness --test
@@ -2019,4 +2007,96 @@ async fn external_voice_keeps_canonical_events_without_any_local_helper() {
     assert!(!wire.contains("appendAudio"));
     token.cancel();
     pump.abort();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn slash_goal_commands_finish_without_turn_events_and_keep_the_session_usable() {
+    let harness = CodexHarness::new().with_executable(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-commands.py"),
+    );
+    let (controls, steers, interrupt) = controls("Yes");
+    let mut initial = request("/goal --budget 4000 ship fixture");
+    let directory = tempfile::tempdir().unwrap();
+    initial.cwd = directory.path().to_string_lossy().into_owned();
+    let mut stream = harness.run(initial, controls).await.unwrap();
+    async fn reply(
+        stream: &mut futures::stream::BoxStream<
+            'static,
+            Result<AgentEvent, zeron_harness::HarnessError>,
+        >,
+    ) -> (String, bool) {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut text = String::new();
+            let mut steered = false;
+            while let Some(event) = stream.next().await {
+                match event.unwrap() {
+                    AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                    AgentEvent::Steered { .. } => steered = true,
+                    AgentEvent::Done { status, error, .. } => {
+                        assert_eq!(status, DoneStatus::Completed, "{error:?}");
+                        return (text, steered);
+                    }
+                    AgentEvent::Error { message } => panic!("{message}"),
+                    _ => {}
+                }
+            }
+            panic!("command ended without Done")
+        })
+        .await
+        .unwrap()
+    }
+    let (text, _) = reply(&mut stream).await;
+    assert!(text.contains("ship fixture") && text.contains("4000"));
+    for (command, expected) in [
+        ("/goal pause", "paused"),
+        ("/goal", "Tokens used: 123"),
+        ("/goal resume", "active"),
+        ("/goal clear", "Goal cleared"),
+        ("/goal", "No goal"),
+        ("/ps", "second command"),
+        ("/stop", "Background terminals stopped"),
+        ("/skills", "fixture-skill"),
+        ("/pwd", "/fixture"),
+        ("/plan", "Plan mode enabled"),
+        ("ordinary prompt", "mode=plan"),
+        ("/plan off", "Plan mode disabled"),
+        ("ordinary follow-up", "mode=default"),
+        ("/plan prepare an implementation plan", "mode=plan"),
+        ("/plan off", "Plan mode disabled"),
+        ("/init", "mode=default"),
+        ("/recap", "mode=default"),
+    ] {
+        steers.send(SteerMessage::text(command)).await.unwrap();
+        let (text, steered) = reply(&mut stream).await;
+        assert!(steered, "command must acknowledge its accepted message");
+        assert!(text.contains(expected), "{command}: {text}");
+    }
+    interrupt.cancel();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn unsupported_native_slash_method_errors_without_falling_back_to_a_model_turn() {
+    let harness = CodexHarness::new().with_executable(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-commands.py"),
+    );
+    let (controls, _steers, _interrupt) = controls("Yes");
+    let mut stream = harness.run(request("/mcp"), controls).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            match event.unwrap() {
+                AgentEvent::TextDelta { .. } => panic!("must not fall back to prompt text"),
+                AgentEvent::Done { status, error, .. } => {
+                    assert_eq!(status, DoneStatus::Errored);
+                    assert!(error.unwrap().contains("unsupported fixture method"));
+                    return;
+                }
+                _ => {}
+            }
+        }
+        panic!("missing command failure")
+    })
+    .await
+    .unwrap();
 }

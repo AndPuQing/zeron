@@ -1258,7 +1258,7 @@ fn tool_fingerprint(tools: &[ToolItem], auto_open: bool) -> u64 {
 /// Clipboard payload for an assistant/system entry: authored text parts in
 /// document order, preserving Markdown while excluding tool traces and other
 /// structured parts.
-fn assistant_copy_text(entry: &SessionMessageEntry) -> Option<SharedString> {
+pub(crate) fn assistant_copy_text(entry: &SessionMessageEntry) -> Option<SharedString> {
     let text = entry
         .parts
         .iter()

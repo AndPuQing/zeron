@@ -1381,6 +1381,65 @@ impl Client {
         }
     }
 
+    /// Fetch the current chat's provider commands and skills from its owning host.
+    /// Partial failures remain visible without discarding the successful catalog.
+    pub async fn composer_catalog(
+        &self,
+        chat_id: &str,
+    ) -> Result<crate::composer::ComposerCatalog> {
+        let chat = self
+            .inner
+            .workspace
+            .chat(chat_id)
+            .ok_or_else(|| ClientError::NotFound(chat_id.into()))?;
+        let harness = chat.config.as_ref().map(|c| c.harness).ok_or_else(|| {
+            ClientError::InvalidArgument("Choose an agent before loading commands".into())
+        })?;
+        self.composer_catalog_at(
+            &chat.device_id,
+            serde_json::json!({ "harness": harness, "chatId": chat_id }),
+        )
+        .await
+    }
+
+    /// Catalog for a draft before a chat exists. The host resolves the project root.
+    pub async fn new_session_composer_catalog(
+        &self,
+        device_id: &str,
+        harness: &str,
+        space_id: Option<String>,
+    ) -> Result<crate::composer::ComposerCatalog> {
+        if device_id.is_empty() {
+            return Err(ClientError::InvalidArgument(
+                "Choose a host before loading commands".into(),
+            ));
+        }
+        self.composer_catalog_at(
+            device_id,
+            serde_json::json!({ "harness": harness, "spaceId": space_id }),
+        )
+        .await
+    }
+
+    async fn composer_catalog_at(
+        &self,
+        device_id: &str,
+        params: serde_json::Value,
+    ) -> Result<crate::composer::ComposerCatalog> {
+        match self.inner.backend() {
+            Backend::Demo(_) => Ok(crate::composer::ComposerCatalog::default()),
+            Backend::Live(live) => {
+                let (commands, skills) = tokio::join!(
+                    live.relay
+                        .call(device_id, zeron_rpc::methods::LIST_COMMANDS, params.clone()),
+                    live.relay
+                        .call(device_id, zeron_rpc::methods::LIST_SKILLS, params),
+                );
+                Ok(crate::composer::from_replies(commands, skills))
+            }
+        }
+    }
+
     /// Workspace file search for composer `@` mentions (host `SearchFiles`,
     /// gitignore-aware; an empty query returns the chat's featured files).
     pub async fn search_files(

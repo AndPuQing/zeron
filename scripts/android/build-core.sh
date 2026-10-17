@@ -27,7 +27,8 @@ OUT="${1:-$ROOT/target/android-core}"
 mkdir -p "$OUT/kotlin" "$OUT/jniLibs"
 cd "$ROOT"
 
-# The host library only supplies UniFFI metadata. Build it and bindgen together
+# The host library supplies UniFFI metadata and backs JVM unit tests. Build it
+# and bindgen together
 # in the dev profile; the Android libraries below still use the mobile profile.
 CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p zeron-mobile --lib \
   --bin uniffi-bindgen --features bindgen

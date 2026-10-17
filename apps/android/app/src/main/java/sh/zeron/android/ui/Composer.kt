@@ -105,6 +105,7 @@ fun Composer(
     transcript: TranscriptState,
 ) {
     val draft = remember(c.chatId) { ComposerModel() }
+    draft.commandContext = "${c.chatId}:${c.host.deviceId}:${row?.harness}"
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
     var error by remember { mutableStateOf<String?>(null) }
@@ -169,7 +170,7 @@ fun Composer(
                 }
                 val item = handle.composer().queue.firstOrNull { it.id == id }
                 editBase = item?.let { it.text to it.visibleText }
-                if (stash == null) stash = draft.text to draft.images.toList()
+                if (stash == null) stash = draft.persistedDraft() to draft.images.toList()
                 draft.clear()
                 draft.setText(item?.visibleText ?: "")
                 editingId = id
@@ -182,6 +183,7 @@ fun Composer(
     }
 
     fun send() {
+        if (draft.selectionError != null) return
         if (!draft.hasContent) return
         if (editingId != null) {
             finishEdit(draft.encoded())
@@ -216,6 +218,7 @@ fun Composer(
 
     Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp)) {
         if (c.queue.isNotEmpty()) QueuePanel(c.queue, handle, editingId, onEdit = ::beginEdit)
+        CommandSuggestions(draft, c.chatId, row?.harness, c.host.deviceId) { client.composerCatalog(c.chatId) }
         MentionSuggestions(draft, search = { q ->
             client.searchFiles(c.host.deviceId, c.chatId, null, q)
         })

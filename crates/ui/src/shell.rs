@@ -13270,6 +13270,30 @@ impl Render for Shell {
                 WorkspaceCommand::Stop => {
                     self.composer.update(cx, |c, cx| c.interrupt_selected(cx))
                 }
+                WorkspaceCommand::Archive if !self.active_chat.is_empty() => {
+                    self.archive_selected_chat(cx)
+                }
+                WorkspaceCommand::Copy => {
+                    let text = self
+                        .state
+                        .read(cx)
+                        .transcript
+                        .iter()
+                        .rev()
+                        .filter(|entry| {
+                            entry.role == zeron_doc::MessageRole::Assistant
+                                && entry.status == Some(zeron_doc::MessageStatus::Complete)
+                        })
+                        .find_map(crate::transcript::assistant_copy_text);
+                    if let Some(text) = text {
+                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(text.to_string()));
+                    }
+                }
+                WorkspaceCommand::Side if !self.active_chat.is_empty() => self.create_side_chat(cx),
+                WorkspaceCommand::Shortcuts => self.open_settings(SettingsSection::Shortcuts, cx),
+                WorkspaceCommand::Appearance => self.open_settings(SettingsSection::Appearance, cx),
+                WorkspaceCommand::Accounts => self.open_settings(SettingsSection::Agents, cx),
+                WorkspaceCommand::Quit => crate::app_menus::request_quit(cx),
                 _ => {}
             }
         }

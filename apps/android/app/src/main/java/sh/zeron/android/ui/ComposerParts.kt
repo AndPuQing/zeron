@@ -87,11 +87,16 @@ fun ComposerSurface(
 ) {
     var focused by remember { mutableStateOf(false) }
     val card = alwaysCard || focused || model.hasContent
+    val selectionError = model.selectionError
     GlassSurface(
         shape = RoundedCornerShape(GlassMetrics.composerRadius),
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
+            selectionError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+            }
             AnimatedVisibility(model.images.isNotEmpty() && card) { StagedThumbnails(model) }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.heightIn(min = 56.dp)) {
                 if (!card) {
@@ -118,7 +123,7 @@ fun ComposerSurface(
                 }
                 if (!card) {
                     Spacer(Modifier.width(8.dp))
-                    ActionButton(action, model.hasContent, onAction)
+                    ActionButton(action, model.hasContent && selectionError == null, onAction)
                     Spacer(Modifier.width(8.dp))
                 } else {
                     Spacer(Modifier.width(16.dp))
@@ -150,7 +155,7 @@ fun ComposerSurface(
                         content = chips,
                     )
                     Spacer(Modifier.width(8.dp))
-                    ActionButton(action, model.hasContent, onAction)
+                    ActionButton(action, model.hasContent && selectionError == null, onAction)
                 }
             }
         }

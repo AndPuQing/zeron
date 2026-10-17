@@ -60,6 +60,7 @@ struct SessionChrome: Equatable {
 /// A session's data + commands, independent of where it comes from.
 protocol SessionSource: AnyObject {
     var chrome: SessionChrome { get }
+    var commandContext: String { get }
     var onChange: (() -> Void)? { get set }
     /// Content present: false = the opening loader still stands in.
     var hydrated: Bool { get }
@@ -89,6 +90,7 @@ protocol SessionSource: AnyObject {
     func image(_ reference: String) async -> UIImage?
     /// Workspace files for `@` mentions.
     func searchFiles(_ query: String) async -> [FileMatch]
+    func commandCatalog() async throws -> ComposerCatalog
 }
 
 enum QueueAction {
@@ -103,6 +105,7 @@ enum QueueAction {
 /// demo session lands).
 final class FixtureSessionSource: SessionSource {
     private(set) var chrome = SessionChrome()
+    var commandContext: String { "preview" }
     var onChange: (() -> Void)?
     let hydrated = true
     let canFork = true
@@ -242,4 +245,5 @@ final class FixtureSessionSource: SessionSource {
     func loadImage(_ reference: String, into view: UIImageView) {}
     func image(_ reference: String) async -> UIImage? { nil }
     func searchFiles(_ query: String) async -> [FileMatch] { [] }
+    func commandCatalog() async throws -> ComposerCatalog { ComposerCatalog(commands: [], warning: nil) }
 }

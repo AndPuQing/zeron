@@ -473,6 +473,7 @@ pub(crate) fn parse_commands(value: Option<&Value>) -> Vec<SlashCommand> {
         .filter_map(|c| {
             let name = str_field(c, "name");
             (!name.is_empty()).then(|| SlashCommand {
+                unavailable_reason: None,
                 name,
                 description: str_field(c, "description"),
                 input_hint: c
@@ -684,11 +685,13 @@ mod tests {
             vec![AgentEvent::AvailableCommands {
                 commands: vec![
                     SlashCommand {
+                        unavailable_reason: None,
                         name: "compact".into(),
                         description: "Compact the session".into(),
                         input_hint: None,
                     },
                     SlashCommand {
+                        unavailable_reason: None,
                         name: "goal".into(),
                         description: "Set a goal".into(),
                         input_hint: Some("the goal".into()),
