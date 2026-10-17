@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.testing.Test
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose.compiler)
@@ -18,6 +20,7 @@ require(versionParts[1] < 1000 && versionParts[2] < 1000) {
 val forkVersionCode = versionParts[0].toLong() * 1_000_000 + versionParts[1] * 1000 + versionParts[2]
 require(forkVersionCode in 1..2_100_000_000L) { "Android versionCode is out of range" }
 val coreOut = repoRoot.resolve("target/android-core")
+val hostCoreDir = repoRoot.resolve("target/debug")
 val iconsOut = layout.buildDirectory.dir("generated/zeron-icons")
 val skipCore = providers.gradleProperty("zeronSkipCore").isPresent
 val releaseSigning = listOf(
@@ -48,7 +51,7 @@ val buildCore by tasks.registering(Exec::class) {
     val skip = skipCore
     val requiredLibraries = abis.flatMap { abi ->
         listOf("libzeron_mobile.so", "libc++_shared.so").map { coreOut.resolve("jniLibs/$abi/$it") }
-    }
+    } + hostCoreDir.resolve(System.mapLibraryName("zeron_mobile"))
     workingDir = repoRoot
     commandLine("bash", "scripts/android/build-core.sh", coreOut.path)
     environment("ANDROID_NDK_HOME", ndk)
@@ -134,6 +137,13 @@ android {
     packaging { jniLibs { useLegacyPackaging = false } }
 }
 
+// JVM unit tests use the host library built for UniFFI metadata, not Android's .so.
+// Keep this path out of the APK's jniLibs and device-test configuration.
+tasks.withType<Test>().configureEach {
+    dependsOn(buildCore)
+    systemProperty("jna.library.path", hostCoreDir.path)
+}
+
 tasks.named("preBuild") { dependsOn(buildCore, genIcons) }
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     dependsOn(validateReleaseSigning)
@@ -160,6 +170,8 @@ dependencies {
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     testImplementation("junit:junit:4.13.2")
+    // The Android AAR has no desktop jnidispatch; JVM tests need the matching JAR.
+    testRuntimeOnly("${libs.jna.get()}@jar")
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }
