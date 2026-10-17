@@ -29,9 +29,9 @@ fn main() -> anyhow::Result<()> {
                     })?))
             }
             "entry" | "fresh-entry" | "list" | "selected" | "results" | "partial" | "empty"
-            | "source-error" | "scan-error" | "scanning" => scene = arg,
+            | "source-error" | "scan-error" | "scanning" | "device-menu" => scene = arg,
             _ => anyhow::bail!(
-                "Unknown option: {arg}. Scenes: entry, fresh-entry, list, selected, results, partial, empty, source-error, scan-error, scanning; flags: --light, --opaque, --narrow, --capture DIRECTORY"
+                "Unknown option: {arg}. Scenes: entry, fresh-entry, list, selected, results, partial, empty, source-error, scan-error, scanning, device-menu; flags: --light, --opaque, --narrow, --capture DIRECTORY"
             ),
         }
     }
