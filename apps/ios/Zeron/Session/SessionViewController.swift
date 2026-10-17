@@ -400,7 +400,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     /// The user's own draft (never a queued message being edited).
     private func saveDraft() {
-        Drafts.save(chatId, stashed ? stashedDraft : composer.encodedDraft)
+        Drafts.save(chatId, stashed ? stashedDraft : composer.persistedDraft)
     }
 
     /// An edit lease is being requested (taps on other rows wait).
@@ -433,7 +433,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
                 return
             }
             if !stashed {
-                stashedDraft = composer.encodedDraft
+                stashedDraft = composer.persistedDraft
                 stashedImages = composer.images
                 stashed = true
             }

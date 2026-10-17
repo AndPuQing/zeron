@@ -41,7 +41,14 @@ Selection preserves the remaining draft and does not immediately execute it.
 Selected skills retain their canonical identity, including their path and
 provider command; same-name skills receive distinct display tokens.
 
-Provider/host/project changes invalidate the open catalog and selected mappings.
+Provider/host/project changes invalidate the open catalog and mark selected
+references as requiring reselection. The composer shows the affected tokens and
+blocks sending until they are removed or reselected; it never silently drops
+reference metadata. Invalid state is preserved in a versioned local draft envelope
+across navigation and queue-edit stashing, separate from provider prompt encoding.
+Selected skills remain bound when moved into prose; Markdown code, escapes and
+existing links remain literal. Restoring multiple same-name references preserves
+their distinct identities without rebinding pre-existing literal tokens.
 Each opening reloads the host catalog, while typing filters it locally. Cancelled
 loads cannot replace a later context. Partial catalog failures preserve successful
 results and expose retry controls; an unsupported older host reports the missing

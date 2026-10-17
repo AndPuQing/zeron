@@ -96,7 +96,11 @@ conversation navigation and stop button for those existing controls. The
 `/zeron:*` workspace menu belongs to the desktop client. Terminal-only actions
 remain unavailable on every client.
 
-Changing agent, host or project reloads the catalog. Loading errors include a
+Changing agent, host or project reloads the catalog and marks existing selections
+as invalid. A visible message lists the affected tokens, and sending stays blocked
+until they are removed or reselected. Saving or reopening a draft preserves this
+state. Prepending prose to a selected skill keeps its exact identity; code blocks
+and escaped tokens remain literal. Loading errors include a
 retry control; a partial failure still shows the catalog that loaded. Older
 hosts without the catalog RPCs require an update. Installing a new phone build
 alone does not add native Codex methods to an older execution host.

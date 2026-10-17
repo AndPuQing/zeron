@@ -87,7 +87,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
     private func rememberDraft() {
         guard !created else { return }
         app.lastDraft = draft
-        app.newSessionText = composer.encodedDraft
+        app.newSessionText = composer.persistedDraft
         app.newSessionImages = composer.images
     }
 

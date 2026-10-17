@@ -17145,6 +17145,18 @@ public func workosAuthorizeUrl(state: String) -> String  {
 })
 }
 /**
+ * Explain invalid selected references still present in the draft before sending.
+ */
+public func composerSelectionError(text: String, selections: [ComposerCommand]) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_composer_selection_error(
+        FfiConverterString.lower(text),
+        FfiConverterSequenceTypeComposerCommand.lower(selections),uniffiCallStatus
+    )
+})
+}
+/**
  * Encode selected composer references without changing ordinary typed text.
  */
 public func encodeComposerSelections(text: String, selections: [ComposerCommand]) -> String  {
@@ -17173,6 +17185,18 @@ public func restoreComposerDraft(text: String) -> ComposerDraft  {
         uniffiCallStatus in
     uniffi_zeron_mobile_fn_func_restore_composer_draft(
         FfiConverterString.lower(text),uniffiCallStatus
+    )
+})
+}
+/**
+ * Persist draft text together with invalid-selection state, never for sending.
+ */
+public func saveComposerDraft(text: String, selections: [ComposerCommand]) -> String  {
+    return try!  FfiConverterString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_save_composer_draft(
+        FfiConverterString.lower(text),
+        FfiConverterSequenceTypeComposerCommand.lower(selections),uniffiCallStatus
     )
 })
 }
@@ -17340,6 +17364,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_func_workos_authorize_url() != 35994) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_func_composer_selection_error() != 27924) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_func_encode_composer_selections() != 27413) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -17347,6 +17374,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_restore_composer_draft() != 22567) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_save_composer_draft() != 35358) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_default_voice_styles() != 30650) {

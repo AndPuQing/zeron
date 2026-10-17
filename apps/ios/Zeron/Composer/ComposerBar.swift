@@ -70,7 +70,14 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     var commandContext = "" {
         didSet {
             if commandContext != oldValue {
-                if !oldValue.isEmpty { selectedCommands.removeAll() }
+                if !oldValue.isEmpty {
+                    selectedCommands = selectedCommands.mapValues { command in
+                        var invalid = command
+                        invalid.unavailableReason = "Context changed"
+                        return invalid
+                    }
+                    refreshAction(animated: false)
+                }
                 closeCommands()
                 if textView.isFirstResponder { updateMentionQuery() }
             }
@@ -93,7 +100,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         get { textView.text }
         set {
             selectedCommands.removeAll()
-            if newValue.contains("zeron-invoke:") {
+            if newValue.contains("zeron-invoke:") || newValue.hasPrefix("zeron-composer-draft-v1:") {
                 let restored = restoreComposerDraft(text: newValue)
                 textView.text = restored.text
                 for command in restored.selections { selectedCommands[command.token] = command }
@@ -110,6 +117,18 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     var encodedDraft: String {
         selectedCommands.isEmpty ? textView.text : encodeComposerSelections(text: textView.text, selections: Array(selectedCommands.values))
     }
+
+    var selectionError: String? {
+        guard selectedCommands.values.contains(where: { $0.unavailableReason != nil }) else { return nil }
+        return composerSelectionError(text: textView.text, selections: Array(selectedCommands.values))
+    }
+
+    var persistedDraft: String {
+        selectedCommands.isEmpty ? textView.text : saveComposerDraft(text: textView.text, selections: Array(selectedCommands.values))
+    }
+
+    private let selectionWarning = UILabel()
+    private var warningZeroHeight: NSLayoutConstraint!
 
     let textView = UITextView()
     private let glass = Glass.surface(interactive: false, radius: Glass.Metrics.composerRadius)
@@ -158,6 +177,19 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         glass.translatesAutoresizingMaskIntoConstraints = false
         addSubview(glass)
         let content = glass.contentView
+        selectionWarning.font = UIFont.preferredFont(forTextStyle: .caption1)
+        selectionWarning.textColor = .systemRed
+        selectionWarning.numberOfLines = 0
+        selectionWarning.accessibilityIdentifier = "composer-selection-error"
+        selectionWarning.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(selectionWarning)
+        warningZeroHeight = selectionWarning.heightAnchor.constraint(equalToConstant: 0)
+        warningZeroHeight.isActive = true
+        NSLayoutConstraint.activate([
+            selectionWarning.topAnchor.constraint(equalTo: content.topAnchor),
+            selectionWarning.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 14),
+            selectionWarning.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -14),
+        ])
         // Tapping anywhere on the surface focuses the input.
         let tap = UITapGestureRecognizer(target: self, action: #selector(focusFromTap))
         tap.cancelsTouchesInView = false
@@ -239,7 +271,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             glass.trailingAnchor.constraint(equalTo: trailingAnchor),
             glass.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            thumbsScroll.topAnchor.constraint(equalTo: content.topAnchor),
+            thumbsScroll.topAnchor.constraint(equalTo: selectionWarning.bottomAnchor),
             thumbsScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 12),
             thumbsScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -12),
             thumbsHeight,
@@ -675,7 +707,13 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
 
     private func refreshAction(animated: Bool) {
         let action: Action = running ? (hasContent ? .queue : .stop) : .send
-        let enabled = action == .stop || hasContent
+        let error = selectionError
+        if selectionWarning.text != error {
+            selectionWarning.text = error
+            warningZeroHeight.isActive = error == nil
+            onHeightChange?()
+        }
+        let enabled = action == .stop || (hasContent && error == nil)
         let steering = action == .queue && preferredDelivery == .steer && canSteer
         var config = UIButton.Configuration.filled()
         config.cornerStyle = .capsule
@@ -747,6 +785,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     private func send(_ mode: DeliveryMode) {
+        guard selectionError == nil else { return }
         guard hasContent else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let body = mentions.encode(encodedDraft.trimmingCharacters(in: .whitespacesAndNewlines))

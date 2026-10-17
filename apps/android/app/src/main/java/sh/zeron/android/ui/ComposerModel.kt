@@ -6,6 +6,7 @@ import android.graphics.ImageDecoder
 import android.net.Uri
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -41,10 +42,14 @@ class ComposerModel(initial: String = "") {
     private val tokens = LinkedHashMap<String, FileMatch>()
     var commandContext: String = ""
         set(value) {
-            if (field.isNotEmpty() && field != value) commands.clear()
+            if (field.isNotEmpty() && field != value) {
+                commands.keys.toList().forEach { token ->
+                    commands[token] = commands.getValue(token).copy(unavailableReason = "Context changed")
+                }
+            }
             field = value
         }
-    private val commands = LinkedHashMap<String, uniffi.zeron_core.ComposerCommand>()
+    private val commands = mutableStateMapOf<String, uniffi.zeron_core.ComposerCommand>()
 
     /** Only the leading / token opens completion; replace the entire token at the cursor. */
     fun slashQuery(): Pair<IntRange, String>? {
@@ -76,7 +81,7 @@ class ComposerModel(initial: String = "") {
 
     fun setText(s: String) {
         commands.clear()
-        val text = if (s.contains("zeron-invoke:")) {
+        val text = if (s.contains("zeron-invoke:") || s.startsWith("zeron-composer-draft-v1:")) {
             val restored = uniffi.zeron_core.restoreComposerDraft(s)
             restored.selections.forEach { commands[it.token] = it }
             restored.text
@@ -86,6 +91,13 @@ class ComposerModel(initial: String = "") {
 
     fun encodedDraft(): String = if (commands.isEmpty()) value.text else
         uniffi.zeron_core.encodeComposerSelections(value.text, commands.values.toList())
+
+    val selectionError: String?
+        get() = if (commands.values.none { it.unavailableReason != null }) null else
+            uniffi.zeron_core.composerSelectionError(value.text, commands.values.toList())
+
+    fun persistedDraft(): String = if (commands.isEmpty()) value.text else
+        uniffi.zeron_core.saveComposerDraft(value.text, commands.values.toList())
 
     fun clear() {
         setText("")

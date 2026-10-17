@@ -187,7 +187,7 @@ fun Composer(
                 }
                 val item = handle.composer().queue.firstOrNull { it.id == id }
                 editBase = item?.let { it.text to it.visibleText }
-                if (stash == null) stash = draft.encodedDraft() to draft.images.toList()
+                if (stash == null) stash = draft.persistedDraft() to draft.images.toList()
                 draft.clear()
                 draft.setText(item?.visibleText ?: "")
                 editingId = id
@@ -200,6 +200,7 @@ fun Composer(
     }
 
     fun send() {
+        if (draft.selectionError != null) return
         if (!draft.hasContent) return
         if (editingId != null) {
             finishEdit(draft.encoded())

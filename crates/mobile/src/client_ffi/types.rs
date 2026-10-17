@@ -1161,3 +1161,17 @@ pub fn restore_composer_draft(text: String) -> ComposerDraft {
         selections: selections.into_iter().map(Into::into).collect(),
     }
 }
+
+/// Explain invalid selected references still present in the draft before sending.
+#[uniffi::export]
+pub fn composer_selection_error(text: String, selections: Vec<ComposerCommand>) -> Option<String> {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::selection_error(&text, &selections)
+}
+
+/// Persist draft text together with invalid-selection state, never for sending.
+#[uniffi::export]
+pub fn save_composer_draft(text: String, selections: Vec<ComposerCommand>) -> String {
+    let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
+    zc::composer::save_draft(&text, &selections)
+}
