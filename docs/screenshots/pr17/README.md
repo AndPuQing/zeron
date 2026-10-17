@@ -1,8 +1,9 @@
 # PR #17 — existing worktrees only
 
-Native macOS GPUI `Composer` and picker captures from `cb74623f`, rendered with
+Native macOS GPUI `Composer` and picker captures from `7b051377`, rendered with
 the platform text system and Metal. The menu contains only existing linked
-worktrees. Main checkout and unoccupied branches are absent.
+worktrees. Main checkout and unoccupied branches are absent. The footer shows
+only the selector, without a separate Worktree icon/text label.
 
 An isolated worktree supplies fixed synthetic chat/branch data. The scenes show
 choosing a worktree, the same chat with `feat/search` selected, and its closed
