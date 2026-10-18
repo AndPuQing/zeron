@@ -430,6 +430,9 @@ mod tests {
     use crate::Harness;
     use serde_json::json;
     fn fixture(root: &Path) -> SavedSession {
+        // Match storage_root's identity, including Windows' verbatim prefix.
+        let canonical_root = root.canonicalize().unwrap();
+        let root = canonical_root.as_path();
         let id = uuid::Uuid::new_v4().to_string();
         let path = root
             .join("sessions")
@@ -481,6 +484,8 @@ mod tests {
         let harness = AcpHarness::grok().with_saved_session_home(home.path());
         let page = harness.saved_sessions(None).await.unwrap();
         assert_eq!(page.sessions.len(), 1);
+        assert_eq!(page.sessions[0].store_id, source.store_id);
+        assert_eq!(page.sessions[0].locator, source.locator);
         assert!(!page.sessions[0].running);
         fs::write(
             home.path().join("active_sessions.json"),
