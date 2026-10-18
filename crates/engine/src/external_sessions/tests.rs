@@ -522,7 +522,10 @@ async fn mixed_harness_pages_keep_independent_source_identity_copy_and_native_re
     let dir = tempfile::tempdir().unwrap();
     let registry = Arc::new(HarnessRegistry::new());
     let mut providers = vec![];
-    for id in [HarnessId::Dsh, HarnessId::Pi, HarnessId::Opencode] {
+    for &(id, _, _) in zeron_proto::SESSION_IMPORT_PROVIDERS {
+        if matches!(id, HarnessId::Codex | HarnessId::ClaudeCode) {
+            continue;
+        }
         let provider = Arc::new(Provider {
             id,
             paginated: true,
@@ -546,7 +549,7 @@ async fn mixed_harness_pages_keep_independent_source_identity_copy_and_native_re
         .await
         .unwrap();
     assert!(first.source_errors.is_empty());
-    assert_eq!(first.sessions.len(), 3);
+    assert_eq!(first.sessions.len(), providers.len());
     let refs: std::collections::HashSet<_> = first
         .sessions
         .iter()
@@ -554,7 +557,7 @@ async fn mixed_harness_pages_keep_independent_source_identity_copy_and_native_re
         .collect();
     assert_eq!(
         refs.len(),
-        3,
+        providers.len(),
         "same native IDs in different harnesses must stay distinct"
     );
     let second = core
@@ -564,7 +567,7 @@ async fn mixed_harness_pages_keep_independent_source_identity_copy_and_native_re
         })
         .await
         .unwrap();
-    assert_eq!(second.sessions.len(), 3);
+    assert_eq!(second.sessions.len(), providers.len());
     assert!(second.next_cursor.is_none());
     for entry in first.sessions {
         let chat_id = imported(&batch(&core, &entry.source_ref).await);

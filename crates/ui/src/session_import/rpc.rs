@@ -27,6 +27,10 @@ fn discovery(result: ExternalSessionList) -> SessionDiscovery {
                 let provider = match row.harness {
                     zeron_proto::HarnessId::Codex => SessionProvider::Codex,
                     zeron_proto::HarnessId::ClaudeCode => SessionProvider::ClaudeCode,
+                    zeron_proto::HarnessId::Copilot => SessionProvider::Copilot,
+                    zeron_proto::HarnessId::Cursor => SessionProvider::Cursor,
+                    zeron_proto::HarnessId::Grok => SessionProvider::Grok,
+                    zeron_proto::HarnessId::Hermes => SessionProvider::Hermes,
                     zeron_proto::HarnessId::Dsh => SessionProvider::Dsh,
                     zeron_proto::HarnessId::Pi => SessionProvider::Pi,
                     zeron_proto::HarnessId::Opencode => SessionProvider::Opencode,
@@ -189,7 +193,10 @@ mod tests {
             sessions,
             ..Default::default()
         });
-        assert_eq!(mapped.sessions.len(), 5);
+        assert_eq!(
+            mapped.sessions.len(),
+            zeron_proto::SESSION_IMPORT_PROVIDERS.len()
+        );
         for (row, (id, _, label)) in mapped
             .sessions
             .iter()

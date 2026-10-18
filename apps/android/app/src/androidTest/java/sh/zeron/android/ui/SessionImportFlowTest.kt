@@ -112,6 +112,10 @@ class SessionImportFlowTest {
         find("Load more sessions").click()
         val fixtures = listOf(
             "DeepSeek Harness" to "Review the import pipeline",
+            "GitHub Copilot" to "Preserve the Copilot workspace",
+            "Cursor" to "Continue the SDK checkpoint",
+            "Grok" to "Restore the Grok conversation",
+            "Hermes" to "Resume the Hermes ACP session",
             "Pi" to "Trace the session tree",
             "OpenCode" to "Verify native session forks",
         )
@@ -122,9 +126,9 @@ class SessionImportFlowTest {
             find(title).click()
             current = agent
         }
-        find("Import 3 selected").click()
+        find("Import ${fixtures.size} selected").click()
         await { fixtures.all { (_, title) -> rows().any { it.title == title && it.archived } } }
-        find("Import results · 3 of 3 imported")
+        find("Import results · ${fixtures.size} of ${fixtures.size} imported")
         find("Refresh").click()
         find("Load more sessions").click()
         await { !device.hasObject(By.text("Load more sessions")) }

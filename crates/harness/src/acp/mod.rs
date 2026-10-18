@@ -32,11 +32,14 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 mod antigravity_paths;
+mod copilot_saved;
 mod devin_models;
 mod dsh_discovery;
 mod dsh_saved;
+mod grok_saved;
 mod normalize;
 mod prompt;
+mod saved;
 mod subagent;
 mod subagent_devin;
 mod system_message;
@@ -1712,7 +1715,7 @@ impl AcpHarness {
         self
     }
 
-    /// Test seam for an isolated native dsh history store.
+    /// Test seam for an isolated native history store.
     #[doc(hidden)]
     pub fn with_saved_session_home(mut self, home: impl Into<PathBuf>) -> Self {
         self.saved_home = Some(home.into());
@@ -1943,6 +1946,11 @@ impl AcpHarness {
         // place to widen it. Parity with codex's yolo mode (see codex/mod.rs).
         if self.spec.id == HarnessId::Dsh {
             cmd.env("DSH_PERMISSION_MODE", "danger-full-access");
+        }
+        if self.spec.id == HarnessId::Hermes
+            && let Some(home) = &self.saved_home
+        {
+            cmd.env("HERMES_HOME", home);
         }
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
@@ -2426,25 +2434,25 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
 #[async_trait]
 impl Harness for AcpHarness {
     fn saved_session_store_id(&self) -> Result<String, HarnessError> {
-        self.dsh_saved_store_id()
+        self.import_store_id()
     }
     async fn saved_sessions(
         &self,
         cursor: Option<&str>,
     ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
-        self.dsh_saved_list(cursor).await
+        self.import_list(cursor).await
     }
     async fn saved_session_history(
         &self,
         session: &crate::saved_sessions::SavedSession,
     ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
-        self.dsh_saved_call("history", None, Some(session)).await
+        self.import_history(session).await
     }
     async fn copy_saved_session(
         &self,
         session: &crate::saved_sessions::SavedSession,
     ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
-        self.dsh_saved_call("copy", None, Some(session)).await
+        self.import_copy(session).await
     }
 
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {

@@ -402,12 +402,15 @@ async fn every_supported_harness_can_be_filtered_selected_and_submitted() {
         assert!(s.rows[0].disabled_reason.is_none());
         c.select_visible();
     }
-    assert_eq!(c.snapshot().selected_count, 5);
+    assert_eq!(
+        c.snapshot().selected_count,
+        zeron_proto::SESSION_IMPORT_PROVIDERS.len() as u32
+    );
     c.start(false);
     let Request::Start(_, _, refs, reply) = next(&mut requests).await else {
         panic!()
     };
-    assert_eq!(refs.len(), 5);
+    assert_eq!(refs.len(), zeron_proto::SESSION_IMPORT_PROVIDERS.len());
     let (tx, rx) = mpsc::channel(8);
     reply.send(Ok(rx)).unwrap();
     tx.send(Ok(Event::Finished { cancelled: false }))

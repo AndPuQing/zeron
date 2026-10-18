@@ -8,6 +8,10 @@ use crate::HarnessId;
 pub const SESSION_IMPORT_PROVIDERS: &[(HarnessId, &str, &str)] = &[
     (HarnessId::Codex, "codex", "Codex"),
     (HarnessId::ClaudeCode, "claude-code", "Claude Code"),
+    (HarnessId::Copilot, "copilot", "GitHub Copilot"),
+    (HarnessId::Cursor, "cursor", "Cursor"),
+    (HarnessId::Grok, "grok", "Grok"),
+    (HarnessId::Hermes, "hermes", "Hermes"),
     (HarnessId::Dsh, "dsh", "DeepSeek Harness"),
     (HarnessId::Pi, "pi", "Pi"),
     (HarnessId::Opencode, "opencode", "OpenCode"),

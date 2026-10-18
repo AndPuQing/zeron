@@ -32,9 +32,9 @@ See [Android setup and updates](apps/android/README.md).
 
 ## Import existing sessions
 
-Choose **Import** on Sessions to bring in saved Codex, Claude Code, DeepSeek
-Harness, Pi, or OpenCode conversations from an execution device. Select sessions
-under **Not imported**; copies appear in **Archived** and can continue with their
+Choose **Import** on Sessions to bring in saved Codex, Claude Code, GitHub Copilot,
+Cursor, Grok, Hermes, DeepSeek Harness, Pi, or OpenCode conversations from an execution device.
+Select sessions under **Not imported**; copies appear in **Archived** and can continue with their
 original harness. Existing source histories stay unchanged. See
 [native format support](crates/harness/README.md#saved-session-imports).
 
