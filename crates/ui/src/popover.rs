@@ -586,6 +586,18 @@ pub fn anchored_menu_below_end(
     content: AnyElement,
     closing: Option<std::time::Instant>,
 ) -> AnyElement {
+    anchored_menu_below_end_layer(id, content, closing, 6.0, 1)
+}
+
+/// [`anchored_menu_below_end`] on an explicit deferred layer, for trailing
+/// controls inside a modal or palette.
+pub fn anchored_menu_below_end_layer(
+    id: impl Into<SharedString>,
+    content: AnyElement,
+    closing: Option<std::time::Instant>,
+    gap: f32,
+    priority: usize,
+) -> AnyElement {
     let exit = closing.map(exit_progress);
     let content = frosted_menu(exit, content);
     div()
@@ -601,11 +613,11 @@ pub fn anchored_menu_below_end(
                     .child(menu_motion_from(
                         id.into(),
                         exit,
-                        div().occlude().pt(px(6.0)).child(content),
+                        div().occlude().pt(px(gap)).child(content),
                         -MENU_TRAVEL,
                     )),
             )
-            .priority(1)
+            .priority(priority)
             .into_any_element(),
         )
         .into_any_element()
@@ -1325,6 +1337,11 @@ pub fn dialog_field(input: AnyElement) -> gpui::Div {
 /// `transition-colors` (zeron dialogs.tsx). Caller adds id + click; `fade_key`
 /// as in [`menu_row`].
 pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) -> gpui::Div {
+    btn_ghost_base(theme, fade_key).child(SharedString::from(label.to_string()))
+}
+
+/// Ghost-button styling for callers composing icons and a truncating label.
+pub fn btn_ghost_base(theme: &Theme, fade_key: impl Into<SharedString>) -> gpui::Div {
     let fade_key = fade_key.into();
     let mut btn = div()
         .px(px(12.0))
@@ -1337,8 +1354,7 @@ pub fn btn_ghost(theme: &Theme, label: &str, fade_key: impl Into<SharedString>) 
             crate::theme::wash(0.0),
             ink(0.06),
         ))
-        .cursor_pointer()
-        .child(SharedString::from(label.to_string()));
+        .cursor_pointer();
     btn.interactivity()
         .on_hover(motion::hover_listener(fade_key));
     btn
