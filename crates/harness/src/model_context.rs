@@ -67,6 +67,16 @@ pub(crate) fn context(
         HarnessId::Pi => {
             vec![root("PI_CODING_AGENT_DIR", home.join(".pi/agent")).join("auth.json")]
         }
+        HarnessId::Omp => {
+            // OMP keeps Pi's env prefix but its own `.omp/agent` store, whose
+            // model config (and optional auth file) change the catalog.
+            let root = root("PI_CODING_AGENT_DIR", home.join(".omp/agent"));
+            vec![
+                root.join("models.yml"),
+                root.join("config.yml"),
+                root.join("auth.json"),
+            ]
+        }
         HarnessId::Dsh => {
             let root = root("DSH_HOME", home.join(".dsh"));
             let profile = root.join("profiles").join(crate::acp::dsh_profile());
@@ -118,6 +128,7 @@ pub(crate) fn context(
         HarnessId::Grok => &["GROK_", "XAI_"],
         HarnessId::Hermes => &["HERMES_", "OPENAI_", "ANTHROPIC_"],
         HarnessId::Pi => &["PI_", "OPENAI_", "ANTHROPIC_"],
+        HarnessId::Omp => &["OMP_", "PI_", "OPENAI_", "ANTHROPIC_"],
         HarnessId::Devin => &["DEVIN_"],
         HarnessId::Antigravity => &["GEMINI_", "GOOGLE_"],
         HarnessId::Dsh => &["DSH_", "DEEPSEEK_"],

@@ -8,7 +8,7 @@ import SwiftUI
 import UIKit
 
 enum BrandMark {
-    case claude, openai, copilot, cursor, devin, grok, hermes, pi, opencode, antigravity, dsh
+    case claude, openai, copilot, cursor, devin, grok, hermes, pi, omp, opencode, antigravity, dsh
 
     var viewBox: CGSize {
         switch self {
@@ -20,6 +20,7 @@ enum BrandMark {
         case .grok: return CGSize(width: 16, height: 16)
         case .hermes: return CGSize(width: 24, height: 24)
         case .pi: return CGSize(width: 800, height: 800)
+        case .omp: return CGSize(width: 24, height: 24)
         case .opencode: return CGSize(width: 24, height: 30)
         case .antigravity: return CGSize(width: 24, height: 24)
         case .dsh: return CGSize(width: 24, height: 24)
@@ -30,7 +31,7 @@ enum BrandMark {
     /// asset says so or the mark's holes fill in solid.
     var evenOddFill: Bool {
         switch self {
-        case .hermes, .pi, .opencode, .antigravity: return true
+        case .hermes, .pi, .omp, .opencode, .antigravity: return true
         default: return false
         }
     }
@@ -53,6 +54,8 @@ enum BrandMark {
             return HermesMarkData.pathData
         case .pi:
             return "M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65ZM517.36 400H634.72V634.72H517.36Z"
+        case .omp:
+            return "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2.6a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8ZM8.4 9h7.2v2.1h-2.5v5.4h-2.2v-5.4H10.7v5.4H8.5v-5.4H8.4Z"
         case .opencode:
             // opencode-mark.svg's frame (the desktop asset's second path is a
             // 45%-opacity inner fill this single-path renderer skips — the
@@ -74,6 +77,7 @@ enum BrandMark {
         case "grok": return .grok
         case "hermes": return .hermes
         case "pi": return .pi
+        case "omp": return .omp
         case "opencode": return .opencode
         case "antigravity": return .antigravity
         case "dsh": return .dsh

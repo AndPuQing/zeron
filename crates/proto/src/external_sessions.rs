@@ -14,6 +14,7 @@ pub const SESSION_IMPORT_PROVIDERS: &[(HarnessId, &str, &str)] = &[
     (HarnessId::Hermes, "hermes", "Hermes"),
     (HarnessId::Dsh, "dsh", "DeepSeek Harness"),
     (HarnessId::Pi, "pi", "Pi"),
+    (HarnessId::Omp, "omp", "Oh My Pi"),
     (HarnessId::Opencode, "opencode", "OpenCode"),
 ];
 

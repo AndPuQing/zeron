@@ -35,7 +35,7 @@ pub struct SessionImportController {
 
 /// The agent filter lists every provider the importer can read; a menu keeps
 /// the toolbar steady as harnesses are added.
-const AGENT_FILTERS: [Option<SessionProvider>; 10] = [
+const AGENT_FILTERS: [Option<SessionProvider>; 11] = [
     None,
     Some(SessionProvider::Codex),
     Some(SessionProvider::ClaudeCode),
@@ -45,6 +45,7 @@ const AGENT_FILTERS: [Option<SessionProvider>; 10] = [
     Some(SessionProvider::Hermes),
     Some(SessionProvider::Dsh),
     Some(SessionProvider::Pi),
+    Some(SessionProvider::Omp),
     Some(SessionProvider::Opencode),
 ];
 

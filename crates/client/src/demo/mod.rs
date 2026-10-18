@@ -988,6 +988,15 @@ impl DemoHost {
             installed: true,
             enabled: Some(true),
         });
+        list.push(HarnessInfo {
+            id: "omp".into(),
+            label: "Oh My Pi".into(),
+            supports_steering: Some(true),
+            steering_mode: Some("step-boundary".into()),
+            reasoning_levels: Vec::new(),
+            installed: true,
+            enabled: Some(true),
+        });
         list
     }
 

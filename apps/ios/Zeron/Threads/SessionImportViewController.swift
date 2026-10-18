@@ -163,6 +163,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         case "hermes": return "Hermes"
         case "dsh": return "DeepSeek Harness"
         case "pi": return "Pi"
+        case "omp": return "Oh My Pi"
         case "opencode": return "OpenCode"
         default: return "All agents"
         }
@@ -189,7 +190,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         hostButton.isEnabled = !s.running
         navigationItem.rightBarButtonItem?.isEnabled = !s.running && !s.loading
         updatePicker(agents, title: agentLabel(s.provider), image: BrandMarks.image(for: s.provider, side: 18) ?? UIImage(systemName: "square.grid.2x2"))
-        let providers: [String?] = [nil, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "opencode"]
+        let providers: [String?] = [nil, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "omp", "opencode"]
         agents.menu = UIMenu(children: providers.map { provider in
             UIAction(title: agentLabel(provider), image: BrandMarks.image(for: provider, side: 20) ?? UIImage(systemName: "square.grid.2x2"),
                      state: s.provider == provider ? .on : .off) { [weak self] _ in self?.importer?.setProvider(provider: provider) }
