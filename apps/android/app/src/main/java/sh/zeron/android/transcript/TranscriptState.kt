@@ -10,6 +10,7 @@ import androidx.compose.runtime.setValue
 import sh.zeron.android.core.TextEngine
 import uniffi.zeron_core.LayoutFrame
 import uniffi.zeron_core.LayoutListener
+import uniffi.zeron_core.MathFace
 import uniffi.zeron_core.RowKind
 import uniffi.zeron_core.TranscriptView
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,7 +35,11 @@ class TranscriptState {
                 if (!closed) apply(engine.frame())
             }
         }
-    })
+    }).also {
+        // The Android painter draws text runs; keep formulas readable until it
+        // can also draw the core's positioned math glyphs.
+        it.setMath(false, MathFace.FIRA, 100u)
+    }
 
     var frame by mutableStateOf<LayoutFrame?>(null)
         private set

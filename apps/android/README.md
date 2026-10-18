@@ -6,6 +6,9 @@ where; Kotlin paints, scrolls and handles gestures.** The transcript's text
 measurement, markdown layout, prefix-sum virtualization and display lists are
 the exact code iOS runs — see [`docs/mobile-rewrite.md`](../../docs/mobile-rewrite.md).
 
+LaTeX formulas remain readable as TeX source on Android; native formula
+rendering currently supports desktop and iOS.
+
 The UI follows the iOS shell's Liquid Glass style: floating capsule navigation,
 round glass actions and a glass composer, with shared neutral/violet colors and
 Geist type. Compact menus, inset grouped settings, checkmark selections and
