@@ -412,42 +412,35 @@ impl SessionImportDialog {
                     .text_color(theme.text_muted.opacity(0.5)),
             );
         if owns_menu {
-            let menu = popover::popover_card(theme)
-                .w(px(180.0))
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.close_filter_menu(cx);
-                }))
-                .children(labels.iter().enumerate().map(|(index, label)| {
-                    popover::menu_row_nav(
-                        theme,
-                        index == selected,
-                        index == self.filter_menu_active,
-                        format!("{menu_id}-{index}"),
-                    )
-                    .id((menu_id, index))
-                    .debug_selector(move || format!("{menu_id}-{index}"))
-                    .role(gpui::Role::Button)
-                    .aria_selected(index == selected)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.choose_filter(kind, index, cx);
+            let menu =
+                popover::popover_card(theme)
+                    .w(px(180.0))
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.close_filter_menu(cx);
                     }))
-                    .child(
-                        div()
-                            .flex_none()
-                            .size(px(14.0))
-                            .flex()
-                            .items_center()
-                            .when(index == selected, |slot| {
-                                slot.child(
-                                    icon(icons::CHECK)
-                                        .size(px(12.0))
-                                        .text_color(theme.text),
-                                )
-                            }),
-                    )
-                    .child(SharedString::from((*label).to_string()))
-                }))
-                .into_any_element();
+                    .children(labels.iter().enumerate().map(|(index, label)| {
+                        popover::menu_row_nav(
+                            theme,
+                            index == selected,
+                            index == self.filter_menu_active,
+                            format!("{menu_id}-{index}"),
+                        )
+                        .id((menu_id, index))
+                        .debug_selector(move || format!("{menu_id}-{index}"))
+                        .role(gpui::Role::Button)
+                        .aria_selected(index == selected)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.choose_filter(kind, index, cx);
+                        }))
+                        .child(div().flex_none().size(px(14.0)).flex().items_center().when(
+                            index == selected,
+                            |slot| {
+                                slot.child(icon(icons::CHECK).size(px(12.0)).text_color(theme.text))
+                            },
+                        ))
+                        .child(SharedString::from((*label).to_string()))
+                    }))
+                    .into_any_element();
             trigger = trigger.child(popover::anchored_menu_below_layer(
                 menu_id,
                 menu,
@@ -461,10 +454,9 @@ impl SessionImportDialog {
         trigger.into_any_element()
     }
 
-    fn render_filters(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
-        let agent_labels = AGENT_FILTERS.map(|provider| {
-            provider.map_or("All agents", SessionProvider::label)
-        });
+    fn render_filters(&self, theme: &Theme, width: f32, cx: &mut Context<Self>) -> AnyElement {
+        let agent_labels =
+            AGENT_FILTERS.map(|provider| provider.map_or("All agents", SessionProvider::label));
         let agent_selected = AGENT_FILTERS
             .iter()
             .position(|provider| *provider == self.model.provider)
@@ -496,63 +488,60 @@ impl SessionImportDialog {
             this.model.active = None;
             cx.notify();
         }));
+        let search = div()
+            .flex_1()
+            .when(width < 620.0, |search| search.flex_none().w_full())
+            .min_w(px(160.0))
+            .h(px(32.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(popover::palette_search_icon(theme))
+            .child(div().flex_1().min_w_0().child(self.search.clone()));
+        let filters = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .flex_wrap()
+            .gap(px(4.0))
+            .when(needs_provider_filter(&self.model), |row| {
+                row.child(self.render_filter_picker(
+                    theme,
+                    FilterMenu::Agent,
+                    "import-agent-filter",
+                    "import-agent-option",
+                    &agent_labels,
+                    agent_selected,
+                    "Agent filter",
+                    cx,
+                ))
+            })
+            .when(needs_status_filter(&self.model), |row| {
+                row.child(self.render_filter_picker(
+                    theme,
+                    FilterMenu::Status,
+                    "import-status-filter",
+                    "import-status-option",
+                    &status_labels,
+                    status_selected,
+                    "Import status filter",
+                    cx,
+                ))
+            })
+            .when(has_project, |row| row.child(scope));
+        let stacked = width < 620.0;
         div()
             .flex_none()
-            .px(px(16.0))
-            .py(px(10.0))
+            .px(px(20.0))
+            .py(px(8.0))
             .flex()
-            .flex_col()
-            .gap(px(10.0))
+            .gap(px(if stacked { 4.0 } else { 12.0 }))
+            .when(stacked, |toolbar| toolbar.flex_col())
+            .when(!stacked, |toolbar| toolbar.items_center())
             .border_b_1()
             .border_color(theme.border)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .child(popover::palette_search_icon(theme))
-                    .child(div().flex_1().min_w_0().child(self.search.clone())),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .flex_wrap()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .flex_wrap()
-                            .gap(px(4.0))
-                            .when(needs_provider_filter(&self.model), |row| {
-                                row.child(self.render_filter_picker(
-                                    theme,
-                                    FilterMenu::Agent,
-                                    "import-agent-filter",
-                                    "import-agent-option",
-                                    &agent_labels,
-                                    agent_selected,
-                                    "Agent filter",
-                                    cx,
-                                ))
-                            })
-                            .when(needs_status_filter(&self.model), |row| {
-                                row.child(self.render_filter_picker(
-                                    theme,
-                                    FilterMenu::Status,
-                                    "import-status-filter",
-                                    "import-status-option",
-                                    &status_labels,
-                                    status_selected,
-                                    "Import status filter",
-                                    cx,
-                                ))
-                            }),
-                    )
-                    .when(has_project, |row| row.child(scope)),
-            )
+            .child(search)
+            .child(filters)
             .into_any_element()
     }
 
@@ -657,34 +646,99 @@ impl SessionImportDialog {
             .min_w_0()
             .flex()
             .flex_col()
-            .gap(px(5.0))
+            .gap(px(4.0))
             .child(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(7.0))
+                    .gap(px(8.0))
                     .child(
                         icon(brand)
                             .size(px(14.0))
                             .flex_none()
                             .text_color(tint.unwrap_or(theme.text_muted)),
                     )
-                    .child(div().flex_1().min_w_0().truncate().child(row.title.clone()))
-                    .children(badge)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(crate::typography::ui_rems(14.0))
+                            .font_weight(gpui::FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .when(
+                                matches!(row.eligibility, ImportEligibility::Unavailable { .. }),
+                                |title| title.text_color(theme.text_muted),
+                            )
+                            .child(row.title.clone()),
+                    )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(crate::typography::ui_rems(11.0))
-                            .text_color(theme.text_muted)
-                            .child(crate::state::format_time_ago(
-                                row.updated_at,
-                                chrono::Utc::now(),
-                            )),
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .w(px(72.0))
+                                    .flex_none()
+                                    .flex()
+                                    .justify_end()
+                                    .children(badge),
+                            )
+                            .child(
+                                div()
+                                    .w(px(36.0))
+                                    .flex_none()
+                                    .text_right()
+                                    .text_size(crate::typography::ui_rems(11.0))
+                                    .text_color(theme.text_muted)
+                                    .child(crate::state::format_time_ago(
+                                        row.updated_at,
+                                        chrono::Utc::now(),
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .w(px(40.0))
+                                    .flex_none()
+                                    .flex()
+                                    .justify_end()
+                                    .when_some(
+                                        chat_id.filter(|_| !self.is_importing()),
+                                        |slot, chat_id| {
+                                            slot.child(
+                                                popover::btn_ghost(
+                                                    theme,
+                                                    "Open",
+                                                    format!("import-open-{index}"),
+                                                )
+                                                .id(("import-open", index))
+                                                .role(gpui::Role::Button)
+                                                .aria_label(SharedString::from(format!(
+                                                    "Open {}",
+                                                    row.title
+                                                )))
+                                                .tab_index(0)
+                                                .flex_none()
+                                                .py(px(2.0))
+                                                .px(px(6.0))
+                                                .on_click(cx.listener(move |_, _, _, cx| {
+                                                    cx.emit(SessionImportEvent::OpenChat {
+                                                        chat_id: chat_id.clone(),
+                                                    });
+                                                    cx.stop_propagation();
+                                                })),
+                                            )
+                                        },
+                                    ),
+                            ),
                     ),
             )
             .when_some(status, |content, status| {
                 content.child(
                     div()
+                        .pl(px(22.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(color)
                         .child(status),
@@ -718,25 +772,10 @@ impl SessionImportDialog {
                 this.toggle_session(row_id.clone(), cx);
             }))
             .when(self.model.batch.is_none(), |item| item.child(selection))
-            .child(content)
-            .when_some(chat_id.filter(|_| !self.is_importing()), |item, chat_id| {
-                item.child(
-                    popover::btn_ghost(theme, "Open", format!("import-open-{index}"))
-                        .id(("import-open", index))
-                        .role(gpui::Role::Button)
-                        .aria_label(SharedString::from(format!("Open {}", row.title)))
-                        .tab_index(0)
-                        .flex_none()
-                        .py(px(2.0))
-                        .px(px(6.0))
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            cx.emit(SessionImportEvent::OpenChat {
-                                chat_id: chat_id.clone(),
-                            });
-                            cx.stop_propagation();
-                        })),
-                )
+            .when(self.model.batch.is_some(), |item| {
+                item.child(div().flex_none().w(px(28.0)))
             })
+            .child(content)
             .into_any_element()
     }
 
@@ -816,8 +855,9 @@ impl SessionImportDialog {
                         .text_color(theme.text_muted)
                         .tooltip(crate::settings::widgets::text_tooltip(row.cwd.clone()))
                         .when(selectable, |header| {
-                            header.cursor_pointer().on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            header
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     for id in &group_refs {
                                         if all_selected {
                                             this.model.selected.remove(id);
@@ -826,8 +866,7 @@ impl SessionImportDialog {
                                         }
                                     }
                                     cx.notify();
-                                },
-                            ))
+                                }))
                         })
                         // The slot stays reserved so project names line up with
                         // the session rows and with each other.
@@ -1080,10 +1119,14 @@ impl SessionImportDialog {
                         .child(
                             popover::btn_primary(
                                 theme,
-                                &format!(
-                                    "Import {selected} session{}",
-                                    if selected == 1 { "" } else { "s" }
-                                ),
+                                &if selected == 0 {
+                                    "Import sessions".to_owned()
+                                } else {
+                                    format!(
+                                        "Import {selected} session{}",
+                                        if selected == 1 { "" } else { "s" }
+                                    )
+                                },
                             )
                             .id("import-submit")
                             .debug_selector(|| "import-submit".into())
@@ -1145,55 +1188,33 @@ impl Render for SessionImportDialog {
         } else {
             "Import existing sessions"
         };
-        let mut header = div()
-            .flex_none()
-            .px(px(20.0))
-            .py(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(div().flex_1().child(popover::dialog_title(&theme, title)))
-                    .when(!importing, |header| {
-                        header.child(
-                            div()
-                                .id("import-dialog-close")
-                                .role(gpui::Role::Button)
-                                .aria_label("Close import")
-                                .tab_index(0)
-                                .size(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .rounded(px(4.0))
-                                .cursor_pointer()
-                                .hover(|button| button.bg(theme.glass_hover()))
-                                .on_click(cx.listener(|this, _, _, cx| this.close_or_cancel(cx)))
-                                .child(
-                                    icon(icons::CLOSE)
-                                        .size(px(14.0))
-                                        .text_color(theme.text_muted),
-                                ),
-                        )
-                    }),
-            )
-            .child(popover::dialog_body(
-                &theme,
-                "Copy saved sessions into Zerun. Imports go to Archived; project files stay shared.",
-            ));
+        let mut heading = div().min_w_0().flex().items_center().gap(px(8.0)).child(
+            div().flex_1().min_w_0().child(
+                popover::dialog_title(&theme, title)
+                    .text_size(crate::typography::ui_rems(16.0))
+                    .truncate(),
+            ),
+        );
         if self.model.devices.len() > 1 && self.model.batch.is_none() {
             let device = &self.model.devices[self.model.device_index];
-            let mut trigger = popover::btn_ghost(&theme, &device.name, "import-source-device")
+            let mut trigger = popover::btn_ghost_base(&theme, "import-source-device")
                 .id("import-source-device")
                 .debug_selector(|| "import-source-device".into())
                 .role(gpui::Role::Button)
-                .aria_label("Source device")
+                .aria_label(SharedString::from(format!(
+                    "Source device: {}",
+                    device.name
+                )))
                 .aria_expanded(self.device_menu.is_open())
                 .tab_index(0)
+                .flex_none()
+                .max_w(px(160.0))
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .px(px(8.0))
+                .py(px(4.0))
+                .tooltip(crate::settings::widgets::text_tooltip(device.name.clone()))
                 .on_mouse_down(
                     gpui::MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
@@ -1210,7 +1231,20 @@ impl Render for SessionImportDialog {
                         window.focus(&this.focus, cx);
                         cx.notify();
                     }
-                }));
+                }))
+                .child(
+                    icon(icons::MONITOR)
+                        .size(px(13.0))
+                        .flex_none()
+                        .text_color(theme.text_muted),
+                )
+                .child(div().min_w_0().truncate().child(device.name.clone()))
+                .child(
+                    icon(icons::ALT_ARROW_DOWN)
+                        .size(px(12.0))
+                        .flex_none()
+                        .text_color(theme.text_muted.opacity(0.5)),
+                );
             if self.device_menu.get().is_some() {
                 let menu =
                     popover::popover_card(&theme)
@@ -1244,7 +1278,7 @@ impl Render for SessionImportDialog {
                 // The dialog is a priority-2 modal layer, so the default
                 // priority-1 menu would paint underneath the card; the
                 // dropdown must sit one layer above the dialog.
-                trigger = trigger.child(popover::anchored_menu_below_layer(
+                trigger = trigger.child(popover::anchored_menu_below_end_layer(
                     "import-device-menu",
                     menu,
                     self.device_menu.closing_since(),
@@ -1252,19 +1286,46 @@ impl Render for SessionImportDialog {
                     3,
                 ));
             }
-            header = header.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(
-                        icon(icons::MONITOR)
-                            .size(px(14.0))
-                            .text_color(theme.text_muted),
-                    )
-                    .child(trigger),
-            );
+            heading = heading.child(trigger);
         }
+        let header = div()
+            .flex_none()
+            .px(px(20.0))
+            .pt(px(16.0))
+            .pb(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(heading.when(!importing, |heading| {
+                heading.child(
+                    div()
+                        .id("import-dialog-close")
+                        .role(gpui::Role::Button)
+                        .aria_label("Close import")
+                        .tab_index(0)
+                        .size(px(24.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.0))
+                        .cursor_pointer()
+                        .hover(|button| button.bg(theme.glass_hover()))
+                        .on_click(cx.listener(|this, _, _, cx| this.close_or_cancel(cx)))
+                        .child(
+                            icon(icons::CLOSE)
+                                .size(px(14.0))
+                                .text_color(theme.text_muted),
+                        ),
+                )
+            }))
+            .child(
+                popover::dialog_body(
+                    &theme,
+                    "Imports are saved in Archived. Project files stay shared.",
+                )
+                .text_size(crate::typography::ui_rems(12.0)),
+            );
         let body = div()
             .min_w_0()
             .min_h_0()
@@ -1272,7 +1333,7 @@ impl Render for SessionImportDialog {
             .flex()
             .flex_col()
             .when(self.model.batch.is_none(), |list| {
-                list.child(self.render_filters(&theme, cx))
+                list.child(self.render_filters(&theme, width, cx))
             })
             .child(self.render_list(&theme, cx));
         popover::dialog_card(&theme)
@@ -1382,7 +1443,10 @@ impl SessionImportDialog {
 fn needs_provider_filter(model: &ImportModel) -> bool {
     model.provider.is_some()
         || model.sessions.first().is_some_and(|first| {
-            model.sessions.iter().any(|row| row.provider != first.provider)
+            model
+                .sessions
+                .iter()
+                .any(|row| row.provider != first.provider)
         })
 }
 
