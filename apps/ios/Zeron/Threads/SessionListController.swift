@@ -558,6 +558,12 @@ class SessionsViewController: SessionListController {
 
     func optionsMenu() -> UIMenu {
         UIMenu(children: [
+            UIAction(title: "Import sessions…", image: UIImage(systemName: "square.and.arrow.down")) { [weak self] _ in
+                guard let self else { return }
+                let picker = UINavigationController(rootViewController: SessionImportViewController(app: self.app))
+                picker.modalPresentationStyle = .formSheet
+                self.present(picker, animated: true)
+            },
             UIAction(title: "New Section…", image: UIImage(systemName: "folder.badge.plus")) { [weak self] _ in
                 self?.promptForSection { name in self?.app.createSection(name) }
             },

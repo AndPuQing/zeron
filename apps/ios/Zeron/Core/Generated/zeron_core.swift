@@ -1292,6 +1292,8 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func workspaceRevision()  -> UInt64
     
+    func sessionImport(listener: SessionImportListener)  -> CoreSessionImport
+    
     /**
      * Returns immediately. Callbacks are dispatched on the core runtime; the
      * platform must hop to its media/UI executor and call complete_media.
@@ -2219,6 +2221,16 @@ open func workspaceRevision() -> UInt64  {
 })
 }
     
+open func sessionImport(listener: SessionImportListener) -> CoreSessionImport  {
+    return try!  FfiConverterTypeCoreSessionImport_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_session_import(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSessionImportListener_lower(listener),uniffiCallStatus
+    )
+})
+}
+    
     /**
      * Returns immediately. Callbacks are dispatched on the core runtime; the
      * platform must hop to its media/UI executor and call complete_media.
@@ -2279,6 +2291,238 @@ public func FfiConverterTypeCoreClient_lift(_ handle: UInt64) throws -> CoreClie
 #endif
 public func FfiConverterTypeCoreClient_lower(_ value: CoreClient) -> UInt64 {
     return FfiConverterTypeCoreClient.lower(value)
+}
+
+
+
+
+
+
+public protocol CoreSessionImportProtocol: AnyObject, Sendable {
+    
+    func cancel() 
+    
+    func dismiss() 
+    
+    func loadMore() 
+    
+    func refresh() 
+    
+    func selectDevice(deviceId: String) 
+    
+    func selectVisible() 
+    
+    func setProvider(provider: String?) 
+    
+    func setQuery(query: String) 
+    
+    func snapshot()  -> SessionImportSnapshot
+    
+    func start(retry: Bool) 
+    
+    func toggle(sourceRef: String) 
+    
+    func updateHosts() 
+    
+}
+open class CoreSessionImport: CoreSessionImportProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_zeron_mobile_fn_clone_coresessionimport(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_zeron_mobile_fn_free_coresessionimport(handle, $0) }
+    }
+
+    
+
+    
+open func cancel()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_cancel(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func dismiss()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_dismiss(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func loadMore()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_load_more(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func refresh()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_refresh(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func selectDevice(deviceId: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_select_device(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(deviceId),uniffiCallStatus
+    )
+}
+}
+    
+open func selectVisible()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_select_visible(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+open func setProvider(provider: String?)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_set_provider(
+            self.uniffiCloneHandle(),
+        FfiConverterOptionString.lower(provider),uniffiCallStatus
+    )
+}
+}
+    
+open func setQuery(query: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_set_query(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(query),uniffiCallStatus
+    )
+}
+}
+    
+open func snapshot() -> SessionImportSnapshot  {
+    return try!  FfiConverterTypeSessionImportSnapshot_lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_snapshot(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func start(retry: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_start(
+            self.uniffiCloneHandle(),
+        FfiConverterBool.lower(retry),uniffiCallStatus
+    )
+}
+}
+    
+open func toggle(sourceRef: String)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_toggle(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(sourceRef),uniffiCallStatus
+    )
+}
+}
+    
+open func updateHosts()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coresessionimport_update_hosts(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeCoreSessionImport: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = CoreSessionImport
+
+    public static func lift(_ handle: UInt64) throws -> CoreSessionImport {
+        return CoreSessionImport(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: CoreSessionImport) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> CoreSessionImport {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: CoreSessionImport, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoreSessionImport_lift(_ handle: UInt64) throws -> CoreSessionImport {
+    return try FfiConverterTypeCoreSessionImport.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeCoreSessionImport_lower(_ value: CoreSessionImport) -> UInt64 {
+    return FfiConverterTypeCoreSessionImport.lower(value)
 }
 
 
@@ -3721,6 +3965,210 @@ public func FfiConverterTypeSessionHandle_lift(_ handle: UInt64) throws -> Sessi
 #endif
 public func FfiConverterTypeSessionHandle_lower(_ value: SessionHandle) -> UInt64 {
     return FfiConverterTypeSessionHandle.lower(value)
+}
+
+
+
+
+
+
+public protocol SessionImportListener: AnyObject, Sendable {
+    
+    /**
+     * Delivered on a client worker: dispatch to the platform's UI thread.
+     */
+    func onImportChanged(snapshot: SessionImportSnapshot) 
+    
+}
+open class SessionImportListenerImpl: SessionImportListener, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_zeron_mobile_fn_clone_sessionimportlistener(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_zeron_mobile_fn_free_sessionimportlistener(handle, $0) }
+    }
+
+    
+
+    
+    /**
+     * Delivered on a client worker: dispatch to the platform's UI thread.
+     */
+open func onImportChanged(snapshot: SessionImportSnapshot)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_sessionimportlistener_on_import_changed(
+            self.uniffiCloneHandle(),
+        FfiConverterTypeSessionImportSnapshot_lower(snapshot),uniffiCallStatus
+    )
+}
+}
+    
+
+    
+}
+
+
+
+// Put the implementation in a struct so we don't pollute the top-level namespace
+fileprivate struct UniffiCallbackInterfaceSessionImportListener {
+
+    // Create the VTable using a series of closures.
+    // Swift automatically converts these into C callback functions.
+    //
+    // Store the vtable directly.
+    static let vtable: UniffiVTableCallbackInterfaceSessionImportListener = UniffiVTableCallbackInterfaceSessionImportListener(
+        uniffiFree: { (uniffiHandle: UInt64) -> () in
+            do {
+                try FfiConverterTypeSessionImportListener.handleMap.remove(handle: uniffiHandle)
+            } catch {
+                print("Uniffi callback interface SessionImportListener: handle missing in uniffiFree")
+            }
+        },
+        uniffiClone: { (uniffiHandle: UInt64) -> UInt64 in
+            do {
+                return try FfiConverterTypeSessionImportListener.handleMap.clone(handle: uniffiHandle)
+            } catch {
+                fatalError("Uniffi callback interface SessionImportListener: handle missing in uniffiClone")
+            }
+        },
+        onImportChanged: { (
+            uniffiHandle: UInt64,
+            snapshot: RustBuffer,
+            uniffiOutReturn: UnsafeMutableRawPointer,
+            uniffiCallStatus: UnsafeMutablePointer<RustCallStatus>
+        ) in
+            let makeCall = {
+                () throws -> () in
+                guard let uniffiObj = try? FfiConverterTypeSessionImportListener.handleMap.get(handle: uniffiHandle) else {
+                    throw UniffiInternalError.unexpectedStaleHandle
+                }
+                return uniffiObj.onImportChanged(
+                     snapshot: try FfiConverterTypeSessionImportSnapshot_lift(snapshot)
+                )
+            }
+
+            
+            let writeReturn = { () }
+            uniffiTraitInterfaceCall(
+                callStatus: uniffiCallStatus,
+                makeCall: makeCall,
+                writeReturn: writeReturn
+            )
+        }
+    )
+
+    // Rust stores this pointer for future callback invocations, so it must live
+    // for the process lifetime (not just for the init function call).
+    //
+    // `nonisolated(unsafe)` is needed under Swift 6 strict concurrency.
+    // This is safe because the pointee is initialized once during static init
+    // and never mutated by either side of the FFI.  Its fields are C function pointers.
+    nonisolated(unsafe) static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterfaceSessionImportListener> = {
+        let ptr = UnsafeMutablePointer<UniffiVTableCallbackInterfaceSessionImportListener>.allocate(capacity: 1)
+        ptr.initialize(to: vtable)
+        return UnsafePointer(ptr)
+    }()
+}
+
+private func uniffiCallbackInitSessionImportListener() {
+    uniffi_zeron_mobile_fn_init_callback_vtable_sessionimportlistener(UniffiCallbackInterfaceSessionImportListener.vtablePtr)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportListener: FfiConverter {
+    fileprivate static let handleMap = UniffiHandleMap<SessionImportListener>()
+
+    typealias FfiType = UInt64
+    typealias SwiftType = SessionImportListener
+
+    public static func lift(_ handle: UInt64) throws -> SessionImportListener {
+        if ((handle & 1) == 0) {
+            // Rust-generated handle, construct a new class that uses the handle to implement the
+            // interface
+            return SessionImportListenerImpl(unsafeFromHandle: handle)
+        } else {
+            // Swift-generated handle, get the object from the handle map
+            return try handleMap.remove(handle: handle)
+        }
+    }
+
+    public static func lower(_ value: SessionImportListener) -> UInt64 {
+         if let rustImpl = value as? SessionImportListenerImpl {
+             // Rust-implemented object.  Clone the handle and return it
+            return rustImpl.uniffiCloneHandle()
+         } else {
+            // Swift object, generate a new vtable handle and return that.
+            return handleMap.insert(obj: value)
+         }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportListener {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SessionImportListener, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportListener_lift(_ handle: UInt64) throws -> SessionImportListener {
+    return try FfiConverterTypeSessionImportListener.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportListener_lower(_ value: SessionImportListener) -> UInt64 {
+    return FfiConverterTypeSessionImportListener.lower(value)
 }
 
 
@@ -9587,6 +10035,318 @@ public func FfiConverterTypeSendRequest_lower(_ value: SendRequest) -> RustBuffe
 }
 
 
+public struct SessionImportHost: Equatable, Hashable {
+    public var id: String
+    public var name: String
+    public var online: Bool
+    public var supported: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, online: Bool, supported: Bool) {
+        self.id = id
+        self.name = name
+        self.online = online
+        self.supported = supported
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionImportHost: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportHost: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportHost {
+        return
+            try SessionImportHost(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                online: FfiConverterBool.read(from: &buf), 
+                supported: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionImportHost, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterBool.write(value.online, into: &buf)
+        FfiConverterBool.write(value.supported, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportHost_lift(_ buf: RustBuffer) throws -> SessionImportHost {
+    return try FfiConverterTypeSessionImportHost.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportHost_lower(_ value: SessionImportHost) -> RustBuffer {
+    return FfiConverterTypeSessionImportHost.lower(value)
+}
+
+
+public struct SessionImportResult: Equatable, Hashable {
+    public var sourceRef: String
+    public var title: String
+    public var phase: SessionImportPhase
+    public var reason: String?
+    public var retryable: Bool
+    public var chatId: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourceRef: String, title: String, phase: SessionImportPhase, reason: String?, retryable: Bool, chatId: String?) {
+        self.sourceRef = sourceRef
+        self.title = title
+        self.phase = phase
+        self.reason = reason
+        self.retryable = retryable
+        self.chatId = chatId
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionImportResult: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportResult {
+        return
+            try SessionImportResult(
+                sourceRef: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                phase: FfiConverterTypeSessionImportPhase.read(from: &buf), 
+                reason: FfiConverterOptionString.read(from: &buf), 
+                retryable: FfiConverterBool.read(from: &buf), 
+                chatId: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionImportResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourceRef, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterTypeSessionImportPhase.write(value.phase, into: &buf)
+        FfiConverterOptionString.write(value.reason, into: &buf)
+        FfiConverterBool.write(value.retryable, into: &buf)
+        FfiConverterOptionString.write(value.chatId, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportResult_lift(_ buf: RustBuffer) throws -> SessionImportResult {
+    return try FfiConverterTypeSessionImportResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportResult_lower(_ value: SessionImportResult) -> RustBuffer {
+    return FfiConverterTypeSessionImportResult.lower(value)
+}
+
+
+public struct SessionImportRow: Equatable, Hashable {
+    public var sourceRef: String
+    public var title: String
+    public var provider: String
+    public var cwd: String
+    public var updatedAtMs: Int64
+    public var disabledReason: String?
+    public var selected: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(sourceRef: String, title: String, provider: String, cwd: String, updatedAtMs: Int64, disabledReason: String?, selected: Bool) {
+        self.sourceRef = sourceRef
+        self.title = title
+        self.provider = provider
+        self.cwd = cwd
+        self.updatedAtMs = updatedAtMs
+        self.disabledReason = disabledReason
+        self.selected = selected
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionImportRow: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportRow: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportRow {
+        return
+            try SessionImportRow(
+                sourceRef: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                provider: FfiConverterString.read(from: &buf), 
+                cwd: FfiConverterString.read(from: &buf), 
+                updatedAtMs: FfiConverterInt64.read(from: &buf), 
+                disabledReason: FfiConverterOptionString.read(from: &buf), 
+                selected: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionImportRow, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.sourceRef, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterString.write(value.provider, into: &buf)
+        FfiConverterString.write(value.cwd, into: &buf)
+        FfiConverterInt64.write(value.updatedAtMs, into: &buf)
+        FfiConverterOptionString.write(value.disabledReason, into: &buf)
+        FfiConverterBool.write(value.selected, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportRow_lift(_ buf: RustBuffer) throws -> SessionImportRow {
+    return try FfiConverterTypeSessionImportRow.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportRow_lower(_ value: SessionImportRow) -> RustBuffer {
+    return FfiConverterTypeSessionImportRow.lower(value)
+}
+
+
+public struct SessionImportSnapshot: Equatable, Hashable {
+    public var hosts: [SessionImportHost]
+    public var deviceId: String?
+    public var rows: [SessionImportRow]
+    public var query: String
+    public var provider: String?
+    public var loading: Bool
+    public var hasMore: Bool
+    public var error: String?
+    public var discoveryError: String?
+    public var sourceErrors: [String]
+    public var selectedCount: UInt32
+    public var selectionLimit: UInt32
+    public var running: Bool
+    public var cancelling: Bool
+    public var results: [SessionImportResult]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(hosts: [SessionImportHost], deviceId: String?, rows: [SessionImportRow], query: String, provider: String?, loading: Bool, hasMore: Bool, error: String?, discoveryError: String?, sourceErrors: [String], selectedCount: UInt32, selectionLimit: UInt32, running: Bool, cancelling: Bool, results: [SessionImportResult]) {
+        self.hosts = hosts
+        self.deviceId = deviceId
+        self.rows = rows
+        self.query = query
+        self.provider = provider
+        self.loading = loading
+        self.hasMore = hasMore
+        self.error = error
+        self.discoveryError = discoveryError
+        self.sourceErrors = sourceErrors
+        self.selectedCount = selectedCount
+        self.selectionLimit = selectionLimit
+        self.running = running
+        self.cancelling = cancelling
+        self.results = results
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension SessionImportSnapshot: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportSnapshot: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportSnapshot {
+        return
+            try SessionImportSnapshot(
+                hosts: FfiConverterSequenceTypeSessionImportHost.read(from: &buf), 
+                deviceId: FfiConverterOptionString.read(from: &buf), 
+                rows: FfiConverterSequenceTypeSessionImportRow.read(from: &buf), 
+                query: FfiConverterString.read(from: &buf), 
+                provider: FfiConverterOptionString.read(from: &buf), 
+                loading: FfiConverterBool.read(from: &buf), 
+                hasMore: FfiConverterBool.read(from: &buf), 
+                error: FfiConverterOptionString.read(from: &buf), 
+                discoveryError: FfiConverterOptionString.read(from: &buf), 
+                sourceErrors: FfiConverterSequenceString.read(from: &buf), 
+                selectedCount: FfiConverterUInt32.read(from: &buf), 
+                selectionLimit: FfiConverterUInt32.read(from: &buf), 
+                running: FfiConverterBool.read(from: &buf), 
+                cancelling: FfiConverterBool.read(from: &buf), 
+                results: FfiConverterSequenceTypeSessionImportResult.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SessionImportSnapshot, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeSessionImportHost.write(value.hosts, into: &buf)
+        FfiConverterOptionString.write(value.deviceId, into: &buf)
+        FfiConverterSequenceTypeSessionImportRow.write(value.rows, into: &buf)
+        FfiConverterString.write(value.query, into: &buf)
+        FfiConverterOptionString.write(value.provider, into: &buf)
+        FfiConverterBool.write(value.loading, into: &buf)
+        FfiConverterBool.write(value.hasMore, into: &buf)
+        FfiConverterOptionString.write(value.error, into: &buf)
+        FfiConverterOptionString.write(value.discoveryError, into: &buf)
+        FfiConverterSequenceString.write(value.sourceErrors, into: &buf)
+        FfiConverterUInt32.write(value.selectedCount, into: &buf)
+        FfiConverterUInt32.write(value.selectionLimit, into: &buf)
+        FfiConverterBool.write(value.running, into: &buf)
+        FfiConverterBool.write(value.cancelling, into: &buf)
+        FfiConverterSequenceTypeSessionImportResult.write(value.results, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportSnapshot_lift(_ buf: RustBuffer) throws -> SessionImportSnapshot {
+    return try FfiConverterTypeSessionImportSnapshot.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportSnapshot_lower(_ value: SessionImportSnapshot) -> RustBuffer {
+    return FfiConverterTypeSessionImportSnapshot.lower(value)
+}
+
+
 /**
  * One session row, as every list renders it.
  */
@@ -14115,6 +14875,100 @@ public func FfiConverterTypeSendState_lower(_ value: SendState) -> RustBuffer {
 
 
 
+
+public enum SessionImportPhase: Equatable, Hashable {
+    
+    case pending
+    case importing
+    case imported
+    case alreadyManaged
+    case failed
+    case cancelled
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SessionImportPhase: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSessionImportPhase: FfiConverterRustBuffer {
+    typealias SwiftType = SessionImportPhase
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SessionImportPhase {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .pending
+        
+        case 2: return .importing
+        
+        case 3: return .imported
+        
+        case 4: return .alreadyManaged
+        
+        case 5: return .failed
+        
+        case 6: return .cancelled
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: SessionImportPhase, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .pending:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .importing:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .imported:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .alreadyManaged:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .failed:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .cancelled:
+            writeInt(&buf, Int32(6))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportPhase_lift(_ buf: RustBuffer) throws -> SessionImportPhase {
+    return try FfiConverterTypeSessionImportPhase.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSessionImportPhase_lower(_ value: SessionImportPhase) -> RustBuffer {
+    return FfiConverterTypeSessionImportPhase.lower(value)
+}
+
+
+
 /**
  * Where a new session runs.
  */
@@ -16892,6 +17746,81 @@ fileprivate struct FfiConverterSequenceTypeSectionView: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeSessionImportHost: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionImportHost]
+
+    public static func write(_ value: [SessionImportHost], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionImportHost.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionImportHost] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionImportHost]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionImportHost.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSessionImportResult: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionImportResult]
+
+    public static func write(_ value: [SessionImportResult], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionImportResult.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionImportResult] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionImportResult]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionImportResult.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSessionImportRow: FfiConverterRustBuffer {
+    typealias SwiftType = [SessionImportRow]
+
+    public static func write(_ value: [SessionImportRow], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSessionImportRow.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SessionImportRow] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SessionImportRow]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSessionImportRow.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeSessionRow: FfiConverterRustBuffer {
     typealias SwiftType = [SessionRow]
 
@@ -17966,6 +18895,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_workspace_revision() != 48105) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_session_import() != 64838) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_start_voice() != 62086) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -18033,6 +18965,45 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_transcript_status() != 12910) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_cancel() != 53694) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_dismiss() != 39889) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_load_more() != 41611) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_refresh() != 46666) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_select_device() != 44672) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_select_visible() != 10208) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_set_provider() != 28292) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_set_query() != 49610) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_snapshot() != 51822) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_start() != 26219) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_toggle() != 63289) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coresessionimport_update_hosts() != 34523) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_sessionimportlistener_on_import_changed() != 2049) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_voicecall_complete_media() != 130) {
@@ -18192,6 +19163,7 @@ private let initializationResult: InitializationResult = {
     uniffiCallbackInitClientListener()
     uniffiCallbackInitLayoutListener()
     uniffiCallbackInitPlatformMeasurer()
+    uniffiCallbackInitSessionImportListener()
     uniffiCallbackInitUploadProgress()
     uniffiCallbackInitVisualListener()
     uniffiCallbackInitVoiceMediaListener()

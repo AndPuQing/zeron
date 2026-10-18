@@ -44,34 +44,6 @@ pub enum ImportEligibility {
     Running,
 }
 
-/// Rows shown by import state; `AlreadyManaged` rows count as imported.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ImportStatusFilter {
-    #[default]
-    All,
-    NotImported,
-    Imported,
-}
-
-impl ImportStatusFilter {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "Any status",
-            Self::NotImported => "Not imported",
-            Self::Imported => "Imported",
-        }
-    }
-
-    fn matches(self, eligibility: &ImportEligibility) -> bool {
-        let imported = matches!(eligibility, ImportEligibility::AlreadyManaged { .. });
-        match self {
-            Self::All => true,
-            Self::NotImported => !imported,
-            Self::Imported => imported,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct ExternalSession {
     /// Opaque reference from the importer, never a client-supplied file path.
@@ -195,7 +167,6 @@ pub(super) struct ImportModel {
     pub devices: Vec<ImportDevice>,
     pub device_index: usize,
     pub provider: Option<SessionProvider>,
-    pub status: ImportStatusFilter,
     pub current_project_only: bool,
     pub sessions: Vec<ExternalSession>,
     pub selected: HashSet<String>,
@@ -222,7 +193,6 @@ impl ImportModel {
             devices,
             device_index,
             provider: None,
-            status: ImportStatusFilter::default(),
             current_project_only,
             sessions: Vec::new(),
             selected: HashSet::new(),
@@ -322,7 +292,7 @@ impl ImportModel {
             .filter(|row| {
                 self.provider
                     .is_none_or(|provider| row.provider == provider)
-                    && self.status.matches(&row.eligibility)
+                    && !matches!(row.eligibility, ImportEligibility::AlreadyManaged { .. })
                     && (!self.current_project_only
                         || project.is_none_or(|path| {
                             row.cwd == path || crate::session_import::path_within(&row.cwd, path)
