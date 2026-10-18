@@ -38,6 +38,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 mod catalog;
+mod saved;
 mod state;
 
 use async_trait::async_trait;
@@ -59,7 +60,7 @@ use crate::{Harness, HarnessError, RunControls, Signal, send_signal, shutdown_ch
 /// typings). Bump deliberately — see the module header.
 const CURSOR_SDK_PIN: &str = "@cursor/sdk@1.0.32";
 const SHIM_NAME: &str = "zeron-cursor-shim.mjs";
-const SHIM_SOURCE: &str = include_str!("shim.mjs");
+const SHIM_SOURCE: &str = concat!(include_str!("shim.mjs"), "\n", include_str!("saved.mjs"));
 
 fn cursor_cli_paths() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -89,6 +90,7 @@ fn cursor_cli_paths() -> Vec<PathBuf> {
 /// The Cursor harness. Construct with [`CursorHarness::new`]; tests point it
 /// at a fake shim process with [`CursorHarness::with_executable`].
 pub struct CursorHarness {
+    saved_home: Option<PathBuf>,
     environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     /// Test seam: run this program AS the shim instead of node+managed SDK.
     executable: Option<PathBuf>,
@@ -106,6 +108,7 @@ pub struct CursorHarness {
 impl Default for CursorHarness {
     fn default() -> Self {
         Self {
+            saved_home: None,
             environment: Default::default(),
             executable: None,
             interrupt_grace: Duration::from_secs(2),
@@ -137,6 +140,12 @@ impl CursorHarness {
 
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[doc(hidden)]
+    pub fn with_saved_session_home(mut self, root: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(root.into());
+        self
     }
 
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
@@ -264,6 +273,27 @@ pub async fn login_command(store_path: &std::path::Path) -> Result<Command, Harn
 
 #[async_trait]
 impl Harness for CursorHarness {
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.saved_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.saved_list(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.saved_call("history", None, Some(session)).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.saved_call("copy", None, Some(session)).await
+    }
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
         self.environment.clone()
     }

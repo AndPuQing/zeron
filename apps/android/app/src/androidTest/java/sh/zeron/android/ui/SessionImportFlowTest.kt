@@ -106,6 +106,35 @@ class SessionImportFlowTest {
         assertFalse(device.hasObject(By.text("Polish the mobile layout")))
     }
 
+    @Test
+    fun newHarnessDropdownFiltersImportIntoArchivedAndDisappearOnRescan() {
+        launchFresh("import")
+        find("Load more sessions").click()
+        val fixtures = listOf(
+            "DeepSeek Harness" to "Review the import pipeline",
+            "GitHub Copilot" to "Preserve the Copilot workspace",
+            "Cursor" to "Continue the SDK checkpoint",
+            "Grok" to "Restore the Grok conversation",
+            "Hermes" to "Resume the Hermes ACP session",
+            "Pi" to "Trace the session tree",
+            "OpenCode" to "Verify native session forks",
+        )
+        var current = "All agents"
+        for ((agent, title) in fixtures) {
+            find(current).click()
+            find(agent).click()
+            find(title).click()
+            current = agent
+        }
+        find("Import ${fixtures.size} selected").click()
+        await { fixtures.all { (_, title) -> rows().any { it.title == title && it.archived } } }
+        find("Import results · ${fixtures.size} of ${fixtures.size} imported")
+        find("Refresh").click()
+        find("Load more sessions").click()
+        await { !device.hasObject(By.text("Load more sessions")) }
+        assertFalse(device.hasObject(By.text("Verify native session forks")))
+    }
+
     private fun rows() = model.workspace.value?.let { ws ->
         ws.front.pinned + ws.front.sections.flatMap { it.sessions } + ws.front.recent + ws.archived
     }.orEmpty()

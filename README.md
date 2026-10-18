@@ -1,6 +1,6 @@
 # Zerun
 
-Control your coding agents (Claude Code, Codex, GitHub Copilot, Cursor, Devin, Grok, Hermes, Pi, Antigravity, DeepSeek Harness) locally by default, with optional multi-device sync.
+Control your coding agents (Claude Code, Codex, GitHub Copilot, Cursor, Devin, Grok, Hermes, Pi, OpenCode, Antigravity, DeepSeek Harness) locally by default, with optional multi-device sync.
 
 *English | [简体中文](README.zh-CN.md) | [한국어](README.ko.md) | [日本語](README.ja.md) | [Español](README.es.md)*
 
@@ -29,6 +29,14 @@ The signed release APK supports Android 10 and later on arm64. Open the demo
 without an account, or sign in to follow your synced sessions. Settings →
 **Check for updates** downloads a verified release and opens Android's installer.
 See [Android setup and updates](apps/android/README.md).
+
+## Import existing sessions
+
+Choose **Import** on Sessions to bring in saved Codex, Claude Code, GitHub Copilot,
+Cursor, Grok, Hermes, DeepSeek Harness, Pi, or OpenCode conversations from an execution device.
+Select sessions under **Not imported**; copies appear in **Archived** and can continue with their
+original harness. Existing source histories stay unchanged. See
+[native format support](crates/harness/README.md#saved-session-imports).
 
 ## Headless (CLI)
 

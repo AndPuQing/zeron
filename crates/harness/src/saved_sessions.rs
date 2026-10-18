@@ -31,7 +31,7 @@ pub struct SavedSession {
     pub running: bool,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SavedSessionPage {
     pub sessions: Vec<SavedSession>,
     pub next_cursor: Option<String>,
@@ -63,7 +63,7 @@ pub struct SavedHistoryMessage {
     pub parts: Vec<SavedHistoryPart>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SavedSessionHistory {
     pub messages: Vec<SavedHistoryMessage>,
     pub notice: Option<String>,

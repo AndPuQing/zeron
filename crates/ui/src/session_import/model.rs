@@ -6,6 +6,13 @@ use chrono::{DateTime, Utc};
 pub enum SessionProvider {
     Codex,
     ClaudeCode,
+    Copilot,
+    Cursor,
+    Grok,
+    Hermes,
+    Dsh,
+    Pi,
+    Opencode,
 }
 
 impl SessionProvider {
@@ -13,6 +20,13 @@ impl SessionProvider {
         match self {
             Self::Codex => "Codex",
             Self::ClaudeCode => "Claude Code",
+            Self::Copilot => "GitHub Copilot",
+            Self::Cursor => "Cursor",
+            Self::Grok => "Grok",
+            Self::Hermes => "Hermes",
+            Self::Dsh => "DeepSeek Harness",
+            Self::Pi => "Pi",
+            Self::Opencode => "OpenCode",
         }
     }
 
@@ -20,6 +34,13 @@ impl SessionProvider {
         match self {
             Self::Codex => zeron_proto::HarnessId::Codex,
             Self::ClaudeCode => zeron_proto::HarnessId::ClaudeCode,
+            Self::Copilot => zeron_proto::HarnessId::Copilot,
+            Self::Cursor => zeron_proto::HarnessId::Cursor,
+            Self::Grok => zeron_proto::HarnessId::Grok,
+            Self::Hermes => zeron_proto::HarnessId::Hermes,
+            Self::Dsh => zeron_proto::HarnessId::Dsh,
+            Self::Pi => zeron_proto::HarnessId::Pi,
+            Self::Opencode => zeron_proto::HarnessId::Opencode,
         }
     }
 }

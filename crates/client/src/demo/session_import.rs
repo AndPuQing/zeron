@@ -49,6 +49,49 @@ fn entries(device: &str) -> Vec<ExternalSessionEntry> {
             None,
             false,
         ),
+        (
+            "dsh",
+            "Review the import pipeline",
+            HarnessId::Dsh,
+            None,
+            false,
+        ),
+        (
+            "copilot",
+            "Preserve the Copilot workspace",
+            HarnessId::Copilot,
+            None,
+            false,
+        ),
+        (
+            "cursor",
+            "Continue the SDK checkpoint",
+            HarnessId::Cursor,
+            None,
+            false,
+        ),
+        (
+            "grok",
+            "Restore the Grok conversation",
+            HarnessId::Grok,
+            None,
+            false,
+        ),
+        (
+            "hermes",
+            "Resume the Hermes ACP session",
+            HarnessId::Hermes,
+            None,
+            false,
+        ),
+        ("pi", "Trace the session tree", HarnessId::Pi, None, false),
+        (
+            "opencode",
+            "Verify native session forks",
+            HarnessId::Opencode,
+            None,
+            false,
+        ),
     ]
     .into_iter()
     .enumerate()

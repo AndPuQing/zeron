@@ -3,6 +3,7 @@ mod catalog;
 mod mcp;
 mod normalize;
 mod rpc;
+mod saved;
 mod sessions;
 mod ui;
 
@@ -261,6 +262,28 @@ fn response_data(frame: Value) -> Result<Value, HarnessError> {
 }
 #[async_trait]
 impl Harness for PiHarness {
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.saved_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.list_saved(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.read_saved(session).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.copy_saved(session).await
+    }
+
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
         self.environment.clone()
     }

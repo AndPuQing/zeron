@@ -284,6 +284,18 @@ async function recordNativeSteer(text) {
   };
 }
 
+if (process.argv[2] === "saved") {
+  try {
+    let input = "";
+    for await (const chunk of process.stdin) {
+      input += chunk;
+      if (Buffer.byteLength(input) > 65536) throw new Error("Cursor import request exceeds the size limit.");
+    }
+    out(await savedSessionsMain(JSON.parse(input), sdk));
+    await exitAfterFlush(0);
+  } catch (error) { await fatal(error); }
+}
+
 // ---- models mode ----------------------------------------------------------
 // `node <shim> models`: print the live catalog (`Cursor.models.list()` — no
 // additional login: the SDK resolves CURSOR_API_KEY, then its saved login)

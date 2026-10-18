@@ -50,11 +50,20 @@ struct Receipt {
 }
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
+struct ProviderCursor {
+    next: Option<String>,
+    done: bool,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Cursor {
     codex: Option<String>,
     claude: Option<String>,
     codex_done: bool,
     claude_done: bool,
+    providers: HashMap<HarnessId, ProviderCursor>,
 }
 
 fn error(message: impl Into<String>) -> EngineError {
@@ -220,11 +229,15 @@ impl ExternalSessionImporter {
             .map_err(|_| error("Invalid discovery cursor."))?
             .unwrap_or_default();
         let mut result = ExternalSessionList::default();
-        for id in [HarnessId::Codex, HarnessId::ClaudeCode] {
+        let mut has_more = false;
+        for &(id, _, _) in SESSION_IMPORT_PROVIDERS {
             let (next, done) = if id == HarnessId::Codex {
                 (&mut cursor.codex, &mut cursor.codex_done)
-            } else {
+            } else if id == HarnessId::ClaudeCode {
                 (&mut cursor.claude, &mut cursor.claude_done)
+            } else {
+                let page = cursor.providers.entry(id).or_default();
+                (&mut page.next, &mut page.done)
             };
             if *done {
                 continue;
@@ -237,9 +250,13 @@ impl ExternalSessionImporter {
                 .any(|item| item.id == id && item.installed && item.enabled != Some(false));
             if !available {
                 *done = true;
-                result.source_errors.push(format!(
-                    "{id:?} is not installed or enabled on this device."
-                ));
+                // A new optional provider is absent on most hosts. Missing
+                // installations do not turn otherwise successful scans into errors.
+                if matches!(id, HarnessId::Codex | HarnessId::ClaudeCode) {
+                    result.source_errors.push(format!(
+                        "{id:?} is not installed or enabled on this device."
+                    ));
+                }
                 continue;
             }
             let lease = self.inner.registry.execution_lease(id).await;
@@ -255,6 +272,7 @@ impl ExternalSessionImporter {
                 Ok(page) => {
                     *next = page.next_cursor;
                     *done = next.is_none();
+                    has_more |= !*done;
                     for session in page.sessions {
                         let source_ref = key(&session);
                         let already_managed_chat_id = self.managed(&session)?;
@@ -293,7 +311,7 @@ impl ExternalSessionImporter {
         result
             .sessions
             .sort_by_key(|session| std::cmp::Reverse(session.updated_at_ms));
-        if !cursor.codex_done || !cursor.claude_done {
+        if has_more {
             result.next_cursor =
                 Some(serde_json::to_string(&cursor).map_err(|e| error(e.to_string()))?);
         }

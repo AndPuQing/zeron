@@ -32,10 +32,14 @@
 //!   always ends with `Done { status: Interrupted }`.
 
 mod antigravity_paths;
+mod copilot_saved;
 mod devin_models;
 mod dsh_discovery;
+mod dsh_saved;
+mod grok_saved;
 mod normalize;
 mod prompt;
+mod saved;
 mod subagent;
 mod subagent_devin;
 mod system_message;
@@ -1443,6 +1447,7 @@ pub struct AcpHarness {
     /// Override of the agent's on-disk sessions root (grok's
     /// `~/.grok/sessions`), where subagent transcripts are tailed from.
     sessions_root: Option<PathBuf>,
+    saved_home: Option<PathBuf>,
     /// Grace between `session/cancel` and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -1478,6 +1483,7 @@ impl AcpHarness {
             spec,
             executable: None,
             sessions_root: None,
+            saved_home: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             // Generous: the handshake is local work for every agent
@@ -1709,9 +1715,13 @@ impl AcpHarness {
         self
     }
 
-    /// Test seam: tail subagent transcripts from this sessions root instead
-    /// of the agent's real one (`~/.grok/sessions`).
+    /// Test seam for an isolated native history store.
     #[doc(hidden)]
+    pub fn with_saved_session_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(home.into());
+        self
+    }
+
     pub fn with_sessions_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.sessions_root = Some(root.into());
         self
@@ -1936,6 +1946,11 @@ impl AcpHarness {
         // place to widen it. Parity with codex's yolo mode (see codex/mod.rs).
         if self.spec.id == HarnessId::Dsh {
             cmd.env("DSH_PERMISSION_MODE", "danger-full-access");
+        }
+        if self.spec.id == HarnessId::Hermes
+            && let Some(home) = &self.saved_home
+        {
+            cmd.env("HERMES_HOME", home);
         }
         self.configure_adapter_environment(&mut cmd, &exe);
         if let Some(cwd) = cwd.filter(|c| !c.is_empty()) {
@@ -2418,6 +2433,28 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
 
 #[async_trait]
 impl Harness for AcpHarness {
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.import_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.import_list(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.import_history(session).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.import_copy(session).await
+    }
+
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
         self.environment.clone()
     }

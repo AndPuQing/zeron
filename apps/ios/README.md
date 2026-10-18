@@ -9,9 +9,9 @@ runs on the phone.
 gestures.** Everything in Rust is platform-neutral — the future Android app
 links the same library. See [`docs/mobile-rewrite.md`](../../docs/mobile-rewrite.md).
 
-Choose **Import sessions…** from the Sessions menu to select saved Codex or Claude Code
-sessions from an online desktop host. The chooser shows only sessions not yet
-imported, supports batches of up to 200, and keeps per-session results for
+Choose **Import sessions…** from the Sessions menu to select saved Codex, Claude Code, GitHub Copilot,
+Cursor, Grok, Hermes, DeepSeek Harness, Pi, or OpenCode sessions from an online desktop host.
+The chooser shows only sessions not yet imported, supports batches of up to 200, and keeps per-session results for
 cancellation and retry. Imports are saved in **Archived**; source history stays
 on the host. Update the host if the device picker says an update is required.
 

@@ -154,7 +154,18 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         button.accessibilityLabel = title
     }
     private func agentLabel(_ provider: String?) -> String {
-        provider == "codex" ? "Codex" : provider == "claude-code" ? "Claude Code" : "All agents"
+        switch provider {
+        case "codex": return "Codex"
+        case "claude-code": return "Claude Code"
+        case "copilot": return "GitHub Copilot"
+        case "cursor": return "Cursor"
+        case "grok": return "Grok"
+        case "hermes": return "Hermes"
+        case "dsh": return "DeepSeek Harness"
+        case "pi": return "Pi"
+        case "opencode": return "OpenCode"
+        default: return "All agents"
+        }
     }
 
     fileprivate func receive(_ snapshot: SessionImportSnapshot) {
@@ -178,7 +189,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         hostButton.isEnabled = !s.running
         navigationItem.rightBarButtonItem?.isEnabled = !s.running && !s.loading
         updatePicker(agents, title: agentLabel(s.provider), image: BrandMarks.image(for: s.provider, side: 18) ?? UIImage(systemName: "square.grid.2x2"))
-        let providers: [String?] = [nil, "codex", "claude-code"]
+        let providers: [String?] = [nil, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "opencode"]
         agents.menu = UIMenu(children: providers.map { provider in
             UIAction(title: agentLabel(provider), image: BrandMarks.image(for: provider, side: 20) ?? UIImage(systemName: "square.grid.2x2"),
                      state: s.provider == provider ? .on : .off) { [weak self] _ in self?.importer?.setProvider(provider: provider) }

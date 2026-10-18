@@ -8,6 +8,8 @@ use zeron_harness::saved_sessions::{SavedHistoryMessage, SavedSessionPage};
 use zeron_harness::{Harness, HarnessError, RunControls};
 
 struct Provider {
+    id: HarnessId,
+    paginated: bool,
     cwd: String,
     copies: AtomicUsize,
     fail_read: AtomicBool,
@@ -18,7 +20,7 @@ struct Provider {
 impl Provider {
     fn session(&self) -> SavedSession {
         SavedSession {
-            harness: HarnessId::Codex,
+            harness: self.id,
             native_id: "original".into(),
             store_id: "canonical-store".into(),
             title: "Imported conversation".into(),
@@ -35,7 +37,7 @@ impl Provider {
 #[async_trait]
 impl Harness for Provider {
     fn id(&self) -> HarnessId {
-        HarnessId::Codex
+        self.id
     }
     fn display_name(&self) -> &str {
         "Copy fixture"
@@ -60,13 +62,18 @@ impl Harness for Provider {
         }
         .into())
     }
-    async fn saved_sessions(
-        &self,
-        _cursor: Option<&str>,
-    ) -> Result<SavedSessionPage, HarnessError> {
+    async fn saved_sessions(&self, cursor: Option<&str>) -> Result<SavedSessionPage, HarnessError> {
         Ok(SavedSessionPage {
-            sessions: vec![self.session()],
-            next_cursor: None,
+            sessions: vec![SavedSession {
+                native_id: if cursor.is_some() {
+                    "second"
+                } else {
+                    "original"
+                }
+                .into(),
+                ..self.session()
+            }],
+            next_cursor: (self.paginated && cursor.is_none()).then(|| "page2".into()),
         })
     }
     async fn copy_saved_session(
@@ -115,7 +122,7 @@ impl Harness for Provider {
         assert!(session.starts_with("native-copy-"));
         Ok(futures::stream::iter(vec![
             Ok(AgentEvent::SessionStarted {
-                harness: HarnessId::Codex,
+                harness: self.id,
                 model: "test".into(),
                 cwd: request.cwd,
                 session_id: session.clone(),
@@ -141,6 +148,8 @@ fn setup() -> (tempfile::TempDir, Arc<Provider>, EngineCore) {
     let cwd = dir.path().join("project worktree");
     std::fs::create_dir(&cwd).unwrap();
     let provider = Arc::new(Provider {
+        id: HarnessId::Codex,
+        paginated: false,
         cwd: cwd.to_string_lossy().into(),
         copies: AtomicUsize::new(0),
         fail_read: AtomicBool::new(false),
@@ -506,4 +515,97 @@ async fn cancelled_waiting_batch_copies_nothing_and_engine_shutdown_rejects_new_
             })
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn mixed_harness_pages_keep_independent_source_identity_copy_and_native_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let registry = Arc::new(HarnessRegistry::new());
+    let mut providers = vec![];
+    for &(id, _, _) in zeron_proto::SESSION_IMPORT_PROVIDERS {
+        if matches!(id, HarnessId::Codex | HarnessId::ClaudeCode) {
+            continue;
+        }
+        let provider = Arc::new(Provider {
+            id,
+            paginated: true,
+            cwd: dir.path().to_string_lossy().into(),
+            copies: AtomicUsize::new(0),
+            fail_read: AtomicBool::new(false),
+            store_changed: AtomicBool::new(false),
+            requests: Mutex::new(vec![]),
+        });
+        registry.register(provider.clone());
+        providers.push(provider);
+    }
+    let core =
+        EngineCore::assemble(&dir.path().join("data"), registry, HarnessId::Pi, None).unwrap();
+    // Old cursors predate the optional provider map and remain readable.
+    let first = core
+        .external_sessions
+        .list(ListExternalSessionsParams {
+            cursor: Some(r#"{"codex_done":true,"claude_done":true}"#.into()),
+        })
+        .await
+        .unwrap();
+    assert!(first.source_errors.is_empty());
+    assert_eq!(first.sessions.len(), providers.len());
+    let refs: std::collections::HashSet<_> = first
+        .sessions
+        .iter()
+        .map(|s| s.source_ref.clone())
+        .collect();
+    assert_eq!(
+        refs.len(),
+        providers.len(),
+        "same native IDs in different harnesses must stay distinct"
+    );
+    let second = core
+        .external_sessions
+        .list(ListExternalSessionsParams {
+            cursor: first.next_cursor,
+        })
+        .await
+        .unwrap();
+    assert_eq!(second.sessions.len(), providers.len());
+    assert!(second.next_cursor.is_none());
+    for entry in first.sessions {
+        let chat_id = imported(&batch(&core, &entry.source_ref).await);
+        let chat = core.workspace.chat(&chat_id).unwrap().unwrap();
+        assert!(chat.archived);
+        assert_eq!(chat.config.as_ref().unwrap().harness, entry.harness);
+        assert_eq!(chat.import_source.as_ref().unwrap().harness, entry.harness);
+        let provider = providers.iter().find(|p| p.id == entry.harness).unwrap();
+        assert_eq!(provider.copies.load(Ordering::Relaxed), 1);
+        let events = batch(&core, &entry.source_ref).await;
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ExternalSessionImportEvent::AlreadyManaged { .. }))
+        );
+        assert_eq!(provider.copies.load(Ordering::Relaxed), 1);
+        // Every new harness receives the copied native identity on continuation.
+        let mut next = request(&provider.cwd);
+        core.sessions
+            .prepare_imported_run(&chat_id, entry.harness, &mut next)
+            .unwrap();
+        let (_steer, steering) = tokio::sync::mpsc::channel(1);
+        let controls = RunControls {
+            realtime: None,
+            execution_lease: None,
+            steering,
+            interrupt: tokio_util::sync::CancellationToken::new(),
+            turn: Default::default(),
+            request_input: Box::new(|_| tokio::sync::oneshot::channel().1),
+        };
+        let mut run = provider.run(next, controls).await.unwrap();
+        while let Some(event) = run.next().await {
+            event.unwrap();
+        }
+        assert_eq!(
+            provider.requests.lock().unwrap()[0].resume.as_deref(),
+            Some("native-copy-1")
+        );
+    }
+    core.external_sessions.shutdown().await;
 }

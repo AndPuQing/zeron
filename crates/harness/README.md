@@ -88,3 +88,61 @@ without losing the session. Follow-up prompts wait for the current turn to end.
 The CLI supplies the available models and their config options; **Auto** is the
 fallback when discovery is unavailable. `COPILOT_EXECUTABLE` can select a custom
 binary. Updates use Settings' provider update action or `copilot update`.
+
+## Saved session imports
+
+The desktop and mobile import chooser supports nine production harnesses: Codex,
+Claude Code, GitHub Copilot, Cursor, Grok, Hermes, DeepSeek Harness, Pi, and OpenCode. Discovery runs on the selected
+execution device using its existing installation. Imports create independent native copies and archived
+Zerun conversations; continuation resumes the copy. Sources reported as running
+and unavailable working directories cannot be imported; native running-status
+coverage is listed below.
+
+| Harness | Discovery and copy |
+| --- | --- |
+| Codex | Native app-server history and fork APIs. |
+| Claude Code | Native project logs under the selected Claude config directory. |
+| GitHub Copilot | Local CLI sessions under `$COPILOT_HOME` (default `~/.copilot`), discovered and forked by the native headless RPC. Requires a CLI version with `sessions.fork` (verified with 1.0.98). Remote and detached sessions are excluded. |
+| Cursor | The pinned 1.0.32 SDK: default SQLite stores under `~/.cursor/projects/*/sdk-agent-store` and Zerun-owned JSONL stores. The public SDK copies checkpoint blobs, runs and events into an independent store and resumes the new agent ID. Cursor CLI `.cursor/chats`, cloud sessions and arbitrary custom SDK stores are not scanned. `ZERUN_CURSOR_HISTORY_DIR` overrides the default `.cursor` root. |
+| Grok | Format-1 native session directories under `$GROK_HOME/sessions` (default `~/.grok/sessions`), retaining model history, updates, plans and compaction files with a new native ID. Verified export and ACP restore with 1.0.4. Open sessions in the native active-session index are excluded. |
+| Hermes | Native ACP `session/list`, `session/fork` and `session/load`, using `$HERMES_HOME` (default `~/.hermes`). Requires the ACP extra and a version advertising all three capabilities (verified with 0.18.2). The native API currently exposes ACP-origin sessions only; CLI/gateway history is excluded. ACP supplies no cross-process running-status signal; forks capture the persisted native context. |
+| DeepSeek Harness | The default `$DSH_HOME/sessions` store, using installed dsh persistence packages for plain or zstd logs. Requires Node.js and an ACP profile with `session/load` support, such as `acp-plus`, to continue imported copies. Custom persistence roots are not scanned. |
+| Pi | Native v2/v3 tree logs under `$PI_CODING_AGENT_DIR/sessions` (default `~/.pi/agent/sessions`) and an absolute global `sessionDir`. The copy retains all branches, signatures, compaction, and extension records; the transcript follows the current branch. Relative or project-specific custom stores are not discovered globally. |
+| OpenCode | Native HTTP list, full transcript export, and fork APIs on both 1.18 and 2.x. The native server owns all database writes. |
+
+Devin and Antigravity remain unavailable in the import chooser: their integrated
+native interfaces can list and restore sessions but provide no verified public
+independent-copy operation. Private DAG/trajectory databases are not rewritten
+to manufacture a new identity. Mock is a test harness, not an import source.
+
+Cursor snapshots a complete SDK store before opening it, so source migrations
+never run in place; stores larger than 64 MiB are rejected. Grok copies a complete
+session directory with the same bound. Copies reject symlinks and unsupported
+formats.
+
+Display transcripts omit attachments and unsupported blocks with a notice;
+native copies retain provider-owned context. Source and display size limits
+reject oversized imports instead of silently truncating conversation context.
+
+The `saved::tests` tests cover transcript replay, busy sessions, source isolation,
+Pi trees and both OpenCode HTTP generations.
+Optional native compatibility tests use synthetic stores without model requests:
+
+```bash
+ZERON_DSH_TEST_PACKAGES=/path/to/.dsh/profiles \
+  cargo test -p zeron-harness --lib acp::dsh_saved -- --ignored
+ZERON_PI_TEST_MODULE=/path/to/pi/dist/core/session-manager.js \
+  cargo test -p zeron-harness --lib pi::saved -- --ignored
+ZERON_OPENCODE_TEST_BINARY=/path/to/opencode \
+  cargo test -p zeron-harness --lib opencode::saved -- --ignored
+ZERON_COPILOT_TEST_BINARY=/path/to/copilot \
+  cargo test -p zeron-harness --lib copilot_saved -- --ignored
+ZERON_CURSOR_TEST_MODULE=/path/to/@cursor/sdk/dist/esm/index.js \
+  cargo test -p zeron-harness --lib cursor::saved -- --ignored
+ZERON_GROK_TEST_BINARY=/path/to/grok \
+  cargo test -p zeron-harness --lib grok_saved -- --ignored
+ZERON_HERMES_TEST_BINARY=/path/to/hermes \
+ZERON_HERMES_TEST_SOURCE=/path/to/hermes-agent \
+ZERON_HERMES_TEST_PYTHON=/path/to/hermes-agent/venv/bin/python \
+  cargo test -p zeron-harness --lib acp::saved -- --ignored
+```

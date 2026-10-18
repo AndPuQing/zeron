@@ -48,6 +48,7 @@ it("replays unacknowledged frames and retires only the matching token", async ()
   ws.close();
 });
 
+// Allow setup and queue verification in addition to the 5s drain deadline.
 it("drains 300 queued wakes through a bounded acknowledgment window", async () => {
   const room = env.DEVICE_ROOMS.get(env.DEVICE_ROOMS.idFromName(crypto.randomUUID()));
   const response = await room.fetch("https://test/ws?role=host&nudgeAck=1", { headers: { "x-zeron-auth-user": "owner", upgrade: "websocket" } });
@@ -67,7 +68,7 @@ it("drains 300 queued wakes through a bounded acknowledgment window", async () =
   await expect.poll(() => seen.size, {timeout:5000}).toBe(300);
   await expect.poll(() => runInDurableObject(room, (_i, state) => pendingNudges(state.storage.sql).length)).toBe(0);
   ws.close();
-});
+}, 15_000);
 
 it("keeps legacy hosts usable without acknowledgment support", async () => {
   const room = env.DEVICE_ROOMS.get(env.DEVICE_ROOMS.idFromName(crypto.randomUUID()));

@@ -202,7 +202,7 @@ fn cap(text: &str, limit: usize) -> String {
     }
     format!("{}\n… [truncated]", &text[..at])
 }
-fn tool(name: &str, args: &Value) -> ToolCall {
+pub(super) fn tool(name: &str, args: &Value) -> ToolCall {
     match name {
         "bash" => ToolCall::Exec {
             command: string(args, "command").into(),

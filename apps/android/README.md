@@ -17,9 +17,9 @@ sheet and keyboard behavior; Backdrop 1.0.6 supplies GPU blur and refraction. An
 13 adds refraction, and Android 10/11 use an opaque material fallback.
 See [the shared mobile design and component research](../../docs/mobile-liquid-glass.md).
 
-Tap **Import** on Sessions to select saved Codex or Claude Code
-sessions from an online desktop host. The chooser shows only sessions not yet
-imported, supports batches of up to 200, and keeps per-session results for
+Tap **Import** on Sessions to select saved Codex, Claude Code, GitHub Copilot,
+Cursor, Grok, Hermes, DeepSeek Harness, Pi, or OpenCode sessions from an online desktop host.
+The chooser shows only sessions not yet imported, supports batches of up to 200, and keeps per-session results for
 cancellation and retry. Imports are saved in **Archived**; source history stays
 on the host. Update the host if the device picker says an update is required.
 

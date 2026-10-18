@@ -27,6 +27,13 @@ fn discovery(result: ExternalSessionList) -> SessionDiscovery {
                 let provider = match row.harness {
                     zeron_proto::HarnessId::Codex => SessionProvider::Codex,
                     zeron_proto::HarnessId::ClaudeCode => SessionProvider::ClaudeCode,
+                    zeron_proto::HarnessId::Copilot => SessionProvider::Copilot,
+                    zeron_proto::HarnessId::Cursor => SessionProvider::Cursor,
+                    zeron_proto::HarnessId::Grok => SessionProvider::Grok,
+                    zeron_proto::HarnessId::Hermes => SessionProvider::Hermes,
+                    zeron_proto::HarnessId::Dsh => SessionProvider::Dsh,
+                    zeron_proto::HarnessId::Pi => SessionProvider::Pi,
+                    zeron_proto::HarnessId::Opencode => SessionProvider::Opencode,
                     _ => return None,
                 };
                 let eligibility = if let Some(chat_id) = row.already_managed_chat_id {
@@ -166,6 +173,40 @@ mod tests {
     use futures::StreamExt;
     use std::sync::{Arc, Mutex};
     use zeron_rpc::{RpcError, RpcReply, RpcService};
+
+    #[test]
+    fn all_native_import_harnesses_survive_wire_mapping() {
+        let sessions = zeron_proto::SESSION_IMPORT_PROVIDERS
+            .iter()
+            .map(|(harness, key, label)| zeron_proto::ExternalSessionEntry {
+                source_ref: (*key).into(),
+                harness: *harness,
+                title: (*label).into(),
+                cwd: "/project".into(),
+                updated_at_ms: 1000,
+                already_managed_chat_id: None,
+                unavailable_reason: None,
+                running: false,
+            })
+            .collect();
+        let mapped = discovery(ExternalSessionList {
+            sessions,
+            ..Default::default()
+        });
+        assert_eq!(
+            mapped.sessions.len(),
+            zeron_proto::SESSION_IMPORT_PROVIDERS.len()
+        );
+        for (row, (id, _, label)) in mapped
+            .sessions
+            .iter()
+            .zip(zeron_proto::SESSION_IMPORT_PROVIDERS)
+        {
+            assert_eq!(row.provider.harness(), *id);
+            assert_eq!(row.provider.label(), *label);
+            assert_eq!(row.eligibility, ImportEligibility::Available);
+        }
+    }
 
     #[derive(Default)]
     struct SourceDevice {
