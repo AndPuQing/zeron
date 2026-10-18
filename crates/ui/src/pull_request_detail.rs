@@ -304,6 +304,8 @@ impl ParsedDiff {
 
 #[derive(Clone)]
 struct DetailSnapshot {
+    /// Board observation used to fetch this snapshot, never a later preview.
+    preview: Option<ChangeRequestListItem>,
     detail: ChangeRequestDetail,
     body: crate::markdown::BlockTree,
     activity: Vec<crate::markdown::BlockTree>,
@@ -412,8 +414,9 @@ pub struct PullRequestDetailPage {
     selection_prefix: String,
     cache: Rc<RefCell<PullRequestCache>>,
     preview: Option<ChangeRequestListItem>,
-    /// A newly observed board revision, deferred while reading or posting.
+    /// A newly observed board update, deferred while reading or posting.
     board_refresh_owed: bool,
+    board_metadata_refresh_owed: bool,
     error: Option<String>,
     loading: bool,
     fetched: Option<Instant>,
@@ -490,6 +493,7 @@ impl PullRequestDetailPage {
             cache,
             preview,
             board_refresh_owed: false,
+            board_metadata_refresh_owed: false,
             error: None,
             loading: false,
             fetched: None,
@@ -595,6 +599,14 @@ impl PullRequestDetailPage {
                 page.comment_event(event, cx)
             }));
         let cached = page.cache.borrow_mut().get(&page.target, &page.url);
+        let metadata_stale = cached.as_ref().is_some_and(|snapshot| {
+            page.preview.as_ref().is_some_and(|preview| {
+                snapshot
+                    .preview
+                    .as_ref()
+                    .is_none_or(|old| metadata_changed(old, preview))
+            })
+        });
         let stale = cached.as_ref().is_some_and(|snapshot| {
             page.preview.as_ref().is_some_and(|preview| {
                 !preview.head_ref_oid.is_empty()
@@ -637,6 +649,12 @@ impl PullRequestDetailPage {
         }
         if page.detail.is_none() {
             page.load(stale, cx);
+        } else if metadata_stale && page.state.read(cx).engine().is_some() {
+            page.board_refresh_owed = true;
+            page.board_metadata_refresh_owed = true;
+            page.refresh_from_board(cx);
+        } else {
+            page.revalidate_if_stale(cx);
         }
         page
     }
@@ -669,6 +687,20 @@ impl PullRequestDetailPage {
         let url = self.url.clone();
         let copy_url = self.url.clone();
         let (number, title) = self.identity();
+        let status = self
+            .detail
+            .as_ref()
+            .map(|detail| pr_state_label(&detail.state, detail.is_draft))
+            .or_else(|| {
+                self.preview.as_ref().map(|preview| {
+                    let state = match preview.state {
+                        zeron_proto::ChangeRequestState::Open => "OPEN",
+                        zeron_proto::ChangeRequestState::Merged => "MERGED",
+                        zeron_proto::ChangeRequestState::Closed => "CLOSED",
+                    };
+                    pr_state_label(state, preview.is_draft)
+                })
+            });
         div()
             .w_full()
             .min_w_0()
@@ -707,6 +739,27 @@ impl PullRequestDetailPage {
                             .child(title),
                     ),
             )
+            .when_some(status, |el, status| {
+                let color = match status {
+                    "Open" => theme.success,
+                    "Merged" => theme.code_text,
+                    "Closed" => theme.danger,
+                    _ => theme.text_muted,
+                };
+                el.child(
+                    div()
+                        .id("pr-state-badge")
+                        .debug_selector(|| "pr-state-badge".into())
+                        .flex_none()
+                        .px(px(8.0))
+                        .py(px(3.0))
+                        .rounded(px(12.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(color)
+                        .bg(color.opacity(0.15))
+                        .child(status),
+                )
+            })
             .child(
                 action("pr-detail-refresh", "Refresh pull request", &theme)
                     .when(self.loading, |el| el.opacity(0.4))
@@ -753,7 +806,7 @@ impl PullRequestDetailPage {
     }
 
     /// Reconcile already-loaded board data when this tab becomes active.
-    /// Observe each head once: a stale board or a failed refresh must not
+    /// Observe each board snapshot once: a stale board or a failed refresh must not
     /// turn tab switching into repeated network requests.
     pub(crate) fn update_board_preview(
         &mut self,
@@ -769,8 +822,13 @@ impl PullRequestDetailPage {
             .preview
             .as_ref()
             .is_none_or(|old| old.head_ref_oid != preview.head_ref_oid);
+        let metadata_changed = self
+            .preview
+            .as_ref()
+            .is_some_and(|old| metadata_changed(old, &preview));
         self.preview = Some(preview);
-        if changed {
+        if changed || metadata_changed {
+            self.board_metadata_refresh_owed |= metadata_changed;
             self.board_refresh_owed = true;
             self.refresh_from_board(cx);
         }
@@ -790,15 +848,31 @@ impl PullRequestDetailPage {
         else {
             return false;
         };
+        let metadata_changed = std::mem::take(&mut self.board_metadata_refresh_owed);
         if self
             .detail
             .as_ref()
             .is_some_and(|detail| detail.head_ref_oid == head)
         {
-            return false;
+            if metadata_changed {
+                self.load_with_params(self.params(true), cx);
+            }
+            return metadata_changed;
         }
         self.refresh_with_head(Some(head), cx);
         true
+    }
+
+    /// Revalidate on reopening/activation without discarding an unchanged patch.
+    pub(crate) fn revalidate_if_stale(&mut self, cx: &mut Context<Self>) {
+        if !self.loading
+            && self.error.is_none()
+            && self.state.read(cx).engine().is_some()
+            && self.submission.is_none()
+            && self.fetched.is_some_and(|at| at.elapsed().as_secs() >= 60)
+        {
+            self.load_with_params(self.params(true), cx);
+        }
     }
 
     /// Reload the details, and the diff now or on the next Code visit.
@@ -838,6 +912,9 @@ impl PullRequestDetailPage {
 
     fn params(&self, refresh: bool) -> serde_json::Value {
         let mut params = serde_json::json!({"url": self.url, "refresh": refresh});
+        if let Some(preview) = &self.preview {
+            params["updatedAt"] = preview.updated_at.to_rfc3339().into();
+        }
         if let Some(target) = &self.target {
             params["targetDeviceId"] = target.clone().into();
         }
@@ -873,8 +950,15 @@ impl PullRequestDetailPage {
             self.error = Some("Connect to your device to load this pull request.".into());
             return;
         };
+        // This read invalidates a patch that is still in flight: its response
+        // belongs to the pre-read details. Cancel it here, before the read
+        // starts, so every refresh path is covered and the callback can never
+        // strand a completed task. The patch already on screen is kept; a Code
+        // visit refetches once these details settle.
+        self.diff_task = None;
         self.loading = true;
         self.error = None;
+        let observed_preview = self.preview.clone();
         self.task = Some(cx.spawn(async move |this, cx| {
             let result = engine.client().call(methods::GET_CHANGE_REQUEST, params).await
                 .map_err(|error| format!("Couldn’t load this pull request. {}", failure_reason(&error)))
@@ -882,6 +966,7 @@ impl PullRequestDetailPage {
             // Large descriptions and review threads must not stall the UI thread.
             let result = cx.background_executor().spawn(async move {
                 result.map(|detail| DetailSnapshot {
+                    preview: observed_preview,
                     body: super::pull_request_media::parse_description(&detail.body),
                     activity: detail.activity_comments()
                         .map(|comment| super::pull_request_media::parse_description(&comment.body)).collect(),
@@ -1200,6 +1285,9 @@ impl PullRequestDetailPage {
         crate::markdown::render::clear_selection_surface(&self.selection_prefix);
         self.tab = tab;
         self.scroll.scroll.set_offset(gpui::Point::default());
+        if tab == Tab::Activity {
+            self.revalidate_if_stale(cx);
+        }
         if tab == Tab::Code && self.diff.is_none() && self.diff_task.is_none() {
             self.load_diff(false, cx);
         }
@@ -1444,6 +1532,26 @@ fn status_chip(raw: &str, theme: &Theme) -> AnyElement {
 /// Space between the Summary's stacked cards; the header sits 2× further.
 const CARD_GAP: f32 = 12.0;
 
+fn metadata_changed(old: &ChangeRequestListItem, new: &ChangeRequestListItem) -> bool {
+    old.updated_at != new.updated_at
+        || old.state != new.state
+        || old.is_draft != new.is_draft
+        || old.review_decision != new.review_decision
+}
+
+// A closed draft is closed; draft only qualifies an open pull request.
+fn pr_state_label(state: &str, is_draft: bool) -> &'static str {
+    if state.eq_ignore_ascii_case("merged") {
+        "Merged"
+    } else if state.eq_ignore_ascii_case("closed") {
+        "Closed"
+    } else if state.eq_ignore_ascii_case("open") {
+        if is_draft { "Draft" } else { "Open" }
+    } else {
+        "Unknown"
+    }
+}
+
 /// Title and metadata line; shared by the loaded page and its placeholder.
 fn detail_header(
     title: &str,
@@ -1686,11 +1794,7 @@ impl Render for PullRequestDetailPage {
                                 .mt(px(24.0))
                                 .child(field(
                                     "Status",
-                                    if detail.is_draft {
-                                        "Draft".into()
-                                    } else {
-                                        detail.state.clone()
-                                    },
+                                    pr_state_label(&detail.state, detail.is_draft).into(),
                                     true,
                                     &theme,
                                 ))
@@ -2053,192 +2157,165 @@ impl Render for PullRequestDetailPage {
                                     ),
                             );
                         }
-                        let viewer_login = detail.viewer_login.as_deref().or_else(|| {
-                            detail
-                                .activity_comments()
-                                .find(|comment| {
-                                    comment.viewer_did_author && !comment.author.login.is_empty()
-                                })
-                                .map(|comment| comment.author.login.as_str())
-                        });
                         for (index, comment) in activity {
-                            let own = comment.viewer_did_author
-                                || viewer_login.is_some_and(|login| {
-                                    login.eq_ignore_ascii_case(&comment.author.login)
-                                });
                             thread = thread.child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .mb(px(24.0))
-                                    .when(own, |el| el.justify_end())
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!("pr-message-{index}")))
-                                            .debug_selector(move || format!("pr-message-{index}"))
-                                            .min_w_0()
-                                            .w(gpui::relative(0.9))
-                                            .when(own, |el| {
-                                                el.max_w(gpui::relative(0.8))
-                                                    .px(px(16.0))
-                                                    .py(px(10.0))
-                                                    .rounded(px(Theme::BUBBLE_RADIUS))
-                                                    .bg(crate::theme::user_bubble_bg())
-                                            })
-                                            .flex()
-                                            .flex_col()
-                                            .gap(px(8.0))
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .flex_wrap()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                    .child(super::pull_request_media::avatar(
-                                                        &comment.author.login,
-                                                        format!("pr-actor-{index}").into(),
-                                                        24.0,
-                                                        &theme,
-                                                    ))
-                                                    .child(
-                                                        div()
-                                                            .font_weight(gpui::FontWeight::MEDIUM)
-                                                            .child(
-                                                                if comment.author.login.is_empty() {
-                                                                    "Deleted account".to_owned()
-                                                                } else {
-                                                                    comment.author.login.clone()
-                                                                },
-                                                            ),
-                                                    )
-                                                    .when(!comment.state.is_empty(), |el| {
-                                                        el.child(status_chip(
-                                                            &comment.state,
-                                                            &theme,
-                                                        ))
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .text_size(crate::typography::ui_rems(
-                                                                11.0,
-                                                            ))
-                                                            .text_color(theme.text_muted)
-                                                            .child(activity_time(
-                                                                if comment.created_at.is_empty() {
-                                                                    &comment.submitted_at
-                                                                } else {
-                                                                    &comment.created_at
-                                                                },
-                                                            )),
-                                                    ),
-                                            )
-                                            .children(inline_thread(detail, index).map(|review| {
-                                                let location = review
-                                                    .line
-                                                    .or(review.original_line)
-                                                    .map(|line| format!("{}:{line}", review.path))
-                                                    .unwrap_or_else(|| review.path.clone());
-                                                let status = if review.is_resolved {
-                                                    "Resolved"
-                                                } else {
-                                                    "Unresolved"
-                                                };
-                                                // One quiet line: where the comment sits (a link
-                                                // to it on GitHub), then its state.
-                                                let link = url::Url::parse(&comment.url)
-                                                    .ok()
-                                                    .filter(|url| {
-                                                        url.scheme() == "https"
-                                                            && url.host_str() == Some("github.com")
-                                                    });
-                                                let mut details = vec![status];
-                                                if review.is_outdated {
-                                                    details.push("Outdated");
-                                                }
-                                                if comment.reply_to.is_some() {
-                                                    details.push("Reply");
-                                                }
-                                                div()
-                                                    .debug_selector(move || {
-                                                        format!("pr-inline-thread-{index}")
-                                                    })
-                                                    .min_w_0()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap(px(8.0))
-                                                    .text_size(crate::typography::ui_rems(12.0))
-                                                    .text_color(theme.text_muted)
-                                                    .child(
-                                                        div()
-                                                            .id(SharedString::from(format!(
-                                                                "pr-inline-location-{index}"
-                                                            )))
-                                                            .min_w_0()
-                                                            .h(px(22.0))
-                                                            .px(px(6.0))
-                                                            .flex()
-                                                            .items_center()
-                                                            .gap(px(4.0))
-                                                            .rounded(px(6.0))
-                                                            .bg(theme.ink(0.035))
-                                                            .font_family(theme.font_mono.clone())
-                                                            .text_size(px(11.5))
-                                                            .tooltip(widgets::text_tooltip(
-                                                                location.clone(),
-                                                            ))
-                                                            .child(
-                                                                div().min_w_0().truncate().child(location),
-                                                            )
-                                                            .when_some(link, |el, url| {
-                                                                el.debug_selector(move || {
-                                                                    format!("pr-inline-link-{index}")
-                                                                })
-                                                                .role(gpui::Role::Link)
-                                                                .aria_label(
-                                                                    "Open review comment on GitHub",
-                                                                )
-                                                                .tab_index(0)
-                                                                .cursor_pointer()
-                                                                .hover(|style| {
-                                                                    style
-                                                                        .bg(theme.ink(0.07))
-                                                                        .text_color(theme.text)
-                                                                })
-                                                                .child(
-                                                                    crate::icons::icon(
-                                                                        crate::icons::ARROW_UP_RIGHT,
-                                                                    )
-                                                                    .size(px(11.0))
-                                                                    .flex_none()
-                                                                    .text_color(theme.text_muted),
-                                                                )
-                                                                .on_click(move |_, _, cx| {
-                                                                    cx.open_url(url.as_str())
-                                                                })
-                                                            }),
-                                                    )
-                                                    .child(
-                                                        div()
-                                                            .flex_none()
-                                                            .child(details.join(" · ")),
-                                                    )
-                                            }))
-                                            .children(self.activity_bodies.get(index).map(
-                                                |body| {
-                                                    div().child(rich_text(
-                                                        body,
-                                                        format!(
-                                                            "{}activity-{index}",
-                                                            self.selection_prefix
+                                div().w_full().flex().mb(px(24.0)).child(
+                                    div()
+                                        .id(SharedString::from(format!("pr-message-{index}")))
+                                        .debug_selector(move || format!("pr-message-{index}"))
+                                        .min_w_0()
+                                        .w_full()
+                                        .px(px(16.0))
+                                        .py(px(12.0))
+                                        .rounded(px(10.0))
+                                        .border_1()
+                                        .border_color(theme.border)
+                                        .bg(theme.ink(0.025))
+                                        .flex()
+                                        .flex_col()
+                                        .gap(px(8.0))
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_wrap()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .child(super::pull_request_media::avatar(
+                                                    &comment.author.login,
+                                                    format!("pr-actor-{index}").into(),
+                                                    24.0,
+                                                    &theme,
+                                                ))
+                                                .child(
+                                                    div()
+                                                        .font_weight(gpui::FontWeight::MEDIUM)
+                                                        .child(
+                                                            if comment.author.login.is_empty() {
+                                                                "Deleted account".to_owned()
+                                                            } else {
+                                                                comment.author.login.clone()
+                                                            },
                                                         ),
-                                                        &self.url,
-                                                        &theme,
-                                                        window,
-                                                        cx.weak_entity(),
-                                                    ))
-                                                },
-                                            )),
-                                    ),
+                                                )
+                                                .when(!comment.state.is_empty(), |el| {
+                                                    el.child(status_chip(&comment.state, &theme))
+                                                })
+                                                .child(
+                                                    div()
+                                                        .text_size(crate::typography::ui_rems(11.0))
+                                                        .text_color(theme.text_muted)
+                                                        .child(activity_time(
+                                                            if comment.created_at.is_empty() {
+                                                                &comment.submitted_at
+                                                            } else {
+                                                                &comment.created_at
+                                                            },
+                                                        )),
+                                                ),
+                                        )
+                                        .children(inline_thread(detail, index).map(|review| {
+                                            let location = review
+                                                .line
+                                                .or(review.original_line)
+                                                .map(|line| format!("{}:{line}", review.path))
+                                                .unwrap_or_else(|| review.path.clone());
+                                            let status = if review.is_resolved {
+                                                "Resolved"
+                                            } else {
+                                                "Unresolved"
+                                            };
+                                            // One quiet line: where the comment sits (a link
+                                            // to it on GitHub), then its state.
+                                            let link =
+                                                url::Url::parse(&comment.url).ok().filter(|url| {
+                                                    url.scheme() == "https"
+                                                        && url.host_str() == Some("github.com")
+                                                });
+                                            let mut details = vec![status];
+                                            if review.is_outdated {
+                                                details.push("Outdated");
+                                            }
+                                            if comment.reply_to.is_some() {
+                                                details.push("Reply");
+                                            }
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!("pr-inline-thread-{index}")
+                                                })
+                                                .min_w_0()
+                                                .flex()
+                                                .items_center()
+                                                .gap(px(8.0))
+                                                .text_size(crate::typography::ui_rems(12.0))
+                                                .text_color(theme.text_muted)
+                                                .child(
+                                                    div()
+                                                        .id(SharedString::from(format!(
+                                                            "pr-inline-location-{index}"
+                                                        )))
+                                                        .min_w_0()
+                                                        .h(px(22.0))
+                                                        .px(px(6.0))
+                                                        .flex()
+                                                        .items_center()
+                                                        .gap(px(4.0))
+                                                        .rounded(px(6.0))
+                                                        .bg(theme.ink(0.035))
+                                                        .font_family(theme.font_mono.clone())
+                                                        .text_size(px(11.5))
+                                                        .tooltip(widgets::text_tooltip(
+                                                            location.clone(),
+                                                        ))
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .child(location),
+                                                        )
+                                                        .when_some(link, |el, url| {
+                                                            el.debug_selector(move || {
+                                                                format!("pr-inline-link-{index}")
+                                                            })
+                                                            .role(gpui::Role::Link)
+                                                            .aria_label(
+                                                                "Open review comment on GitHub",
+                                                            )
+                                                            .tab_index(0)
+                                                            .cursor_pointer()
+                                                            .hover(|style| {
+                                                                style
+                                                                    .bg(theme.ink(0.07))
+                                                                    .text_color(theme.text)
+                                                            })
+                                                            .child(
+                                                                crate::icons::icon(
+                                                                    crate::icons::ARROW_UP_RIGHT,
+                                                                )
+                                                                .size(px(11.0))
+                                                                .flex_none()
+                                                                .text_color(theme.text_muted),
+                                                            )
+                                                            .on_click(move |_, _, cx| {
+                                                                cx.open_url(url.as_str())
+                                                            })
+                                                        }),
+                                                )
+                                                .child(div().flex_none().child(details.join(" · ")))
+                                        }))
+                                        .children(self.activity_bodies.get(index).map(|body| {
+                                            div().child(rich_text(
+                                                body,
+                                                format!(
+                                                    "{}activity-{index}",
+                                                    self.selection_prefix
+                                                ),
+                                                &self.url,
+                                                &theme,
+                                                window,
+                                                cx.weak_entity(),
+                                            ))
+                                        })),
+                                ),
                             );
                         }
                         column = column.child(thread);
@@ -2451,6 +2528,7 @@ mod tests {
 
     fn snapshot(title: &str) -> DetailSnapshot {
         DetailSnapshot {
+            preview: None,
             detail: ChangeRequestDetail {
                 title: title.into(),
                 ..Default::default()
@@ -2581,7 +2659,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn pull_request_reopening_uses_cached_content_without_a_network_request(
+    fn pull_request_reopening_offline_uses_cached_content_without_a_network_request(
         cx: &mut gpui::TestAppContext,
     ) {
         fixture::init(cx);
@@ -2774,9 +2852,279 @@ mod tests {
             additions: 1,
             deletions: 1,
             mergeability: zeron_proto::ChangeRequestMergeability::Unknown,
-            created_at: chrono::Utc::now(),
-            updated_at: chrono::Utc::now(),
+            created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            updated_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         }
+    }
+
+    #[test]
+    fn pull_request_status_prioritizes_terminal_states_over_draft() {
+        assert_eq!(pr_state_label("OPEN", false), "Open");
+        assert_eq!(pr_state_label("OPEN", true), "Draft");
+        assert_eq!(pr_state_label("MERGED", true), "Merged");
+        assert_eq!(pr_state_label("CLOSED", true), "Closed");
+        assert_eq!(pr_state_label("closed", false), "Closed");
+        assert_eq!(pr_state_label("", false), "Unknown");
+    }
+
+    #[gpui::test]
+    fn pull_request_reopening_reconciles_recent_cached_metadata(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let mut preview = board_preview(&"a".repeat(40));
+        let mut cached = snapshot("Old metadata");
+        cached.detail.head_ref_oid = preview.head_ref_oid.clone();
+        cached.detail.state = "OPEN".into();
+        cached.preview = Some(preview.clone());
+        preview.updated_at += chrono::Duration::seconds(1);
+        preview.state = zeron_proto::ChangeRequestState::Closed;
+        let version = preview.updated_at.to_rfc3339();
+        let rpc = ScriptedRpc::new(move |method, params| {
+            let version = version.clone();
+            async move {
+                assert_eq!(method, methods::GET_CHANGE_REQUEST);
+                assert_eq!(params["updatedAt"], version);
+                assert_eq!(params["refresh"], true);
+                zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                    head_ref_oid: "a".repeat(40),
+                    state: "CLOSED".into(),
+                    ..Default::default()
+                })
+            }
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = preview.url.clone();
+        cache.borrow_mut().put(None, url.clone(), cached);
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url,
+                None,
+                cache.clone(),
+                Some(preview.clone()),
+                window,
+                cx,
+            )
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.detail.as_ref().unwrap().state, "CLOSED")
+        });
+        assert_eq!(rpc.completed(), 1);
+        assert_eq!(cache.borrow().entries[0].1.preview.as_ref(), Some(&preview));
+    }
+
+    #[gpui::test]
+    fn pull_request_same_head_activity_refresh_keeps_diff_and_draft(cx: &mut gpui::TestAppContext) {
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let rpc = ScriptedRpc::new(|method, params| async move {
+            assert_eq!(method, methods::GET_CHANGE_REQUEST);
+            assert_eq!(params["refresh"], true);
+            zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                head_ref_oid: "a".repeat(40),
+                state: "CLOSED".into(),
+                comments: vec![zeron_proto::ChangeRequestComment {
+                    body: "New GitHub comment".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = "https://github.com/a/b/pull/1";
+        let mut cached = snapshot("Before comment");
+        cached.detail.head_ref_oid = "a".repeat(40);
+        cached.preview = Some(board_preview(&"a".repeat(40)));
+        cached.diff = Some(ParsedDiff::new("same patch".into()));
+        cache.borrow_mut().put(None, url.into(), cached);
+        let preview = board_preview(&"a".repeat(40));
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                Some(preview.clone()),
+                window,
+                cx,
+            )
+        });
+        let mut updated = preview;
+        updated.updated_at += chrono::Duration::seconds(1);
+        updated.state = zeron_proto::ChangeRequestState::Closed;
+        page.update(cx, |page, cx| {
+            page.comment_input
+                .update(cx, |input, cx| input.set_text("Keep draft", cx));
+            page.select_tab(Tab::Activity, cx);
+            page.update_board_preview(updated.clone(), cx);
+            page.update_board_preview(updated.clone(), cx);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.update(cx, |page, cx| {
+            assert_eq!(page.detail.as_ref().unwrap().state, "CLOSED");
+            assert_eq!(
+                page.detail.as_ref().unwrap().comments[0].body,
+                "New GitHub comment"
+            );
+            assert_eq!(page.activity_bodies.len(), 1);
+            assert_eq!(page.diff.as_ref().unwrap().patch, "same patch");
+            assert_eq!(page.comment_input.read(cx).text(), "Keep draft");
+            page.update_board_preview(updated, cx);
+            assert!(!page.loading);
+        });
+        assert_eq!(rpc.completed(), 1);
+        // Entering Activity after the freshness interval also refreshes when
+        // the board has not observed a new comment yet.
+        page.update(cx, |page, cx| {
+            page.select_tab(Tab::Summary, cx);
+            page.fetched = Some(Instant::now() - Duration::from_secs(61));
+            page.select_tab(Tab::Activity, cx);
+            assert!(page.loading);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        assert_eq!(rpc.completed(), 2);
+        // Reopening a cached page must not leave Activity stale indefinitely.
+        cache.borrow_mut().entries[0].1.fetched = Instant::now() - Duration::from_secs(61);
+        let (reopened, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                None,
+                window,
+                cx,
+            )
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            reopened.read_with(cx, |page, _| !page.loading)
+        });
+        assert_eq!(rpc.completed(), 3);
+    }
+
+    #[gpui::test]
+    fn pull_request_leaving_code_during_a_stale_refresh_reloads_the_pending_patch(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const OUTDATED: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn outdated() {}\n";
+        const CURRENT: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn current() {}\n";
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let release_diff = Arc::new(tokio::sync::Notify::new());
+        let release_detail = Arc::new(tokio::sync::Notify::new());
+        let diff_calls = Arc::new(AtomicUsize::new(0));
+        let rpc = ScriptedRpc::new({
+            let release_diff = release_diff.clone();
+            let release_detail = release_detail.clone();
+            let diff_calls = diff_calls.clone();
+            move |method, params| {
+                let release_diff = release_diff.clone();
+                let release_detail = release_detail.clone();
+                let diff_calls = diff_calls.clone();
+                async move {
+                    match method.as_str() {
+                        methods::GET_CHANGE_REQUEST => {
+                            // The stale revalidation stays pending until the
+                            // test releases it, so the patch can answer first.
+                            release_detail.notified().await;
+                            assert_eq!(params["refresh"], true);
+                            zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                                head_ref_oid: "a".repeat(40),
+                                base_ref_oid: "c".repeat(40),
+                                ..Default::default()
+                            })
+                        }
+                        methods::GET_CHANGE_REQUEST_DIFF => {
+                            let call = diff_calls.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(params["headRefOid"], "a".repeat(40));
+                            assert_eq!(params["baseRefOid"], "c".repeat(40));
+                            if call == 0 {
+                                release_diff.notified().await;
+                                zeron_rpc::RpcReply::value(&OUTDATED)
+                            } else {
+                                zeron_rpc::RpcReply::value(&CURRENT)
+                            }
+                        }
+                        _ => panic!("unexpected RPC"),
+                    }
+                }
+            }
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = "https://github.com/a/b/pull/1";
+        let preview = board_preview(&"a".repeat(40));
+        let mut cached = snapshot("Already loaded");
+        cached.detail.head_ref_oid = "a".repeat(40);
+        cached.detail.base_ref_oid = "c".repeat(40);
+        cached.preview = Some(preview.clone());
+        cache.borrow_mut().put(None, url.into(), cached);
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                Some(preview),
+                window,
+                cx,
+            )
+        });
+        // The cache carries the detail and its board observation: no read yet.
+        page.update(cx, |page, cx| {
+            assert!(!page.loading && page.detail.is_some() && page.diff.is_none());
+            page.select_tab(Tab::Code, cx);
+        });
+        rpc.settle(cx, &runtime, |_| diff_calls.load(Ordering::SeqCst) == 1);
+
+        // Leaving Code for Activity revalidates the stale details. The patch
+        // answers while those details are still loading.
+        page.update(cx, |page, cx| {
+            page.fetched = Some(Instant::now() - Duration::from_secs(61));
+            page.select_tab(Tab::Activity, cx);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| page.loading)
+        });
+        release_diff.notify_one();
+        rpc.settle(cx, &runtime, |_| rpc.completed() >= 1);
+        cx.run_until_parked();
+
+        // The details settle on the same revisions; Activity is not Code, so
+        // nothing fetches the patch here.
+        release_detail.notify_one();
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.update(cx, |page, cx| page.select_tab(Tab::Code, cx));
+
+        // Returning to Code must reload the patch instead of staying blank.
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| page.diff.is_some())
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.diff.as_ref().unwrap().patch, CURRENT);
+        });
+        assert_eq!(
+            diff_calls.load(Ordering::SeqCst),
+            2,
+            "Code refetches the patch the stale refresh dropped"
+        );
+        assert!(
+            cx.debug_bounds("pr-file-header-0").is_some(),
+            "the loaded patch renders"
+        );
     }
 
     #[gpui::test]
@@ -4132,10 +4480,14 @@ mod tests {
             }
             assert_eq!(mine.right(), composer.right());
             assert_eq!(other.left(), composer.left() + px(8.0), "title's text edge");
-            assert!(mine.left() > other.left());
+            assert_eq!(
+                mine.left(),
+                other.left(),
+                "all authors share one full-width column"
+            );
+            assert_eq!(mine.right(), other.right());
         }
-        // Yours even when GitHub marks none of your comments: the engine
-        // reports who you are, which covers reviews too.
+        // Viewer metadata must not change the shared, full-width layout.
         page.update(cx, |page, cx| {
             let detail = page.detail.as_mut().unwrap();
             detail.comments[0].viewer_did_author = false;

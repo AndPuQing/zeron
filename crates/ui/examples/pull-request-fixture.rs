@@ -142,6 +142,7 @@ fn main() -> anyhow::Result<()> {
     set_delay(3)?;
     gpui_platform::application()
         .with_assets(icons::Assets)
+        .with_http_client(pull_request_fixture_http_client(runtime.handle().clone()))
         .run(move |cx| {
             gpui_tokio::init(cx);
             gpui_base::init(cx);
