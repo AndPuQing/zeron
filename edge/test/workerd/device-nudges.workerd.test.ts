@@ -66,7 +66,11 @@ it("drains 300 queued wakes through a bounded acknowledgment window", async () =
   });
   await runDurableObjectAlarm(room);
   await expect.poll(() => seen.size, {timeout:5000}).toBe(300);
-  await expect.poll(() => runInDurableObject(room, (_i, state) => pendingNudges(state.storage.sql).length)).toBe(0);
+  // Receiving every frame can precede the server processing the final ACKs.
+  await expect.poll(
+    () => runInDurableObject(room, (_i, state) => pendingNudges(state.storage.sql).length),
+    { timeout: 5000 }
+  ).toBe(0);
   ws.close();
 }, 15_000);
 
