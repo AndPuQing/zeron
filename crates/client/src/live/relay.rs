@@ -33,7 +33,7 @@ pub(crate) fn deadline(method: &str) -> Duration {
     match method {
         methods::CREATE_WORKTREE => Duration::from_secs(120),
         methods::LIST_MODELS | methods::LIST_COMMANDS => Duration::from_secs(100),
-        methods::UPLOAD_COMMIT => Duration::from_secs(150),
+        methods::UPLOAD_COMMIT | methods::LIST_EXTERNAL_SESSIONS => Duration::from_secs(150),
         _ => CALL_TIMEOUT,
     }
 }
@@ -156,6 +156,26 @@ impl Relay {
             }
         }
         unreachable!("the second attempt always returns")
+    }
+
+    /// Checked subscriptions are never retried: starting an import is a mutation.
+    pub(crate) async fn subscribe(
+        &self,
+        device_id: &str,
+        method: &str,
+        params: Value,
+    ) -> Result<zeron_rpc::RpcSubscription> {
+        let client = self
+            .links
+            .client(device_id)
+            .await
+            .map_err(|e| map_rpc(device_id, method, e))?;
+        tokio::time::timeout(CALL_TIMEOUT, client.subscribe_checked(method, params))
+            .await
+            .map_err(|_| {
+                ClientError::HostUnavailable(format!("{method} on {device_id} timed out"))
+            })?
+            .map_err(|e| map_rpc(device_id, method, e))
     }
 
     /// Chunked upload (`UploadChunk` ×N with `seq`, then `UploadCommit`).

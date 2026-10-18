@@ -55,6 +55,7 @@ object Routes {
     const val CHAT = "chat/{id}"
     const val NEW = "new"
     const val SEARCH = "search"
+    const val IMPORT = "import"
     fun chat(id: String) = "chat/$id"
 }
 
@@ -67,6 +68,7 @@ private fun MainNav(model: AppModel) {
             null -> Unit
             "new" -> nav.navigate(Routes.NEW)
             "search" -> nav.navigate(Routes.SEARCH)
+            "import" -> nav.navigate(Routes.IMPORT)
             else -> if (route.startsWith("chat:")) nav.navigate(Routes.chat(route.removePrefix("chat:")))
         }
     }
@@ -94,6 +96,7 @@ private fun MainNav(model: AppModel) {
                 nav.navigate(Routes.chat(id))
             })
         }
+        composable(Routes.IMPORT) { SessionImportScreen(model, onClose = { nav.popBackStack() }) }
         composable(Routes.SEARCH) {
             SearchScreen(model, onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.chat(it)) })
         }
@@ -114,7 +117,7 @@ private fun Home(model: AppModel, nav: NavHostController) {
         background = { source ->
             Box(source.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 when (tab) {
-                    Tab.Sessions -> SessionsScreen(model, onOpen = { nav.navigate(Routes.chat(it)) })
+                    Tab.Sessions -> SessionsScreen(model, onOpen = { nav.navigate(Routes.chat(it)) }, onImport = { nav.navigate(Routes.IMPORT) })
                     Tab.Settings -> SettingsScreen(model)
                 }
             }

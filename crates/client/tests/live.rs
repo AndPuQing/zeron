@@ -539,6 +539,10 @@ struct HostService {
     chunks: Mutex<std::collections::BTreeMap<(String, u64), String>>,
     committed: Mutex<Vec<(String, String, Vec<u8>)>>,
     spaces: Mutex<Vec<String>>,
+    imports: Mutex<Vec<zeron_proto::ImportExternalSessionsParams>>,
+    cancelled_imports: Mutex<Vec<String>>,
+    import_stalled: std::sync::atomic::AtomicBool,
+    import_stop: Arc<tokio::sync::Notify>,
 }
 
 const HOST_IMAGE: &str = "/Users/dev/.zeron/uploads/host.png";
@@ -573,6 +577,49 @@ impl zeron_rpc::RpcService for HostService {
             }
             m::LIST_FOLDERS => {
                 json!({ "path": params["path"].as_str().unwrap_or("/Users/dev"), "entries": [{ "name": "live", "isDir": true, "isRepo": true }], "truncated": false })
+            }
+            m::LIST_EXTERNAL_SESSIONS => {
+                assert!(params["cursor"].is_null());
+                json!({"sessions": [
+                    {"sourceRef": "opaque-ready", "harness": "codex", "title": "Saved history", "cwd": "/Users/dev/live", "updatedAtMs": 1},
+                    {"sourceRef": "opaque-managed", "harness": "claude-code", "title": "Managed history", "cwd": "/Users/dev/live", "updatedAtMs": 2, "alreadyManagedChatId": CHAT}
+                ], "nextCursor": null, "sourceErrors": ["A provider could not scan one folder"]})
+            }
+            m::IMPORT_EXTERNAL_SESSIONS => {
+                let params: zeron_proto::ImportExternalSessionsParams =
+                    serde_json::from_value(params).unwrap();
+                assert!(uuid::Uuid::parse_str(&params.operation_id).is_ok());
+                assert_eq!(params.source_refs, ["opaque-ready"]);
+                self.imports.lock().unwrap().push(params);
+                if self
+                    .import_stalled
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    let stop = self.import_stop.clone();
+                    let first = futures::stream::once(async {
+                        json!({"kind": "importing", "sourceRef": "opaque-ready"})
+                    });
+                    let last = futures::stream::once(async move {
+                        stop.notified().await;
+                        json!({"kind": "finished", "cancelled": true})
+                    });
+                    return Ok(RpcReply::Stream(Box::pin(futures::StreamExt::chain(
+                        first, last,
+                    ))));
+                }
+                return Ok(RpcReply::Stream(Box::pin(futures::stream::iter([
+                    json!({"kind": "importing", "sourceRef": "opaque-ready"}),
+                    json!({"kind": "imported", "sourceRef": "opaque-ready", "chatId": "chat-imported"}),
+                    json!({"kind": "finished", "cancelled": false}),
+                ]))));
+            }
+            m::CANCEL_EXTERNAL_SESSION_IMPORT => {
+                self.cancelled_imports
+                    .lock()
+                    .unwrap()
+                    .push(params["operationId"].as_str().unwrap().into());
+                self.import_stop.notify_one();
+                json!({"ok": true})
             }
             m::UPLOAD_CHUNK => {
                 let id = params["uploadId"].as_str().unwrap_or_default().to_owned();
@@ -1107,5 +1154,99 @@ async fn stalled_wakes_yield_delivery_capacity_to_later_chats() {
             .is_some(),
         "yielding must preserve the stalled obligation"
     );
+    client.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_import_discovery_progress_and_cancellation_use_the_host_relay() {
+    use zeron_client::session_import::{ImportController, ImportPhase, ImportSnapshot};
+    async fn changed(
+        picker: &ImportController,
+        ready: impl Fn(&ImportSnapshot) -> bool,
+    ) -> ImportSnapshot {
+        let mut changes = picker.subscribe();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let snapshot = picker.snapshot();
+                if ready(&snapshot) {
+                    return snapshot;
+                }
+                changes.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
+    }
+    let edge = MockEdge::start().await;
+    let host = HostRegistry::start(&edge).await;
+    {
+        let mut device = host_rows(Utc::now()).0;
+        device
+            .capabilities
+            .push(zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1.into());
+        host.doc.lock().unwrap().upsert_device(&device).unwrap();
+        host.client.nudge();
+    }
+    let service = Arc::new(HostService::default());
+    let _relay = zeron_rpc::HostRelay::spawn(
+        zeron_rpc::HostRelayConfig::new(
+            edge.edge_url(),
+            HOST,
+            Arc::new(zeron_rpc::StaticToken("t".into())),
+        ),
+        service.clone(),
+        Arc::new(|_| true),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let client = phone(&edge, dir.path());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !(edge.relay_host_connected(HOST)
+            && client.workspace().device(HOST).is_some_and(|d| {
+                d.online
+                    && d.capabilities
+                        .iter()
+                        .any(|c| c == zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1)
+            }))
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let picker = client.session_import();
+    let s = changed(&picker, |s| !s.loading).await;
+    assert_eq!(s.rows.len(), 1);
+    assert_eq!(s.rows[0].source_ref, "opaque-ready");
+    assert_eq!(s.source_errors.len(), 1);
+    picker.select_visible();
+    picker.start(false);
+    let s = changed(&picker, |s| !s.running).await;
+    assert_eq!(s.results[0].phase, ImportPhase::Imported);
+    assert_eq!(s.results[0].chat_id.as_deref(), Some("chat-imported"));
+    assert!(s.rows.is_empty());
+    service
+        .import_stalled
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    picker.refresh();
+    changed(&picker, |s| !s.loading).await;
+    picker.select_visible();
+    picker.start(false);
+    changed(&picker, |s| {
+        s.results
+            .first()
+            .is_some_and(|r| r.phase == ImportPhase::Importing)
+    })
+    .await;
+    picker.cancel();
+    let s = changed(&picker, |s| !s.running).await;
+    assert_eq!(s.results[0].phase, ImportPhase::Cancelled);
+    assert!(s.results[0].retryable);
+    let imports = service.imports.lock().unwrap();
+    assert_eq!(imports.len(), 2);
+    assert_eq!(
+        service.cancelled_imports.lock().unwrap().as_slice(),
+        &[imports[1].operation_id.clone()]
+    );
+    picker.close();
     client.shutdown();
 }

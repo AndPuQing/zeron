@@ -38,6 +38,7 @@ mod live;
 pub mod rpc;
 pub mod runtime;
 pub mod session;
+pub mod session_import;
 pub mod workspace;
 
 pub use client::{Client, NewSession, PRELOAD_CAP, PushPrefs, SessionTarget, WARM_SESSION_CAP};

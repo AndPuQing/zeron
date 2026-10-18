@@ -66,7 +66,7 @@ import uniffi.zeron_core.PullRequestState
 import uniffi.zeron_core.SessionRow
 import uniffi.zeron_core.WorkspaceSnapshot
 
-private enum class Filter(val label: String) { All("All"), NeedsYou("Needs you"), Working("Working"), Pinned("Pinned") }
+private enum class Filter(val label: String) { All("All"), NeedsYou("Needs you"), Working("Working"), Pinned("Pinned"), Archived("Archived") }
 
 /** "1 needs you" / "2 working" — the live summary beside New session. */
 fun liveSummary(ws: WorkspaceSnapshot): String? {
@@ -90,7 +90,7 @@ private fun liveCounts(ws: WorkspaceSnapshot): Pair<Int, Int> {
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
+fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit, onImport: () -> Unit) {
     val workspace by model.workspace.collectAsState()
     val connectivity by model.connectivity.collectAsState()
     var filter by rememberSaveable { mutableStateOf(Filter.All) }
@@ -109,10 +109,10 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
     }
 
     val archive: (SessionRow) -> Unit = { row ->
-        model.archive(row.id)
+        if (row.archived) model.unarchive(row.id) else model.archive(row.id)
         scope.launch {
-            if (snackbar.showSnackbar("Archived", actionLabel = "Undo", withDismissAction = true) == SnackbarResult.ActionPerformed) {
-                model.unarchive(row.id)
+            if (snackbar.showSnackbar(if (row.archived) "Unarchived" else "Archived", actionLabel = "Undo", withDismissAction = true) == SnackbarResult.ActionPerformed) {
+                if (row.archived) model.archive(row.id) else model.unarchive(row.id)
             }
         }
     }
@@ -152,6 +152,7 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
             ) {
                 item("header") {
                     ScreenHeader("Sessions", subtitle) {
+                        TonalCircleButton(ZIcons.ArrowDown, "Import", onClick = onImport)
                         if (connectivity?.state == ConnectivityState.OFFLINE) {
                             TonalCircleButton(
                                 ZIcons.Offline, "Offline", onClick = { scope.launch { model.refresh() } },
@@ -194,12 +195,14 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit) {
                     Filter.NeedsYou -> group("f", null, frontRows(ws).filter { it.indicator == ChatIndicator.AWAITING_INPUT }, model, onOpen, archive)
                     Filter.Working -> group("f", null, frontRows(ws).filter { it.indicator == ChatIndicator.WORKING }, model, onOpen, archive)
                     Filter.Pinned -> group("f", null, front.pinned, model, onOpen, archive)
+                    Filter.Archived -> group("f", null, ws.archived, model, onOpen, archive)
                 }
                 val empty = when (filter) {
                     Filter.All -> front.pinned.isEmpty() && front.sections.isEmpty() && front.recent.isEmpty()
                     Filter.NeedsYou -> counts.second == 0
                     Filter.Working -> counts.first == 0
                     Filter.Pinned -> front.pinned.isEmpty()
+                    Filter.Archived -> ws.archived.isEmpty()
                 }
                 if (empty) item("empty") { EmptyState(filter) }
             }
@@ -267,7 +270,7 @@ private fun SwipeableSessionRow(
             val revealing = state.dismissDirection == SwipeToDismissBoxValue.EndToStart
             Surface(Modifier.fillMaxSize(), shape = shape, color = if (revealing) MaterialTheme.colorScheme.tertiaryContainer else androidx.compose.ui.graphics.Color.Transparent) {
                 Box(Modifier.padding(end = 28.dp), contentAlignment = Alignment.CenterEnd) {
-                    if (revealing) ZIcon(ZIcons.Archive, "Archive", tint = MaterialTheme.colorScheme.onTertiaryContainer)
+                    if (revealing) ZIcon(ZIcons.Archive, if (row.archived) "Unarchive" else "Archive", tint = MaterialTheme.colorScheme.onTertiaryContainer)
                 }
             }
         },
@@ -330,7 +333,7 @@ fun SessionItem(
             listOfNotNull(
                 if (row.parentChatId == null) MenuAction(if (row.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(row.id, !row.pinned) } else null,
                 MenuAction("Rename", ZIcons.Rename) { renaming = true },
-                MenuAction("Archive", ZIcons.Archive) { archive(row) },
+                MenuAction(if (row.archived) "Unarchive" else "Archive", ZIcons.Archive) { archive(row) },
             ),
         )
     }
@@ -405,6 +408,7 @@ private fun EmptyState(filter: Filter) {
                 Filter.NeedsYou -> "Nothing needs you"
                 Filter.Working -> "No agents working"
                 Filter.Pinned -> "Nothing pinned"
+                Filter.Archived -> "Nothing archived"
             },
             style = MaterialTheme.typography.titleLarge,
         )

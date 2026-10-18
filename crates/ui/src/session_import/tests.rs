@@ -97,9 +97,6 @@ fn selection_excludes_unavailable_sessions_and_survives_filters() {
             .map(|row| row.source_ref.clone())
             .collect::<Vec<_>>()
     };
-    model.status = ImportStatusFilter::Imported;
-    assert_eq!(visible(&model), ["managed"]);
-    model.status = ImportStatusFilter::NotImported;
     assert_eq!(visible(&model), ["ready", "missing", "running"]);
     assert!(model.selected.contains("ready"));
 }
@@ -108,7 +105,6 @@ fn selection_excludes_unavailable_sessions_and_survives_filters() {
 fn imported_rows_move_out_of_the_not_imported_filter() {
     let mut model = model();
     model.sessions = vec![session("one", ImportEligibility::Available)];
-    model.status = ImportStatusFilter::NotImported;
     model.toggle_selection("one");
     let batch = request_id(model.begin_import(false).unwrap());
     assert!(model.update_item(
@@ -119,8 +115,8 @@ fn imported_rows_move_out_of_the_not_imported_filter() {
         })
     ));
     assert!(model.visible_sessions("").is_empty());
-    model.status = ImportStatusFilter::Imported;
-    assert_eq!(model.visible_sessions("").len(), 1);
+    assert!(model.selected.is_empty());
+    assert!(model.batch.is_some(), "successful results remain available");
 }
 
 #[test]
@@ -261,35 +257,18 @@ fn filter_row_hides_choices_the_scan_has_nothing_to_filter() {
     let mut single = model();
     single.sessions = vec![session("codex", ImportEligibility::Available)];
     assert!(!needs_provider_filter(&single));
-    assert!(!needs_status_filter(&single));
 
     let mut mixed = model();
     let mut claude = session("claude", ImportEligibility::Available);
     claude.provider = SessionProvider::ClaudeCode;
     mixed.sessions = vec![session("codex", ImportEligibility::Available), claude];
     assert!(needs_provider_filter(&mixed));
-    assert!(
-        !needs_status_filter(&mixed),
-        "nothing imported yet, so nothing to filter by status"
-    );
-
-    let mut imported = model();
-    imported.sessions = vec![session(
-        "managed",
-        ImportEligibility::AlreadyManaged {
-            chat_id: "chat".into(),
-        },
-    )];
-    assert!(needs_status_filter(&imported));
-
     // A filter that is currently applied stays visible even when the scan no
     // longer justifies it, so it can always be cleared again.
     let mut applied = model();
     applied.sessions = vec![session("codex", ImportEligibility::Available)];
     applied.provider = Some(SessionProvider::ClaudeCode);
-    applied.status = ImportStatusFilter::Imported;
     assert!(needs_provider_filter(&applied));
-    assert!(needs_status_filter(&applied));
 }
 
 #[test]
@@ -415,30 +394,20 @@ fn native_agent_filter_picks_a_provider_from_its_menu(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
-fn native_status_filter_picks_an_eligibility_from_its_menu(cx: &mut gpui::TestAppContext) {
+fn import_chooser_hides_managed_sessions_without_a_status_picker(cx: &mut gpui::TestAppContext) {
     cx.update(|cx| {
         gpui_base::init(cx);
         cx.set_global(Theme::default());
         crate::composer::init(cx, Default::default());
     });
     let (view, cx) = cx.add_window_view(|_, cx| filtered_dialog(cx));
-    let trigger = cx.debug_bounds("import-status-filter-trigger").unwrap();
-    cx.simulate_click(trigger.center(), gpui::Modifiers::default());
+    assert!(cx.debug_bounds("import-status-filter-trigger").is_none());
     view.read_with(cx, |view, _| {
-        assert_eq!(view.filter_menu.get(), Some(&FilterMenu::Status))
-    });
-    let option = cx.debug_bounds("import-status-option-1").unwrap();
-    cx.simulate_click(option.center(), gpui::Modifiers::default());
-    view.read_with(cx, |view, _| {
-        assert_eq!(view.model.status, ImportStatusFilter::NotImported);
         assert!(
             view.model
                 .visible_sessions("")
                 .iter()
-                .all(|row| !matches!(
-                    row.eligibility,
-                    ImportEligibility::AlreadyManaged { .. }
-                ))
+                .all(|row| !matches!(row.eligibility, ImportEligibility::AlreadyManaged { .. }))
         );
     });
 }

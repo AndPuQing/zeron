@@ -658,3 +658,80 @@ fn sends_to_an_offline_host_park_as_queued_not_working() {
     assert_eq!(row.send_state, Some(zeron_client::SendState::Queued));
     assert_eq!(row.host_indicator, ChatIndicator::Idle);
 }
+
+#[test]
+fn importing_external_history_publishes_sessions_and_retries_only_failed_items() {
+    use zeron_client::session_import::ImportPhase;
+    let (client, _dir) = demo(fast());
+    let picker = client.session_import();
+    wait_for("import discovery", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    assert!(
+        picker
+            .snapshot()
+            .rows
+            .iter()
+            .all(|r| r.title != "Already in Sessions")
+    );
+    picker.load_more();
+    wait_for("next discovery page", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    picker.select_visible();
+    assert_eq!(picker.snapshot().selected_count, 3);
+    picker.start(false);
+    wait_for("partial import", Duration::from_secs(5), || {
+        !picker.snapshot().running
+    });
+    let results = picker.snapshot().results;
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| r.phase == ImportPhase::Imported)
+            .count(),
+        2
+    );
+    assert_eq!(results.iter().filter(|r| r.retryable).count(), 1);
+    let imported_ids: Vec<_> = results
+        .iter()
+        .filter_map(|r| r.chat_id.as_deref())
+        .collect();
+    let ws = client.workspace();
+    for id in &imported_ids {
+        assert!(
+            ws.archived.iter().any(|r| &r.id == id),
+            "imports belong in Archived, like the real host"
+        );
+    }
+    picker.start(true);
+    wait_for("retry import", Duration::from_secs(5), || {
+        !picker.snapshot().running
+    });
+    let results = picker.snapshot().results;
+    assert!(results.iter().all(|r| r.phase == ImportPhase::Imported));
+    assert_eq!(
+        results
+            .iter()
+            .filter(|r| imported_ids.contains(&r.chat_id.as_deref().unwrap_or_default()))
+            .count(),
+        2
+    );
+    picker.refresh();
+    wait_for("rescan", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    picker.load_more();
+    wait_for("rescan next page", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    let s = picker.snapshot();
+    assert_eq!(
+        s.rows.len(),
+        2,
+        "only running and missing-directory sources remain"
+    );
+    assert!(s.rows.iter().all(|r| r.disabled_reason.is_some()));
+    picker.close();
+    client.shutdown();
+}

@@ -253,7 +253,7 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                             ) { createSideChat(true) },
                             MenuAction("Copy transcript", ZIcons.Copy) { transcript.frame?.let { clipboard.setText(AnnotatedString(it.plainText())) } },
                             row?.takeIf { it.parentChatId == null }?.let { r -> MenuAction(if (r.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(chatId, !r.pinned) } },
-                            row?.let { MenuAction("Archive", ZIcons.Archive) { model.archive(chatId); onBack() } },
+                            row?.let { MenuAction(if (it.archived) "Unarchive" else "Archive", ZIcons.Archive) { if (it.archived) model.unarchive(chatId) else model.archive(chatId); onBack() } },
                         ),
                     )
                 }

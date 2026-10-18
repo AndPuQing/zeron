@@ -11,6 +11,7 @@
 
 mod fixtures;
 mod png;
+mod session_import;
 mod transcripts;
 mod visuals;
 
@@ -70,6 +71,9 @@ pub(crate) struct DemoHost {
     options: DemoOptions,
     client: Weak<ClientInner>,
     refs: Mutex<HashMap<String, Vec<RepoRef>>>,
+    imported: Mutex<HashMap<String, String>>,
+    import_operations: Mutex<HashMap<String, CancellationToken>>,
+    import_attempted: Mutex<HashSet<String>>,
     /// Running turn per chat: (turn id, cancel token).
     turns: Mutex<HashMap<String, (u64, CancellationToken)>>,
     turn_seq: AtomicU64,
@@ -94,6 +98,9 @@ impl DemoHost {
             options,
             client: Arc::downgrade(client),
             refs: Mutex::new(HashMap::new()),
+            imported: Mutex::new(HashMap::new()),
+            import_operations: Mutex::new(HashMap::new()),
+            import_attempted: Mutex::new(HashSet::new()),
             turns: Mutex::new(HashMap::new()),
             turn_seq: AtomicU64::new(1),
             turn_gates: Mutex::new(HashMap::new()),

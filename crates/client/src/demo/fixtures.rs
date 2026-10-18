@@ -314,7 +314,9 @@ pub(crate) fn devices(self_id: &str, self_name: &str, now: i64) -> Vec<Device> {
             capabilities: if caps {
                 capability::ALL_QUEUE
                     .iter()
-                    .map(|c| (*c).to_owned())
+                    .copied()
+                    .chain([zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1])
+                    .map(|c| c.to_owned())
                     .collect()
             } else {
                 Vec::new()

@@ -21,7 +21,7 @@ use crate::composer::{ComposerInput, ComposerInputEvent};
 use crate::icons::{self, icon};
 use crate::popover;
 use crate::theme::Theme;
-use model::{ImportModel, ImportStatusFilter};
+use model::ImportModel;
 
 /// A backend can answer requests asynchronously using the dialog's receive_*
 /// methods. Only devices advertising import support should be supplied.
@@ -41,17 +41,10 @@ const AGENT_FILTERS: [Option<SessionProvider>; 3] = [
     Some(SessionProvider::ClaudeCode),
 ];
 
-const STATUS_FILTERS: [ImportStatusFilter; 3] = [
-    ImportStatusFilter::All,
-    ImportStatusFilter::NotImported,
-    ImportStatusFilter::Imported,
-];
-
 /// Which filter menu owns the shared popup — at most one is open at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FilterMenu {
     Agent,
-    Status,
 }
 
 pub struct SessionImportDialog {
@@ -231,9 +224,6 @@ impl SessionImportDialog {
             FilterMenu::Agent if index < AGENT_FILTERS.len() => {
                 self.model.provider = AGENT_FILTERS[index];
             }
-            FilterMenu::Status if index < STATUS_FILTERS.len() => {
-                self.model.status = STATUS_FILTERS[index];
-            }
             _ => return,
         }
         self.model.active = None;
@@ -245,7 +235,6 @@ impl SessionImportDialog {
         if let Some(kind) = self.filter_menu.as_open().copied() {
             let count = match kind {
                 FilterMenu::Agent => AGENT_FILTERS.len(),
-                FilterMenu::Status => STATUS_FILTERS.len(),
             };
             match key {
                 "escape" | "tab" => self.close_filter_menu(cx),
@@ -461,11 +450,6 @@ impl SessionImportDialog {
             .iter()
             .position(|provider| *provider == self.model.provider)
             .unwrap_or(0);
-        let status_labels = STATUS_FILTERS.map(ImportStatusFilter::label);
-        let status_selected = STATUS_FILTERS
-            .iter()
-            .position(|status| *status == self.model.status)
-            .unwrap_or(0);
         let has_project = self
             .model
             .devices
@@ -513,18 +497,6 @@ impl SessionImportDialog {
                     &agent_labels,
                     agent_selected,
                     "Agent filter",
-                    cx,
-                ))
-            })
-            .when(needs_status_filter(&self.model), |row| {
-                row.child(self.render_filter_picker(
-                    theme,
-                    FilterMenu::Status,
-                    "import-status-filter",
-                    "import-status-option",
-                    &status_labels,
-                    status_selected,
-                    "Import status filter",
                     cx,
                 ))
             })
@@ -901,7 +873,9 @@ impl SessionImportDialog {
             let loading = self.model.discovery.is_loading();
             let failed =
                 self.model.discovery.error().is_some() || !self.model.source_errors.is_empty();
-            let filtered = !self.model.sessions.is_empty();
+            let filtered = self.model.provider.is_some()
+                || self.model.current_project_only
+                || !self.search.read(cx).text().trim().is_empty();
             list = list.child(
                 div()
                     .flex_1()
@@ -927,7 +901,7 @@ impl SessionImportDialog {
                     } else if filtered {
                         "No matching sessions"
                     } else {
-                        "No saved sessions found"
+                        "No unimported sessions found"
                     })
                     .child(
                         div()
@@ -936,7 +910,11 @@ impl SessionImportDialog {
                             .child(if filtered {
                                 "Try another agent, project, or search."
                             } else {
-                                "Sessions from Codex and Claude Code will appear here."
+                                if self.model.next_cursor.is_some() {
+                                    "Load more to keep looking for unimported sessions."
+                                } else {
+                                    "Imported sessions are available in Archived."
+                                }
                             }),
                     ),
             );
@@ -1401,7 +1379,6 @@ impl SessionImportDialog {
         }
         let open_menu = match scene {
             "filter-agent" => Some(FilterMenu::Agent),
-            "filter-status" => Some(FilterMenu::Status),
             _ => None,
         };
         if let Some(kind) = open_menu {
@@ -1410,9 +1387,6 @@ impl SessionImportDialog {
                 FilterMenu::Agent => AGENT_FILTERS
                     .iter()
                     .position(|provider| *provider == self.model.provider),
-                FilterMenu::Status => STATUS_FILTERS
-                    .iter()
-                    .position(|status| *status == self.model.status),
             }
             .unwrap_or(0);
         }
@@ -1435,11 +1409,7 @@ impl SessionImportDialog {
     }
 }
 
-/// The filter row earns its space only when the scan has something to filter:
-/// a single-agent device does not need an agent picker, and a device with
-/// nothing imported does not need an import-status picker. A filter that is set
-/// to something other than the default stays visible so it can always be
-/// cleared again.
+/// Keep an applied agent filter visible so it can always be cleared.
 fn needs_provider_filter(model: &ImportModel) -> bool {
     model.provider.is_some()
         || model.sessions.first().is_some_and(|first| {
@@ -1448,14 +1418,6 @@ fn needs_provider_filter(model: &ImportModel) -> bool {
                 .iter()
                 .any(|row| row.provider != first.provider)
         })
-}
-
-fn needs_status_filter(model: &ImportModel) -> bool {
-    model.status != ImportStatusFilter::All
-        || model
-            .sessions
-            .iter()
-            .any(|row| matches!(row.eligibility, ImportEligibility::AlreadyManaged { .. }))
 }
 
 /// The rounded selection box shared by session rows and project headers.
