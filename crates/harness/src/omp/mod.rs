@@ -440,9 +440,16 @@ impl Harness for OmpHarness {
         let args = match &request.resume {
             Some(id) => match store.resume_args(id, Path::new(&request.cwd)) {
                 Ok(args) => args,
-                // Like every other harness, a session that can no longer be
-                // reopened starts fresh with a visible notice. Failing instead
-                // would strand the chat: the engine resumes the same id forever.
+                // An imported copy must never fall back to a fresh provider
+                // session: the doc would then claim history it does not have.
+                // Fail before spawning anything so no new OMP session exists.
+                Err(error) if request.require_native_resume => {
+                    return Err(HarnessError::Protocol(format!(
+                        "This chat was imported from a native OMP session and must resume it; session {id} could not be restored ({error}). No new session was started."
+                    )));
+                }
+                // An ordinary chat that lost its history starts fresh with a
+                // visible notice, like the other harnesses.
                 Err(error) => {
                     lost_context = Some(format!(
                         "OMP could not restore session {id}; starting a new session without the previous context: {error}"
@@ -450,6 +457,11 @@ impl Harness for OmpHarness {
                     vec![]
                 }
             },
+            None if request.require_native_resume => {
+                return Err(HarnessError::Protocol(
+                    "This chat was imported from a native OMP session but carries no session id to resume. No new session was started.".into(),
+                ));
+            }
             None => vec![],
         };
         if lost_context.is_some() {
@@ -940,6 +952,73 @@ async fn load_images(paths: &[String]) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(resume: Option<&str>, require_native_resume: bool) -> RunRequest {
+        RunRequest {
+            prompt: "p".into(),
+            harness: None,
+            model: None,
+            reasoning: None,
+            model_options: Default::default(),
+            cwd: "/tmp".into(),
+            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            auto_approve: false,
+            resume: resume.map(str::to_owned),
+            require_native_resume,
+            attachments: vec![],
+            worktree: None,
+            mcp: None,
+        }
+    }
+
+    fn controls() -> RunControls {
+        let (_steering, steering) = mpsc::channel(1);
+        RunControls {
+            realtime: None,
+            execution_lease: None,
+            steering,
+            interrupt: crate::CancellationToken::new(),
+            request_input: Box::new(|_| {
+                let (tx, rx) = tokio::sync::oneshot::channel();
+                let _ = tx.send(vec![]);
+                rx
+            }),
+            turn: Default::default(),
+        }
+    }
+
+    /// An imported copy must never silently start a fresh provider session.
+    #[tokio::test]
+    async fn imported_sessions_never_fall_back_to_a_new_native_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        std::fs::create_dir_all(&agent).unwrap();
+        // The override binary does not exist: if the driver ever reached
+        // `spawn` the returned error would be about the missing executable,
+        // so a resume-contract error proves no OMP process was started and no
+        // prompt was dispatched. This stays cross-platform.
+        let harness = OmpHarness::new()
+            .with_executable(dir.path().join("omp-does-not-exist"))
+            .with_agent_dir(&agent);
+
+        // (a) The recorded native file is gone.
+        let mut gone = request(Some("missing-id"), true);
+        gone.cwd = dir.path().display().to_string();
+        let Err(error) = harness.run(gone, controls()).await else {
+            panic!("strict resume must fail");
+        };
+        assert!(error.to_string().contains("must resume"), "{error}");
+        assert!(!error.to_string().contains("binary"), "{error}");
+
+        // (b) An imported copy with no session id at all.
+        let mut bare = request(None, true);
+        bare.cwd = dir.path().display().to_string();
+        let Err(error) = harness.run(bare, controls()).await else {
+            panic!("strict resume must fail");
+        };
+        assert!(error.to_string().contains("no session id"), "{error}");
+        assert!(!error.to_string().contains("binary"), "{error}");
+    }
 
     #[test]
     fn thinking_selection_reads_the_omp_option() {

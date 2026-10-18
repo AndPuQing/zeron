@@ -48,23 +48,29 @@ message it was sent with. Interruption sends `abort`, then reads until the
 
 Session identity is refreshed from `get_state` (`sessionId`, absolute
 `sessionFile`, model, `autoCompactionEnabled`). Resume passes the verified
-absolute file to `--resume`; a session that can no longer be resolved starts
-fresh with a visible "without the previous context" notice, like the other
-harnesses.
+absolute file to `--resume`. An ordinary chat whose session can no longer be
+resolved starts fresh with a visible "without the previous context" notice,
+like the other harnesses; an imported copy (`require_native_resume`) instead
+fails before any process is started, so it can never claim native history it
+does not have.
 
-Identity boundaries. The private UUID -> file index is
+Interactive dialogs. An `ask` request answers each question with option labels
+and/or `customInput`: a single-select question takes one option alone or free
+text alone (never both), a multi-select question may combine several options
+with free text, and an answer with neither cancels the dialog.
+
+Identity boundaries (OMP side). The private UUID -> file index is
 `<agent>/zeron-omp-sessions`, a DEDICATED namespace beside Pi's
 `<agent>/zeron-sessions`, so an explicitly shared `PI_CODING_AGENT_DIR` (both
-products honor that variable) can never make them read or write each other's
+products honor that variable) can never make OMP read or write Pi's index
 records. Native stores differ by default too (`~/.pi/agent/sessions` vs
-`~/.omp/agent/sessions`). If a user deliberately points both products at one
-native directory — `PI_CODING_AGENT_DIR` or `PI_CODING_AGENT_SESSION_DIR` —
-OMP accepts a file only when its head carries OMP markers (the `title` slot, a
+`~/.omp/agent/sessions`). If a user deliberately points OMP at Pi's native
+directory — `PI_CODING_AGENT_DIR` or `PI_CODING_AGENT_SESSION_DIR` — OMP lists
+or resumes a file only when its head carries OMP markers (the `title` slot, a
 per-entry `runtime` identity, `model_change.model`, or
-`thinking_level_change.configured`), so Pi's `modelId`/`provider` files are
-never listed by the OMP importer, resolved for resume, or parsed as OMP
-history. Files are copied or renamed across products remain outside that
-guarantee and are reported as an identity error rather than guessed at.
+`thinking_level_change.configured`); Pi's `modelId`/`provider` files are
+reported as identity errors rather than parsed as OMP history. This covers the
+OMP index, import and resume paths changed here; Pi's own driver is unchanged.
 
 Sources inspected: `@oh-my-pi/pi-coding-agent@18.11.3` (`src/modes/rpc/*`,
 `src/session/session-entries.ts`) and a live `omp/mode rpc` probe on

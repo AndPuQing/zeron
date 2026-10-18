@@ -116,29 +116,50 @@ impl Dialogs {
             if method == "ask" {
                 let mut resolved = vec![];
                 for (omp_id, question, options, multi) in &questions {
+                    // OMP accepts a pure custom answer (`selectedOptions: []`
+                    // plus `customInput`), one option alone, or several options
+                    // for a multi-select question. It rejects more than one
+                    // option, or an option together with custom text, for a
+                    // single-select question.
+                    let mut selected: Vec<String> = vec![];
+                    let mut custom: Option<String> = None;
                     let labels = answers
                         .iter()
                         .find(|a| a.question_id == question.id)
                         .map(|a| a.labels.as_slice())
                         .unwrap_or_default();
-                    let selected: Vec<&String> = labels
-                        .iter()
-                        .filter(|label| options.contains(label))
-                        .collect();
-                    let custom: Vec<&String> = labels
-                        .iter()
-                        .filter(|label| !options.contains(label))
-                        .collect();
-                    let mut entry = json!({"id":omp_id,"selectedOptions":selected});
-                    if !custom.is_empty() {
-                        entry["customInput"] = json!(custom[0]);
+                    for label in labels {
+                        let label = label.trim();
+                        if label.is_empty() {
+                            continue;
+                        }
+                        if options.iter().any(|option| option == label) {
+                            if !selected.iter().any(|chosen| chosen == label) {
+                                selected.push(label.to_owned());
+                            }
+                        } else if custom.is_none() {
+                            custom = Some(label.to_owned());
+                        }
                     }
-                    if selected.is_empty() && (!multi || custom.is_empty()) {
-                        // No usable answer: cancel the whole dialog rather than
-                        // silently selecting the first option.
+                    if !multi {
+                        if custom.is_some() {
+                            // A single-select question answers with either an
+                            // option or free text, never both.
+                            selected.clear();
+                        } else {
+                            selected.truncate(1);
+                        }
+                    }
+                    if selected.is_empty() && custom.is_none() {
+                        // No usable answer at all: cancel the whole dialog
+                        // rather than inventing a choice.
                         response = json!({"type":"extension_ui_response","id":id,"cancelled":true});
                         let _ = client.send(response);
                         return;
+                    }
+                    let mut entry = json!({"id":omp_id,"selectedOptions":selected});
+                    if let Some(custom) = custom {
+                        entry["customInput"] = json!(custom);
                     }
                     resolved.push(entry);
                 }
@@ -165,5 +186,108 @@ impl Dialogs {
     }
     pub fn cancel(&mut self) {
         self.tasks.abort_all();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    fn answering(labels: Vec<String>) -> Arc<Input> {
+        Arc::new(move |questions: Vec<UserInputQuestion>| {
+            let (tx, rx) = oneshot::channel();
+            let answers = questions
+                .iter()
+                .map(|question| UserInputAnswer {
+                    question_id: question.id.clone(),
+                    labels: labels.clone(),
+                })
+                .collect();
+            let _ = tx.send(answers);
+            rx
+        })
+    }
+
+    fn ask_frame(multi: bool, options: &[&str]) -> Value {
+        json!({
+            "id": "ask-1",
+            "method": "ask",
+            "questions": [{
+                "id": "q1",
+                "question": "Pick one",
+                "header": "H",
+                "multi": multi,
+                "options": options
+                    .iter()
+                    .map(|label| json!({ "label": label }))
+                    .collect::<Vec<_>>(),
+            }]
+        })
+    }
+
+    /// Drive the real `request -> extension_ui_response` path and read the frame
+    /// the driver would write to OMP.
+    async fn ask_response(labels: Vec<String>, frame: Value) -> Value {
+        let (writer, peer) = tokio::io::duplex(4096);
+        let (_peer_writer, reader) = tokio::io::duplex(4096);
+        let transport = super::super::rpc::Transport::new(writer, reader);
+        let mut dialogs = Dialogs::default();
+        dialogs.input = Some(answering(labels));
+        dialogs.request(transport.client.clone(), &frame);
+        let mut lines = BufReader::new(peer).lines();
+        let line = tokio::time::timeout(std::time::Duration::from_secs(2), lines.next_line())
+            .await
+            .expect("dialog response timed out")
+            .expect("dialog stream closed")
+            .expect("dialog response line");
+        serde_json::from_str(&line).expect("dialog response JSON")
+    }
+
+    #[tokio::test]
+    async fn ask_single_select_custom_text_is_kept() {
+        let response = ask_response(
+            vec!["my own answer".into()],
+            ask_frame(false, &["Alpha", "Beta"]),
+        )
+        .await;
+        assert_eq!(response["answers"][0]["selectedOptions"], json!([]));
+        assert_eq!(response["answers"][0]["customInput"], "my own answer");
+        assert!(response.get("cancelled").is_none());
+    }
+
+    #[tokio::test]
+    async fn ask_free_text_question_without_options_is_kept() {
+        let response = ask_response(vec!["free form".into()], ask_frame(false, &[])).await;
+        assert_eq!(response["answers"][0]["selectedOptions"], json!([]));
+        assert_eq!(response["answers"][0]["customInput"], "free form");
+        assert!(response.get("cancelled").is_none());
+    }
+
+    #[tokio::test]
+    async fn ask_single_select_option_is_selected() {
+        let response = ask_response(vec!["Beta".into()], ask_frame(false, &["Alpha", "Beta"])).await;
+        assert_eq!(response["answers"][0]["selectedOptions"], json!(["Beta"]));
+        assert!(response["answers"][0].get("customInput").is_none());
+    }
+
+    #[tokio::test]
+    async fn ask_multi_select_keeps_options_and_custom() {
+        let response = ask_response(
+            vec!["Alpha".into(), "Beta".into(), "extra".into()],
+            ask_frame(true, &["Alpha", "Beta"]),
+        )
+        .await;
+        assert_eq!(
+            response["answers"][0]["selectedOptions"],
+            json!(["Alpha", "Beta"])
+        );
+        assert_eq!(response["answers"][0]["customInput"], "extra");
+    }
+
+    #[tokio::test]
+    async fn ask_empty_answer_cancels() {
+        let response = ask_response(vec![], ask_frame(false, &["Alpha"])).await;
+        assert_eq!(response["cancelled"], true);
     }
 }
