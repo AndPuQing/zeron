@@ -53,6 +53,8 @@
 //! [`default_stall_bound`] (`ZERON_OPENCODE_STALL_MS`, 0 disables) errors
 //! out instead of spinning "Working" forever.
 
+mod saved;
+
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -229,6 +231,7 @@ pub struct OpencodeHarness {
     executable: Option<PathBuf>,
     /// Test seam: an already-running server (no spawn, no auth unless given).
     base_url: Option<String>,
+    saved_home: Option<PathBuf>,
     interrupt_grace: Duration,
     kill_grace: Duration,
     startup_timeout: Duration,
@@ -245,6 +248,7 @@ impl Default for OpencodeHarness {
             environment: Default::default(),
             executable: None,
             base_url: None,
+            saved_home: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             startup_timeout: startup_timeout(),
@@ -272,6 +276,13 @@ impl OpencodeHarness {
     /// Use a fixed binary instead of PATH/known-location resolution.
     pub fn with_executable(mut self, path: impl Into<PathBuf>) -> Self {
         self.executable = Some(path.into());
+        self
+    }
+
+    /// Override store identity for an attached test server.
+    #[doc(hidden)]
+    pub fn with_saved_session_home(mut self, root: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(root.into());
         self
     }
 
@@ -363,6 +374,28 @@ impl OpencodeHarness {
 
 #[async_trait]
 impl Harness for OpencodeHarness {
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.saved_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.list_saved(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.read_saved(session).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.copy_saved(session).await
+    }
+
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
         self.environment.clone()
     }

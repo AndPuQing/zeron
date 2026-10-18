@@ -384,3 +384,34 @@ async fn failed_pagination_can_retry_the_same_cursor_without_losing_selection() 
     assert_eq!(s.selected_count, 1);
     assert_eq!(s.rows.len(), 2);
 }
+
+#[tokio::test]
+async fn every_supported_harness_can_be_filtered_selected_and_submitted() {
+    let entries = zeron_proto::SESSION_IMPORT_PROVIDERS
+        .iter()
+        .map(|(harness, key, _)| ExternalSessionEntry {
+            harness: *harness,
+            ..entry(key)
+        })
+        .collect();
+    let (c, mut requests) = discovered(entries).await;
+    for (_, key, _) in zeron_proto::SESSION_IMPORT_PROVIDERS {
+        c.set_provider(Some((*key).into()));
+        let s = c.snapshot();
+        assert_eq!(s.rows.len(), 1);
+        assert!(s.rows[0].disabled_reason.is_none());
+        c.select_visible();
+    }
+    assert_eq!(c.snapshot().selected_count, 5);
+    c.start(false);
+    let Request::Start(_, _, refs, reply) = next(&mut requests).await else {
+        panic!()
+    };
+    assert_eq!(refs.len(), 5);
+    let (tx, rx) = mpsc::channel(8);
+    reply.send(Ok(rx)).unwrap();
+    tx.send(Ok(Event::Finished { cancelled: false }))
+        .await
+        .unwrap();
+    wait(&c, |s| !s.running).await;
+}

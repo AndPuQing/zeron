@@ -88,3 +88,35 @@ without losing the session. Follow-up prompts wait for the current turn to end.
 The CLI supplies the available models and their config options; **Auto** is the
 fallback when discovery is unavailable. `COPILOT_EXECUTABLE` can select a custom
 binary. Updates use Settings' provider update action or `copilot update`.
+
+## Saved session imports
+
+The desktop and mobile import chooser supports Codex, Claude Code, DeepSeek
+Harness, Pi, and OpenCode. Discovery runs on the selected execution device using
+its existing installation. Imports create independent native copies and archived
+Zerun conversations; continuation resumes the copy. Running conversations and
+unavailable working directories cannot be imported.
+
+| Harness | Discovery and copy |
+| --- | --- |
+| Codex | Native app-server history and fork APIs. |
+| Claude Code | Native project logs under the selected Claude config directory. |
+| DeepSeek Harness | The default `$DSH_HOME/sessions` store, using installed dsh persistence packages for plain or zstd logs. Requires Node.js and an ACP profile with `session/load` support, such as `acp-plus`, to continue imported copies. Custom persistence roots are not scanned. |
+| Pi | Native v2/v3 tree logs under `$PI_CODING_AGENT_DIR/sessions` (default `~/.pi/agent/sessions`) and an absolute global `sessionDir`. The copy retains all branches, signatures, compaction, and extension records; the transcript follows the current branch. Relative or project-specific custom stores are not discovered globally. |
+| OpenCode | Native HTTP list, full transcript export, and fork APIs on both 1.18 and 2.x. The native server owns all database writes. |
+
+Display transcripts omit attachments and unsupported blocks with a notice;
+native copies retain provider-owned context. Source and display size limits
+reject oversized imports instead of silently truncating conversation context.
+
+The `saved::tests` tests cover Pi trees and both OpenCode HTTP generations.
+Optional native compatibility tests use synthetic stores without model requests:
+
+```bash
+ZERON_DSH_TEST_PACKAGES=/path/to/.dsh/profiles \
+  cargo test -p zeron-harness --lib acp::dsh_saved -- --ignored
+ZERON_PI_TEST_MODULE=/path/to/pi/dist/core/session-manager.js \
+  cargo test -p zeron-harness --lib pi::saved -- --ignored
+ZERON_OPENCODE_TEST_BINARY=/path/to/opencode \
+  cargo test -p zeron-harness --lib opencode::saved -- --ignored
+```

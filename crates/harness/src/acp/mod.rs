@@ -34,6 +34,7 @@
 mod antigravity_paths;
 mod devin_models;
 mod dsh_discovery;
+mod dsh_saved;
 mod normalize;
 mod prompt;
 mod subagent;
@@ -1443,6 +1444,7 @@ pub struct AcpHarness {
     /// Override of the agent's on-disk sessions root (grok's
     /// `~/.grok/sessions`), where subagent transcripts are tailed from.
     sessions_root: Option<PathBuf>,
+    saved_home: Option<PathBuf>,
     /// Grace between `session/cancel` and SIGTERM.
     interrupt_grace: Duration,
     /// Grace between SIGTERM and SIGKILL.
@@ -1478,6 +1480,7 @@ impl AcpHarness {
             spec,
             executable: None,
             sessions_root: None,
+            saved_home: None,
             interrupt_grace: Duration::from_secs(2),
             kill_grace: Duration::from_secs(3),
             // Generous: the handshake is local work for every agent
@@ -1709,9 +1712,13 @@ impl AcpHarness {
         self
     }
 
-    /// Test seam: tail subagent transcripts from this sessions root instead
-    /// of the agent's real one (`~/.grok/sessions`).
+    /// Test seam for an isolated native dsh history store.
     #[doc(hidden)]
+    pub fn with_saved_session_home(mut self, home: impl Into<PathBuf>) -> Self {
+        self.saved_home = Some(home.into());
+        self
+    }
+
     pub fn with_sessions_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.sessions_root = Some(root.into());
         self
@@ -2418,6 +2425,28 @@ fn trait_from_config_option(option: &Value) -> Option<ModelOption> {
 
 #[async_trait]
 impl Harness for AcpHarness {
+    fn saved_session_store_id(&self) -> Result<String, HarnessError> {
+        self.dsh_saved_store_id()
+    }
+    async fn saved_sessions(
+        &self,
+        cursor: Option<&str>,
+    ) -> Result<crate::saved_sessions::SavedSessionPage, HarnessError> {
+        self.dsh_saved_list(cursor).await
+    }
+    async fn saved_session_history(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSessionHistory, HarnessError> {
+        self.dsh_saved_call("history", None, Some(session)).await
+    }
+    async fn copy_saved_session(
+        &self,
+        session: &crate::saved_sessions::SavedSession,
+    ) -> Result<crate::saved_sessions::SavedSession, HarnessError> {
+        self.dsh_saved_call("copy", None, Some(session)).await
+    }
+
     fn environment(&self) -> std::sync::Arc<crate::environment::EnvironmentSnapshot> {
         self.environment.clone()
     }

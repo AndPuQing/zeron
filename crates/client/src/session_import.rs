@@ -220,7 +220,8 @@ impl State {
                     .clone()
                     .or_else(|| r.running.then(|| "Session is still running".into()))
                     .or_else(|| {
-                        (!matches!(r.harness, HarnessId::Codex | HarnessId::ClaudeCode))
+                        zeron_proto::session_import_provider(r.harness)
+                            .is_none()
                             .then(|| "This agent does not support import".into())
                     }),
             })
@@ -417,10 +418,11 @@ impl ImportController {
         self.notify();
     }
     pub fn set_provider(&self, provider: Option<String>) {
-        if provider
-            .as_deref()
-            .is_some_and(|p| !matches!(p, "codex" | "claude-code"))
-        {
+        if provider.as_deref().is_some_and(|p| {
+            !zeron_proto::SESSION_IMPORT_PROVIDERS
+                .iter()
+                .any(|(_, key, _)| *key == p)
+        }) {
             return;
         }
         lock(&self.state).view.provider = provider;
@@ -674,7 +676,7 @@ fn selectable(row: &ExternalSessionEntry) -> bool {
     row.already_managed_chat_id.is_none()
         && row.unavailable_reason.is_none()
         && !row.running
-        && matches!(row.harness, HarnessId::Codex | HarnessId::ClaudeCode)
+        && zeron_proto::session_import_provider(row.harness).is_some()
 }
 fn finish(weak: &Weak<ImportController>, cancelled: bool, error: Option<String>) {
     if let Some(this) = weak.upgrade() {
@@ -687,9 +689,5 @@ fn finish(weak: &Weak<ImportController>, cancelled: bool, error: Option<String>)
 mod tests;
 
 fn provider(harness: HarnessId) -> &'static str {
-    match harness {
-        HarnessId::Codex => "codex",
-        HarnessId::ClaudeCode => "claude-code",
-        _ => "unsupported",
-    }
+    zeron_proto::session_import_provider(harness).map_or("unsupported", |(key, _)| key)
 }

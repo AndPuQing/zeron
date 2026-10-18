@@ -679,7 +679,7 @@ fn importing_external_history_publishes_sessions_and_retries_only_failed_items()
         !picker.snapshot().loading
     });
     picker.select_visible();
-    assert_eq!(picker.snapshot().selected_count, 3);
+    assert_eq!(picker.snapshot().selected_count, 6);
     picker.start(false);
     wait_for("partial import", Duration::from_secs(5), || {
         !picker.snapshot().running
@@ -690,7 +690,7 @@ fn importing_external_history_publishes_sessions_and_retries_only_failed_items()
             .iter()
             .filter(|r| r.phase == ImportPhase::Imported)
             .count(),
-        2
+        5
     );
     assert_eq!(results.iter().filter(|r| r.retryable).count(), 1);
     let imported_ids: Vec<_> = results
@@ -715,7 +715,7 @@ fn importing_external_history_publishes_sessions_and_retries_only_failed_items()
             .iter()
             .filter(|r| imported_ids.contains(&r.chat_id.as_deref().unwrap_or_default()))
             .count(),
-        2
+        5
     );
     picker.refresh();
     wait_for("rescan", Duration::from_secs(5), || {

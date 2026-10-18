@@ -4,6 +4,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::HarnessId;
 
+/// Native formats the importer can copy and resume without changing the source.
+pub const SESSION_IMPORT_PROVIDERS: &[(HarnessId, &str, &str)] = &[
+    (HarnessId::Codex, "codex", "Codex"),
+    (HarnessId::ClaudeCode, "claude-code", "Claude Code"),
+    (HarnessId::Dsh, "dsh", "DeepSeek Harness"),
+    (HarnessId::Pi, "pi", "Pi"),
+    (HarnessId::Opencode, "opencode", "OpenCode"),
+];
+
+pub fn session_import_provider(harness: HarnessId) -> Option<(&'static str, &'static str)> {
+    SESSION_IMPORT_PROVIDERS
+        .iter()
+        .find(|(id, _, _)| *id == harness)
+        .map(|(_, key, label)| (*key, *label))
+}
+
 pub const MAX_EXTERNAL_SESSION_IMPORT_BATCH: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

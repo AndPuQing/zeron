@@ -35,10 +35,13 @@ pub struct SessionImportController {
 
 /// The agent filter lists every provider the importer can read; a menu keeps
 /// the toolbar steady as harnesses are added.
-const AGENT_FILTERS: [Option<SessionProvider>; 3] = [
+const AGENT_FILTERS: [Option<SessionProvider>; 6] = [
     None,
     Some(SessionProvider::Codex),
     Some(SessionProvider::ClaudeCode),
+    Some(SessionProvider::Dsh),
+    Some(SessionProvider::Pi),
+    Some(SessionProvider::Opencode),
 ];
 
 /// Which filter menu owns the shared popup — at most one is open at a time.

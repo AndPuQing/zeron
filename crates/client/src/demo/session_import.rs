@@ -49,6 +49,21 @@ fn entries(device: &str) -> Vec<ExternalSessionEntry> {
             None,
             false,
         ),
+        (
+            "dsh",
+            "Review the import pipeline",
+            HarnessId::Dsh,
+            None,
+            false,
+        ),
+        ("pi", "Trace the session tree", HarnessId::Pi, None, false),
+        (
+            "opencode",
+            "Verify native session forks",
+            HarnessId::Opencode,
+            None,
+            false,
+        ),
     ]
     .into_iter()
     .enumerate()
