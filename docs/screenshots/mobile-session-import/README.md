@@ -10,8 +10,11 @@ device names and the temporary import failure are demo fixtures; no personal
 history or real desktop sessions are included.
 
 - `android-chooser.png`: the import page reached from Sessions → Import, with
-  host selection, search, agent filters, and only unimported sessions. Running
+  floating glass controls for host selection, search and the agent dropdown,
+  native agent marks, and only unimported sessions. Running
   sessions and missing project directories show their unavailable reasons.
+- `android-agents.png`: the compact agent dropdown with native Codex and Claude
+  Code brand marks and a checkmark on the current choice.
 - `android-results.png`: a three-session batch with two successful imports and
   one simulated temporary failure. Successful sessions remain imported in
   Archived, while Retry remaining retries only the failed item.

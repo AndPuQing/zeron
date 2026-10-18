@@ -39,9 +39,11 @@ class SessionImportFlowTest {
         find("Improve import navigation").click()
         find("Import 1 selected")
         assertFalse(device.hasObject(By.text("Already in Sessions")))
+        find("All agents").click()
         find("Claude Code").click()
         await { !device.hasObject(By.text("Improve import navigation")) }
         find("Import 1 selected") // Hidden selections stay selected.
+        find("Claude Code").click()
         find("All agents").click()
         try {
             device.setOrientationLeft()
@@ -126,6 +128,7 @@ class SessionImportFlowTest {
         repeat(8) {
             clearCache()
             device.wait(Until.findObject(By.text(text)), 750)?.let { return it }
+            device.findObject(By.desc(text))?.let { return it }
             device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
                 device.displayWidth / 2, device.displayHeight / 3, 25)
         }
@@ -135,6 +138,7 @@ class SessionImportFlowTest {
             device.swipe(device.displayWidth / 2, device.displayHeight / 3,
                 device.displayWidth / 2, device.displayHeight * 3 / 4, 25)
             device.wait(Until.findObject(By.text(text)), 500)?.let { return it }
+            device.findObject(By.desc(text))?.let { return it }
         }
         error("No visible text: $text")
     }

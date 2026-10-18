@@ -152,7 +152,7 @@ fun SessionsScreen(model: AppModel, onOpen: (String) -> Unit, onImport: () -> Un
             ) {
                 item("header") {
                     ScreenHeader("Sessions", subtitle) {
-                        androidx.compose.material3.TextButton(onClick = onImport) { Text("Import") }
+                        TonalCircleButton(ZIcons.ArrowDown, "Import", onClick = onImport)
                         if (connectivity?.state == ConnectivityState.OFFLINE) {
                             TonalCircleButton(
                                 ZIcons.Offline, "Offline", onClick = { scope.launch { model.refresh() } },
