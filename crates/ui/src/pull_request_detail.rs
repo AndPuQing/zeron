@@ -950,6 +950,12 @@ impl PullRequestDetailPage {
             self.error = Some("Connect to your device to load this pull request.".into());
             return;
         };
+        // This read invalidates a patch that is still in flight: its response
+        // belongs to the pre-read details. Cancel it here, before the read
+        // starts, so every refresh path is covered and the callback can never
+        // strand a completed task. The patch already on screen is kept; a Code
+        // visit refetches once these details settle.
+        self.diff_task = None;
         self.loading = true;
         self.error = None;
         let observed_preview = self.preview.clone();
@@ -3003,6 +3009,122 @@ mod tests {
             reopened.read_with(cx, |page, _| !page.loading)
         });
         assert_eq!(rpc.completed(), 3);
+    }
+
+    #[gpui::test]
+    fn pull_request_leaving_code_during_a_stale_refresh_reloads_the_pending_patch(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        const OUTDATED: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn outdated() {}\n";
+        const CURRENT: &str = "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-fn old() {}\n+fn current() {}\n";
+        let runtime = fixture::runtime();
+        let _guard = runtime.enter();
+        fixture::init(cx);
+        let release_diff = Arc::new(tokio::sync::Notify::new());
+        let release_detail = Arc::new(tokio::sync::Notify::new());
+        let diff_calls = Arc::new(AtomicUsize::new(0));
+        let rpc = ScriptedRpc::new({
+            let release_diff = release_diff.clone();
+            let release_detail = release_detail.clone();
+            let diff_calls = diff_calls.clone();
+            move |method, params| {
+                let release_diff = release_diff.clone();
+                let release_detail = release_detail.clone();
+                let diff_calls = diff_calls.clone();
+                async move {
+                    match method.as_str() {
+                        methods::GET_CHANGE_REQUEST => {
+                            // The stale revalidation stays pending until the
+                            // test releases it, so the patch can answer first.
+                            release_detail.notified().await;
+                            assert_eq!(params["refresh"], true);
+                            zeron_rpc::RpcReply::value(&ChangeRequestDetail {
+                                head_ref_oid: "a".repeat(40),
+                                base_ref_oid: "c".repeat(40),
+                                ..Default::default()
+                            })
+                        }
+                        methods::GET_CHANGE_REQUEST_DIFF => {
+                            let call = diff_calls.fetch_add(1, Ordering::SeqCst);
+                            assert_eq!(params["headRefOid"], "a".repeat(40));
+                            assert_eq!(params["baseRefOid"], "c".repeat(40));
+                            if call == 0 {
+                                release_diff.notified().await;
+                                zeron_rpc::RpcReply::value(&OUTDATED)
+                            } else {
+                                zeron_rpc::RpcReply::value(&CURRENT)
+                            }
+                        }
+                        _ => panic!("unexpected RPC"),
+                    }
+                }
+            }
+        });
+        let cache = Rc::new(RefCell::new(PullRequestCache::default()));
+        let url = "https://github.com/a/b/pull/1";
+        let preview = board_preview(&"a".repeat(40));
+        let mut cached = snapshot("Already loaded");
+        cached.detail.head_ref_oid = "a".repeat(40);
+        cached.detail.base_ref_oid = "c".repeat(40);
+        cached.preview = Some(preview.clone());
+        cache.borrow_mut().put(None, url.into(), cached);
+        let (page, cx) = cx.add_window_view(|window, cx| {
+            PullRequestDetailPage::new(
+                fixture::state(cx, Some(rpc.client())),
+                url.into(),
+                None,
+                cache.clone(),
+                Some(preview),
+                window,
+                cx,
+            )
+        });
+        // The cache carries the detail and its board observation: no read yet.
+        page.update(cx, |page, cx| {
+            assert!(!page.loading && page.detail.is_some() && page.diff.is_none());
+            page.select_tab(Tab::Code, cx);
+        });
+        rpc.settle(cx, &runtime, |_| diff_calls.load(Ordering::SeqCst) == 1);
+
+        // Leaving Code for Activity revalidates the stale details. The patch
+        // answers while those details are still loading.
+        page.update(cx, |page, cx| {
+            page.fetched = Some(Instant::now() - Duration::from_secs(61));
+            page.select_tab(Tab::Activity, cx);
+        });
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| page.loading)
+        });
+        release_diff.notify_one();
+        rpc.settle(cx, &runtime, |_| rpc.completed() >= 1);
+        cx.run_until_parked();
+
+        // The details settle on the same revisions; Activity is not Code, so
+        // nothing fetches the patch here.
+        release_detail.notify_one();
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| !page.loading)
+        });
+        page.update(cx, |page, cx| page.select_tab(Tab::Code, cx));
+
+        // Returning to Code must reload the patch instead of staying blank.
+        rpc.settle(cx, &runtime, |cx| {
+            page.read_with(cx, |page, _| page.diff.is_some())
+        });
+        cx.run_until_parked();
+        page.read_with(cx, |page, _| {
+            assert_eq!(page.diff.as_ref().unwrap().patch, CURRENT);
+        });
+        assert_eq!(
+            diff_calls.load(Ordering::SeqCst),
+            2,
+            "Code refetches the patch the stale refresh dropped"
+        );
+        assert!(
+            cx.debug_bounds("pr-file-header-0").is_some(),
+            "the loaded patch renders"
+        );
     }
 
     #[gpui::test]
