@@ -123,9 +123,9 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "ios-import-agent-selected")
         agents.tap()
         snapshot(app, "ios-import-agents")
-        app.buttons["All agents"].tap()
+        app.buttons["All Agents"].tap()
         XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForExistence(timeout: 5))
-        XCTAssertEqual(agents.label, "All agents")
+        XCTAssertEqual(agents.label, "All Agents")
 
         let host = app.buttons["import-device"]
         host.tap()

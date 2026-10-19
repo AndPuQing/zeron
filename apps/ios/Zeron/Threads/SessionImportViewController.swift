@@ -198,7 +198,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         case "pi": return "Pi"
         case "omp": return "Oh My Pi"
         case "opencode": return "OpenCode"
-        default: return "All agents"
+        default: return "All Agents"
         }
     }
     private func agentImage(_ provider: String?) -> UIImage? {
