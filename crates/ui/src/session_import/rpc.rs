@@ -33,6 +33,7 @@ fn discovery(result: ExternalSessionList) -> SessionDiscovery {
                     zeron_proto::HarnessId::Hermes => SessionProvider::Hermes,
                     zeron_proto::HarnessId::Dsh => SessionProvider::Dsh,
                     zeron_proto::HarnessId::Pi => SessionProvider::Pi,
+                    zeron_proto::HarnessId::Omp => SessionProvider::Omp,
                     zeron_proto::HarnessId::Opencode => SessionProvider::Opencode,
                     _ => return None,
                 };

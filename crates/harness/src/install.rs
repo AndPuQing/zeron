@@ -86,6 +86,9 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
             Shell("curl -fsSL https://pi.dev/install.sh | sh", "sh"),
             Npm("@earendil-works/pi-coding-agent", true),
         ],
+        // Oh My Pi ships prebuilt native binaries inside its npm package, so a
+        // plain npm install is the documented, cross-platform path.
+        Omp => vec![Npm("@oh-my-pi/pi-coding-agent", false)],
         Grok if windows => vec![Npm("@xai-official/grok", false)],
         Grok => vec![
             Shell("curl -fsSL https://x.ai/cli/install.sh | bash", "bash"),
@@ -165,6 +168,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Cursor => "curl https://cursor.com/install -fsS | bash",
         Opencode => "npm install -g @opencode/cli",
         Pi => "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+        Omp => "npm install -g @oh-my-pi/pi-coding-agent",
         Grok => "npm install -g @xai-official/grok",
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
@@ -182,6 +186,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Cursor => ("cursor-agent", "~/.local/bin or ~/.cursor/bin"),
         Opencode => ("opencode", "~/.opencode/bin or the npm global bin"),
         Pi => ("pi", "the npm global bin"),
+        Omp => ("omp", "the npm global bin or ~/.local/share/pnpm/bin"),
         Grok => ("grok", "~/.grok/bin or the npm global bin"),
         Hermes => ("hermes", "~/.local/bin or ~/.hermes/bin"),
         Devin => ("devin", "~/.local/bin"),
@@ -200,6 +205,7 @@ pub fn installed(id: HarnessId) -> bool {
         Cursor => crate::CursorHarness::new().installed(),
         Opencode => crate::OpencodeHarness::new().installed(),
         Pi => crate::PiHarness::new().installed(),
+        Omp => crate::OmpHarness::new().installed(),
         Grok => crate::AcpHarness::grok().installed(),
         Hermes => crate::AcpHarness::hermes().installed(),
         Devin => crate::AcpHarness::devin().installed(),
@@ -406,13 +412,14 @@ async fn run(
 mod tests {
     use super::*;
 
-    const IDS: [HarnessId; 12] = [
+    const IDS: [HarnessId; 13] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
         HarnessId::Copilot,
         HarnessId::Cursor,
         HarnessId::Opencode,
         HarnessId::Pi,
+        HarnessId::Omp,
         HarnessId::Grok,
         HarnessId::Hermes,
         HarnessId::Devin,

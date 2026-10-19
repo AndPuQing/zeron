@@ -118,6 +118,7 @@ fn project_dirs(harness: HarnessId) -> &'static [&'static str] {
         HarnessId::Grok => &[".agents/skills", ".claude/skills", ".grok/skills"],
         HarnessId::Hermes => &[".agents/skills"],
         HarnessId::Pi => &[".agents/skills", ".pi/skills"],
+        HarnessId::Omp => &[".agents/skills", ".omp/skills"],
         HarnessId::Devin => &[".agents/skills"],
         HarnessId::Antigravity => &[".agents/skills", ".gemini/skills"],
         HarnessId::Dsh => &[".agents/skills", ".dsh/skills"],
@@ -158,6 +159,13 @@ fn discover_at(harness: HarnessId, cwd: &Path, home: &Path) -> Result<Vec<Skill>
             std::env::var_os("PI_CODING_AGENT_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| home.join(".pi/agent"))
+                .join("skills"),
+            String::new(),
+        )),
+        HarnessId::Omp => roots.push((
+            std::env::var_os("PI_CODING_AGENT_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| home.join(".omp/agent"))
                 .join("skills"),
             String::new(),
         )),
@@ -296,7 +304,10 @@ fn scan_root(
             }
             let legacy_commands = root.file_name().is_some_and(|name| name == "commands");
             let flat = legacy_commands
-                || (matches!(harness, HarnessId::Opencode | HarnessId::Pi) && depth == 0);
+                || (matches!(
+                    harness,
+                    HarnessId::Opencode | HarnessId::Pi | HarnessId::Omp
+                ) && depth == 0);
             if entry.file_name() != "SKILL.md"
                 && !(flat && path.extension().is_some_and(|ext| ext == "md"))
             {

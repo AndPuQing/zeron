@@ -86,6 +86,13 @@ fn entries(device: &str) -> Vec<ExternalSessionEntry> {
         ),
         ("pi", "Trace the session tree", HarnessId::Pi, None, false),
         (
+            "omp",
+            "Import the Oh My Pi transcript",
+            HarnessId::Omp,
+            None,
+            false,
+        ),
+        (
             "opencode",
             "Verify native session forks",
             HarnessId::Opencode,

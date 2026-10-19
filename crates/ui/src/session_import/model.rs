@@ -12,6 +12,7 @@ pub enum SessionProvider {
     Hermes,
     Dsh,
     Pi,
+    Omp,
     Opencode,
 }
 
@@ -26,6 +27,7 @@ impl SessionProvider {
             Self::Hermes => "Hermes",
             Self::Dsh => "DeepSeek Harness",
             Self::Pi => "Pi",
+            Self::Omp => "Oh My Pi",
             Self::Opencode => "OpenCode",
         }
     }
@@ -40,6 +42,7 @@ impl SessionProvider {
             Self::Hermes => zeron_proto::HarnessId::Hermes,
             Self::Dsh => zeron_proto::HarnessId::Dsh,
             Self::Pi => zeron_proto::HarnessId::Pi,
+            Self::Omp => zeron_proto::HarnessId::Omp,
             Self::Opencode => zeron_proto::HarnessId::Opencode,
         }
     }

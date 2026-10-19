@@ -258,6 +258,12 @@ fn provider(id: HarnessId) -> ProviderSpec {
             update_args: Some(&["update", "--self"]),
             manual_command: "pi update --self",
         },
+        HarnessId::Omp => ProviderSpec {
+            version_args: &["--version"],
+            latest: LatestSource::Npm("@oh-my-pi/pi-coding-agent"),
+            update_args: Some(&["update"]),
+            manual_command: "omp update",
+        },
         HarnessId::Opencode => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::Opencode,

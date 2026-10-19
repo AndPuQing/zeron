@@ -208,7 +208,7 @@ fun SessionImportScreen(model: AppModel, onClose: () -> Unit) {
                         if (s.provider == null) ZIcon(ZIcons.Context, null, Modifier.size(18.dp)) else HarnessMark(s.provider, 18.dp)
                     })
                     ChoiceMenu(agentMenu, { agentMenu = false }, listOf(MenuSection(null,
-                        listOf<String?>(null, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "opencode").map { id ->
+                        listOf<String?>(null, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "omp", "opencode").map { id ->
                             MenuChoice(agentLabel(id), selected = s.provider == id, leading = {
                                 if (id == null) ZIcon(ZIcons.Context, null, Modifier.size(20.dp)) else HarnessMark(id, 20.dp)
                             }) { importer.setProvider(id) }
@@ -287,6 +287,7 @@ private fun agentLabel(provider: String?) = when (provider) {
     "hermes" -> "Hermes"
     "dsh" -> "DeepSeek Harness"
     "pi" -> "Pi"
+    "omp" -> "Oh My Pi"
     "opencode" -> "OpenCode"
     else -> "All agents"
 }

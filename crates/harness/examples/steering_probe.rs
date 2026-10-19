@@ -24,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
         "devin" => Arc::new(AcpHarness::devin()),
         "hermes" => Arc::new(AcpHarness::hermes()),
         "pi" => Arc::new(zeron_harness::PiHarness::new()),
+        "omp" => Arc::new(zeron_harness::OmpHarness::new()),
         "antigravity" => Arc::new(AcpHarness::antigravity()),
         _ => anyhow::bail!("unknown harness"),
     };

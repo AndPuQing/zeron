@@ -810,6 +810,27 @@ pub fn default_registry() -> HarnessRegistry {
             )
         }),
     );
+    // Native Oh My Pi (OMP) RPC. A Pi-derived product with its own handshake,
+    // framing and store; thinking levels are discovered per model.
+    registry.register_configured(
+        HarnessDescriptor {
+            id: HarnessId::Omp,
+            name: "Oh My Pi".into(),
+            supports_steering: true,
+            steering_mode: SteeringMode::StepBoundary,
+            reasoning_levels: Vec::new(),
+            installed: true,
+            can_install: false,
+            enabled: None,
+        },
+        Box::new(|| zeron_harness::OmpHarness::new().installed()),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::OmpHarness::new().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
+    );
     // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
     // desktop app speaks — `opencode serve` + the /global/event bus), same
     // lazy pattern: the static descriptor mirrors OpencodeHarness exactly.
@@ -988,6 +1009,7 @@ mod tests {
                 HarnessId::Grok,
                 HarnessId::Hermes,
                 HarnessId::Pi,
+                HarnessId::Omp,
                 HarnessId::Opencode,
                 HarnessId::Antigravity,
                 HarnessId::Dsh,
@@ -1054,6 +1076,11 @@ mod tests {
         assert_eq!(pi.display_name(), "Pi");
         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
         assert!(pi.reasoning_levels().is_empty());
+        let omp = registry.resolve(HarnessId::Omp).unwrap();
+        assert_eq!(omp.id(), HarnessId::Omp);
+        assert_eq!(omp.display_name(), "Oh My Pi");
+        assert_eq!(omp.steering_mode(), SteeringMode::StepBoundary);
+        assert!(omp.reasoning_levels().is_empty());
         let dsh = registry.resolve(HarnessId::Dsh).unwrap();
         assert_eq!(dsh.id(), HarnessId::Dsh);
         assert_eq!(dsh.display_name(), "DeepSeek Harness");
