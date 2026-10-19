@@ -151,7 +151,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
                 let identity = self.composer.commandContext
                 guard let client = self.app.client else { throw CancellationError() }
                 let models = try await client.listModels(deviceId: self.deviceId, harness: self.draft.harness)
-                guard identity == self.composer.commandContext else { throw CancellationError() }
+                guard identity == self.composer.commandContext, self.view.window != nil else { throw CancellationError() }
                 guard !models.isEmpty else {
                     throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
                 }

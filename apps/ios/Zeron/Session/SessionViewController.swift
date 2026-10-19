@@ -561,7 +561,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             guard let config = client.sessionConfig(chatId: chatId) else { throw CancellationError() }
             let identity = source.commandContext
             let models = try await client.listModels(deviceId: handle.composer().host.deviceId, harness: config.harness)
-            guard identity == source.commandContext else { throw CancellationError() }
+            guard identity == source.commandContext, view.window != nil else { throw CancellationError() }
             guard !models.isEmpty else {
                 throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
             }
@@ -603,7 +603,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         case .side:
             router?.openChildSession(try app.createSideChat(parentId: chatId))
         case .fork:
+            let identity = source.commandContext
             let id = try await app.forkSideChat(sourceId: chatId)
+            guard identity == source.commandContext, view.window != nil else { return }
             router?.openChildSession(id)
         }
     }
