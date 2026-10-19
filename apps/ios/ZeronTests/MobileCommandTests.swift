@@ -55,6 +55,25 @@ final class MobileCommandTests: XCTestCase {
     }
 
     @MainActor
+    func testLateMenuClickFromPreviousContextIsIgnored() {
+        let suggestions = CommandSuggestions()
+        suggestions.context = "old-host:codex"
+        var picked = false
+        suggestions.onPick = { _ in picked = true }
+        var command = modelCommand
+        command.unavailableReason = nil
+        suggestions.show(ComposerCatalog(commands: [command], warning: nil), query: "")
+        func commandButton(_ view: UIView) -> UIButton? {
+            if view.accessibilityIdentifier == "slash-/model" { return view as? UIButton }
+            return view.subviews.compactMap(commandButton).first
+        }
+        let button = commandButton(suggestions)!
+        suggestions.context = "new-host:claude-code"
+        button.sendActions(for: .primaryActionTriggered)
+        XCTAssertFalse(picked)
+    }
+
+    @MainActor
     func testRejectedForkPreservesDraft() {
         let composer = ComposerBar()
         composer.commandHarness = { "codex" }

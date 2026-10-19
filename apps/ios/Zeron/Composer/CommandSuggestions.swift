@@ -3,6 +3,7 @@ import UIKit
 /// Scrollable catalog; unavailable commands retain their explanation.
 final class CommandSuggestions: UIView {
     var onPick: ((ComposerCommand) -> Void)?
+    var context = ""
     var onRetry: (() -> Void)?
     private let card = Glass.surface(radius: 18)
     private let scroll = UIScrollView()
@@ -41,6 +42,7 @@ final class CommandSuggestions: UIView {
         let rows = catalog?.commands.filter {
             query.isEmpty || $0.token.dropFirst().localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query)
         } ?? []
+        let context = self.context
         for command in rows {
             var config = UIButton.Configuration.plain()
             config.title = command.token + (command.inputHint.map { "  \($0)" } ?? "")
@@ -49,7 +51,8 @@ final class CommandSuggestions: UIView {
             config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
             config.baseForegroundColor = command.unavailableReason == nil ? Palette.text : Palette.tertiary
             let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
-                self?.onPick?(command)
+                guard let self, self.context == context else { return }
+                self.onPick?(command)
             })
             button.contentHorizontalAlignment = .leading
             button.isEnabled = command.unavailableReason == nil

@@ -111,7 +111,8 @@ class ComposerModel(initial: String = "") {
         return (start until end) to trimmed.drop(1)
     }
 
-    fun insertCommand(command: uniffi.zeron_core.ComposerCommand) {
+    fun insertCommand(command: uniffi.zeron_core.ComposerCommand, expectedContext: String = commandContext) {
+        if (expectedContext != commandContext) return
         val (range, _) = slashQuery() ?: return
         if (performLocalCommand(command.insertion, range)) return
         if (command.unavailableReason != null) return

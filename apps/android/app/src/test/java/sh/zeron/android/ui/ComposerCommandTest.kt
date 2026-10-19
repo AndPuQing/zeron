@@ -36,6 +36,13 @@ class ComposerCommandTest {
         assertNull(model.slashQuery())
     }
 
+    @Test fun lateSelectionFromAnotherContextIsIgnored() {
+        val model = ComposerModel("/go")
+        model.commandContext = "new-host:codex"
+        model.insertCommand(goal, "old-host:codex")
+        assertEquals("/go", model.text)
+    }
+
     @Test fun completionAddsArgumentSpace() {
         val model = ComposerModel("/go")
         model.insertCommand(goal)

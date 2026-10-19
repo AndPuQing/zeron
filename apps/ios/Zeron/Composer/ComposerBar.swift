@@ -129,6 +129,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     var commandContext = "" {
         didSet {
             if commandContext != oldValue {
+                commandSuggestions.context = commandContext
                 if !oldValue.isEmpty {
                     selectedCommands = selectedCommands.mapValues { command in
                         var invalid = command

@@ -53,6 +53,7 @@ fun CommandSuggestions(
         ?.sortedWith(compareBy({ it.unavailableReason != null }, { it.token }))?.filter {
         query.isEmpty() || it.token.drop(1).contains(query, ignoreCase = true) || it.description.contains(query, ignoreCase = true)
     }.orEmpty()
+    val selectionContext = model.commandContext
     val scroll = rememberScrollState()
     LaunchedEffect(query) { scroll.scrollTo(0) }
     GlassSurface(
@@ -64,7 +65,7 @@ fun CommandSuggestions(
                 val enabled = command.unavailableReason == null
                 Column(
                     Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.55f)
-                        .clickable(enabled = enabled) { model.insertCommand(command) }
+                        .clickable(enabled = enabled) { model.insertCommand(command, selectionContext) }
                         .testTag("slash-${command.token}")
                         .padding(horizontal = 14.dp, vertical = 10.dp),
                 ) {
