@@ -459,7 +459,11 @@ impl ImportController {
             .filter(|r| s.visible(r) && selectable(r))
             .map(|r| r.source_ref.clone())
             .collect();
-        let clear = !refs.is_empty() && refs.iter().all(|r| s.selected.contains(r));
+        // At the batch cap a partial selection cannot grow. Let the same
+        // control clear the visible selection instead of becoming a dead end.
+        let clear = !refs.is_empty()
+            && (refs.iter().all(|r| s.selected.contains(r))
+                || (s.selected.len() == LIMIT && refs.iter().any(|r| s.selected.contains(r))));
         for r in refs {
             if clear {
                 s.selected.remove(&r);

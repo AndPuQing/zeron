@@ -1,9 +1,8 @@
 import UIKit
 
 /// Remote history selection; the Rust controller owns discovery and batch lifetimes.
-final class SessionImportViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, UIAdaptivePresentationControllerDelegate {
-    private enum Section: Equatable { case notices, results, sessions, unavailable, actions }
-    private enum ListAction: Equatable { case selectVisible, loadMore }
+final class SessionImportViewController: UIViewController, UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate, UIAdaptivePresentationControllerDelegate {
+    private enum Section: Equatable { case notices, results, sessions, unavailable }
     private let app: AppModel
     private var importer: CoreSessionImport?
     private var state: SessionImportSnapshot?
@@ -11,18 +10,20 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
     private lazy var bridge = ImportListenerBridge(owner: self)
     private let hostButton = UIButton(type: .system)
     private let agents = UIButton(type: .system)
-    private let search = UITextField()
+    private let search = UISearchBar()
     private let table = UITableView(frame: .zero, style: .insetGrouped)
     private let status = UILabel()
     private let primary = UIButton(type: .system)
     private let retry = UIButton(type: .system)
     private let progress = UIProgressView(progressViewStyle: .default)
     private let spinner = UIActivityIndicatorView(style: .medium)
+    private let pagingSpinner = UIActivityIndicatorView(style: .medium)
+    private let selectAll = UIButton(type: .system)
+    private let sessionsHeading = UITableViewHeaderFooterView(reuseIdentifier: nil)
     private let header = UIStackView()
-    private let searchGlass = Glass.surface()
     private let footer = UIStackView()
     private var sections: [Section] = []
-    private var actions: [ListAction] = []
+    private var pageRequestScheduled = false
     private var availableRows: [SessionImportRow] = []
     private var unavailableRows: [SessionImportRow] = []
     private var showsUnavailable = false
@@ -49,47 +50,30 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         agents.changesSelectionAsPrimaryAction = true
         agents.accessibilityIdentifier = "import-agents"
         search.placeholder = "Search sessions"
-        search.font = .preferredFont(forTextStyle: .body)
-        search.adjustsFontForContentSizeCategory = true
-        search.textColor = Palette.text
-        search.clearButtonMode = .whileEditing
+        search.searchBarStyle = .minimal
+        search.searchTextField.adjustsFontForContentSizeCategory = true
+        search.searchTextField.accessibilityIdentifier = "import-search"
         search.returnKeyType = .search
         search.autocapitalizationType = .none
         search.autocorrectionType = .no
-        search.accessibilityLabel = "Search sessions"
-        search.accessibilityIdentifier = "import-search"
         search.delegate = self
-        search.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            self.importer?.setQuery(query: self.search.text ?? "")
-        }, for: .editingChanged)
         let pickers = UIStackView(arrangedSubviews: [hostButton, agents])
         pickers.distribution = .fillEqually
         pickers.spacing = 10
-        let searchIcon = UIImageView(image: UIImage(systemName: "magnifyingglass"))
-        searchIcon.tintColor = Palette.secondary
-        searchIcon.setContentHuggingPriority(.required, for: .horizontal)
-        let searchContents = UIStackView(arrangedSubviews: [searchIcon, search])
-        searchContents.alignment = .center
-        searchContents.spacing = 8
-        searchContents.translatesAutoresizingMaskIntoConstraints = false
-        searchGlass.contentView.addSubview(searchContents)
         NSLayoutConstraint.activate([
             hostButton.heightAnchor.constraint(greaterThanOrEqualToConstant: Glass.Metrics.control),
             agents.heightAnchor.constraint(greaterThanOrEqualToConstant: Glass.Metrics.control),
-            searchGlass.heightAnchor.constraint(greaterThanOrEqualToConstant: Glass.Metrics.control),
-            searchContents.leadingAnchor.constraint(equalTo: searchGlass.contentView.leadingAnchor, constant: 14),
-            searchContents.trailingAnchor.constraint(equalTo: searchGlass.contentView.trailingAnchor, constant: -14),
-            searchContents.topAnchor.constraint(equalTo: searchGlass.contentView.topAnchor, constant: 10),
-            searchContents.bottomAnchor.constraint(equalTo: searchGlass.contentView.bottomAnchor, constant: -10),
         ])
         header.addArrangedSubview(pickers)
-        header.addArrangedSubview(searchGlass)
+        header.addArrangedSubview(search)
         header.axis = .vertical
         header.spacing = 8
         table.backgroundColor = .clear
         table.dataSource = self
         table.delegate = self
+        table.allowsMultipleSelectionDuringEditing = true
+        table.setEditing(true, animated: false)
+        table.alwaysBounceVertical = true
         table.keyboardDismissMode = .onDrag
         table.estimatedRowHeight = 64
         table.rowHeight = UITableView.automaticDimension
@@ -98,6 +82,18 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         table.contentInset.bottom = 8
         table.sectionHeaderTopPadding = 0
         table.accessibilityIdentifier = "import-list"
+        selectAll.accessibilityIdentifier = "import-select-all"
+        selectAll.addAction(UIAction { [weak self] _ in self?.importer?.selectVisible() }, for: .touchUpInside)
+        let heading = UIStackView(arrangedSubviews: [selectAll])
+        heading.translatesAutoresizingMaskIntoConstraints = false
+        sessionsHeading.contentView.addSubview(heading)
+        NSLayoutConstraint.activate([
+            heading.leadingAnchor.constraint(equalTo: sessionsHeading.contentView.layoutMarginsGuide.leadingAnchor),
+            heading.trailingAnchor.constraint(lessThanOrEqualTo: sessionsHeading.contentView.layoutMarginsGuide.trailingAnchor),
+            heading.topAnchor.constraint(equalTo: sessionsHeading.contentView.topAnchor),
+            heading.bottomAnchor.constraint(equalTo: sessionsHeading.contentView.bottomAnchor),
+            selectAll.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+        ])
         status.font = .preferredFont(forTextStyle: .footnote)
         status.textColor = Palette.secondary
         status.adjustsFontForContentSizeCategory = true
@@ -162,9 +158,11 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         alert.addAction(UIAlertAction(title: "Stop and close", style: .destructive) { [weak self] _ in self?.importer?.dismiss(); self?.dismiss(animated: true) })
         present(alert, animated: true)
     }
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        textField.resignFirstResponder()
-        return true
+    func searchBar(_ searchBar: UISearchBar, textDidChange searchText: String) {
+        importer?.setQuery(query: searchText)
+    }
+    func searchBarSearchButtonClicked(_ searchBar: UISearchBar) {
+        searchBar.resignFirstResponder()
     }
 
     private func updatePicker(_ button: UIButton, title: String, image: UIImage?) {
@@ -227,8 +225,37 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
                      state: s.provider == provider ? .on : .off) { [weak self] _ in self?.importer?.setProvider(provider: provider) }
         })
         agents.isHidden = s.deviceId == nil
-        searchGlass.isHidden = s.deviceId == nil
-        if s.loading { spinner.startAnimating() } else { spinner.stopAnimating() }
+        search.isHidden = s.deviceId == nil
+        if s.loading && s.rows.isEmpty { spinner.startAnimating() } else { spinner.stopAnimating() }
+        if s.loading && !s.rows.isEmpty {
+            pagingSpinner.frame = CGRect(x: 0, y: 0, width: table.bounds.width, height: 44)
+            table.tableFooterView = pagingSpinner
+            pagingSpinner.startAnimating()
+        } else {
+            pagingSpinner.stopAnimating()
+            table.tableFooterView = nil
+        }
+        let selectedVisible = availableRows.filter(\.selected).count
+        let allSelected = !availableRows.isEmpty && selectedVisible == availableRows.count
+        let willClear = allSelected || (selectedVisible > 0 && s.selectedCount == s.selectionLimit)
+        var selectionStyle = UIButton.Configuration.plain()
+        selectionStyle.title = "Not imported"
+        selectionStyle.image = UIImage(systemName: allSelected ? "checkmark.circle.fill" : selectedVisible > 0 ? "minus.circle.fill" : "circle")
+        selectionStyle.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
+        selectionStyle.imagePadding = 12
+        selectionStyle.baseForegroundColor = selectedVisible > 0 ? Palette.accent : Palette.secondary
+        selectionStyle.contentInsets = .zero
+        selectionStyle.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
+            var attributes = incoming
+            attributes.font = UIFont.preferredFont(forTextStyle: .subheadline)
+            attributes.foregroundColor = Palette.secondary
+            return attributes
+        }
+        selectAll.configuration = selectionStyle
+        selectAll.accessibilityLabel = willClear ? "Deselect loaded sessions" : "Select all loaded sessions"
+        selectAll.accessibilityValue = allSelected ? "All selected" : selectedVisible > 0 ? "Some selected" : "None selected"
+        selectAll.accessibilityHint = "Applies to loaded sessions matching your filters. Up to \(s.selectionLimit) sessions per import."
+        selectAll.isEnabled = !availableRows.isEmpty && !s.running && !s.loading
         let done = s.results.filter { $0.phase != .pending && $0.phase != .importing }.count
         let imported = s.results.filter { $0.phase == .imported || $0.phase == .alreadyManaged }.count
         progress.isHidden = !s.running
@@ -247,11 +274,18 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
             sections.append(.sessions)
             if !unavailableRows.isEmpty { sections.append(.unavailable) }
         }
-        actions = []
-        if !availableRows.isEmpty { actions.append(.selectVisible) }
-        if s.hasMore { actions.append(.loadMore) }
-        if !actions.isEmpty { sections.append(.actions) }
+        reloadList()
+    }
+    private func reloadList() {
+        for indexPath in table.indexPathsForSelectedRows ?? [] {
+            table.deselectRow(at: indexPath, animated: false)
+        }
         table.reloadData()
+        if let section = sections.firstIndex(of: .sessions) {
+            for (row, session) in availableRows.enumerated() where session.selected {
+                table.selectRow(at: IndexPath(row: row, section: section), animated: false, scrollPosition: .none)
+            }
+        }
     }
     func numberOfSections(in tableView: UITableView) -> Int { sections.count }
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -261,18 +295,20 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         case .results: return s.results.count
         case .sessions: return availableRows.isEmpty && !s.loading ? 1 : availableRows.count
         case .unavailable: return 1 + (showsUnavailable ? unavailableRows.count : 0)
-        case .actions: return actions.count
         }
     }
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch sections[section] {
         case .results: return "Import results"
-        case .sessions: return "Not imported"
         default: return nil
         }
     }
+    func tableView(_ tableView: UITableView, viewForHeaderInSection section: Int) -> UIView? {
+        sections[section] == .sessions ? sessionsHeading : nil
+    }
     func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
-        self.tableView(tableView, titleForHeaderInSection: section) == nil ? .leastNormalMagnitude : UITableView.automaticDimension
+        if sections[section] == .sessions { return UITableView.automaticDimension }
+        return self.tableView(tableView, titleForHeaderInSection: section) == nil ? .leastNormalMagnitude : UITableView.automaticDimension
     }
     func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat { 8 }
     private func emptyMessage(_ s: SessionImportSnapshot) -> String {
@@ -293,13 +329,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         content.textProperties.color = row.disabledReason == nil ? Palette.text : Palette.secondary
         cell.accessibilityIdentifier = "import-session-\(row.sourceRef)"
         cell.accessibilityTraits = row.disabledReason == nil ? [.button] : [.notEnabled]
-        if row.disabledReason == nil {
-            let mark = UIImageView(image: UIImage(systemName: row.selected ? "checkmark.circle.fill" : "circle",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 22)))
-            mark.tintColor = row.selected ? Palette.accent : Palette.tertiary
-            cell.accessoryView = mark
-            cell.selectionStyle = state?.running == false && state?.loading == false ? .default : .none
-        }
+        cell.selectionStyle = row.disabledReason == nil ? .default : .none
         if row.selected { cell.accessibilityTraits.insert(.selected) }
     }
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -333,7 +363,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
             }
         case .unavailable:
             if indexPath.row == 0 {
-                content.text = "\(unavailableRows.count) unavailable sessions"
+                content.text = "\(unavailableRows.count) unavailable \(unavailableRows.count == 1 ? "session" : "sessions")"
                 content.textProperties.color = Palette.secondary
                 content.image = UIImage(systemName: showsUnavailable ? "chevron.down" : "chevron.right",
                     withConfiguration: UIImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
@@ -344,12 +374,6 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
             } else {
                 configureSession(unavailableRows[indexPath.row - 1], cell: cell, content: &content)
             }
-        case .actions:
-            let action = actions[indexPath.row]
-            content.text = action == .selectVisible ? "Select visible" : "Load more sessions"
-            cell.accessibilityIdentifier = action == .selectVisible ? "import-select-visible" : "import-load-more"
-            content.textProperties.color = s.running || s.loading ? Palette.secondary : Palette.accent
-            cell.accessibilityTraits = .button
         }
         var background = UIBackgroundConfiguration.listGroupedCell()
         background.backgroundColor = Palette.elevated
@@ -357,12 +381,27 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         cell.contentConfiguration = content
         return cell
     }
+    func tableView(_ tableView: UITableView, canEditRowAt indexPath: IndexPath) -> Bool {
+        sections[indexPath.section] == .sessions && !availableRows.isEmpty
+    }
+    func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
+        if sections[indexPath.section] == .sessions && (availableRows.isEmpty || state?.running != false || state?.loading != false) { return nil }
+        return indexPath
+    }
+    func tableView(_ tableView: UITableView, willDeselectRowAt indexPath: IndexPath) -> IndexPath? {
+        state?.running == false && state?.loading == false ? indexPath : nil
+    }
+    func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
+        if sections[indexPath.section] == .sessions && !availableRows.isEmpty {
+            importer?.toggle(sourceRef: availableRows[indexPath.row].sourceRef)
+        }
+    }
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
+        if sections[indexPath.section] != .sessions { tableView.deselectRow(at: indexPath, animated: true) }
         guard let s = state else { return }
         if sections[indexPath.section] == .unavailable && indexPath.row == 0 {
             showsUnavailable.toggle()
-            table.reloadData()
+            reloadList()
             return
         }
         guard !s.running, !s.loading else { return }
@@ -371,12 +410,23 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
             if indexPath.row == notices.count { if s.hasMore { importer?.loadMore() } else { importer?.refresh() } }
         case .sessions:
             if !availableRows.isEmpty { importer?.toggle(sourceRef: availableRows[indexPath.row].sourceRef) }
-        case .actions:
-            switch actions[indexPath.row] {
-            case .selectVisible: importer?.selectVisible()
-            case .loadMore: importer?.loadMore()
-            }
         default: break
+        }
+    }
+    func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // Only a person's upward scroll requests another page. Snapshot reloads,
+        // keyboard resizing and failed requests must not start a retry loop.
+        guard scrollView.isDragging || scrollView.isDecelerating,
+              scrollView.panGestureRecognizer.translation(in: scrollView).y < 0,
+              scrollView.contentOffset.y + scrollView.bounds.height >= scrollView.contentSize.height - 120,
+              let s = state, s.hasMore, !s.loading, !s.running, s.discoveryError == nil,
+              !pageRequestScheduled else { return }
+        pageRequestScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pageRequestScheduled = false
+            guard let s = self.state, s.hasMore, !s.loading, !s.running, s.discoveryError == nil else { return }
+            self.importer?.loadMore()
         }
     }
     private func phaseLabel(_ phase: SessionImportPhase) -> String {

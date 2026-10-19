@@ -32,7 +32,7 @@ final class SessionFlowTests: XCTestCase {
     func testImportSessionsKeepsRowsBetweenControls() {
         let app = launch(["-appearance", "1"])
         openImport(app)
-        let search = app.textFields["import-search"]
+        let search = app.searchFields["import-search"]
         let list = app.tables["import-list"]
         let primary = app.buttons["import-primary"]
         let first = app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch
@@ -41,12 +41,19 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertLessThan(primary.frame.height, 65, "the normal action is one compact row")
         XCTAssertFalse(primary.isEnabled)
         XCTAssertEqual(app.staticTexts["import-status"].label, "Select sessions")
+        XCTAssertFalse(app.cells["import-select-visible"].exists)
+        XCTAssertFalse(app.cells["import-load-more"].exists)
+        let selectAll = app.buttons["import-select-all"]
+        XCTAssertTrue(selectAll.exists)
+        XCTAssertGreaterThanOrEqual(selectAll.frame.height, 44)
+        XCTAssertEqual(selectAll.value as? String, "None selected")
         snapshot(app, "ios-import-light")
 
         first.tap()
         XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected")
         XCTAssertTrue(primary.isEnabled)
+        XCTAssertEqual(selectAll.value as? String, "Some selected")
         snapshot(app, "ios-import-selected")
 
         search.tap()
@@ -60,6 +67,20 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected", "filtering preserves the selection")
         snapshot(app, "ios-import-search")
+        selectAll.tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        XCTAssertEqual(selectAll.value as? String, "All selected")
+        selectAll.tap()
+        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5), "clearing filtered rows preserves hidden selections")
+        search.buttons["Clear text"].tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.isSelected, "native row selection follows the source identity after filtering")
+        search.typeText("\n")
+        selectAll.tap()
+        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        selectAll.tap()
+        XCTAssertTrue(app.staticTexts["Select sessions"].waitForExistence(timeout: 5))
+        XCTAssertFalse(primary.isEnabled)
     }
 
     func testImportSessionsFoldsUnavailableAndLoadsMore() {
@@ -80,10 +101,9 @@ final class SessionFlowTests: XCTestCase {
         unavailable.tap()
         XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
 
-        let more = app.cells["import-load-more"]
-        for _ in 0..<3 where !more.isHittable { list.swipeUp() }
-        more.tap()
+        list.swipeUp()
         XCTAssertTrue(app.cells.containing(.staticText, identifier: "Polish the mobile layout").firstMatch.waitForExistence(timeout: 10))
+        list.swipeDown()
         let agents = app.buttons["import-agents"]
         agents.tap()
         app.buttons["Claude Code"].tap()
