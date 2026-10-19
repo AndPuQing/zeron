@@ -21,6 +21,77 @@ final class SessionFlowTests: XCTestCase {
         add(shot)
     }
 
+    private func openImport(_ app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Import sessions…"].tap()
+        XCTAssertTrue(app.navigationBars["Import sessions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testImportSessionsKeepsRowsBetweenControls() {
+        let app = launch(["-appearance", "1"])
+        openImport(app)
+        let search = app.textFields["import-search"]
+        let list = app.tables["import-list"]
+        let primary = app.buttons["import-primary"]
+        let first = app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch
+        XCTAssertLessThan(first.frame.minY - search.frame.maxY, 80, "empty sections must not leave a gap above the first session")
+        XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY, "the action stays outside the scrollable list")
+        XCTAssertLessThan(primary.frame.height, 65, "the normal action is one compact row")
+        XCTAssertFalse(primary.isEnabled)
+        XCTAssertEqual(app.staticTexts["import-status"].label, "Select sessions")
+        snapshot(app, "ios-import-light")
+
+        first.tap()
+        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected")
+        XCTAssertTrue(primary.isEnabled)
+        snapshot(app, "ios-import-selected")
+
+        search.tap()
+        search.typeText("deployment")
+        let matching = app.cells.containing(.staticText, identifier: "Review the deployment workflow").firstMatch
+        XCTAssertTrue(matching.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(primary.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+        XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY)
+        search.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected", "filtering preserves the selection")
+        snapshot(app, "ios-import-search")
+    }
+
+    func testImportSessionsFoldsUnavailableAndLoadsMore() {
+        let app = launch(["-appearance", "2"])
+        openImport(app)
+        let list = app.tables["import-list"]
+        let unavailable = app.cells["import-unavailable"]
+        XCTAssertTrue(unavailable.exists)
+        XCTAssertEqual(unavailable.value as? String, "Collapsed")
+        XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
+        snapshot(app, "ios-import-dark")
+
+        unavailable.tap()
+        XCTAssertEqual(unavailable.value as? String, "Expanded")
+        XCTAssertTrue(app.staticTexts["Archived project notes"].exists)
+        XCTAssertFalse(app.buttons["import-primary"].isEnabled)
+        snapshot(app, "ios-import-unavailable")
+        unavailable.tap()
+        XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
+
+        let more = app.cells["import-load-more"]
+        for _ in 0..<3 where !more.isHittable { list.swipeUp() }
+        more.tap()
+        XCTAssertTrue(app.cells.containing(.staticText, identifier: "Polish the mobile layout").firstMatch.waitForExistence(timeout: 10))
+        app.buttons["import-agents"].tap()
+        snapshot(app, "ios-import-agents")
+        app.buttons["Claude Code"].tap()
+        XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Improve import navigation"].exists)
+        XCTAssertTrue(app.staticTexts["Review the deployment workflow"].exists)
+    }
+
     func testFrontPageShowsFoldersAndRecents() {
         let app = launch()
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
