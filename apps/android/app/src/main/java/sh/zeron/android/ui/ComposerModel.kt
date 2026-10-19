@@ -97,7 +97,6 @@ class ComposerModel(initial: String = "") {
         return true
     }
 
-
     /** Only the leading / token opens completion; replace the entire token at the cursor. */
     fun slashQuery(): Pair<IntRange, String>? {
         if (!value.selection.collapsed || value.composition != null) return null

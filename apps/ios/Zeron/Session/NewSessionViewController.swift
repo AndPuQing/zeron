@@ -148,9 +148,15 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             guard let self else { throw CancellationError() }
             switch action {
             case .model:
-                let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
                 let identity = self.composer.commandContext
-                for model in self.models where model.harness == self.draft.harness {
+                guard let client = self.app.client else { throw CancellationError() }
+                let models = try await client.listModels(deviceId: self.deviceId, harness: self.draft.harness)
+                guard identity == self.composer.commandContext else { throw CancellationError() }
+                guard !models.isEmpty else {
+                    throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
+                }
+                let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
+                for model in models {
                     sheet.addAction(UIAlertAction(title: model.label, style: .default) { [weak self] _ in
                         guard let self, identity == self.composer.commandContext else { return }
                         self.draft.model = model.id

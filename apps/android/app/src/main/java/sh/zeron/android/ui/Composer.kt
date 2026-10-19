@@ -191,8 +191,8 @@ fun Composer(
     }
 
     fun send() {
-        if (draft.performLocalCommand()) return
         if (draft.selectionError != null) return
+        if (draft.performLocalCommand()) return
         if (!draft.hasContent) return
         if (editingId != null) {
             finishEdit(draft.encoded())

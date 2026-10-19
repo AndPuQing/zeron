@@ -74,9 +74,10 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
 
     private func resolvedCatalog(_ catalog: ComposerCatalog?) -> ComposerCatalog? {
         guard var catalog else { return nil }
+        let context = localCommandContext?()
         catalog.commands = catalog.commands.map { command in
             guard let local = mobileComposerAction(harness: commandHarness?() ?? "", text: command.insertion),
-                  let context = localCommandContext?(), onLocalCommand != nil else { return command }
+                  let context, onLocalCommand != nil else { return command }
             var row = command
             row.description = local.description
             row.unavailableReason = localCommandPending ? "An action is already in progress." : mobileComposerActionError(action: local.action, context: context)
@@ -111,7 +112,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         textChanged()
         Task { [weak self] in
             guard let self else { return }
-            defer { self.localCommandPending = false; self.refreshLocalCommands() }
+            defer { self.localCommandPending = false; self.refreshAction(animated: false); self.refreshLocalCommands() }
             do {
                 guard self.commandContext == identity else { throw CancellationError() }
                 try await perform(local.action)
@@ -780,7 +781,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             warningZeroHeight.isActive = error == nil
             onHeightChange?()
         }
-        let enabled = action == .stop || (hasContent && error == nil)
+        let enabled = action == .stop || (hasContent && selectionError == nil && !localCommandPending)
         let steering = action == .queue && preferredDelivery == .steer && canSteer
         var config = UIButton.Configuration.filled()
         config.cornerStyle = .capsule
@@ -852,6 +853,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     private func send(_ mode: DeliveryMode) {
+        guard selectionError == nil, !localCommandPending else { return }
         if let local = mobileComposerAction(harness: commandHarness?() ?? "", text: textView.text), onLocalCommand != nil {
             if local.hasArguments {
                 localCommandMessage = "This action takes no arguments. Select it from the / menu to keep the rest of your draft."
@@ -861,7 +863,6 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             }
             return
         }
-        guard selectionError == nil else { return }
         guard hasContent else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         let body = mentions.encode(encodedDraft.trimmingCharacters(in: .whitespacesAndNewlines))

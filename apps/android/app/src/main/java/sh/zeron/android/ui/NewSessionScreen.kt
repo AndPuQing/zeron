@@ -114,8 +114,8 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     LaunchedEffect(Unit) { focus.requestFocus() }
 
     fun create() {
-        if (composer.performLocalCommand()) return
         if (composer.selectionError != null) return
+        if (composer.performLocalCommand()) return
         model.lastDraft = draft
         val id = model.createSession(draft.copy(model = draft.model ?: choice?.model?.id), composer.encoded(), composer.images.map { it.outgoing })
         if (id != null) { composer.clear(); onCreated(id) } else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }

@@ -562,6 +562,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             let identity = source.commandContext
             let models = try await client.listModels(deviceId: handle.composer().host.deviceId, harness: config.harness)
             guard identity == source.commandContext else { throw CancellationError() }
+            guard !models.isEmpty else {
+                throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
+            }
             let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
             for model in models {
                 sheet.addAction(UIAlertAction(title: model.label, style: .default) { [weak self] _ in
