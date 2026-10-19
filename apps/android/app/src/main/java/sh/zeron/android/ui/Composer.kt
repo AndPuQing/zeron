@@ -245,8 +245,14 @@ fun Composer(
         try { client.renameSession(c.chatId, title) } catch (e: Exception) { error = e.message }
     }
 
-    // Leaving the session gives an edited row straight back.
-    DisposableEffect(c.chatId) { onDispose { finishEdit(null); draft.localActions = null } }
+    // The composer survives navigation; a queued edit must not become its next draft.
+    DisposableEffect(c.chatId, draft) {
+        onDispose {
+            finishEdit(null)
+            restoreStash()
+            draft.localActions = null
+        }
+    }
 
     Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp)) {
         if (c.queue.isNotEmpty()) QueuePanel(c.queue, handle, editingId, onEdit = ::beginEdit)

@@ -132,7 +132,13 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
             }
         })
 
-    androidx.compose.runtime.DisposableEffect(composer) { onDispose { composer.localActions = null } }
+    androidx.compose.runtime.DisposableEffect(model, composer) {
+        onDispose {
+            // Keep the execution target with the retained text on Close and system Back too.
+            model.lastDraft = draft
+            composer.localActions = null
+        }
+    }
 
     var composerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     GlassScene(
