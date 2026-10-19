@@ -343,6 +343,10 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         cell.accessoryView = nil
         cell.accessibilityIdentifier = nil
         cell.accessibilityValue = nil
+        // Keep pagination available to VoiceOver without an extra visible row.
+        cell.accessibilityCustomActions = s.hasMore && !s.loading && !s.running && s.discoveryError == nil
+            ? [UIAccessibilityCustomAction(name: "Load more sessions") { [weak self] _ in self?.loadNextPage() ?? false }]
+            : nil
         cell.selectionStyle = .none
         cell.accessibilityTraits = .staticText
         switch sections[indexPath.section] {
@@ -425,9 +429,14 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.pageRequestScheduled = false
-            guard let s = self.state, s.hasMore, !s.loading, !s.running, s.discoveryError == nil else { return }
-            self.importer?.loadMore()
+            self.loadNextPage()
         }
+    }
+    @discardableResult
+    private func loadNextPage() -> Bool {
+        guard let s = state, s.hasMore, !s.loading, !s.running, s.discoveryError == nil, let importer else { return false }
+        importer.loadMore()
+        return true
     }
     private func phaseLabel(_ phase: SessionImportPhase) -> String {
         switch phase {
