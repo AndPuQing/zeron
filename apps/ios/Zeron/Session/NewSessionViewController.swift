@@ -171,7 +171,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             case .search, .appearance:
                 self.rememberDraft()
                 let router = self.router
-                let navigate = {
+                let navigate: () -> Void = {
                     if action == .search { router?.showSearch() } else { router?.showSettings() }
                 }
                 if self.embedded { navigate() } else { self.dismiss(animated: true, completion: navigate) }

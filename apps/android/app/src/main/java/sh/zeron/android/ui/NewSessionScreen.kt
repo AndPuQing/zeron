@@ -386,12 +386,16 @@ private fun ModelChip(
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    LaunchedEffect(modelRequest) { if (modelRequest > 0) open = true }
+    var currentAgentOnly by remember { mutableStateOf(false) }
+    LaunchedEffect(modelRequest) {
+        if (modelRequest > 0) { currentAgentOnly = true; open = true }
+    }
+    val offeredModels = if (currentAgentOnly) models.filter { it.harness == draft.harness } else models
     // Never the harness name in place of a model.
     val title = choice?.model?.label ?: draft.model?.let { modelLabel(draft.harness, it) }
         ?: fallbackModels(draft.harness).firstOrNull()?.label ?: harnessLabel(draft.harness)
-    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { open = true }) {
-        ChoiceMenu(open, { open = false }, models.groupBy { it.harness }.map { (harness, list) ->
+    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { currentAgentOnly = false; open = true }) {
+        ChoiceMenu(open, { open = false }, offeredModels.groupBy { it.harness }.map { (harness, list) ->
             MenuSection(list.first().harnessLabel, list.map { m ->
                 MenuChoice(m.model.label, m.harness == draft.harness && m.model.id == choice?.model?.id, leading = { HarnessMark(harness, 18.dp) }) {
                     onPick(draft.copy(harness = m.harness, model = m.model.id, effort = null))
