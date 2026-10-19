@@ -290,7 +290,23 @@ jobs:
             -only-testing:ZeronUITests/SessionFlowTests/testSheetForkEnablesWhenFirstReplyLands \
             -only-testing:ZeronUITests/SessionFlowTests/testArchivingSideChatUpdatesParent \
             -only-testing:ZeronUITests/SessionFlowTests/testForkToSideChatFromMenu \
+            -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsKeepsRowsBetweenControls \
+            -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsFoldsUnavailableAndLoadsMore \
             CODE_SIGNING_ALLOWED=NO test
+      - name: Export iOS screenshots
+        if: always()
+        run: |
+          if [[ -d "$RUNNER_TEMP/ios-tests.xcresult" ]]; then
+            xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-tests.xcresult" \
+              --output-path "$RUNNER_TEMP/ios-screenshots"
+          fi
+      - name: Upload iOS screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/ios-screenshots
+          if-no-files-found: ignore
       - name: Upload iOS test results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

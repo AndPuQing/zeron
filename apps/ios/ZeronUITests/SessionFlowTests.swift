@@ -21,6 +21,120 @@ final class SessionFlowTests: XCTestCase {
         add(shot)
     }
 
+    private func openImport(_ app: XCUIApplication) {
+        XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["Import sessions…"].tap()
+        XCTAssertTrue(app.navigationBars["Import sessions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch.waitForExistence(timeout: 10))
+    }
+
+    func testImportSessionsKeepsRowsBetweenControls() {
+        let app = launch(["-appearance", "1"])
+        openImport(app)
+        let search = app.searchFields["import-search"]
+        let host = app.buttons["import-device"]
+        let agents = app.buttons["import-agents"]
+        let list = app.tables["import-list"]
+        let primary = app.buttons["import-primary"]
+        let first = app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch
+        XCTAssertLessThan(first.frame.minY - search.frame.maxY, 80, "empty sections must not leave a gap above the first session")
+        XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY, "the action stays outside the scrollable list")
+        XCTAssertLessThan(primary.frame.height, 65, "the normal action is one compact row")
+        XCTAssertLessThan(primary.frame.width, search.frame.width / 2, "the action remains compact when there is no status")
+        XCTAssertEqual(host.frame.minX, search.frame.minX, accuracy: 1, "the device filter aligns with the visible search field")
+        XCTAssertEqual(agents.frame.maxX, search.frame.maxX, accuracy: 1, "the agent filter aligns with the visible search field")
+        XCTAssertEqual(host.frame.width, agents.frame.width, accuracy: 1)
+        XCTAssertFalse(primary.isEnabled)
+        XCTAssertEqual(primary.label, "Import")
+        XCTAssertFalse(app.staticTexts["import-status"].exists, "selection counts belong in the Import button")
+        XCTAssertFalse(app.cells["import-select-visible"].exists)
+        XCTAssertFalse(app.cells["import-load-more"].exists)
+        let selectAll = app.buttons["import-select-all"]
+        XCTAssertTrue(selectAll.exists)
+        XCTAssertGreaterThanOrEqual(selectAll.frame.height, 44)
+        XCTAssertEqual(selectAll.value as? String, "None selected")
+        snapshot(app, "ios-import-light")
+
+        first.tap()
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 1", timeout: 5))
+        XCTAssertFalse(app.staticTexts["import-status"].exists)
+        XCTAssertTrue(primary.isEnabled)
+        XCTAssertEqual(selectAll.value as? String, "Some selected")
+        snapshot(app, "ios-import-selected")
+
+        search.tap()
+        search.typeText("deployment")
+        let matching = app.cells.containing(.staticText, identifier: "Review the deployment workflow").firstMatch
+        XCTAssertTrue(matching.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertLessThanOrEqual(primary.frame.maxY, app.keyboards.firstMatch.frame.minY + 1)
+        XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY)
+        search.typeText("\n")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(primary.label, "Import 1", "filtering preserves the selection")
+        snapshot(app, "ios-import-search")
+        selectAll.tap()
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 2", timeout: 5))
+        XCTAssertEqual(selectAll.value as? String, "All selected")
+        selectAll.tap()
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 1", timeout: 5), "clearing filtered rows preserves hidden selections")
+        search.tap()
+        search.buttons["Clear text"].tap()
+        XCTAssertTrue(first.waitForExistence(timeout: 5))
+        XCTAssertTrue(first.isSelected, "native row selection follows the source identity after filtering")
+        search.typeText("\n")
+        selectAll.tap()
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 2", timeout: 5))
+        selectAll.tap()
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import", timeout: 5))
+        XCTAssertFalse(app.staticTexts["import-status"].exists)
+        XCTAssertFalse(primary.isEnabled)
+    }
+
+    func testImportSessionsFoldsUnavailableAndLoadsMore() {
+        let app = launch(["-appearance", "2"])
+        openImport(app)
+        let list = app.tables["import-list"]
+        let unavailable = app.cells["import-unavailable"]
+        XCTAssertTrue(unavailable.exists)
+        XCTAssertEqual(unavailable.value as? String, "Collapsed")
+        XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
+        snapshot(app, "ios-import-dark")
+
+        unavailable.tap()
+        XCTAssertEqual(unavailable.value as? String, "Expanded")
+        XCTAssertTrue(app.staticTexts["Archived project notes"].exists)
+        XCTAssertFalse(app.buttons["import-primary"].isEnabled)
+        snapshot(app, "ios-import-unavailable")
+        unavailable.tap()
+        XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
+
+        list.swipeUp()
+        XCTAssertTrue(app.cells.containing(.staticText, identifier: "Polish the mobile layout").firstMatch.waitForExistence(timeout: 10))
+        list.swipeDown()
+        let agents = app.buttons["import-agents"]
+        agents.tap()
+        app.buttons["Claude Code"].tap()
+        XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForNonExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Improve import navigation"].exists)
+        XCTAssertTrue(app.staticTexts["Review the deployment workflow"].exists)
+        XCTAssertEqual(agents.label, "Claude Code")
+        snapshot(app, "ios-import-agent-selected")
+        agents.tap()
+        snapshot(app, "ios-import-agents")
+        app.buttons["All Agents"].tap()
+        XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForExistence(timeout: 5))
+        XCTAssertEqual(agents.label, "All Agents")
+
+        let host = app.buttons["import-device"]
+        host.tap()
+        snapshot(app, "ios-import-hosts")
+        app.buttons["MacBook Pro"].tap()
+        XCTAssertTrue(app.cells["import-session-dev-mac:codex"].waitForExistence(timeout: 10))
+        XCTAssertEqual(host.label, "MacBook Pro")
+    }
+
     func testFrontPageShowsFoldersAndRecents() {
         let app = launch()
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))

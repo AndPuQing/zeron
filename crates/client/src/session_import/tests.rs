@@ -218,6 +218,33 @@ async fn selection_limit_and_filters_preserve_explicit_choices() {
 }
 
 #[tokio::test]
+async fn select_visible_can_clear_at_the_cap_without_clearing_hidden_choices() {
+    let (c, _) = discovered(
+        (0..LIMIT + 3)
+            .map(|i| entry(&format!("item-{i:03}")))
+            .collect(),
+    )
+    .await;
+    c.select_visible();
+    assert_eq!(c.snapshot().selected_count, LIMIT as u32);
+    c.set_query("item-00".into());
+    c.select_visible();
+    assert_eq!(c.snapshot().selected_count, (LIMIT - 10) as u32);
+    assert!(c.snapshot().rows.iter().all(|r| !r.selected));
+    c.set_query(String::new());
+    assert!(
+        c.snapshot()
+            .rows
+            .iter()
+            .any(|r| r.source_ref == "item-010" && r.selected)
+    );
+    c.select_visible();
+    assert_eq!(c.snapshot().selected_count, LIMIT as u32);
+    c.select_visible();
+    assert_eq!(c.snapshot().selected_count, 0);
+}
+
+#[tokio::test]
 async fn cancellation_waits_for_start_and_keeps_the_current_items_durable_result() {
     let (c, mut requests) = discovered(vec![entry("one"), entry("two")]).await;
     c.select_visible();

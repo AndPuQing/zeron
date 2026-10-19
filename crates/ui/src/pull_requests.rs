@@ -4308,11 +4308,18 @@ mod tests {
         cx.run_until_parked();
         let scroll = page.read_with(cx, |page, _| page.repository_scroll.scroll.clone());
         assert!(scroll.max_offset().y > px(0.0));
-        let input = cx.debug_bounds("pr-repository-load").unwrap();
+        // The entrance animation can move the whole card between frames.
+        // Scrolling must leave the input fixed relative to that card.
+        let input_bounds = |cx: &mut gpui::VisualTestContext| {
+            let input = cx.debug_bounds("pr-repository-load").unwrap();
+            let card = cx.debug_bounds("pr-repository-card").unwrap();
+            gpui::Bounds::new(input.origin - card.origin, input.size)
+        };
+        let input = input_bounds(cx);
         scroll.set_offset(gpui::point(px(0.0), -scroll.max_offset().y));
         cx.update(|window, cx| window.draw(cx).clear());
         assert_eq!(
-            cx.debug_bounds("pr-repository-load").unwrap(),
+            input_bounds(cx),
             input,
             "the input stays above the scroll region"
         );
