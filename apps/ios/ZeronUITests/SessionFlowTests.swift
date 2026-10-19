@@ -84,12 +84,26 @@ final class SessionFlowTests: XCTestCase {
         for _ in 0..<3 where !more.isHittable { list.swipeUp() }
         more.tap()
         XCTAssertTrue(app.cells.containing(.staticText, identifier: "Polish the mobile layout").firstMatch.waitForExistence(timeout: 10))
-        app.buttons["import-agents"].tap()
-        snapshot(app, "ios-import-agents")
+        let agents = app.buttons["import-agents"]
+        agents.tap()
         app.buttons["Claude Code"].tap()
         XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForNonExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Improve import navigation"].exists)
         XCTAssertTrue(app.staticTexts["Review the deployment workflow"].exists)
+        XCTAssertEqual(agents.label, "Claude Code")
+        snapshot(app, "ios-import-agent-selected")
+        agents.tap()
+        snapshot(app, "ios-import-agents")
+        app.buttons["All agents"].tap()
+        XCTAssertTrue(app.staticTexts["Improve import navigation"].waitForExistence(timeout: 5))
+        XCTAssertEqual(agents.label, "All agents")
+
+        let host = app.buttons["import-device"]
+        host.tap()
+        snapshot(app, "ios-import-hosts")
+        app.buttons["MacBook Pro"].tap()
+        XCTAssertTrue(app.cells["import-session-dev-mac:codex"].waitForExistence(timeout: 10))
+        XCTAssertEqual(host.label, "MacBook Pro")
     }
 
     func testFrontPageShowsFoldersAndRecents() {

@@ -42,9 +42,11 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         navigationItem.leftBarButtonItem = UIBarButtonItem(systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.requestClose() })
         navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .refresh, primaryAction: UIAction { [weak self] _ in self?.importer?.refresh() })
         hostButton.showsMenuAsPrimaryAction = true
+        hostButton.changesSelectionAsPrimaryAction = true
         hostButton.accessibilityIdentifier = "import-device"
         hostButton.contentHorizontalAlignment = .leading
         agents.showsMenuAsPrimaryAction = true
+        agents.changesSelectionAsPrimaryAction = true
         agents.accessibilityIdentifier = "import-agents"
         search.placeholder = "Search sessions"
         search.font = .preferredFont(forTextStyle: .body)
@@ -167,8 +169,10 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
 
     private func updatePicker(_ button: UIButton, title: String, image: UIImage?) {
         var config = UIButton.Configuration.glass()
-        config.title = title + "  ⌄"
+        config.title = title
+        config.indicator = .popup
         config.image = image
+        config.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 17, weight: .regular)
         config.imagePadding = 8
         config.baseForegroundColor = Palette.text
         config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12)
@@ -209,17 +213,17 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
             notices.append("Computer offline")
         }
         updatePicker(hostButton, title: s.hosts.first(where: { $0.id == s.deviceId })?.name ?? "Computer", image: UIImage(systemName: "laptopcomputer"))
-        hostButton.menu = UIMenu(children: s.hosts.map { host in
+        hostButton.menu = UIMenu(options: .singleSelection, children: s.hosts.map { host in
             UIAction(title: host.name + (!host.supported ? " · Update required" : !host.online ? " · Offline" : ""),
                      attributes: host.online && host.supported ? [] : .disabled,
                      state: host.id == s.deviceId ? .on : .off) { [weak self] _ in self?.importer?.selectDevice(deviceId: host.id) }
         })
         hostButton.isEnabled = !s.running
         navigationItem.rightBarButtonItem?.isEnabled = !s.running && !s.loading
-        updatePicker(agents, title: agentLabel(s.provider), image: BrandMarks.image(for: s.provider, side: 18) ?? UIImage(systemName: "square.grid.2x2"))
+        updatePicker(agents, title: agentLabel(s.provider), image: BrandMarks.image(for: s.provider, side: 18))
         let providers: [String?] = [nil, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "omp", "opencode"]
-        agents.menu = UIMenu(children: providers.map { provider in
-            UIAction(title: agentLabel(provider), image: BrandMarks.image(for: provider, side: 20) ?? UIImage(systemName: "square.grid.2x2"),
+        agents.menu = UIMenu(options: .singleSelection, children: providers.map { provider in
+            UIAction(title: agentLabel(provider), image: BrandMarks.image(for: provider, side: 18),
                      state: s.provider == provider ? .on : .off) { [weak self] _ in self?.importer?.setProvider(provider: provider) }
         })
         agents.isHidden = s.deviceId == nil
