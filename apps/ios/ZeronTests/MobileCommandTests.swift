@@ -30,6 +30,31 @@ final class MobileCommandTests: XCTestCase {
     }
 
     @MainActor
+    func testDirectSubmissionDoesNotSendLocalActionsOrTheirArguments() async {
+        let composer = ComposerBar()
+        composer.commandHarness = { "codex" }
+        composer.localCommandContext = { self.context }
+        var actions = 0
+        let invoked = expectation(description: "direct action")
+        composer.onLocalCommand = { _ in actions += 1; invoked.fulfill() }
+        composer.onSend = { _, _, _ in XCTFail("Local action must not reach send"); return .kept }
+        func sendButton(_ view: UIView) -> UIButton? {
+            if view.accessibilityIdentifier == "composer-send" { return view as? UIButton }
+            return view.subviews.compactMap(sendButton).first
+        }
+        composer.text = "/model extra"
+        let send = sendButton(composer)!
+        send.sendActions(for: .touchUpInside)
+        XCTAssertEqual(actions, 0)
+        XCTAssertEqual(composer.text, "/model extra")
+        composer.text = "/model"
+        send.sendActions(for: .touchUpInside)
+        await fulfillment(of: [invoked], timeout: 2)
+        XCTAssertEqual(actions, 1)
+        XCTAssertEqual(composer.text, "")
+    }
+
+    @MainActor
     func testRejectedForkPreservesDraft() {
         let composer = ComposerBar()
         composer.commandHarness = { "codex" }

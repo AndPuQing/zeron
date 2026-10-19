@@ -72,7 +72,7 @@ fun CommandSuggestions(
                     Text(command.unavailableReason ?: command.description, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            val warning = model.localError ?: error ?: catalog?.warning
+            val warning = error ?: catalog?.warning
             if (warning != null) {
                 Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
                 TextButton(onClick = { retry++ }) { Text("Retry loading commands") }

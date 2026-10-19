@@ -253,7 +253,7 @@ fun Composer(
         MentionSuggestions(draft, search = { q ->
             client.searchFiles(c.host.deviceId, c.chatId, null, q)
         })
-        (draft.localError ?: error)?.let {
+        error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 16.dp, bottom = 6.dp))
         }
         if (editingId != null) {
