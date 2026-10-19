@@ -11,6 +11,8 @@
 //! through [`CoreClient::session_handle`] → [`zeron_client::SessionHandle`]
 //! (`snapshot()` / `subscribe()`), never over FFI.
 
+mod composer_actions;
+
 mod session;
 mod session_import;
 pub use session_import::*;
