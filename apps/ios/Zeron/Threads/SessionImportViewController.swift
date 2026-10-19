@@ -60,12 +60,20 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         let pickers = UIStackView(arrangedSubviews: [hostButton, agents])
         pickers.distribution = .fillEqually
         pickers.spacing = 10
+        let pickerRow = UIView()
+        pickers.translatesAutoresizingMaskIntoConstraints = false
+        pickerRow.addSubview(pickers)
+        header.addArrangedSubview(pickerRow)
+        header.addArrangedSubview(search)
         NSLayoutConstraint.activate([
+            // UISearchBar owns its field's insets; align the visible controls to the field.
+            pickers.leadingAnchor.constraint(equalTo: search.searchTextField.leadingAnchor),
+            pickers.trailingAnchor.constraint(equalTo: search.searchTextField.trailingAnchor),
+            pickers.topAnchor.constraint(equalTo: pickerRow.topAnchor),
+            pickers.bottomAnchor.constraint(equalTo: pickerRow.bottomAnchor),
             hostButton.heightAnchor.constraint(greaterThanOrEqualToConstant: Glass.Metrics.control),
             agents.heightAnchor.constraint(greaterThanOrEqualToConstant: Glass.Metrics.control),
         ])
-        header.addArrangedSubview(pickers)
-        header.addArrangedSubview(search)
         header.axis = .vertical
         header.spacing = 8
         table.backgroundColor = .clear
@@ -107,6 +115,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         buttonStyle.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20)
         primary.configuration = buttonStyle
         primary.accessibilityIdentifier = "import-primary"
+        primary.setContentHuggingPriority(.required, for: .horizontal)
         primary.setContentCompressionResistancePriority(.required, for: .horizontal)
         primary.addAction(UIAction { [weak self] _ in
             guard let self else { return }
@@ -116,7 +125,7 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         retry.configuration = .plain()
         retry.setTitle("Retry remaining", for: .normal)
         retry.addAction(UIAction { [weak self] _ in self?.importer?.start(retry: true) }, for: .touchUpInside)
-        let selection = UIStackView(arrangedSubviews: [status, primary])
+        let selection = UIStackView(arrangedSubviews: [status, UIView(), primary])
         selection.alignment = .center
         selection.spacing = 12
         footer.addArrangedSubview(progress)
@@ -192,6 +201,9 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         default: return "All agents"
         }
     }
+    private func agentImage(_ provider: String?) -> UIImage? {
+        provider == nil ? UIImage(systemName: "sparkles") : BrandMarks.image(for: provider, side: 18)
+    }
 
     fileprivate func receive(_ snapshot: SessionImportSnapshot) {
         guard isViewLoaded else { return }
@@ -218,10 +230,10 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         })
         hostButton.isEnabled = !s.running
         navigationItem.rightBarButtonItem?.isEnabled = !s.running && !s.loading
-        updatePicker(agents, title: agentLabel(s.provider), image: BrandMarks.image(for: s.provider, side: 18))
+        updatePicker(agents, title: agentLabel(s.provider), image: agentImage(s.provider))
         let providers: [String?] = [nil, "codex", "claude-code", "copilot", "cursor", "grok", "hermes", "dsh", "pi", "omp", "opencode"]
         agents.menu = UIMenu(options: .singleSelection, children: providers.map { provider in
-            UIAction(title: agentLabel(provider), image: BrandMarks.image(for: provider, side: 18),
+            UIAction(title: agentLabel(provider), image: agentImage(provider),
                      state: s.provider == provider ? .on : .off) { [weak self] _ in self?.importer?.setProvider(provider: provider) }
         })
         agents.isHidden = s.deviceId == nil
@@ -260,9 +272,9 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         let imported = s.results.filter { $0.phase == .imported || $0.phase == .alreadyManaged }.count
         progress.isHidden = !s.running
         progress.progress = s.results.isEmpty ? 0 : Float(done) / Float(s.results.count)
-        status.text = s.running ? "\(done) of \(s.results.count) finished" : s.results.isEmpty
-            ? (s.selectedCount == 0 ? "Select sessions" : "\(s.selectedCount) selected")
-            : "\(imported) of \(s.results.count) imported · \(s.selectedCount) selected"
+        status.isHidden = !s.running && s.results.isEmpty
+        status.text = status.isHidden ? nil : s.running
+            ? "\(done) of \(s.results.count) finished" : "\(imported) of \(s.results.count) imported"
         primary.accessibilityHint = "Select up to \(s.selectionLimit) sessions per import."
         primary.setTitle(s.running ? (s.cancelling ? "Stopping…" : "Stop import") : (s.selectedCount > 0 ? "Import \(s.selectedCount)" : "Import"), for: .normal)
         primary.isEnabled = s.running ? !s.cancelling : s.selectedCount > 0 && !s.loading

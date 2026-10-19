@@ -33,14 +33,21 @@ final class SessionFlowTests: XCTestCase {
         let app = launch(["-appearance", "1"])
         openImport(app)
         let search = app.searchFields["import-search"]
+        let host = app.buttons["import-device"]
+        let agents = app.buttons["import-agents"]
         let list = app.tables["import-list"]
         let primary = app.buttons["import-primary"]
         let first = app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch
         XCTAssertLessThan(first.frame.minY - search.frame.maxY, 80, "empty sections must not leave a gap above the first session")
         XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY, "the action stays outside the scrollable list")
         XCTAssertLessThan(primary.frame.height, 65, "the normal action is one compact row")
+        XCTAssertLessThan(primary.frame.width, search.frame.width / 2, "the action remains compact when there is no status")
+        XCTAssertEqual(host.frame.minX, search.frame.minX, accuracy: 1, "the device filter aligns with the visible search field")
+        XCTAssertEqual(agents.frame.maxX, search.frame.maxX, accuracy: 1, "the agent filter aligns with the visible search field")
+        XCTAssertEqual(host.frame.width, agents.frame.width, accuracy: 1)
         XCTAssertFalse(primary.isEnabled)
-        XCTAssertEqual(app.staticTexts["import-status"].label, "Select sessions")
+        XCTAssertEqual(primary.label, "Import")
+        XCTAssertFalse(app.staticTexts["import-status"].exists, "selection counts belong in the Import button")
         XCTAssertFalse(app.cells["import-select-visible"].exists)
         XCTAssertFalse(app.cells["import-load-more"].exists)
         let selectAll = app.buttons["import-select-all"]
@@ -50,8 +57,8 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "ios-import-light")
 
         first.tap()
-        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected")
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 1", timeout: 5))
+        XCTAssertFalse(app.staticTexts["import-status"].exists)
         XCTAssertTrue(primary.isEnabled)
         XCTAssertEqual(selectAll.value as? String, "Some selected")
         snapshot(app, "ios-import-selected")
@@ -65,22 +72,23 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertLessThanOrEqual(list.frame.maxY, primary.frame.minY)
         search.typeText("\n")
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5))
-        XCTAssertEqual(app.staticTexts["import-status"].label, "1 selected", "filtering preserves the selection")
+        XCTAssertEqual(primary.label, "Import 1", "filtering preserves the selection")
         snapshot(app, "ios-import-search")
         selectAll.tap()
-        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 2", timeout: 5))
         XCTAssertEqual(selectAll.value as? String, "All selected")
         selectAll.tap()
-        XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5), "clearing filtered rows preserves hidden selections")
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 1", timeout: 5), "clearing filtered rows preserves hidden selections")
         search.tap()
         search.buttons["Clear text"].tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertTrue(first.isSelected, "native row selection follows the source identity after filtering")
         search.typeText("\n")
         selectAll.tap()
-        XCTAssertTrue(app.staticTexts["2 selected"].waitForExistence(timeout: 5))
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import 2", timeout: 5))
         selectAll.tap()
-        XCTAssertTrue(app.staticTexts["Select sessions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(primary.wait(for: \.label, toEqual: "Import", timeout: 5))
+        XCTAssertFalse(app.staticTexts["import-status"].exists)
         XCTAssertFalse(primary.isEnabled)
     }
 
