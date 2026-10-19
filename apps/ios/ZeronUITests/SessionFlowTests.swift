@@ -72,6 +72,7 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertEqual(selectAll.value as? String, "All selected")
         selectAll.tap()
         XCTAssertTrue(app.staticTexts["1 selected"].waitForExistence(timeout: 5), "clearing filtered rows preserves hidden selections")
+        search.tap()
         search.buttons["Clear text"].tap()
         XCTAssertTrue(first.waitForExistence(timeout: 5))
         XCTAssertTrue(first.isSelected, "native row selection follows the source identity after filtering")
