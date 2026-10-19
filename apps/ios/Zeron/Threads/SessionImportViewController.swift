@@ -241,10 +241,10 @@ final class SessionImportViewController: UIViewController, UITableViewDataSource
         var selectionStyle = UIButton.Configuration.plain()
         selectionStyle.title = "Not imported"
         selectionStyle.image = UIImage(systemName: allSelected ? "checkmark.circle.fill" : selectedVisible > 0 ? "minus.circle.fill" : "circle")
-        selectionStyle.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 22)
-        selectionStyle.imagePadding = 12
+        selectionStyle.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 17)
+        selectionStyle.imagePadding = 15
         selectionStyle.baseForegroundColor = selectedVisible > 0 ? Palette.accent : Palette.secondary
-        selectionStyle.contentInsets = .zero
+        selectionStyle.contentInsets = NSDirectionalEdgeInsets(top: 0, leading: 3, bottom: 0, trailing: 0)
         selectionStyle.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { incoming in
             var attributes = incoming
             attributes.font = UIFont.preferredFont(forTextStyle: .subheadline)
