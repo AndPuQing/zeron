@@ -55,6 +55,58 @@ final class MobileCommandTests: XCTestCase {
     }
 
     @MainActor
+    func testNamespacedActionsExecuteAcrossOtherAgents() async {
+        for harness in ["claude-code", "copilot", "cursor", "devin", "grok", "hermes", "pi", "omp", "opencode", "antigravity", "dsh"] {
+            let composer = ComposerBar()
+            composer.commandHarness = { harness }
+            composer.localCommandContext = { self.context }
+            let invoked = expectation(description: "\(harness) local action")
+            composer.onLocalCommand = { action in
+                XCTAssertEqual(action, .model)
+                invoked.fulfill()
+            }
+            composer.onSend = { _, _, _ in XCTFail("Local action must not send a prompt"); return .kept }
+            composer.text = "/zeron:mo keep this"
+            composer.textView.selectedRange = NSRange(location: 9, length: 0)
+            composer.insertCommand(ComposerCommand(token: "/zeron:model", description: "Zerun: Model", inputHint: nil, insertion: "/zeron:model", unavailableReason: "Mobile action"))
+            XCTAssertEqual(composer.encodedDraft, " keep this")
+            await fulfillment(of: [invoked], timeout: 2)
+            let submitted = expectation(description: "\(harness) direct action")
+            composer.onLocalCommand = { action in
+                XCTAssertEqual(action, .model)
+                submitted.fulfill()
+            }
+            composer.text = "/zeron:model"
+            func sendButton(_ view: UIView) -> UIButton? {
+                if view.accessibilityIdentifier == "composer-send" { return view as? UIButton }
+                return view.subviews.compactMap(sendButton).first
+            }
+            sendButton(composer)!.sendActions(for: .touchUpInside)
+            await fulfillment(of: [submitted], timeout: 2)
+            XCTAssertEqual(composer.text, "")
+        }
+    }
+
+    @MainActor
+    func testOtherAgentsNativeCommandsStillReachSend() {
+        for (harness, token) in [("claude-code", "/model"), ("pi", "/name"), ("opencode", "/review"), ("dsh", "/compact")] {
+            let composer = ComposerBar()
+            composer.commandHarness = { harness }
+            composer.localCommandContext = { self.context }
+            composer.onLocalCommand = { _ in XCTFail("Must preserve native command routing") }
+            var sent: String?
+            composer.onSend = { body, _, _ in sent = body; return .sent }
+            composer.text = "\(token) native argument"
+            func sendButton(_ view: UIView) -> UIButton? {
+                if view.accessibilityIdentifier == "composer-send" { return view as? UIButton }
+                return view.subviews.compactMap(sendButton).first
+            }
+            sendButton(composer)!.sendActions(for: .touchUpInside)
+            XCTAssertEqual(sent, "\(token) native argument")
+        }
+    }
+
+    @MainActor
     func testLateMenuClickFromPreviousContextIsIgnored() {
         let suggestions = CommandSuggestions()
         suggestions.context = "old-host:codex"

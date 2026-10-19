@@ -67,6 +67,38 @@ class MobileLocalCommandTest {
         assertEquals(listOf(uniffi.zeron_core.MobileComposerAction.MODEL), actions)
     }
 
+    @Test fun namespacedActionsWorkAcrossOtherAgentsWithoutInterceptingNativeCommands() = kotlinx.coroutines.runBlocking {
+        for (harness in listOf("claude-code", "copilot", "cursor", "devin", "grok", "hermes", "pi", "omp", "opencode", "antigravity", "dsh")) {
+            val draft = ComposerModel()
+            val actions = mutableListOf<uniffi.zeron_core.MobileComposerAction>()
+            draft.localActions = MobileCommandActions(harness, this, { context }) { actions += it }
+            val command = modelCommand.copy(token = "/zeron:model", insertion = "/zeron:model")
+            assertNull(draft.displayCommand(command).unavailableReason)
+            draft.value = TextFieldValue("/zeron:mo keep this", TextRange(9))
+            draft.insertCommand(command)
+            assertEquals(" keep this", draft.encodedDraft())
+            draft.setText("/zeron:model")
+            assertTrue(draft.performLocalCommand())
+            assertEquals("", draft.text)
+            assertEquals(List(2) { uniffi.zeron_core.MobileComposerAction.MODEL }, actions)
+            for (native in listOf("/model", "/name", "/fork", "/review", "/compact")) {
+                draft.setText("$native native argument")
+                assertFalse(draft.performLocalCommand())
+                assertEquals("$native native argument", draft.encodedDraft())
+            }
+            draft.setText("/zeron:rename title")
+            assertTrue(draft.performLocalCommand())
+            assertEquals("/zeron:rename title", draft.text)
+            assertEquals(2, actions.size)
+            draft.localActions = MobileCommandActions(harness, this, { context.copy(canFork = false) }) { fail("Fork is unavailable") }
+            val fork = command.copy(token = "/zeron:fork", insertion = "/zeron:fork")
+            assertNotNull(draft.displayCommand(fork).unavailableReason)
+            draft.setText("/zeron:fork")
+            draft.insertCommand(fork)
+            assertEquals("/zeron:fork", draft.text)
+        }
+    }
+
     @Test fun directSubmitRejectsArgumentsAndFailureRestoresTheCommand() = kotlinx.coroutines.runBlocking {
         val draft = ComposerModel("/rename title")
         var called = false

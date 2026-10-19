@@ -1,4 +1,48 @@
-//! Mobile-owned commands. Resolve canonical commands, never same-name skills.
+//! Mobile-owned commands. Provider commands retain their own routing; the
+//! `zeron:` namespace is reserved for explicit local actions across providers.
+use super::types::{ComposerCatalog, ComposerCommand};
+use zeron_proto::{HarnessId, invocation::Invocation};
+
+const LOCAL_COMMANDS: &[&str] = &[
+    "model", "new", "resume", "rename", "archive", "copy", "side", "fork", "theme",
+];
+
+fn known_harness(harness: &str) -> Option<HarnessId> {
+    serde_json::from_value(serde_json::Value::String(harness.to_owned())).ok()
+}
+
+/// Keep the host's native catalog and skill identities intact. Codex already
+/// advertises its mapped client commands; other agents receive explicit Zerun
+/// actions rather than having their native /model, /clear or /fork intercepted.
+pub(super) fn with_mobile_actions(mut catalog: ComposerCatalog, harness: &str) -> ComposerCatalog {
+    match known_harness(harness) {
+        None | Some(HarnessId::Codex) => return catalog,
+        Some(_) => {}
+    }
+    for name in LOCAL_COMMANDS {
+        let name = format!("zeron:{name}");
+        let token = format!("/{name}");
+        if catalog
+            .commands
+            .iter()
+            .any(|command| command.token == token)
+        {
+            continue;
+        }
+        let insertion = Invocation::Command { name }.link();
+        let local = mobile_composer_action(harness.to_owned(), insertion.clone())
+            .expect("registered local command");
+        catalog.commands.push(ComposerCommand {
+            token,
+            description: local.description,
+            input_hint: None,
+            insertion,
+            unavailable_reason: Some("Use this action in Zerun's mobile / menu.".into()),
+        });
+    }
+    catalog
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum MobileComposerAction {
     Model,
@@ -34,15 +78,20 @@ pub fn mobile_composer_action(harness: String, text: String) -> Option<MobileCom
     use zeron_proto::invocation::{
         Invocation, invocation_links, invocation_prompt, leading_command,
     };
-    if harness != "codex"
-        || invocation_links(&text)
-            .iter()
-            .any(|(_, i)| matches!(i, Invocation::Skill { .. }))
+    known_harness(&harness)?;
+    if invocation_links(&text)
+        .iter()
+        .any(|(_, i)| matches!(i, Invocation::Skill { .. }))
     {
         return None;
     }
     let decoded = invocation_prompt(&text);
     let (name, args) = leading_command(&decoded)?;
+    let (name, local_namespace) = match name.strip_prefix("zeron:") {
+        Some(name) if LOCAL_COMMANDS.contains(&name) => (name, true),
+        _ if harness == "codex" => (name, false),
+        _ => return None,
+    };
     use MobileComposerAction::*;
     let (action, description) = match name {
         "model" => (Model, "Choose a model"),
@@ -58,7 +107,11 @@ pub fn mobile_composer_action(harness: String, text: String) -> Option<MobileCom
     };
     Some(MobileComposerLocalCommand {
         action,
-        description: description.into(),
+        description: if local_namespace {
+            format!("Zerun: {description}")
+        } else {
+            description.into()
+        },
         has_arguments: !args.is_empty(),
     })
 }
@@ -138,6 +191,159 @@ mod tests {
                 .has_arguments
         );
     }
+    const PROVIDERS: &[&str] = &[
+        "claude-code",
+        "codex",
+        "copilot",
+        "cursor",
+        "devin",
+        "grok",
+        "hermes",
+        "pi",
+        "omp",
+        "opencode",
+        "antigravity",
+        "dsh",
+        "mock",
+    ];
+
+    fn command(name: &str) -> ComposerCommand {
+        ComposerCommand {
+            token: format!("/{name}"),
+            description: "Provider command".into(),
+            input_hint: Some("args".into()),
+            insertion: Invocation::Command { name: name.into() }.link(),
+            unavailable_reason: None,
+        }
+    }
+
+    #[test]
+    fn explicit_local_commands_work_across_all_supported_agents() {
+        for harness in PROVIDERS {
+            for name in LOCAL_COMMANDS {
+                let text = format!("/zeron:{name}");
+                let row = mobile_composer_action((*harness).into(), text).unwrap();
+                assert!(!row.has_arguments);
+                assert!(row.description.starts_with("Zerun: "));
+                assert!(
+                    mobile_composer_action(
+                        (*harness).into(),
+                        command(&format!("zeron:{name}")).insertion
+                    )
+                    .is_some()
+                );
+                let skill = Invocation::Skill {
+                    name: format!("zeron:{name}"),
+                    path: "/project/SKILL.md".into(),
+                    command: None,
+                };
+                assert!(mobile_composer_action((*harness).into(), skill.link()).is_none());
+                if *harness != "codex" {
+                    assert!(
+                        mobile_composer_action((*harness).into(), format!("/{name}")).is_none()
+                    );
+                }
+            }
+            assert!(
+                mobile_composer_action((*harness).into(), "/zeron:rename title".into())
+                    .unwrap()
+                    .has_arguments
+            );
+            for name in [
+                "compact",
+                "review",
+                "name",
+                "session",
+                "export",
+                "security",
+                "zeron:unknown",
+            ] {
+                assert!(
+                    mobile_composer_action((*harness).into(), command(name).insertion).is_none(),
+                    "{harness}/{name}"
+                );
+            }
+        }
+        assert!(mobile_composer_action("unknown-agent".into(), "/zeron:model".into()).is_none());
+    }
+
+    #[test]
+    fn catalog_keeps_native_commands_skills_hints_and_warnings() {
+        for harness in PROVIDERS.iter().filter(|h| **h != "codex") {
+            let native = command("model");
+            let unavailable = ComposerCommand {
+                unavailable_reason: Some("Provider unavailable".into()),
+                ..command("fork")
+            };
+            let skill = ComposerCommand {
+                token: "$model".into(),
+                insertion: Invocation::Skill {
+                    name: "model".into(),
+                    path: "/project/SKILL.md".into(),
+                    command: None,
+                }
+                .link(),
+                ..command("model")
+            };
+            let original = vec![native, unavailable, skill];
+            let catalog = with_mobile_actions(
+                ComposerCatalog {
+                    commands: original.clone(),
+                    warning: Some("Skills discovery failed".into()),
+                },
+                harness,
+            );
+            assert_eq!(
+                catalog.commands.len(),
+                original.len() + LOCAL_COMMANDS.len()
+            );
+            assert_eq!(catalog.warning.as_deref(), Some("Skills discovery failed"));
+            for (before, after) in original.iter().zip(&catalog.commands) {
+                assert_eq!(before.token, after.token);
+                assert_eq!(before.insertion, after.insertion);
+                assert_eq!(before.description, after.description);
+                assert_eq!(before.input_hint, after.input_hint);
+                assert_eq!(before.unavailable_reason, after.unavailable_reason);
+                assert!(
+                    mobile_composer_action((*harness).into(), after.insertion.clone()).is_none()
+                );
+            }
+            let twice = with_mobile_actions(catalog, harness);
+            assert_eq!(twice.commands.len(), original.len() + LOCAL_COMMANDS.len());
+        }
+    }
+
+    #[test]
+    fn empty_catalog_still_provides_local_actions_without_fabricating_provider_commands() {
+        for harness in ["cursor", "dsh", "claude-code"] {
+            let catalog = with_mobile_actions(
+                ComposerCatalog {
+                    commands: vec![],
+                    warning: Some("Host offline".into()),
+                },
+                harness,
+            );
+            assert_eq!(catalog.commands.len(), LOCAL_COMMANDS.len());
+            assert!(
+                catalog
+                    .commands
+                    .iter()
+                    .all(|c| c.token.starts_with("/zeron:"))
+            );
+            assert_eq!(catalog.warning.as_deref(), Some("Host offline"));
+        }
+        for harness in ["codex", "unknown-agent"] {
+            let catalog = with_mobile_actions(
+                ComposerCatalog {
+                    commands: vec![command("goal")],
+                    warning: None,
+                },
+                harness,
+            );
+            assert_eq!(catalog.commands.len(), 1);
+        }
+    }
+
     #[test]
     fn checks_page_and_live_context() {
         let mut c = context();
