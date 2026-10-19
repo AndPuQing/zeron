@@ -66,6 +66,64 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     /// `@` file search (nil disables mentions).
     var mentionSearch: ((String) async -> [FileMatch])?
 
+    var commandHarness: (() -> String)?
+    var localCommandContext: (() -> MobileComposerContext)?
+    var onLocalCommand: ((MobileComposerAction) async throws -> Void)?
+    private var localCommandPending = false
+    private var localCommandMessage: String?
+
+    private func resolvedCatalog(_ catalog: ComposerCatalog?) -> ComposerCatalog? {
+        guard var catalog else { return nil }
+        catalog.commands = catalog.commands.map { command in
+            guard let local = mobileComposerAction(harness: commandHarness?() ?? "", text: command.insertion),
+                  let context = localCommandContext?(), onLocalCommand != nil else { return command }
+            var row = command
+            row.description = local.description
+            row.unavailableReason = localCommandPending ? "An action is already in progress." : mobileComposerActionError(action: local.action, context: context)
+            return row
+        }
+        catalog.commands.sort {
+            if ($0.unavailableReason == nil) != ($1.unavailableReason == nil) { return $0.unavailableReason == nil }
+            return $0.token < $1.token
+        }
+        return catalog
+    }
+
+    func refreshLocalCommands() {
+        if let query = SlashQuery.active(in: textView.text, selection: textView.selectedRange) {
+            commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, error: commandError)
+        }
+    }
+
+    /// Local actions never become command references or provider messages.
+    private func performLocalCommand(_ local: MobileComposerLocalCommand, range: NSRange) {
+        guard let context = localCommandContext?(), let perform = onLocalCommand else { return }
+        let error = localCommandPending ? "An action is already in progress." : mobileComposerActionError(action: local.action, context: context)
+        if let error { localCommandMessage = error; refreshAction(animated: false); return }
+        let previous = textView.text ?? ""
+        let remaining = (previous as NSString).replacingCharacters(in: range, with: "")
+        let identity = commandContext
+        textView.text = remaining
+        textView.selectedRange = NSRange(location: min(range.location, (remaining as NSString).length), length: 0)
+        localCommandPending = true
+        localCommandMessage = nil
+        closeCommands()
+        textChanged()
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.localCommandPending = false; self.refreshLocalCommands() }
+            do {
+                guard self.commandContext == identity else { throw CancellationError() }
+                try await perform(local.action)
+            } catch {
+                guard self.commandContext == identity else { return }
+                if self.textView.text == remaining { self.textView.text = previous; self.textChanged() }
+                self.localCommandMessage = error.localizedDescription
+                self.refreshAction(animated: false)
+            }
+        }
+    }
+
     var commandCatalog: (() async throws -> ComposerCatalog)?
     var commandContext = "" {
         didSet {
@@ -445,7 +503,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     private func updateCommands(_ query: SlashQuery) {
-        commandSuggestions.show(loadedCommands, query: query.query, error: commandError)
+        commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, error: commandError)
         guard loadedCommands == nil, commandError == nil, commandTask == nil, let load = commandCatalog else { return }
         commandTask = Task { [weak self] in
             do {
@@ -454,7 +512,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
                 self.loadedCommands = catalog
                 self.commandTask = nil
                 if let q = SlashQuery.active(in: self.textView.text, selection: self.textView.selectedRange) {
-                    self.commandSuggestions.show(catalog, query: q.query)
+                    self.commandSuggestions.show(self.resolvedCatalog(catalog), query: q.query)
                 }
             } catch {
                 guard !Task.isCancelled, let self else { return }
@@ -468,8 +526,12 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     func insertCommand(_ command: ComposerCommand) {
-        guard command.unavailableReason == nil,
-              let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange) else { return }
+        guard let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange) else { return }
+        if let local = mobileComposerAction(harness: commandHarness?() ?? "", text: command.insertion), onLocalCommand != nil {
+            performLocalCommand(local, range: q.range)
+            return
+        }
+        guard command.unavailableReason == nil else { return }
         let ns = textView.text as NSString
         let selected = prepareComposerSelection(
             text: ns.replacingCharacters(in: q.range, with: ""),
@@ -683,6 +745,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     private func textChanged() {
+        localCommandMessage = nil;
         placeholderLabel.isHidden = !textView.text.isEmpty
         let before = textHeight.constant
         updateMode(animated: true)
@@ -711,7 +774,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
 
     private func refreshAction(animated: Bool) {
         let action: Action = running ? (hasContent ? .queue : .stop) : .send
-        let error = selectionError
+        let error = selectionError ?? localCommandMessage
         if selectionWarning.text != error {
             selectionWarning.text = error
             warningZeroHeight.isActive = error == nil
@@ -789,6 +852,15 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     }
 
     private func send(_ mode: DeliveryMode) {
+        if let local = mobileComposerAction(harness: commandHarness?() ?? "", text: textView.text), onLocalCommand != nil {
+            if local.hasArguments {
+                localCommandMessage = "This action takes no arguments. Select it from the / menu to keep the rest of your draft."
+                refreshAction(animated: false)
+            } else {
+                performLocalCommand(local, range: NSRange(location: 0, length: (textView.text as NSString).length))
+            }
+            return
+        }
         guard selectionError == nil else { return }
         guard hasContent else { return }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()

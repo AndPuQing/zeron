@@ -1,5 +1,8 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.MobileComposerAction
+import uniffi.zeron_core.MobileComposerContext
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,11 +71,10 @@ private fun catalogModels(): List<ModelChoice> = fallbackHarnesses().filter { it
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -> Unit) {
+fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, composer: ComposerModel = remember { ComposerModel() }) {
     val workspace by model.workspace.collectAsState()
     val client by model.client.collectAsState()
     var draft by remember { mutableStateOf(model.lastDraft) }
-    val composer = remember { ComposerModel() }
     val focus = remember { FocusRequester() }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -112,11 +114,25 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     LaunchedEffect(Unit) { focus.requestFocus() }
 
     fun create() {
+        if (composer.performLocalCommand()) return
         if (composer.selectionError != null) return
         model.lastDraft = draft
         val id = model.createSession(draft.copy(model = draft.model ?: choice?.model?.id), composer.encoded(), composer.images.map { it.outgoing })
-        if (id != null) onCreated(id) else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+        if (id != null) { composer.clear(); onCreated(id) } else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
     }
+
+    var modelRequest by remember { mutableStateOf(0) }
+    composer.localActions = MobileCommandActions(draft.harness, scope,
+        context = { MobileComposerContext(false, false, false, false, false, false) },
+        execute = { action ->
+            when (action) {
+                MobileComposerAction.MODEL -> modelRequest++
+                MobileComposerAction.NEW -> Unit // Keep this draft intact.
+                else -> { model.lastDraft = draft; onNavigate(action) }
+            }
+        })
+
+    androidx.compose.runtime.DisposableEffect(composer) { onDispose { composer.localActions = null } }
 
     var composerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
     GlassScene(
@@ -187,7 +203,7 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
                     } else {
                         HostChip(draft, hosts) { draft = it }
                     }
-                    ModelChip(draft, choice, models) { draft = it }
+                    ModelChip(draft, choice, models, modelRequest) { draft = it }
                     val efforts = choice?.model?.reasoningLevels.orEmpty()
                     if (efforts.isNotEmpty()) {
                         val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
@@ -366,9 +382,11 @@ private fun ModelChip(
     draft: sh.zeron.android.core.NewSessionDraft,
     choice: ModelChoice?,
     models: List<ModelChoice>,
+    modelRequest: Int,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
+    LaunchedEffect(modelRequest) { if (modelRequest > 0) open = true }
     // Never the harness name in place of a model.
     val title = choice?.model?.label ?: draft.model?.let { modelLabel(draft.harness, it) }
         ?: fallbackModels(draft.harness).firstOrNull()?.label ?: harnessLabel(draft.harness)

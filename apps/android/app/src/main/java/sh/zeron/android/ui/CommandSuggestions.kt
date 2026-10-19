@@ -49,7 +49,8 @@ fun CommandSuggestions(
             error = e.message ?: "Could not load commands"
         }
     }
-    val rows = catalog?.commands?.filter {
+    val rows = catalog?.commands?.map(model::displayCommand)
+        ?.sortedWith(compareBy({ it.unavailableReason != null }, { it.token }))?.filter {
         query.isEmpty() || it.token.drop(1).contains(query, ignoreCase = true) || it.description.contains(query, ignoreCase = true)
     }.orEmpty()
     val scroll = rememberScrollState()
@@ -71,7 +72,7 @@ fun CommandSuggestions(
                     Text(command.unavailableReason ?: command.description, style = MaterialTheme.typography.bodySmall)
                 }
             }
-            val warning = error ?: catalog?.warning
+            val warning = model.localError ?: error ?: catalog?.warning
             if (warning != null) {
                 Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
                 TextButton(onClick = { retry++ }) { Text("Retry loading commands") }

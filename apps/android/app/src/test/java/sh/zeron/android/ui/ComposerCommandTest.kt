@@ -43,3 +43,61 @@ class ComposerCommandTest {
         assertNull(model.slashQuery())
     }
 }
+
+class MobileLocalCommandTest {
+    private val modelCommand = ComposerCommand("/model", "Model", null, "/model", "Desktop only")
+    private val context = uniffi.zeron_core.MobileComposerContext(true, false, true, true, false, false)
+
+    @Test fun localMenuSelectionPreservesRemainingDraftAndDoesNotInsertReference() = kotlinx.coroutines.runBlocking {
+        val draft = ComposerModel()
+        val actions = mutableListOf<uniffi.zeron_core.MobileComposerAction>()
+        draft.localActions = MobileCommandActions("codex", this, { context }) { actions += it }
+        draft.value = TextFieldValue("/mo keep this", TextRange(3))
+        assertNull(draft.displayCommand(modelCommand).unavailableReason)
+        draft.insertCommand(modelCommand)
+        assertEquals(" keep this", draft.text)
+        assertEquals(" keep this", draft.encodedDraft())
+        assertEquals(listOf(uniffi.zeron_core.MobileComposerAction.MODEL), actions)
+    }
+
+    @Test fun directSubmitRejectsArgumentsAndFailureRestoresTheCommand() = kotlinx.coroutines.runBlocking {
+        val draft = ComposerModel("/rename title")
+        var called = false
+        draft.localActions = MobileCommandActions("codex", this, { context }) { called = true; error("offline") }
+        assertTrue(draft.performLocalCommand())
+        assertFalse(called)
+        assertEquals("/rename title", draft.text)
+        draft.setText("/model")
+        assertTrue(draft.performLocalCommand())
+        assertTrue(called)
+        assertEquals("/model", draft.text)
+        assertEquals("offline", draft.localError)
+    }
+
+    @Test fun pendingAndContextRestrictionsBlockActionsWithoutConsumingText() = kotlinx.coroutines.runBlocking {
+        val draft = ComposerModel("/fork")
+        var called = false
+        draft.localActions = MobileCommandActions("codex", this, { context.copy(canFork = false) }) { called = true }
+        assertTrue(draft.performLocalCommand())
+        assertFalse(called)
+        assertEquals("/fork", draft.text)
+        draft.localActions = MobileCommandActions("claude-code", this, { context }) { called = true }
+        assertFalse(draft.performLocalCommand())
+        assertNotNull(draft.displayCommand(modelCommand).unavailableReason)
+    }
+
+    @Test fun pendingActionCannotBeTriggeredTwiceOrOverwriteEditsOnFailure() = kotlinx.coroutines.runBlocking {
+        val draft = ComposerModel("/model")
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        var calls = 0
+        draft.localActions = MobileCommandActions("codex", this, { context }) { calls++; gate.await(); error("failed") }
+        draft.performLocalCommand()
+        draft.setText("/model")
+        draft.performLocalCommand()
+        assertEquals(1, calls)
+        draft.setText("new text")
+        gate.complete(Unit)
+        kotlinx.coroutines.yield()
+        assertEquals("new text", draft.text)
+    }
+}

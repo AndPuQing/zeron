@@ -1,5 +1,8 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.MobileComposerAction
+import uniffi.zeron_core.MobileComposerContext
+
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.animation.AnimatedContent
@@ -103,8 +106,13 @@ fun Composer(
     c: ComposerState,
     row: SessionRow?,
     transcript: TranscriptState,
+    draft: ComposerModel,
+    canFork: Boolean,
+    sideChatBusy: Boolean,
+    onNavigate: (MobileComposerAction) -> Unit,
+    onSideChat: suspend (Boolean) -> Unit,
+    onArchived: () -> Unit,
 ) {
-    val draft = remember(c.chatId) { ComposerModel() }
     draft.commandContext = "${c.chatId}:${c.host.deviceId}:${row?.harness}"
     val scope = rememberCoroutineScope()
     val focus = remember { FocusRequester() }
@@ -183,6 +191,7 @@ fun Composer(
     }
 
     fun send() {
+        if (draft.performLocalCommand()) return
         if (draft.selectionError != null) return
         if (!draft.hasContent) return
         if (editingId != null) {
@@ -213,8 +222,30 @@ fun Composer(
         }
     }
 
+    var modelRequest by remember { mutableStateOf(0) }
+    var renaming by remember { mutableStateOf(false) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    draft.localActions = MobileCommandActions(row?.harness ?: "", scope, context = {
+        MobileComposerContext(true, row?.parentChatId != null, canFork,
+            handle.latestAssistantReply() != null, sideChatBusy, editingId != null)
+    }, execute = { action ->
+        when (action) {
+            MobileComposerAction.MODEL -> modelRequest++
+            MobileComposerAction.RENAME -> renaming = true
+            MobileComposerAction.ARCHIVE -> { client.archiveSession(c.chatId); onArchived() }
+            MobileComposerAction.COPY -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(
+                handle.latestAssistantReply() ?: error("Needs a completed assistant reply")))
+            MobileComposerAction.SIDE -> onSideChat(false)
+            MobileComposerAction.FORK -> onSideChat(true)
+            else -> onNavigate(action)
+        }
+    })
+    if (renaming) RenameDialog(row?.title ?: "", onDismiss = { renaming = false }) { title ->
+        try { client.renameSession(c.chatId, title) } catch (e: Exception) { error = e.message }
+    }
+
     // Leaving the session gives an edited row straight back.
-    DisposableEffect(c.chatId) { onDispose { finishEdit(null) } }
+    DisposableEffect(c.chatId) { onDispose { finishEdit(null); draft.localActions = null } }
 
     Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp)) {
         if (c.queue.isNotEmpty()) QueuePanel(c.queue, handle, editingId, onEdit = ::beginEdit)
@@ -222,7 +253,7 @@ fun Composer(
         MentionSuggestions(draft, search = { q ->
             client.searchFiles(c.host.deviceId, c.chatId, null, q)
         })
-        error?.let {
+        (draft.localError ?: error)?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 16.dp, bottom = 6.dp))
         }
         if (editingId != null) {
@@ -245,7 +276,7 @@ fun Composer(
             focusRequester = focus,
         ) {
             if (running && editingId == null) DeliveryChip(delivery, canSteer) { delivery = it }
-            SessionChips(client, c, row)
+            SessionChips(client, c, row, modelRequest)
         }
     }
 }
@@ -286,11 +317,11 @@ private fun DeliveryChip(current: Delivery, canSteer: Boolean, onChange: (Delive
 }
 
 @Composable
-private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?) {
+private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?, modelRequest: Int) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val harness = row?.harness ?: "claude-code"
-    var models by remember { mutableStateOf<List<ModelInfo>?>(null) }
+    var models by remember(c.chatId, c.host.deviceId, harness) { mutableStateOf<List<ModelInfo>?>(null) }
     var menu by remember { mutableStateOf<String?>(null) }
 
     fun open(which: String) {
@@ -299,6 +330,8 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?)
             models = runCatching { client.listModels(c.host.deviceId, harness) }.getOrNull() ?: fallbackModels(harness)
         }
     }
+
+    LaunchedEffect(modelRequest) { if (modelRequest > 0) open("model") }
 
     fun setConfig(change: (ChatConfig) -> ChatConfig) {
         val current = client.sessionConfig(c.chatId) ?: ChatConfig(harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)

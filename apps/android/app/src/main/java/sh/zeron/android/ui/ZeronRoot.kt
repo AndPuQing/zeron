@@ -1,5 +1,7 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.MobileComposerAction
+
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -62,6 +64,15 @@ object Routes {
 @Composable
 private fun MainNav(model: AppModel) {
     val nav = rememberNavController()
+    val drafts = remember(model) { mutableMapOf<String, ComposerModel>() }
+    val navigateAction: (MobileComposerAction) -> Unit = { action ->
+        when (action) {
+            MobileComposerAction.NEW -> nav.navigate(Routes.NEW) { launchSingleTop = true }
+            MobileComposerAction.SEARCH -> nav.navigate(Routes.SEARCH) { launchSingleTop = true }
+            MobileComposerAction.APPEARANCE -> nav.navigate("appearance") { launchSingleTop = true }
+            else -> Unit
+        }
+    }
     LaunchedEffect(Unit) {
         if (model.launch.voicePreview && !model.voice.state.value.live) model.voice.preview()
         when (val route = model.launch.route) {
@@ -76,7 +87,7 @@ private fun MainNav(model: AppModel) {
         composable(Routes.HOME) { Home(model, nav) }
         composable(Routes.CHAT) { entry ->
             val id = entry.arguments?.getString("id") ?: return@composable
-            SessionScreen(model, id, onBack = { nav.popBackStack() }, onOpen = { target ->
+            SessionScreen(model, id, onNavigate = navigateAction, draft = drafts.getOrPut(id) { ComposerModel() }, onBack = { nav.popBackStack() }, onOpen = { target ->
                 val currentId = nav.currentBackStackEntry?.arguments?.getString("id")
                 val route = Routes.chat(target)
                 // Reuse the source page when returning from a fork or its seam.
@@ -91,11 +102,12 @@ private fun MainNav(model: AppModel) {
             })
         }
         composable(Routes.NEW) {
-            NewSessionScreen(model, onClose = { nav.popBackStack() }, onCreated = { id ->
+            NewSessionScreen(model, onNavigate = navigateAction, composer = drafts.getOrPut("new") { ComposerModel() }, onClose = { nav.popBackStack() }, onCreated = { id ->
                 nav.popBackStack()
                 nav.navigate(Routes.chat(id))
             })
         }
+        composable("appearance") { SettingsScreen(model) }
         composable(Routes.IMPORT) { SessionImportScreen(model, onClose = { nav.popBackStack() }) }
         composable(Routes.SEARCH) {
             SearchScreen(model, onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.chat(it)) })
