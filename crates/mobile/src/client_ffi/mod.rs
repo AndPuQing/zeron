@@ -11,6 +11,8 @@
 //! through [`CoreClient::session_handle`] → [`zeron_client::SessionHandle`]
 //! (`snapshot()` / `subscribe()`), never over FFI.
 
+mod composer_actions;
+
 mod session;
 mod session_import;
 pub use session_import::*;
@@ -469,9 +471,13 @@ impl CoreClient {
 
     /// Commands and skills for this session, resolved by its owning host.
     pub async fn composer_catalog(&self, chat_id: String) -> CoreResult<ComposerCatalog> {
+        let harness = self
+            .session_config(chat_id.clone())
+            .map(|config| config.harness)
+            .unwrap_or_default();
         let client = self.client.clone();
         let catalog = on_runtime(async move { client.composer_catalog(&chat_id).await }).await?;
-        Ok(catalog.into())
+        Ok(composer_actions::with_mobile_actions(catalog.into(), &harness))
     }
 
     /// Commands and skills before a conversation exists.
@@ -482,13 +488,17 @@ impl CoreClient {
         space_id: Option<String>,
     ) -> CoreResult<ComposerCatalog> {
         let client = self.client.clone();
+        let action_harness = harness.clone();
         let catalog = on_runtime(async move {
             client
                 .new_session_composer_catalog(&device_id, &harness, space_id)
                 .await
         })
         .await?;
-        Ok(catalog.into())
+        Ok(composer_actions::with_mobile_actions(
+            catalog.into(),
+            &action_harness,
+        ))
     }
 
     /// Files matching `query` in the chat's (or project's) workspace, for

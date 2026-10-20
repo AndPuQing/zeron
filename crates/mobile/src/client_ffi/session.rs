@@ -498,6 +498,12 @@ impl SessionHandle {
         zeron_doc::has_fork_boundary(snap.transcript().iter().map(|entry| entry.message.as_ref()))
     }
 
+    /// Latest completed assistant reply, excluding tool output and reasoning.
+    pub fn latest_assistant_reply(&self) -> Option<String> {
+        let snap = self.inner.snapshot();
+        latest_completed_reply(snap.transcript().iter().map(|entry| entry.message.as_ref()))
+    }
+
     /// Plain text of one entry's text parts (copy / share).
     pub fn message_text(&self, entry_id: String) -> Option<String> {
         let snap = self.inner.snapshot();
@@ -649,5 +655,68 @@ impl SessionHandle {
     /// "Not delivered — tap to retry".
     pub fn retry_delivery(&self) -> CoreResult<()> {
         Ok(self.inner.retry_delivery()?)
+    }
+}
+
+fn latest_completed_reply<'a>(
+    entries: impl DoubleEndedIterator<Item = &'a zeron_doc::SessionMessageEntry>,
+) -> Option<String> {
+    entries
+        .rev()
+        .filter(|entry| {
+            entry.role == zc::MessageRole::Assistant
+                && entry.status == Some(zeron_doc::MessageStatus::Complete)
+        })
+        .find_map(|entry| {
+            let text = entry
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    zc::MessagePart::Text { text, .. } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            (!text.trim().is_empty()).then_some(text)
+        })
+}
+
+#[cfg(test)]
+mod copy_tests {
+    use super::*;
+    use zeron_doc::{MessagePart, MessageRole, MessageStatus, SessionMessageEntry};
+    #[test]
+    fn copy_uses_completed_assistant_text_and_skips_the_streaming_tail() {
+        let reply = SessionMessageEntry {
+            id: "reply".into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Text {
+                id: "text".into(),
+                text: "completed reply".into(),
+            }],
+            created_at: 0,
+            device_id: "test".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        };
+        let user = SessionMessageEntry {
+            role: MessageRole::User,
+            ..reply.clone()
+        };
+        let streaming = SessionMessageEntry {
+            status: Some(MessageStatus::Streaming),
+            ..reply.clone()
+        };
+        let empty = SessionMessageEntry {
+            parts: vec![],
+            ..reply.clone()
+        };
+        let entries = [reply, user, empty, streaming];
+        assert_eq!(
+            latest_completed_reply(entries.iter()).as_deref(),
+            Some("completed reply")
+        );
+        assert!(latest_completed_reply(entries[1..].iter()).is_none());
     }
 }

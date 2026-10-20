@@ -14,6 +14,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.zeron_core.FileMatch
@@ -50,6 +53,49 @@ class ComposerModel(initial: String = "") {
             field = value
         }
     private val commands = mutableStateMapOf<String, uniffi.zeron_core.ComposerCommand>()
+    var localActions: MobileCommandActions? = null
+    private var localPending by mutableStateOf(false)
+    private var localFailure by mutableStateOf<Pair<String, String>?>(null)
+    val localError: String? get() = localFailure?.takeIf { it.first == text }?.second
+
+    fun displayCommand(command: uniffi.zeron_core.ComposerCommand): uniffi.zeron_core.ComposerCommand {
+        val actions = localActions ?: return command
+        val local = uniffi.zeron_core.mobileComposerAction(actions.harness, command.insertion) ?: return command
+        return command.copy(description = local.description, unavailableReason =
+            if (localPending) "An action is already in progress." else
+                uniffi.zeron_core.mobileComposerActionError(local.action, actions.context()))
+    }
+
+    /** True means this is a local action (including rejected attempts), never a prompt. */
+    fun performLocalCommand(input: String = text, range: IntRange? = null): Boolean {
+        val actions = localActions ?: return false
+        val local = uniffi.zeron_core.mobileComposerAction(actions.harness, input) ?: return false
+        val reason = when {
+            localPending -> "An action is already in progress."
+            range == null && local.hasArguments -> "This action takes no arguments. Select it from the / menu to keep the rest of your draft."
+            else -> uniffi.zeron_core.mobileComposerActionError(local.action, actions.context())
+        }
+        if (reason != null) { localFailure = text to reason; return true }
+        val identity = commandContext
+        val previous = value
+        val remaining = if (range == null) "" else text.removeRange(range)
+        value = TextFieldValue(remaining, TextRange((range?.first ?: 0).coerceAtMost(remaining.length)))
+        localPending = true
+        localFailure = null
+        actions.scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                if (identity != commandContext) return@launch
+                actions.execute(local.action)
+            } catch (e: Exception) {
+                if (identity == commandContext) {
+                    if (text == remaining) value = previous
+                    if (e !is CancellationException) localFailure = text to (e.message ?: "Could not complete this action")
+                }
+                if (e is CancellationException) throw e
+            } finally { localPending = false }
+        }
+        return true
+    }
 
     /** Only the leading / token opens completion; replace the entire token at the cursor. */
     fun slashQuery(): Pair<IntRange, String>? {
@@ -65,9 +111,11 @@ class ComposerModel(initial: String = "") {
         return (start until end) to trimmed.drop(1)
     }
 
-    fun insertCommand(command: uniffi.zeron_core.ComposerCommand) {
-        if (command.unavailableReason != null) return
+    fun insertCommand(command: uniffi.zeron_core.ComposerCommand, expectedContext: String = commandContext) {
+        if (expectedContext != commandContext) return
         val (range, _) = slashQuery() ?: return
+        if (performLocalCommand(command.insertion, range)) return
+        if (command.unavailableReason != null) return
         val selected = uniffi.zeron_core.prepareComposerSelection(
             text.removeRange(range), commands.values.toList(), command,
         )
@@ -107,6 +155,7 @@ class ComposerModel(initial: String = "") {
         images.clear()
         tokens.clear()
         commands.clear()
+        localFailure = null
     }
 
     /** The `@query` being typed at the cursor: its start offset and query. */

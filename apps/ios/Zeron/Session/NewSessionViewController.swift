@@ -142,6 +142,43 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             return AttachmentPicker.menu(host: self, limit: 8 - self.composer.images.count) { [weak self] in self?.composer.addImages($0) }
         }
         composer.onChipTap = { _, _ in }
+        composer.commandHarness = { [weak self] in self?.draft.harness ?? "" }
+        composer.localCommandContext = { MobileComposerContext(inSession: false, isChild: false, canFork: false, hasReply: false, busy: false, editing: false) }
+        composer.onLocalCommand = { [weak self] action in
+            guard let self else { throw CancellationError() }
+            switch action {
+            case .model:
+                let identity = self.composer.commandContext
+                guard let client = self.app.client else { throw CancellationError() }
+                let models = try await client.listModels(deviceId: self.deviceId, harness: self.draft.harness)
+                guard identity == self.composer.commandContext, self.view.window != nil else { throw CancellationError() }
+                guard !models.isEmpty else {
+                    throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
+                }
+                let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
+                for model in models {
+                    sheet.addAction(UIAlertAction(title: model.label, style: .default) { [weak self] _ in
+                        guard let self, identity == self.composer.commandContext else { return }
+                        self.draft.model = model.id
+                        self.draft.effort = nil
+                        self.refreshChips()
+                    })
+                }
+                sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+                sheet.popoverPresentationController?.sourceView = self.composer
+                self.present(sheet, animated: true)
+            case .new: break // Already on a new draft; keep its remaining text and images.
+            case .search, .appearance:
+                self.rememberDraft()
+                let router = self.router
+                let navigate: () -> Void = {
+                    if action == .search { router?.showSearch() } else { router?.showSettings() }
+                }
+                if self.embedded { navigate() } else { self.dismiss(animated: true, completion: navigate) }
+            default: throw CancellationError()
+            }
+        }
+
         composer.commandCatalog = { [weak self] in
             guard let self, let client = self.app.client else { throw CancellationError() }
             return try await client.newSessionComposerCatalog(deviceId: self.deviceId, harness: self.draft.harness, spaceId: self.project?.id)

@@ -1,5 +1,8 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.MobileComposerAction
+import uniffi.zeron_core.MobileComposerContext
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,11 +71,10 @@ private fun catalogModels(): List<ModelChoice> = fallbackHarnesses().filter { it
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -> Unit) {
+fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, composer: ComposerModel = remember { ComposerModel() }) {
     val workspace by model.workspace.collectAsState()
     val client by model.client.collectAsState()
     var draft by remember { mutableStateOf(model.lastDraft) }
-    val composer = remember { ComposerModel() }
     val focus = remember { FocusRequester() }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -113,9 +115,29 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
 
     fun create() {
         if (composer.selectionError != null) return
+        if (composer.performLocalCommand()) return
         model.lastDraft = draft
         val id = model.createSession(draft.copy(model = draft.model ?: choice?.model?.id), composer.encoded(), composer.images.map { it.outgoing })
-        if (id != null) onCreated(id) else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+        if (id != null) { composer.clear(); onCreated(id) } else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+    }
+
+    var modelRequest by remember { mutableStateOf(0) }
+    composer.localActions = MobileCommandActions(draft.harness, scope,
+        context = { MobileComposerContext(false, false, false, false, false, false) },
+        execute = { action ->
+            when (action) {
+                MobileComposerAction.MODEL -> modelRequest++
+                MobileComposerAction.NEW -> Unit // Keep this draft intact.
+                else -> { model.lastDraft = draft; onNavigate(action) }
+            }
+        })
+
+    androidx.compose.runtime.DisposableEffect(model, composer) {
+        onDispose {
+            // Keep the execution target with the retained text on Close and system Back too.
+            model.lastDraft = draft
+            composer.localActions = null
+        }
     }
 
     var composerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
@@ -187,7 +209,7 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
                     } else {
                         HostChip(draft, hosts) { draft = it }
                     }
-                    ModelChip(draft, choice, models) { draft = it }
+                    ModelChip(draft, choice, models, modelRequest) { draft = it }
                     val efforts = choice?.model?.reasoningLevels.orEmpty()
                     if (efforts.isNotEmpty()) {
                         val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
@@ -366,14 +388,20 @@ private fun ModelChip(
     draft: sh.zeron.android.core.NewSessionDraft,
     choice: ModelChoice?,
     models: List<ModelChoice>,
+    modelRequest: Int,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
+    var currentAgentOnly by remember { mutableStateOf(false) }
+    LaunchedEffect(modelRequest) {
+        if (modelRequest > 0) { currentAgentOnly = true; open = true }
+    }
+    val offeredModels = if (currentAgentOnly) models.filter { it.harness == draft.harness } else models
     // Never the harness name in place of a model.
     val title = choice?.model?.label ?: draft.model?.let { modelLabel(draft.harness, it) }
         ?: fallbackModels(draft.harness).firstOrNull()?.label ?: harnessLabel(draft.harness)
-    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { open = true }) {
-        ChoiceMenu(open, { open = false }, models.groupBy { it.harness }.map { (harness, list) ->
+    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { currentAgentOnly = false; open = true }) {
+        ChoiceMenu(open, { open = false }, offeredModels.groupBy { it.harness }.map { (harness, list) ->
             MenuSection(list.first().harnessLabel, list.map { m ->
                 MenuChoice(m.model.label, m.harness == draft.harness && m.model.id == choice?.model?.id, leading = { HarnessMark(harness, 18.dp) }) {
                     onPick(draft.copy(harness = m.harness, model = m.model.id, effort = null))

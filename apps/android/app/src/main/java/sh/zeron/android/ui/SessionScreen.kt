@@ -1,5 +1,7 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.MobileComposerAction
+
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -82,7 +84,7 @@ private data class SideChatError(val title: String, val message: String)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (String) -> Unit) {
+fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, draft: ComposerModel = remember(chatId) { ComposerModel() }) {
     val client by model.client.collectAsState()
     val core = client ?: return
     val handle: SessionHandle = remember(core, chatId) { runCatching { core.openSession(chatId) }.getOrNull() } ?: run {
@@ -275,7 +277,11 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
         ) {
             Banner(composer, connectivity?.state, onRetry = { runCatching { handle.retryDelivery() } })
             composer.openInput?.let { QuestionPanel(it) { answers -> runCatching { handle.respondInput(it.requestId, answers) } } }
-            Composer(model, core, handle, composer, row, transcript)
+            Composer(model, core, handle, composer, row, transcript, draft, canFork, sideChatBusy,
+                    onNavigate = onNavigate, onArchived = onBack, onSideChat = { fork ->
+                        val id = if (fork) model.forkSideChat(chatId) else model.createSideChat(parentId)
+                        onOpen(id)
+                    })
         }
     }
 

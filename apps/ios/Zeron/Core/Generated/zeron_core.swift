@@ -3538,6 +3538,11 @@ public protocol SessionHandleProtocol: AnyObject, Sendable {
     
     func interrupt() throws 
     
+    /**
+     * Latest completed assistant reply, excluding tool output and reasoning.
+     */
+    func latestAssistantReply()  -> String?
+    
     func markSeen() 
     
     /**
@@ -3761,6 +3766,18 @@ open func interrupt()throws   {try rustCallWithError(FfiConverterTypeCoreError_l
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
+}
+    
+    /**
+     * Latest completed assistant reply, excluding tool output and reasoning.
+     */
+open func latestAssistantReply() -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_sessionhandle_latest_assistant_reply(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
 }
     
 open func markSeen()  {try! rustCall() {
@@ -8269,6 +8286,134 @@ public func FfiConverterTypeLiveStatus_lift(_ buf: RustBuffer) throws -> LiveSta
 #endif
 public func FfiConverterTypeLiveStatus_lower(_ value: LiveStatus) -> RustBuffer {
     return FfiConverterTypeLiveStatus.lower(value)
+}
+
+
+public struct MobileComposerContext: Equatable, Hashable {
+    public var inSession: Bool
+    public var isChild: Bool
+    public var canFork: Bool
+    public var hasReply: Bool
+    public var busy: Bool
+    public var editing: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(inSession: Bool, isChild: Bool, canFork: Bool, hasReply: Bool, busy: Bool, editing: Bool) {
+        self.inSession = inSession
+        self.isChild = isChild
+        self.canFork = canFork
+        self.hasReply = hasReply
+        self.busy = busy
+        self.editing = editing
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension MobileComposerContext: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMobileComposerContext: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MobileComposerContext {
+        return
+            try MobileComposerContext(
+                inSession: FfiConverterBool.read(from: &buf), 
+                isChild: FfiConverterBool.read(from: &buf), 
+                canFork: FfiConverterBool.read(from: &buf), 
+                hasReply: FfiConverterBool.read(from: &buf), 
+                busy: FfiConverterBool.read(from: &buf), 
+                editing: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MobileComposerContext, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.inSession, into: &buf)
+        FfiConverterBool.write(value.isChild, into: &buf)
+        FfiConverterBool.write(value.canFork, into: &buf)
+        FfiConverterBool.write(value.hasReply, into: &buf)
+        FfiConverterBool.write(value.busy, into: &buf)
+        FfiConverterBool.write(value.editing, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerContext_lift(_ buf: RustBuffer) throws -> MobileComposerContext {
+    return try FfiConverterTypeMobileComposerContext.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerContext_lower(_ value: MobileComposerContext) -> RustBuffer {
+    return FfiConverterTypeMobileComposerContext.lower(value)
+}
+
+
+public struct MobileComposerLocalCommand: Equatable, Hashable {
+    public var action: MobileComposerAction
+    public var description: String
+    public var hasArguments: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(action: MobileComposerAction, description: String, hasArguments: Bool) {
+        self.action = action
+        self.description = description
+        self.hasArguments = hasArguments
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension MobileComposerLocalCommand: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMobileComposerLocalCommand: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MobileComposerLocalCommand {
+        return
+            try MobileComposerLocalCommand(
+                action: FfiConverterTypeMobileComposerAction.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                hasArguments: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: MobileComposerLocalCommand, into buf: inout [UInt8]) {
+        FfiConverterTypeMobileComposerAction.write(value.action, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterBool.write(value.hasArguments, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerLocalCommand_lift(_ buf: RustBuffer) throws -> MobileComposerLocalCommand {
+    return try FfiConverterTypeMobileComposerLocalCommand.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerLocalCommand_lower(_ value: MobileComposerLocalCommand) -> RustBuffer {
+    return FfiConverterTypeMobileComposerLocalCommand.lower(value)
 }
 
 
@@ -13789,6 +13934,121 @@ public func FfiConverterTypeMathFace_lower(_ value: MathFace) -> RustBuffer {
 
 
 
+
+public enum MobileComposerAction: Equatable, Hashable {
+    
+    case model
+    case new
+    case search
+    case rename
+    case archive
+    case copy
+    case side
+    case fork
+    case appearance
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension MobileComposerAction: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeMobileComposerAction: FfiConverterRustBuffer {
+    typealias SwiftType = MobileComposerAction
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> MobileComposerAction {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .model
+        
+        case 2: return .new
+        
+        case 3: return .search
+        
+        case 4: return .rename
+        
+        case 5: return .archive
+        
+        case 6: return .copy
+        
+        case 7: return .side
+        
+        case 8: return .fork
+        
+        case 9: return .appearance
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: MobileComposerAction, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case .model:
+            writeInt(&buf, Int32(1))
+        
+        
+        case .new:
+            writeInt(&buf, Int32(2))
+        
+        
+        case .search:
+            writeInt(&buf, Int32(3))
+        
+        
+        case .rename:
+            writeInt(&buf, Int32(4))
+        
+        
+        case .archive:
+            writeInt(&buf, Int32(5))
+        
+        
+        case .copy:
+            writeInt(&buf, Int32(6))
+        
+        
+        case .side:
+            writeInt(&buf, Int32(7))
+        
+        
+        case .fork:
+            writeInt(&buf, Int32(8))
+        
+        
+        case .appearance:
+            writeInt(&buf, Int32(9))
+        
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerAction_lift(_ buf: RustBuffer) throws -> MobileComposerAction {
+    return try FfiConverterTypeMobileComposerAction.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeMobileComposerAction_lower(_ value: MobileComposerAction) -> RustBuffer {
+    return FfiConverterTypeMobileComposerAction.lower(value)
+}
+
+
+
 /**
  * The four tuned size presets (inline 20, avatar 64, large 96, hero 128).
  */
@@ -16710,6 +16970,30 @@ fileprivate struct FfiConverterOptionTypeInputRequest: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeMobileComposerLocalCommand: FfiConverterRustBuffer {
+    typealias SwiftType = MobileComposerLocalCommand?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeMobileComposerLocalCommand.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeMobileComposerLocalCommand.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeProjectRef: FfiConverterRustBuffer {
     typealias SwiftType = ProjectRef?
 
@@ -18408,6 +18692,24 @@ public func workosAuthorizeUrl(state: String) -> String  {
     )
 })
 }
+public func mobileComposerAction(harness: String, text: String) -> MobileComposerLocalCommand?  {
+    return try!  FfiConverterOptionTypeMobileComposerLocalCommand.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_mobile_composer_action(
+        FfiConverterString.lower(harness),
+        FfiConverterString.lower(text),uniffiCallStatus
+    )
+})
+}
+public func mobileComposerActionError(action: MobileComposerAction, context: MobileComposerContext) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_mobile_composer_action_error(
+        FfiConverterTypeMobileComposerAction_lower(action),
+        FfiConverterTypeMobileComposerContext_lower(context),uniffiCallStatus
+    )
+})
+}
 /**
  * Explain invalid selected references still present in the draft before sending.
  */
@@ -18653,6 +18955,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_workos_authorize_url() != 35994) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_mobile_composer_action() != 42206) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_mobile_composer_action_error() != 33528) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_composer_selection_error() != 27924) {
@@ -18929,6 +19237,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_interrupt() != 42793) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_sessionhandle_latest_assistant_reply() != 25224) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_mark_seen() != 7987) {

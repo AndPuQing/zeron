@@ -107,6 +107,17 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             if queued { self.list.expectQueuedTurn() } else { self.list.beginOwnTurn() }
             return .sent
         }
+        composer.commandHarness = { [weak self] in self?.app.row(self?.chatId ?? "")?.harness ?? "" }
+        composer.localCommandContext = { [weak self] in
+            guard let self else { return MobileComposerContext(inSession: false, isChild: false, canFork: false, hasReply: false, busy: false, editing: false) }
+            let reply = (try? self.app.client?.openSession(chatId: self.chatId))?.latestAssistantReply()
+            return MobileComposerContext(inSession: true, isChild: self.app.row(self.chatId)?.parentChatId != nil,
+                canFork: self.source.canFork, hasReply: reply != nil, busy: self.app.sideChatBusy, editing: self.editingQueueId != nil)
+        }
+        composer.onLocalCommand = { [weak self] action in
+            guard let self else { throw CancellationError() }
+            try await self.performLocalCommand(action)
+        }
         composer.onStop = { [weak self] in self?.source.stop() }
         composer.text = Drafts.load(chatId)
         composer.commandCatalog = { [weak self] in
@@ -506,6 +517,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         composer.canSteer = c.canSteer
         composer.placeholder = c.placeholder
         composer.commandContext = source.commandContext
+        composer.refreshLocalCommands()
         composer.chips = c.chips
         composer.chipMenus = Dictionary(uniqueKeysWithValues: c.chips.map { chip in
             (chip.id, { [weak self] in self?.source.chipMenu(chip.id) })
@@ -538,6 +550,63 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             UIView.animate(withDuration: 0.38, delay: 0, usingSpringWithDamping: 0.86, initialSpringVelocity: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: changes)
         } else {
             changes()
+        }
+    }
+
+    private func performLocalCommand(_ action: MobileComposerAction) async throws {
+        guard let client = app.client else { throw CancellationError() }
+        switch action {
+        case .model:
+            let handle = try client.openSession(chatId: chatId)
+            guard let config = client.sessionConfig(chatId: chatId) else { throw CancellationError() }
+            let identity = source.commandContext
+            let models = try await client.listModels(deviceId: handle.composer().host.deviceId, harness: config.harness)
+            guard identity == source.commandContext, view.window != nil else { throw CancellationError() }
+            guard !models.isEmpty else {
+                throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
+            }
+            let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
+            for model in models {
+                sheet.addAction(UIAlertAction(title: model.label, style: .default) { [weak self] _ in
+                    guard let self, identity == self.source.commandContext,
+                          var latest = client.sessionConfig(chatId: self.chatId) else { return }
+                    latest.model = model.id
+                    latest.reasoning = nil
+                    do { try client.setSessionConfig(chatId: self.chatId, config: latest) }
+                    catch { self.presentSideChatError("Couldn't change model", error) }
+                })
+            }
+            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            sheet.popoverPresentationController?.sourceView = composer
+            present(sheet, animated: true)
+        case .new: router?.presentNewSession(prompt: nil)
+        case .search: router?.showSearch()
+        case .appearance: router?.showSettings()
+        case .rename:
+            let alert = UIAlertController(title: "Rename Session", message: nil, preferredStyle: .alert)
+            alert.addTextField { $0.text = self.app.row(self.chatId)?.title }
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak self] _ in
+                guard let self, let name = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return }
+                do { try client.renameSession(chatId: self.chatId, title: name) }
+                catch { self.presentSideChatError("Couldn't rename this chat", error) }
+            })
+            present(alert, animated: true)
+        case .archive:
+            try client.archiveSession(chatId: chatId)
+            if let split = splitViewController as? SplitRootController, !split.isCollapsed {
+                split.showDraft(prompt: nil, focus: false)
+            } else { navigationController?.popViewController(animated: true) }
+        case .copy:
+            guard let reply = try client.openSession(chatId: chatId).latestAssistantReply() else { throw CancellationError() }
+            UIPasteboard.general.string = reply
+        case .side:
+            router?.openChildSession(try app.createSideChat(parentId: chatId))
+        case .fork:
+            let identity = source.commandContext
+            let id = try await app.forkSideChat(sourceId: chatId)
+            guard identity == source.commandContext, view.window != nil else { return }
+            router?.openChildSession(id)
         }
     }
 

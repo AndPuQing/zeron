@@ -3,17 +3,23 @@ package sh.zeron.android.ui
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
 import sh.zeron.android.ZeronApplication
+import sh.zeron.android.core.NewSessionDraft
 import sh.zeron.android.design.ThemeMode
+import uniffi.zeron_core.BusyPolicy
+import uniffi.zeron_core.SendRequest
 
 /** Shell controls must keep their behavior across menus, sheets and recreation. */
 class ShellFlowTest {
@@ -81,11 +87,94 @@ class ShellFlowTest {
         assertTrue(device.hasObject(By.text("No project")))
     }
 
-    private fun launch(route: String) {
+    @Test
+    fun newSessionDraftKeepsItsTargetAfterClose() = checkNewSessionDraft(useSystemBack = false)
+
+    @Test
+    fun newSessionDraftKeepsItsTargetAfterSystemBack() = checkNewSessionDraft(useSystemBack = true)
+
+    private fun checkNewSessionDraft(useSystemBack: Boolean) {
+        launch("home")
+        val original = model.lastDraft
+        val project = model.workspace.value!!.projects.first()
+        val initial = NewSessionDraft(projectId = project.id, harness = "codex")
+        try {
+            instrumentation.runOnMainSync { model.lastDraft = initial }
+            findText("New session").click()
+            findText(project.name).click()
+            assertTrue(device.wait(Until.hasObject(By.text("Project")), 5_000))
+            findText("No project").click()
+            assertTrue(device.wait(Until.gone(By.text("Project")), 5_000))
+            val text = "Keep this projectless draft"
+            editor().text = text
+            device.waitForIdle()
+            if (useSystemBack) {
+                // Dismiss the keyboard separately from navigating away.
+                var keyboardVisible = false
+                instrumentation.runOnMainSync {
+                    val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+                    keyboardVisible = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                        ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                }
+                if (keyboardVisible) {
+                    device.pressBack()
+                    device.waitForIdle()
+                }
+                device.pressBack()
+            } else {
+                requireNotNull(device.wait(Until.findObject(By.desc("Close")), 5_000)).click()
+            }
+            findText("New session").click()
+            assertEquals(initial.copy(projectId = null, hostId = project.deviceId), model.lastDraft)
+            assertEquals(text, editor().text)
+            assertTrue(device.hasObject(By.text("No project")))
+            requireNotNull(device.wait(Until.findObject(By.desc("Close")), 5_000)).click()
+            findText("New session") // Wait for disposal before restoring test preferences.
+        } finally {
+            instrumentation.runOnMainSync { model.lastDraft = original }
+        }
+    }
+
+    @Test
+    fun leavingQueuedEditRestoresTheUnsentDraft() {
+        launch("home", fast = false, longReply = true)
+        // A fresh slow demo keeps the queued message available during navigation.
+        instrumentation.runOnMainSync { model.startDemo() }
+        val chatId = "chat-deploy"
+        val title = requireNotNull(model.row(chatId)).title
+        findText(title).click()
+        val handle = model.client.value!!.openSession(chatId)
+        try {
+            handle.send(SendRequest("Keep this turn running", emptyList(), null, BusyPolicy.QUEUE))
+            await { handle.composer().live.turnRunning }
+            val queued = "This is the queued message"
+            handle.send(SendRequest(queued, emptyList(), null, BusyPolicy.QUEUE))
+            await { handle.composer().queue.any { it.visibleText == queued } }
+            val draft = "My unsent draft, not the queued message"
+            editor().text = draft
+            requireNotNull(device.wait(Until.findObject(By.desc("Queued message actions")), 5_000)).click()
+            requireNotNull(device.wait(Until.findObject(By.text("Edit")), 5_000)).click()
+            assertTrue(device.wait(Until.hasObject(By.text("Editing queued message")), 5_000))
+            assertEquals(queued, editor().text)
+            editor().text = "Discard these queue edits"
+            requireNotNull(device.wait(Until.findObject(By.desc("Back")), 5_000)).click()
+            findText(title).click()
+            assertEquals(draft, editor().text)
+            assertFalse(device.hasObject(By.text("Editing queued message")))
+            assertEquals(queued, handle.composer().queue.single().visibleText)
+        } finally {
+            runBlocking { handle.composer().queue.forEach { handle.removeQueued(it.id) } }
+            handle.interrupt()
+        }
+    }
+
+    private fun editor() = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000))
+
+    private fun launch(route: String, fast: Boolean = true, longReply: Boolean = false) {
         val context = instrumentation.targetContext
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            .putExtra("demo", true).putExtra("fast", true).putExtra("route", route))
+            .putExtra("demo", true).putExtra("fast", fast).putExtra("longreply", longReply).putExtra("route", route))
         assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName)), 20_000))
         await { model.isDemo && model.workspace.value != null }
         device.waitForIdle()
