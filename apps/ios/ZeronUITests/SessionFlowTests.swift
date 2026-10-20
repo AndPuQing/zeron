@@ -589,7 +589,7 @@ final class SessionFlowTests: XCTestCase {
             XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
             XCTAssertLessThanOrEqual(list.frame.maxY, input.frame.minY)
             XCTAssertLessThanOrEqual(list.frame.height, 280)
-            XCTAssertLessThan(first.frame.height, 80, "long descriptions must not expand completion rows")
+            XCTAssertLessThan(first.frame.height, 50, "names and descriptions share one desktop-style line")
             XCTAssertGreaterThanOrEqual(first.frame.height, 44)
             XCTAssertFalse(first.label.contains("SKILL.md"))
             XCTAssertFalse(first.label.contains("/Users/"))
@@ -603,6 +603,13 @@ final class SessionFlowTests: XCTestCase {
             XCTAssertTrue((input.value as? String ?? "").hasPrefix("$imagegen"))
             XCTAssertFalse((input.value as? String ?? "").contains("SKILL.md"))
             XCTAssertTrue(list.waitForNonExistence(timeout: 5))
+
+            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (input.value as? String ?? "").count))
+            input.typeText("/compact")
+            let command = app.descendants(matching: .any)["slash-/compact"]
+            XCTAssertTrue(command.waitForExistence(timeout: 5))
+            XCTAssertLessThan(command.frame.height, 50)
+            snapshot(app, appearance == "1" ? "ios-commands-command-light" : "ios-commands-command-dark")
             app.terminate()
         }
     }

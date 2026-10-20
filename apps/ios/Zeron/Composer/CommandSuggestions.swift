@@ -1,11 +1,11 @@
 import UIKit
 
-/// Native completion rows above the composer, on a single glass surface.
+/// Desktop completion-row layout, with a native scroll view and touch targets.
 final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelegate {
     var onPick: ((ComposerCommand) -> Void)?
     var context = ""
     var onRetry: (() -> Void)?
-    private let card = Glass.surface(radius: 18)
+    private let card = Glass.surface(radius: 12)
     private let table = UITableView(frame: .zero, style: .plain)
     private var height: NSLayoutConstraint!
     private var commands: [ComposerCommand] = []
@@ -23,13 +23,12 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
         table.dataSource = self
         table.delegate = self
         table.rowHeight = UITableView.automaticDimension
-        table.estimatedRowHeight = 58
+        table.estimatedRowHeight = 44
         table.contentInsetAdjustmentBehavior = .never
         table.scrollsToTop = false
-        table.separatorColor = Palette.hairline.withAlphaComponent(0.5)
-        table.separatorInset = UIEdgeInsets(top: 0, left: 52, bottom: 0, right: 14)
+        table.separatorStyle = .none
         table.tableFooterView = UIView()
-        table.register(UITableViewCell.self, forCellReuseIdentifier: "command")
+        table.register(CommandSuggestionCell.self, forCellReuseIdentifier: "command")
         addSubview(card)
         card.contentView.addSubview(table)
         height = heightAnchor.constraint(equalToConstant: 64)
@@ -40,8 +39,8 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             card.leadingAnchor.constraint(equalTo: leadingAnchor), card.trailingAnchor.constraint(equalTo: trailingAnchor),
             table.topAnchor.constraint(equalTo: card.contentView.topAnchor, constant: 4),
             table.bottomAnchor.constraint(equalTo: card.contentView.bottomAnchor, constant: -4),
-            table.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor),
-            table.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor),
+            table.leadingAnchor.constraint(equalTo: card.contentView.leadingAnchor, constant: 4),
+            table.trailingAnchor.constraint(equalTo: card.contentView.trailingAnchor, constant: -4),
         ])
         registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (self: CommandSuggestions, _) in
             self.table.reloadData()
@@ -73,7 +72,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
         } else {
             status = nil
         }
-        height.constant = min(280, CGFloat(commands.count + (status == nil ? 0 : 1)) * 58 + 8)
+        height.constant = min(280, CGFloat(commands.count + (status == nil ? 0 : 1)) * 44 + 8)
         table.reloadData()
         if resetScroll { table.setContentOffset(.zero, animated: false) }
         setNeedsLayout()
@@ -85,43 +84,33 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "command", for: indexPath)
-        cell.backgroundColor = .clear
-        var content = UIListContentConfiguration.subtitleCell()
-        content.textProperties.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: .systemFont(ofSize: 15, weight: .semibold))
-        content.textProperties.numberOfLines = 1
-        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .caption1)
-        content.secondaryTextProperties.numberOfLines = 1
-        content.secondaryTextProperties.color = Palette.secondary
-        content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
-        content.imageProperties.reservedLayoutSize = CGSize(width: 24, height: 24)
-        content.imageToTextPadding = 12
-        content.textToSecondaryTextVerticalPadding = 3
-        content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
+        let cell = tableView.dequeueReusableCell(withIdentifier: "command", for: indexPath) as! CommandSuggestionCell
         let enabled: Bool
         if indexPath.row < commands.count {
             let command = commands[indexPath.row]
             enabled = command.unavailableReason == nil
-            content.text = command.token
-            content.secondaryText = command.unavailableReason ?? (command.description.isEmpty ? command.inputHint : command.description)
-            content.image = UIImage(systemName: symbol(for: command.token))
+            // Match desktop: description, unavailability and input hint share
+            // the muted inline detail, while the invocation stays canonical.
+            var details = [command.description, command.unavailableReason].compactMap { $0 }.filter { !$0.isEmpty }
+            if let hint = command.inputHint, !hint.isEmpty { details.append("<\(hint)>") }
+            let detail = details.joined(separator: " · ")
+            cell.configure(title: command.token, detail: detail,
+                           image: UIImage(named: command.token.hasPrefix("$") ? "tool-magic-stick-3" : "tool-command"),
+                           enabled: enabled)
             cell.accessibilityIdentifier = "slash-\(command.token)"
-            cell.accessibilityLabel = "\(command.token). \(content.secondaryText ?? "")"
+            cell.accessibilityLabel = "\(command.token). \(detail)"
             cell.accessibilityHint = command.unavailableReason == nil ? command.inputHint : nil
         } else if let status {
             enabled = status.retry
-            content.text = status.title
-            content.secondaryText = status.detail
-            content.image = UIImage(systemName: status.retry ? "arrow.clockwise" : "magnifyingglass")
+            cell.configure(title: status.title, detail: status.detail ?? "",
+                           image: status.retry ? UIImage(systemName: "arrow.clockwise") : UIImage(named: "tool-command"),
+                           enabled: enabled)
             cell.accessibilityIdentifier = "slash-status"
             cell.accessibilityLabel = [status.title, status.detail].compactMap { $0 }.joined(separator: ". ")
             cell.accessibilityHint = nil
         } else {
             enabled = false
         }
-        content.textProperties.color = enabled ? Palette.text : Palette.tertiary
-        content.imageProperties.tintColor = enabled ? Palette.secondary : Palette.tertiary
-        cell.contentConfiguration = content
         cell.selectionStyle = enabled ? .default : .none
         cell.accessibilityTraits = enabled ? .button : [.button, .notEnabled]
         return cell
@@ -146,22 +135,65 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
         }
     }
 
-    private func symbol(for token: String) -> String {
-        if token.hasPrefix("$") { return "puzzlepiece.extension" }
-        let name = token.hasPrefix("/zeron:") ? String(token.dropFirst(7)) : String(token.dropFirst())
-        return switch name {
-        case "model": "cpu"
-        case "new", "clear": "square.and.pencil"
-        case "resume", "agents": "magnifyingglass"
-        case "rename": "pencil"
-        case "archive": "archivebox"
-        case "copy": "doc.on.doc"
-        case "side", "btw": "arrowshape.turn.up.right"
-        case "fork": "arrow.triangle.branch"
-        case "theme": "circle.lefthalf.filled"
-        case "compact": "text.alignleft"
-        case "review": "checkmark.bubble"
-        default: "terminal"
+}
+
+/// Mirrors `popover::completion_row_content`: a 16-point icon, medium label
+/// and muted inline detail, separated by 8 points. The title takes at most
+/// 55% of the row when a detail is present, as on desktop.
+private final class CommandSuggestionCell: UITableViewCell {
+    private let icon = UIImageView()
+    private let title = UILabel()
+    private let detail = UILabel()
+    private var titleLimit: NSLayoutConstraint!
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        isAccessibilityElement = true
+        icon.contentMode = .scaleAspectFit
+        for label in [title, detail] {
+            label.numberOfLines = 1
+            label.lineBreakMode = .byTruncatingTail
+            label.adjustsFontForContentSizeCategory = true
+            label.isAccessibilityElement = false
         }
+        title.accessibilityIdentifier = "slash-title"
+        detail.accessibilityIdentifier = "slash-detail"
+        title.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: Fonts.ui(.sansMedium, 13))
+        detail.font = UIFontMetrics(forTextStyle: .subheadline).scaledFont(for: Fonts.ui(.sans, 12.5))
+        title.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        detail.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        let row = UIStackView(arrangedSubviews: [icon, title, detail])
+        row.alignment = .center
+        row.spacing = 8
+        row.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(row)
+        titleLimit = title.widthAnchor.constraint(lessThanOrEqualTo: row.widthAnchor, multiplier: 0.55)
+        NSLayoutConstraint.activate([
+            contentView.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            row.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
+            row.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+            row.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            row.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -6),
+            icon.widthAnchor.constraint(equalToConstant: 16),
+            icon.heightAnchor.constraint(equalToConstant: 16),
+        ])
+        let highlight = UIView()
+        highlight.backgroundColor = Palette.controlFill
+        highlight.layer.cornerRadius = 7
+        selectedBackgroundView = highlight
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func configure(title text: String, detail description: String, image: UIImage?, enabled: Bool) {
+        title.text = text
+        detail.text = description
+        detail.isHidden = description.isEmpty
+        titleLimit.isActive = !description.isEmpty
+        icon.image = image
+        icon.tintColor = Palette.secondary
+        title.textColor = Palette.text
+        detail.textColor = Palette.secondary
+        contentView.alpha = enabled ? 1 : 0.5
     }
 }
