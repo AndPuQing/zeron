@@ -11,6 +11,14 @@ final class MobileCommandTests: XCTestCase {
     }
 
     @MainActor
+    func testSkillDisplayNameMatchesDesktopCompletion() {
+        XCTAssertEqual(CommandSuggestions.displayName(for: "$imagegen"), "Imagegen")
+        XCTAssertEqual(CommandSuggestions.displayName(for: "$skill_creator"), "Skill Creator")
+        XCTAssertEqual(CommandSuggestions.displayName(for: "$plugin:review-agent"), "Review Agent")
+        XCTAssertEqual(CommandSuggestions.displayName(for: "/compact"), "/compact")
+    }
+
+    @MainActor
     func testSelectionExecutesLocallyAndPreservesRestOfDraft() async {
         let composer = ComposerBar()
         composer.commandHarness = { "codex" }

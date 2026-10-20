@@ -2,6 +2,19 @@ import UIKit
 
 /// Desktop completion-row layout, with a native scroll view and touch targets.
 final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelegate {
+    /// Desktop `composer::skill_display_name`: presentation only, so the
+    /// inserted invocation keeps its canonical `$…` identity.
+    static func displayName(for token: String) -> String {
+        guard token.hasPrefix("$") else { return token }
+        let leaf = token.dropFirst().split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? ""
+        return leaf.split(whereSeparator: { $0 == "-" || $0 == "_" || $0.isWhitespace })
+            .map { word in
+                guard let first = word.first else { return "" }
+                return String(first).uppercased() + String(word.dropFirst()).lowercased()
+            }
+            .joined(separator: " ")
+    }
+
     var onPick: ((ComposerCommand) -> Void)?
     var context = ""
     var onRetry: (() -> Void)?
@@ -94,11 +107,12 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             var details = [command.description, command.unavailableReason].compactMap { $0 }.filter { !$0.isEmpty }
             if let hint = command.inputHint, !hint.isEmpty { details.append("<\(hint)>") }
             let detail = details.joined(separator: " · ")
-            cell.configure(title: command.token, detail: detail,
+            let title = Self.displayName(for: command.token)
+            cell.configure(title: title, detail: detail,
                            image: UIImage(named: command.token.hasPrefix("$") ? "tool-magic-stick-3" : "tool-command"),
                            enabled: enabled)
             cell.accessibilityIdentifier = "slash-\(command.token)"
-            cell.accessibilityLabel = "\(command.token). \(detail)"
+            cell.accessibilityLabel = "\(title). \(detail)"
             cell.accessibilityHint = command.unavailableReason == nil ? command.inputHint : nil
         } else if let status {
             enabled = status.retry
@@ -134,7 +148,6 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             onRetry?()
         }
     }
-
 }
 
 /// Mirrors `popover::completion_row_content`: a 16-point icon, medium label

@@ -591,6 +591,7 @@ final class SessionFlowTests: XCTestCase {
             XCTAssertLessThanOrEqual(list.frame.height, 280)
             XCTAssertLessThan(first.frame.height, 50, "names and descriptions share one desktop-style line")
             XCTAssertGreaterThanOrEqual(first.frame.height, 44)
+            XCTAssertTrue(first.label.hasPrefix("Imagegen"), "desktop skill name: \(first.label)")
             XCTAssertFalse(first.label.contains("SKILL.md"))
             XCTAssertFalse(first.label.contains("/Users/"))
             snapshot(app, appearance == "1" ? "ios-commands-light" : "ios-commands-dark")
@@ -609,6 +610,7 @@ final class SessionFlowTests: XCTestCase {
             let command = app.descendants(matching: .any)["slash-/compact"]
             XCTAssertTrue(command.waitForExistence(timeout: 5))
             XCTAssertLessThan(command.frame.height, 50)
+            XCTAssertTrue(command.label.hasPrefix("/compact"), command.label)
             snapshot(app, appearance == "1" ? "ios-commands-command-light" : "ios-commands-command-dark")
             app.terminate()
         }
