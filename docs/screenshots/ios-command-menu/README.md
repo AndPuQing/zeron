@@ -28,5 +28,6 @@ VoiceOver labels.
 menu stays above the input and keyboard, caps its height, keeps light/dark rows
 one line and 44–50 pt tall, omits paths, filters to the matching skill, checks the
 desktop skill name, inserts the canonical `$imagegen` invocation, and renders the
-`/compact` command row. The native unit tests also cover the desktop display-name
-mapping and retain the stale-context selection guard.
+`/compact` command row. The native unit tests cover the desktop display-name
+mapping, including `$review` / `$review:2` disambiguation with encoded path
+identity, and retain the stale-context selection guard.

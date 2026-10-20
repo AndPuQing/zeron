@@ -3,9 +3,22 @@ import UIKit
 /// Desktop completion-row layout, with a native scroll view and touch targets.
 final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelegate {
     /// Desktop `composer::skill_display_name`: presentation only, so the
-    /// inserted invocation keeps its canonical `$…` identity.
-    static func displayName(for token: String) -> String {
+    /// inserted invocation keeps its canonical `$…` identity. The catalog adds
+    /// `:N` when two skills share a name; restore the base token from the
+    /// canonical insertion so `$review:2` stays `Review · 2` rather than `2`.
+    static func displayName(for command: ComposerCommand) -> String {
+        let token = command.token
         guard token.hasPrefix("$") else { return token }
+        if let suffix = disambiguationSuffix(in: token) {
+            guard let base = canonicalToken(for: command) else { return token }
+            if token == "\(base):\(suffix)" {
+                return "\(desktopName(base)) · \(suffix)"
+            }
+        }
+        return desktopName(token)
+    }
+
+    private static func desktopName(_ token: String) -> String {
         let leaf = token.dropFirst().split(separator: ":", omittingEmptySubsequences: false).last.map(String.init) ?? ""
         return leaf.split(whereSeparator: { $0 == "-" || $0 == "_" || $0.isWhitespace })
             .map { word in
@@ -13,6 +26,24 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
                 return String(first).uppercased() + String(word.dropFirst()).lowercased()
             }
             .joined(separator: " ")
+    }
+
+    /// Only the catalog/restore disambiguation suffix (`:2`, `:3`, …) is added
+    /// after an existing token; a numeric part of the original name never is.
+    private static func disambiguationSuffix(in token: String) -> String? {
+        guard let colon = token.lastIndex(of: ":") else { return nil }
+        let suffix = token[token.index(after: colon)...]
+        guard !suffix.isEmpty, suffix.allSatisfy({ $0.isNumber }),
+              let number = Int(String(suffix)), number >= 2 else { return nil }
+        return String(suffix)
+    }
+
+    private static func canonicalToken(for command: ComposerCommand) -> String? {
+        let restored = restoreComposerDraft(text: command.insertion)
+        guard restored.selections.count == 1,
+              restored.selections[0].insertion == command.insertion,
+              restored.text.hasPrefix("$") else { return nil }
+        return restored.text
     }
 
     var onPick: ((ComposerCommand) -> Void)?
@@ -107,7 +138,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             var details = [command.description, command.unavailableReason].compactMap { $0 }.filter { !$0.isEmpty }
             if let hint = command.inputHint, !hint.isEmpty { details.append("<\(hint)>") }
             let detail = details.joined(separator: " · ")
-            let title = Self.displayName(for: command.token)
+            let title = Self.displayName(for: command)
             cell.configure(title: title, detail: detail,
                            image: UIImage(named: command.token.hasPrefix("$") ? "tool-magic-stick-3" : "tool-command"),
                            enabled: enabled)
