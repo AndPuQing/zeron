@@ -55,7 +55,7 @@ enum BrandMark {
         case .pi:
             return "M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29ZM282.65 282.65V400H400V282.65ZM517.36 400H634.72V634.72H517.36Z"
         case .omp:
-            return "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2.6a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8ZM8.4 9h7.2v2.1h-2.5v5.4h-2.2v-5.4H10.7v5.4H8.5v-5.4H8.4Z"
+            return "M3.36 3h17.28v5.04h-6v12.96h-5.28V8.04H8.88v12.96H3.6V8.04H3.36Z"
         case .opencode:
             // opencode-mark.svg's frame (the desktop asset's second path is a
             // 45%-opacity inner fill this single-path renderer skips — the

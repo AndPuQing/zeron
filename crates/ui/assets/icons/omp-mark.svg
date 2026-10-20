@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24">
-    <!-- Hand-drawn Oh My Pi mark: an open ring (the "O" of Oh My) around a
-         compact pi glyph, drawn monochrome so gpui tints it like the other
-         harness marks. Distinct from Pi's bare pixel-pi mark. Single even-odd
-         path so Android/iOS can share the exact path data. -->
-    <path fill="currentColor" fill-rule="evenodd" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 2.6a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8ZM8.4 9h7.2v2.1h-2.5v5.4h-2.2v-5.4H10.7v5.4H8.5v-5.4H8.4Z"/>
+    <!-- Hand-drawn Oh My Pi mark: a compact pi glyph, drawn monochrome so
+         gpui tints it like the other harness marks. Distinct from Pi's bare
+         pixel-pi mark. Single even-odd path so Android/iOS can share the
+         exact path data. -->
+    <path fill="currentColor" fill-rule="evenodd" d="M3.36 3h17.28v5.04h-6v12.96h-5.28V8.04H8.88v12.96H3.6V8.04H3.36Z"/>
 </svg>
