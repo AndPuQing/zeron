@@ -1553,30 +1553,41 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
+            // One-byte writes must not wait on Nagle/delayed ACK: the test is
+            // about steady progress, not TCP coalescing on the fixture.
+            socket.set_nodelay(true).unwrap();
             let mut request = [0; 4096];
             socket.read(&mut request).await.unwrap();
             socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n")
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n")
                 .await
                 .unwrap();
-            for _ in 0..10 {
+            for _ in 0..20 {
                 socket.write_all(b"x").await.unwrap();
-                tokio::time::sleep(Duration::from_millis(40)).await;
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         });
-        let client =
-            http_client_with_timeouts(Duration::from_secs(1), Duration::from_millis(200)).unwrap();
-        assert_eq!(
-            client
-                .get(format!("http://{address}"))
-                .send_routed()
-                .await
-                .unwrap()
-                .bytes()
-                .await
-                .unwrap()
-                .len(),
-            10
+        // reqwest's read timeout is wall-clock inactivity between body frames
+        // (ReadTimeoutBody), not a total-transfer deadline. Keep the cadence
+        // well below it and the total above it, with enough headroom for a
+        // loaded macOS runner to deschedule this task. The stall cases above
+        // still prove that a real gap trips the read timeout.
+        let read_timeout = Duration::from_secs(1);
+        let client = http_client_with_timeouts(Duration::from_secs(1), read_timeout).unwrap();
+        let started = std::time::Instant::now();
+        let response = client
+            .get(format!("http://{address}"))
+            .send_routed()
+            .await
+            .unwrap();
+        let body = tokio::time::timeout(Duration::from_secs(5), response.bytes())
+            .await
+            .expect("progressing body must finish")
+            .unwrap();
+        assert_eq!(body.len(), 20);
+        assert!(
+            started.elapsed() > read_timeout,
+            "the request must span more than one read timeout"
         );
         server.await.unwrap();
     }
