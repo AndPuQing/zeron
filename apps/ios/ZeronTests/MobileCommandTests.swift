@@ -227,7 +227,7 @@ final class MobileCommandTests: XCTestCase {
             composer.textView.selectedRange = NSRange(location: 3, length: 0)
             composer.insertCommand(ComposerCommand(token: "/goal", description: "Goal", inputHint: nil, insertion: "/goal", unavailableReason: nil))
             XCTAssertEqual(composer.text, "/goal" + suffix)
-            XCTAssertEqual(composer.textView.selectedRange.location, 5)
+            XCTAssertEqual(composer.textView.selectedRange.location, 5, "Suffix: \(suffix.debugDescription)")
         }
     }
 }

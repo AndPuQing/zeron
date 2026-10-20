@@ -551,7 +551,9 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         let suffix = ns.substring(from: NSMaxRange(q.range))
         let following = suffix.first
         let keepSuffix = following.map { $0.isWhitespace || ")]}*_~,.;:!?".contains($0) } ?? false
-        let advance = following?.isWhitespace == true && !suffix.hasPrefix("\n") && !suffix.hasPrefix("\r") ? (String(following!) as NSString).length : 0
+        // CRLF is one Swift Character; inspect its first scalar for line endings.
+        let lineBreak = suffix.unicodeScalars.first == "\n" || suffix.unicodeScalars.first == "\r"
+        let advance = following?.isWhitespace == true && !lineBreak ? (String(following!) as NSString).length : 0
         let replacement = selected.token + (keepSuffix ? "" : " ")
         selectedCommands[selected.token] = selected
         textView.text = ns.replacingCharacters(in: q.range, with: replacement)
