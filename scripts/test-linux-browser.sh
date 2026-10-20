@@ -2,6 +2,10 @@
 # Run the real shell browser fixture with native mouse input on X11 and Wayland.
 # Captures stay outside the repository and can be uploaded as PR attachments.
 set -euo pipefail
+command -v xprop >/dev/null || {
+  echo "xprop is required (install x11-utils)" >&2
+  exit 2
+}
 output="${1:?usage: test-linux-browser.sh OUTPUT_DIRECTORY}"
 binary="${BROWSER_FIXTURE_BINARY:-target/release/examples/browser-fixture}"
 mkdir -p "$output"
@@ -36,7 +40,33 @@ export DISPLAY=":$display_number"
 export XDG_RUNTIME_DIR="$runtime"
 export ZERON_BROWSER_NATIVE_POINTER=1
 openbox >"$output/openbox.log" 2>&1 &
-processes+=("$!")
+openbox_pid=$!
+processes+=("$openbox_pid")
+# Do not launch the fixture while the WM is still grabbing/setting up: the
+# storage test (xvfb-run, no WM) passes, while this script previously started
+# the fixture immediately after openbox. Wait for the EWMH WM check window to
+# be published and named, then the 10s window-visibility budget is meaningful.
+wm_ready=
+for _ in $(seq 1 100); do
+  if ! kill -0 "$openbox_pid" 2>/dev/null; then
+    echo "openbox exited before becoming ready" >&2
+    cat "$output/openbox.log" >&2 || true
+    exit 1
+  fi
+  wm_window="$(xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null | grep -oE '0x[0-9a-fA-F]+' | head -1 || true)"
+  if [[ -n "$wm_window" && "$wm_window" != "0x0" ]] &&
+     xprop -id "$wm_window" -notype _NET_WM_NAME 2>/dev/null | grep -q '='; then
+    wm_ready=1
+    break
+  fi
+  sleep .1
+done
+if [[ "$wm_ready" != 1 ]]; then
+  echo "openbox did not publish _NET_SUPPORTING_WM_CHECK within 10 seconds" >&2
+  xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null >&2 || true
+  cat "$output/openbox.log" >&2 || true
+  exit 1
+fi
 record_fixture() {
   local mode="$1" capture_window="${2:-}" fixture_pid video_pid
   mkdir -p "$output/$mode"
@@ -47,11 +77,23 @@ record_fixture() {
     for _ in $(seq 1 150); do
       capture_window="$(xdotool search --onlyvisible --pid "$fixture_pid" 2>/dev/null | head -1 || true)"
       [ -n "$capture_window" ] && break
-      kill -0 "$fixture_pid" 2>/dev/null || { cat "$output/$mode/fixture.log"; return 1; }
+      if ! kill -0 "$fixture_pid" 2>/dev/null; then
+        cat "$output/$mode/fixture.log"
+        # Keep the native window tree with the failing artifact: a mapped but
+        # unfindable window and a never-mapped window need different fixes.
+        xwininfo -root -tree >"$output/$mode/xwininfo.log" 2>&1 || true
+        xprop -root -notype _NET_SUPPORTING_WM_CHECK >"$output/$mode/wm-check.log" 2>&1 || true
+        return 1
+      fi
       sleep .1
     done
   fi
-  [ -n "$capture_window" ]
+  if [ -z "$capture_window" ]; then
+    echo "fixture window not visible to the runner after 15 seconds" >&2
+    xwininfo -root -tree >"$output/$mode/xwininfo.log" 2>&1 || true
+    xprop -root -notype _NET_SUPPORTING_WM_CHECK >"$output/$mode/wm-check.log" 2>&1 || true
+    return 1
+  fi
   local codec="${BROWSER_FIXTURE_VIDEO_CODEC:-libx264}"
   local -a encoding=(-c:v "$codec")
   if [ "$codec" = libx264 ]; then
