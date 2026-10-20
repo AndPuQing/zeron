@@ -53,6 +53,7 @@ object ZIcons {
     val Sun = R.drawable.zi_sun
     val Moon = R.drawable.zi_moon
     val Magic = R.drawable.zi_magic_stick_3
+    val Command = R.drawable.zi_command
     val Info = R.drawable.zi_info_circle
     val Logout = R.drawable.zi_logout_2
     val Offline = R.drawable.zi_wifi_off

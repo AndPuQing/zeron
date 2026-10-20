@@ -1,29 +1,49 @@
 package sh.zeron.android.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.CancellationException
 import sh.zeron.android.design.GlassSurface
+import sh.zeron.android.design.ZIcon
+import sh.zeron.android.design.ZIcons
+import sh.zeron.android.design.glassControlFill
 import uniffi.zeron_core.ComposerCatalog
+import uniffi.zeron_core.ComposerCommand
 
 /** Fetch once per opening/context; typing filters locally without stale query results. */
 @Composable
@@ -32,6 +52,7 @@ fun CommandSuggestions(
     chatId: String,
     harness: String?,
     deviceId: String,
+    modifier: Modifier = Modifier,
     load: suspend () -> ComposerCatalog,
 ) {
     val query = model.slashQuery()?.second ?: return
@@ -57,29 +78,146 @@ fun CommandSuggestions(
     val scroll = rememberScrollState()
     LaunchedEffect(query) { scroll.scrollTo(0) }
     GlassSurface(
-        shape = RoundedCornerShape(18.dp),
-        modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("slash-menu"),
+        shape = RoundedCornerShape(12.dp),
+        modifier = modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("slash-menu"),
     ) {
-        Column(Modifier.heightIn(max = 280.dp).verticalScroll(scroll).padding(6.dp)) {
+        // Six 48 dp touch rows plus the 4 dp card inset; iOS's 280 grows by the
+        // extra touch-row height. The inset sits outside the scroller so a
+        // seventh row cannot peek through as a clipped sliver.
+        Column(Modifier.heightIn(max = 296.dp).padding(4.dp).verticalScroll(scroll)) {
             rows.forEach { command ->
                 val enabled = command.unavailableReason == null
-                Column(
-                    Modifier.fillMaxWidth().alpha(if (enabled) 1f else 0.55f)
-                        .clickable(enabled = enabled) { model.insertCommand(command, selectionContext) }
-                        .testTag("slash-${command.token}")
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                ) {
-                    Text(command.token + (command.inputHint?.let { "  $it" } ?: ""), style = MaterialTheme.typography.bodyLarge)
-                    Text(command.unavailableReason ?: command.description, style = MaterialTheme.typography.bodySmall)
-                }
+                CommandSuggestionRow(
+                    title = commandDisplayName(command),
+                    detail = commandDetail(command),
+                    icon = if (command.token.startsWith("$")) ZIcons.Magic else ZIcons.Command,
+                    enabled = enabled,
+                    onClick = { model.insertCommand(command, selectionContext) },
+                    testTag = "slash-${command.token}",
+                )
             }
             val warning = error ?: catalog?.warning
             if (warning != null) {
-                Text(warning, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
-                TextButton(onClick = { retry++ }) { Text("Retry loading commands") }
+                CommandSuggestionRow(
+                    title = "Retry loading commands",
+                    detail = warning,
+                    icon = ZIcons.Refresh,
+                    enabled = true,
+                    onClick = { retry++ },
+                    testTag = "slash-status",
+                )
             } else if (rows.isEmpty()) {
-                Text(if (catalog == null) "Loading commands…" else "No matching commands", modifier = Modifier.padding(12.dp))
+                CommandSuggestionRow(
+                    title = if (catalog == null) "Loading commands…" else "No matching commands",
+                    detail = "",
+                    icon = ZIcons.Command,
+                    enabled = false,
+                    onClick = {},
+                    testTag = "slash-status",
+                )
             }
         }
     }
+}
+
+/** One desktop-style completion row: icon, medium name and muted inline detail. */
+@Composable
+private fun CommandSuggestionRow(
+    title: String,
+    detail: String,
+    icon: Int,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    testTag: String,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val titleStyle = MaterialTheme.typography.labelMedium
+    val detailStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 12.5.sp, lineHeight = 16.sp)
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val titleMax = maxWidth * 0.55f
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(if (pressed && enabled) glassControlFill() else Color.Transparent)
+                .clickable(
+                    enabled = enabled,
+                    role = Role.Button,
+                    interactionSource = interaction,
+                    indication = null,
+                    onClick = onClick,
+                )
+                .semantics(mergeDescendants = true) {
+                    contentDescription = if (detail.isEmpty()) title else "$title. $detail"
+                    if (!enabled) disabled()
+                }
+                .testTag(testTag)
+                .alpha(if (enabled) 1f else 0.5f)
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ZIcon(icon, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                title,
+                style = titleStyle,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = if (detail.isEmpty()) Modifier.weight(1f) else Modifier.widthIn(max = titleMax),
+            )
+            if (detail.isNotEmpty()) {
+                Text(
+                    detail,
+                    style = detailStyle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+/** Desktop `skill_display_name`, plus the catalog's `:N` same-name disambiguation. */
+internal fun commandDisplayName(command: ComposerCommand): String {
+    val token = command.token
+    if (!token.startsWith("$")) return token
+    val suffix = disambiguationSuffix(token)
+    if (suffix != null) {
+        val base = canonicalToken(command) ?: return token
+        if (token == "$base:$suffix") return "${desktopSkillName(base)} · $suffix"
+    }
+    return desktopSkillName(token)
+}
+
+internal fun commandDetail(command: ComposerCommand): String = buildList {
+    if (command.description.isNotEmpty()) add(command.description)
+    command.unavailableReason?.takeIf { it.isNotEmpty() }?.let { add(it) }
+    command.inputHint?.takeIf { it.isNotEmpty() }?.let { add("<$it>") }
+}.joinToString(" · ")
+
+private fun desktopSkillName(token: String): String =
+    token.drop(1).substringAfterLast(':').split(Regex("[-_\\s]+"))
+        .filter { it.isNotEmpty() }
+        .joinToString(" ") { word -> word.first().uppercase() + word.drop(1).lowercase() }
+
+/** Only a trailing numeric `:N` (N >= 2) can be a catalog suffix; verify its base. */
+private fun disambiguationSuffix(token: String): String? {
+    val colon = token.lastIndexOf(':')
+    if (colon < 0) return null
+    val suffix = token.substring(colon + 1)
+    if (suffix.isEmpty() || suffix.any { !it.isDigit() }) return null
+    return suffix.takeIf { (it.toIntOrNull() ?: 0) >= 2 }
+}
+
+private fun canonicalToken(command: ComposerCommand): String? {
+    val restored = uniffi.zeron_core.restoreComposerDraft(command.insertion)
+    if (restored.selections.size != 1) return null
+    if (restored.selections[0].insertion != command.insertion) return null
+    if (!restored.text.startsWith("$")) return null
+    return restored.text
 }
