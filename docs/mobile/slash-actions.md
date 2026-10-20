@@ -1,6 +1,17 @@
 # Mobile slash actions
 
-The iOS and Android slash menus keep unavailable commands visible with a reason.
+The iOS and Android `/` menus contain commands only; `$` opens skills only,
+matching the desktop defaults. Unavailable commands remain visible with a reason.
+Both menus use the same Markdown token parser as desktop: completion works in
+prose (including inline skills), but not in code, links, escaped tokens, paths or
+currency amounts. The caret can be in the middle of a token; selection replaces
+that whole token and preserves surrounding punctuation and arguments.
+
+Selected skills retain their canonical name, path and provider invocation through
+sending, queue editing and draft restoration. They never invoke a same-name local
+command. Selection ranges and IME composition suppress completion; changing the
+agent/host/project invalidates selected references. Switching menus, changing the
+query or closing the menu rejects stale menu clicks.
 Commands supplied by the selected agent keep their native routing. Zerun also
 provides the following local actions, which run when selected or submitted without
 arguments. They never enter the chat's send queue or become model prompts.

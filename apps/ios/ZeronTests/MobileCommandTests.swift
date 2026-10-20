@@ -165,4 +165,69 @@ final class MobileCommandTests: XCTestCase {
         composer.insertCommand(modelCommand)
         XCTAssertEqual(composer.text, "/model")
     }
+    @MainActor
+    func testMenusSeparateSkillsAndRejectOldMenuClicks() {
+        let suggestions = CommandSuggestions()
+        var command = modelCommand
+        command.unavailableReason = nil
+        let skill = ComposerCommand(token: "$model", description: "Skill", inputHint: nil, insertion: "[$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)", unavailableReason: nil)
+        let catalog = ComposerCatalog(commands: [command, skill], warning: nil)
+        func button(_ view: UIView, _ id: String) -> UIButton? {
+            if view.accessibilityIdentifier == id { return view as? UIButton }
+            return view.subviews.compactMap { button($0, id) }.first
+        }
+        var picked = false
+        suggestions.onPick = { _ in picked = true }
+        suggestions.show(catalog, query: "")
+        let old = button(suggestions, "slash-/model")!
+        XCTAssertNil(button(suggestions, "skill-$model"))
+        suggestions.show(catalog, query: "", skills: true)
+        XCTAssertNil(button(suggestions, "slash-/model"))
+        let skillButton = button(suggestions, "skill-$model")!
+        old.sendActions(for: .primaryActionTriggered)
+        XCTAssertFalse(picked)
+        suggestions.dismiss()
+        skillButton.sendActions(for: .primaryActionTriggered)
+        XCTAssertFalse(picked)
+    }
+
+    @MainActor
+    func testInlineSkillPreservesIdentityAndCannotRunLocalModelAction() {
+        let link = "[$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)"
+        let skill = ComposerCommand(token: "$model", description: "Skill", inputHint: nil, insertion: link, unavailableReason: nil)
+        for harness in ["codex", "claude-code", "opencode"] {
+            let composer = ComposerBar()
+            composer.commandHarness = { harness }
+            composer.localCommandContext = { self.context }
+            composer.onLocalCommand = { _ in XCTFail("Skills must retain their identity") }
+            composer.text = "👋 use ($mo) please"
+            composer.textView.selectedRange = NSRange(location: ("👋 use ($mo" as NSString).length, length: 0)
+            composer.insertCommand(skill)
+            XCTAssertEqual(composer.text, "👋 use ($model) please")
+            XCTAssertEqual(composer.encodedDraft, "👋 use (\(link)) please")
+            var sent: String?
+            composer.onSend = { body, _, _ in sent = body; return .sent }
+            func sendButton(_ view: UIView) -> UIButton? {
+                if view.accessibilityIdentifier == "composer-send" { return view as? UIButton }
+                return view.subviews.compactMap(sendButton).first
+            }
+            sendButton(composer)!.sendActions(for: .touchUpInside)
+            XCTAssertEqual(sent, "👋 use (\(link)) please")
+            composer.text = "/mo"
+            composer.textView.selectedRange = NSRange(location: 3, length: 0)
+            composer.insertCommand(skill)
+            XCTAssertEqual(composer.text, "/mo")
+        }
+    }
+    @MainActor
+    func testCompletionKeepsLineBreakAndClosingPunctuation() {
+        for suffix in ["\nnext", "\r\nnext", ")", ","] {
+            let composer = ComposerBar()
+            composer.text = "/go" + suffix
+            composer.textView.selectedRange = NSRange(location: 3, length: 0)
+            composer.insertCommand(ComposerCommand(token: "/goal", description: "Goal", inputHint: nil, insertion: "/goal", unavailableReason: nil))
+            XCTAssertEqual(composer.text, "/goal" + suffix)
+            XCTAssertEqual(composer.textView.selectedRange.location, 5)
+        }
+    }
 }

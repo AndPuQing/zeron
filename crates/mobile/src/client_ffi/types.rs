@@ -1130,6 +1130,46 @@ pub struct ComposerCatalog {
     pub warning: Option<String>,
 }
 
+/// A / command or $ skill query; offsets match Swift NSRange and Kotlin String (UTF-16).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ComposerCompletion {
+    pub start: u32,
+    pub end: u32,
+    pub query: String,
+    pub skills: bool,
+}
+
+#[uniffi::export]
+pub fn composer_completion_query(
+    text: String,
+    selection_start: u32,
+    selection_end: u32,
+) -> Option<ComposerCompletion> {
+    if selection_start != selection_end || text.len() > 256 * 1024 {
+        return None;
+    }
+    let mut utf16 = 0;
+    let cursor = text
+        .char_indices()
+        .chain(std::iter::once((text.len(), '\0')))
+        .find_map(|(byte, ch)| {
+            let matches = utf16 == selection_start;
+            utf16 += ch.len_utf16() as u32;
+            matches.then_some(byte)
+        })?;
+    for prefix in ['$', '/'] {
+        if let Some(token) = zeron_proto::completion::invocation_token(&text, cursor, prefix) {
+            return Some(ComposerCompletion {
+                start: text[..token.range.start].encode_utf16().count() as u32,
+                end: text[..token.range.end].encode_utf16().count() as u32,
+                query: token.query,
+                skills: prefix == '$',
+            });
+        }
+    }
+    None
+}
+
 /// Encode selected composer references without changing ordinary typed text.
 #[uniffi::export]
 pub fn encode_composer_selections(text: String, selections: Vec<ComposerCommand>) -> String {
@@ -1185,4 +1225,37 @@ pub fn composer_selection_error(text: String, selections: Vec<ComposerCommand>) 
 pub fn save_composer_draft(text: String, selections: Vec<ComposerCommand>) -> String {
     let selections: Vec<_> = selections.into_iter().map(Into::into).collect();
     zc::composer::save_draft(&text, &selections)
+}
+
+#[cfg(test)]
+mod completion_tests {
+    use super::*;
+
+    #[test]
+    fn completion_offsets_round_trip_mobile_utf16_cursors() {
+        let text = "👋 请使用 $re\u{301}view) 继续";
+        let cursor = "👋 请使用 $re".encode_utf16().count() as u32;
+        let token = composer_completion_query(text.into(), cursor, cursor).unwrap();
+        assert!(token.skills);
+        assert_eq!(token.query, "re");
+        let units: Vec<_> = text.encode_utf16().collect();
+        assert_eq!(
+            String::from_utf16(&units[token.start as usize..token.end as usize]).unwrap(),
+            "$re\u{301}view"
+        );
+        assert!(composer_completion_query(text.into(), 1, 1).is_none());
+        assert!(composer_completion_query(text.into(), cursor, cursor + 1).is_none());
+        assert!(composer_completion_query(text.into(), 1000, 1000).is_none());
+    }
+
+    #[test]
+    fn menus_classify_both_triggers_at_the_caret() {
+        let slash = composer_completion_query("/review $skill".into(), 3, 3).unwrap();
+        assert!(!slash.skills);
+        assert_eq!(slash.end, 7);
+        let skill = composer_completion_query("/review $skill".into(), 14, 14).unwrap();
+        assert!(skill.skills);
+        assert_eq!(skill.start, 8);
+        assert_eq!(skill.query, "skill");
+    }
 }

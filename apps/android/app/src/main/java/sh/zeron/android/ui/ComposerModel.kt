@@ -97,34 +97,42 @@ class ComposerModel(initial: String = "") {
         return true
     }
 
-    /** Only the leading / token opens completion; replace the entire token at the cursor. */
-    fun slashQuery(): Pair<IntRange, String>? {
+    /** Shared desktop Markdown boundaries, with UTF-16 offsets for TextFieldValue. */
+    fun completionQuery(): uniffi.zeron_core.ComposerCompletion? {
         if (!value.selection.collapsed || value.composition != null) return null
-        val cursor = value.selection.start
-        val prefix = text.substring(0, cursor)
-        val trimmed = prefix.trimStart()
-        if (!trimmed.startsWith("/") || trimmed.any { it.isWhitespace() }) return null
-        val start = prefix.length - trimmed.length
-        val indent = prefix.take(start).substringAfterLast('\n')
-        if (indent.length >= 4 || '\t' in indent) return null
-        val end = (start until text.length).firstOrNull { text[it].isWhitespace() } ?: text.length
-        return (start until end) to trimmed.drop(1)
+        val query = uniffi.zeron_core.composerCompletionQuery(text, value.selection.start.toUInt(), value.selection.end.toUInt()) ?: return null
+        val selected = commands[text.substring(query.start.toInt(), query.end.toInt())]
+        return query.takeUnless { selected != null && selected.unavailableReason == null }
     }
 
-    fun insertCommand(command: uniffi.zeron_core.ComposerCommand, expectedContext: String = commandContext) {
+    fun completionRows(catalog: uniffi.zeron_core.ComposerCatalog, query: uniffi.zeron_core.ComposerCompletion): List<uniffi.zeron_core.ComposerCommand> =
+        catalog.commands.filter { it.token.startsWith(if (query.skills) "$" else "/") }
+            .map(::displayCommand)
+            .filter { query.query.isEmpty() || it.token.drop(1).contains(query.query, ignoreCase = true) || it.description.contains(query.query, ignoreCase = true) }
+            .sortedWith(compareBy({ it.unavailableReason != null }, { it.token }))
+
+    fun insertCommand(
+        command: uniffi.zeron_core.ComposerCommand,
+        expectedContext: String = commandContext,
+        expectedQuery: uniffi.zeron_core.ComposerCompletion? = completionQuery(),
+    ) {
         if (expectedContext != commandContext) return
-        val (range, _) = slashQuery() ?: return
+        val query = completionQuery() ?: return
+        if (query != expectedQuery || !command.token.startsWith(if (query.skills) "$" else "/")) return
+        val range = query.start.toInt() until query.end.toInt()
         if (performLocalCommand(command.insertion, range)) return
         if (command.unavailableReason != null) return
         val selected = uniffi.zeron_core.prepareComposerSelection(
             text.removeRange(range), commands.values.toList(), command,
         )
         val end = range.last + 1
-        val hasSeparator = text.getOrNull(end)?.isWhitespace() == true
-        val replacement = selected.token + if (hasSeparator) "" else " "
+        val following = text.getOrNull(end)
+        val advance = if (following?.isWhitespace() == true && following != '\n' && following != '\r') 1 else 0
+        val keepSuffix = following != null && (following.isWhitespace() || following in ")]}*_~,.;:!?")
+        val replacement = selected.token + if (keepSuffix) "" else " "
         val next = text.replaceRange(range, replacement)
         commands[selected.token] = selected
-        value = TextFieldValue(next, TextRange(range.first + replacement.length + if (hasSeparator) 1 else 0))
+        value = TextFieldValue(next, TextRange(range.first + replacement.length + advance))
     }
 
     val text: String get() = value.text

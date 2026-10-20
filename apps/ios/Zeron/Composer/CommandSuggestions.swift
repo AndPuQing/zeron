@@ -5,6 +5,7 @@ final class CommandSuggestions: UIView {
     var onPick: ((ComposerCommand) -> Void)?
     var context = ""
     var onRetry: (() -> Void)?
+    private var generation = 0
     private let card = Glass.surface(radius: 18)
     private let scroll = UIScrollView()
     private let stack = UIStackView()
@@ -37,10 +38,19 @@ final class CommandSuggestions: UIView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    func show(_ catalog: ComposerCatalog?, query: String, error: String? = nil) {
+    func dismiss() {
+        generation += 1
+        isHidden = true
+    }
+
+    func show(_ catalog: ComposerCatalog?, query: String, skills: Bool = false, error: String? = nil) {
+        generation += 1
+        let generation = self.generation
+        let kind = skills ? "skills" : "commands"
+        accessibilityIdentifier = skills ? "skill-menu" : "slash-menu"
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         let rows = catalog?.commands.filter {
-            query.isEmpty || $0.token.dropFirst().localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query)
+            $0.token.hasPrefix(skills ? "$" : "/") && (query.isEmpty || $0.token.dropFirst().localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query))
         } ?? []
         let context = self.context
         for command in rows {
@@ -51,23 +61,26 @@ final class CommandSuggestions: UIView {
             config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
             config.baseForegroundColor = command.unavailableReason == nil ? Palette.text : Palette.tertiary
             let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
-                guard let self, self.context == context else { return }
+                guard let self, self.context == context, self.generation == generation, !self.isHidden else { return }
                 self.onPick?(command)
             })
             button.contentHorizontalAlignment = .leading
             button.isEnabled = command.unavailableReason == nil
-            button.accessibilityIdentifier = "slash-\(command.token)"
+            button.accessibilityIdentifier = "\(skills ? "skill" : "slash")-\(command.token)"
             button.accessibilityLabel = "\(command.token). \(command.unavailableReason ?? command.description)"
             stack.addArrangedSubview(button)
         }
         let warning = error ?? catalog?.warning
         if rows.isEmpty || warning != nil {
             var config = UIButton.Configuration.plain()
-            config.title = warning == nil ? (catalog == nil ? "Loading commands…" : "No matching commands") : "Retry loading commands"
+            config.title = warning == nil ? (catalog == nil ? "Loading \(kind)…" : "No matching \(kind)") : "Retry loading \(kind)"
             config.subtitle = warning
             config.titleAlignment = .leading
             config.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 14)
-            let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in self?.onRetry?() })
+            let button = UIButton(configuration: config, primaryAction: UIAction { [weak self] _ in
+                guard let self, self.context == context, self.generation == generation, !self.isHidden else { return }
+                self.onRetry?()
+            })
             button.isEnabled = warning != nil
             stack.addArrangedSubview(button)
         }
