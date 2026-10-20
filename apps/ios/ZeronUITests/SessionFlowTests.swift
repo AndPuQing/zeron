@@ -576,6 +576,37 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "new-session-created")
     }
 
+    func testCommandSuggestionsStayCompactAndInsertSkills() {
+        for appearance in ["1", "2"] {
+            let app = launch(["-appearance", appearance, "-route", "chat:chat-deploy"])
+            let input = app.textViews["composer-input"]
+            XCTAssertTrue(input.waitForExistence(timeout: 10))
+            input.tap()
+            input.typeText("/")
+            let list = app.tables["slash-list"]
+            let first = app.descendants(matching: .any)["slash-$imagegen"]
+            XCTAssertTrue(first.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+            XCTAssertLessThanOrEqual(list.frame.maxY, input.frame.minY)
+            XCTAssertLessThanOrEqual(list.frame.height, 280)
+            XCTAssertLessThan(first.frame.height, 80, "long descriptions must not expand completion rows")
+            XCTAssertGreaterThanOrEqual(first.frame.height, 44)
+            XCTAssertFalse(first.label.contains("SKILL.md"))
+            XCTAssertFalse(first.label.contains("/Users/"))
+            snapshot(app, appearance == "1" ? "ios-commands-light" : "ios-commands-dark")
+
+            input.typeText("imag")
+            XCTAssertTrue(first.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.descendants(matching: .any)["slash-$openai-docs"].waitForNonExistence(timeout: 5))
+            snapshot(app, appearance == "1" ? "ios-commands-filtered" : "ios-commands-filtered-dark")
+            first.tap()
+            XCTAssertTrue((input.value as? String ?? "").hasPrefix("$imagegen"))
+            XCTAssertFalse((input.value as? String ?? "").contains("SKILL.md"))
+            XCTAssertTrue(list.waitForNonExistence(timeout: 5))
+            app.terminate()
+        }
+    }
+
     func testFileMentionSuggestions() {
         let app = launch(["-route", "chat:chat-deploy"])
         let input = app.textViews["composer-input"]

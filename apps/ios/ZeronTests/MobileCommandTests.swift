@@ -115,13 +115,13 @@ final class MobileCommandTests: XCTestCase {
         var command = modelCommand
         command.unavailableReason = nil
         suggestions.show(ComposerCatalog(commands: [command], warning: nil), query: "")
-        func commandButton(_ view: UIView) -> UIButton? {
-            if view.accessibilityIdentifier == "slash-/model" { return view as? UIButton }
-            return view.subviews.compactMap(commandButton).first
+        func commandList(_ view: UIView) -> UITableView? {
+            if let table = view as? UITableView { return table }
+            return view.subviews.compactMap(commandList).first
         }
-        let button = commandButton(suggestions)!
+        let table = commandList(suggestions)!
         suggestions.context = "new-host:claude-code"
-        button.sendActions(for: .primaryActionTriggered)
+        table.delegate?.tableView?(table, didSelectRowAt: IndexPath(row: 0, section: 0))
         XCTAssertFalse(picked)
     }
 

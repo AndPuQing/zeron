@@ -1000,6 +1000,27 @@ impl DemoHost {
         list
     }
 
+    pub(crate) fn composer_catalog(&self) -> crate::composer::ComposerCatalog {
+        use serde_json::json;
+        crate::composer::from_replies(
+            Ok(json!([
+                {"name":"compact", "description":"Summarize earlier messages"},
+                {"name":"model", "description":"Choose a model", "unavailableReason":"Use the model picker"},
+                {"name":"new", "description":"Start a new conversation", "unavailableReason":"Use the new conversation action"},
+                {"name":"review", "description":"Review changes in this project", "inputHint":"files"},
+                {"name":"terminal", "description":"Open an interactive terminal", "unavailableReason":"Only available in the agent's terminal"}
+            ])),
+            Ok(json!([
+                {"name":"imagegen", "description":"Generate or edit images for websites, games, and more", "path":"/Users/dev/.agents/skills/imagegen/SKILL.md", "enabled":true},
+                {"name":"openai-docs", "description":"OpenAI and Codex docs for models, skills, tasks, and setup", "path":"/Users/dev/.agents/skills/openai-docs/SKILL.md", "enabled":true},
+                {"name":"review-agent", "description":"Find actionable bugs in code changes", "path":"/Users/dev/.agents/skills/review-agent/SKILL.md", "enabled":true},
+                {"name":"skill-creator", "description":"Create or update a skill", "path":"/Users/dev/.agents/skills/skill-creator/SKILL.md", "enabled":true},
+                {"name":"skill-installer", "description":"Install skills from a catalog or repository", "path":"/Users/dev/.agents/skills/skill-installer/SKILL.md", "enabled":true},
+                {"name":"visualize", "description":"Create interactive charts and diagrams", "path":"/Users/dev/.agents/skills/visualize/SKILL.md", "enabled":true}
+            ])),
+        )
+    }
+
     pub(crate) async fn list_models(&self, harness: &str) -> Vec<ModelInfo> {
         tokio::time::sleep(Duration::from_millis(100)).await;
         catalog::fallback_models(harness)
