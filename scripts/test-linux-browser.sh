@@ -45,7 +45,7 @@ processes+=("$openbox_pid")
 # Do not launch the fixture while the WM is still grabbing/setting up: the
 # storage test (xvfb-run, no WM) passes, while this script previously started
 # the fixture immediately after openbox. Wait for the EWMH WM check window to
-# be published and named, then the 10s window-visibility budget is meaningful.
+# be published and named, so WM startup does not overlap fixture startup.
 wm_ready=
 for _ in $(seq 1 100); do
   if ! kill -0 "$openbox_pid" 2>/dev/null; then
@@ -63,7 +63,8 @@ for _ in $(seq 1 100); do
 done
 if [[ "$wm_ready" != 1 ]]; then
   echo "openbox did not publish _NET_SUPPORTING_WM_CHECK within 10 seconds" >&2
-  xprop -root -notype _NET_SUPPORTING_WM_CHECK 2>/dev/null >&2 || true
+  xprop -root -notype _NET_SUPPORTING_WM_CHECK >"$output/wm-check.log" 2>&1 || true
+  cat "$output/wm-check.log" >&2 || true
   cat "$output/openbox.log" >&2 || true
   exit 1
 fi
