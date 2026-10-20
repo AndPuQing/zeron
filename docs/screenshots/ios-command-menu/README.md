@@ -1,12 +1,16 @@
 These are unedited XCTest screenshots from the offline demo workspace on an
 **iPhone 17 Pro simulator (iOS 26.5)**, built with **Xcode 26.6**.
 
-Source revision: `0d36449d05e4061761597850fcb96f723abf5101`.
-CI run: https://github.com/AndPuQing/zeron/actions/runs/39370288596
+Layout source revision: `0d36449d05e4061761597850fcb96f723abf5101`.
+Screenshot CI run: https://github.com/AndPuQing/zeron/actions/runs/39370288596
 
-The iOS job passed **27 native unit tests and 9 selected UI tests**. The mobile
-core checks passed **332 tests (1 ignored)**, and the generated Swift bindings
-matched. The macOS native suite also passed.
+The iOS job that produced these captures passed **27 native unit tests and 9
+selected UI tests**. The mobile core checks passed **332 tests (1 ignored)**, and
+the generated Swift bindings matched. The macOS native suite also passed.
+
+A later display-only same-name naming fix (`0d4f2232`) adds one unit test (28
+total) and does not change this layout, so these captures remain the layout
+evidence.
 
 - `light.png`, `dark.png`: the desktop completion-row layout on Liquid Glass:
   the desktop command/magic-wand icons at 16 pt, a Geist Medium 13 name and a
