@@ -178,7 +178,10 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
                         )
                     }
                 }
-                CommandSuggestions(composer, "new:${project?.id}", draft.harness, deviceId) {
+                CommandSuggestions(
+                    composer, "new:${project?.id}", draft.harness, deviceId,
+                    modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
+                ) {
                     val c = client ?: error("Sign in before loading commands")
                     c.newSessionComposerCatalog(deviceId, draft.harness, project?.id)
                 }

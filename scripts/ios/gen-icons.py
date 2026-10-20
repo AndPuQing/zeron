@@ -17,7 +17,7 @@ CAT = os.path.join(ROOT, "apps/ios/Zeron/Assets.xcassets")
 
 TOOL_ICONS = ["terminal", "document", "document-add", "pen", "magnifer", "folder-with-files",
               "global", "checklist", "widget", "bot", "chat-round-line", "alt-arrow-down",
-              "alt-arrow-right", "arrow-up-right", "git-branch"]
+              "alt-arrow-right", "arrow-up-right", "git-branch", "command", "magic-stick-3"]
 
 DARK_LIFT = [("#64748B", "#CBD5E1"), ("#71717A", "#D4D4D8"), ("#2563EB", "#60A5FA"),
              ("#EA580C", "#FB923C"), ("#16A34A", "#4ADE80"), ("#8B5CF6", "#A78BFA"),

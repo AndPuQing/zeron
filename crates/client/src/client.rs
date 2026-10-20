@@ -1453,7 +1453,7 @@ impl Client {
         params: serde_json::Value,
     ) -> Result<crate::composer::ComposerCatalog> {
         match self.inner.backend() {
-            Backend::Demo(_) => Ok(crate::composer::ComposerCatalog::default()),
+            Backend::Demo(host) => Ok(host.composer_catalog()),
             Backend::Live(live) => {
                 let (commands, skills) = tokio::join!(
                     live.relay

@@ -61,7 +61,7 @@ pub(crate) fn from_replies(
     rows.extend(skills.into_iter().filter(|s| s.enabled).map(|s| {
         ComposerCommand {
             token: format!("${}", s.name),
-            description: format!("{} — {}", s.description, s.path),
+            description: s.description,
             input_hint: None,
             insertion: Invocation::Skill {
                 name: s.name,
@@ -333,6 +333,8 @@ mod tests {
         assert_eq!(c.commands.len(), 2);
         assert_eq!(c.commands[0].token, "$review");
         assert_eq!(c.commands[1].token, "$review:2");
+        assert_eq!(c.commands[0].description, "A");
+        assert_eq!(c.commands[1].description, "B");
         let encoded = encode_selections("$review:2 do this", &c.commands);
         let links = zeron_proto::invocation::invocation_links(&encoded);
         assert!(matches!(&links[0].1, Invocation::Skill { path, .. } if path == "/b/SKILL.md"));
