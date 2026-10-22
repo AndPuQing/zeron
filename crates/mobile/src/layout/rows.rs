@@ -546,14 +546,26 @@ impl RowBuilder {
 
     fn user_row(&mut self, ctx: &mut Ctx, id: &str, content: &str, pending: bool) -> RowCore {
         let key = row_key(&format!("{id}#u"));
-        // Shared parser: strips the image trailer *and* hidden Appshot context.
+        // Shared parser: strips the image trailer *and* hidden Appshot context,
+        // so the attribution header is projected from the visible prompt only.
         let parsed = zeron_client::attachments::parse_user_message(content);
+        // A cross-chat message keeps its routing header in storage for the
+        // agent; the transcript shows the desktop's concise attribution
+        // instead. Unrecognized text (including a malformed header) is
+        // untouched, and the body — attachment trailers and mentions
+        // included — is what the chip/trailer parsing below sees.
+        let attributed = zeron_proto::chat_attribution::attributed_message(parsed.text.trim());
+        let visible = attributed.map_or(parsed.text.trim(), |message| message.body.trim());
+        let attribution = attributed.map(|message| message.name);
+        // Display keeps the historical trimmed prompt; copy keeps the raw one
+        // for ordinary messages (only an attributed body replaces the header).
+        let copy_source = attributed.map_or(parsed.text.as_str(), |message| message.body);
         let (size, lh) = TYPE.body;
         let style = ctx.typo.style(Family::Sans, Weight::Regular, false, size);
         let lh = ctx.typo.px(lh);
         // Chips stand in for their attachments (as on the desktop): those
         // leave the strip, and an image chip opens its upload on tap.
-        let mentions = zeron_proto::attachment_mentions::attachment_mentions(&parsed.text);
+        let mentions = zeron_proto::attachment_mentions::attachment_mentions(visible);
         let chipped = |path: &str| mentions.iter().any(|mention| mention.names_attachment(path));
         let previews: Vec<(u32, String)> = mentions
             .iter()
@@ -563,9 +575,14 @@ impl RowBuilder {
                 Some((mention.index, image.path.clone()))
             })
             .collect();
-        let text = prepare_user_text(ctx, parsed.text.trim(), style, lh, &previews);
-        // Copied text reads attachment chips as their plain label.
-        let body = zeron_proto::attachment_mentions::attachment_mention_prompt(&parsed.text);
+        let bold = ctx.typo.style(Family::Sans, Weight::Semibold, false, size);
+        let text = prepare_user_text(ctx, visible, style, bold, attribution, lh, &previews);
+        // Copied text reads attachment chips as their plain label, and carries
+        // the same attribution a reader sees — never the routing header.
+        let mut body = zeron_proto::attachment_mentions::attachment_mention_prompt(copy_source);
+        if let Some(name) = attribution {
+            body = format!("Message from {name}\n\n{body}");
+        }
         let (msize, mlh) = TYPE.small;
         let mstyle = ctx.typo.style(Family::Sans, Weight::Medium, false, msize);
         // Only images go to image widgets; other files (desktop-sent ZIPs)
@@ -677,9 +694,21 @@ fn user_chips(body: &str, previews: &[(u32, String)]) -> Vec<UserChip> {
 
 /// User prompt text with its canonical links shown as atomic chips: the
 /// desktop's soft pill with an icon well, the label in the body font.
-fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, lh: f32, previews: &[(u32, String)]) -> PText {
+/// `attribution` is the sender name of a cross-chat message: its
+/// `Message from <name>` line is laid out ahead of the body with the name in
+/// the semibold face (the desktop's bold-name recipe), so the prefix takes
+/// part in wrapping and the fold, instead of being painted as a separate row.
+fn prepare_user_text(
+    ctx: &mut Ctx,
+    body: &str,
+    style: super::style::Resolved,
+    bold: super::style::Resolved,
+    attribution: Option<&str>,
+    lh: f32,
+    previews: &[(u32, String)],
+) -> PText {
     let chips = user_chips(body, previews);
-    if chips.is_empty() {
+    if chips.is_empty() && attribution.is_none() {
         return prepare_plain(ctx, body, style, lh, ColorRole::Text, WhiteSpace::PreWrap);
     }
     // The pill sits two points inside the line box, centered like the
@@ -693,7 +722,7 @@ fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, l
     let mut links = Vec::new();
     let mut at = 0;
     // Returns the index of the span pushed for a non-empty piece.
-    let mut push = |text: &mut String, piece: &str, pad: (f32, f32), atomic: bool, link: Option<u16>| {
+    let mut push = |text: &mut String, piece: &str, style: &super::style::Resolved, pad: (f32, f32), atomic: bool, link: Option<u16>| {
         if piece.is_empty() {
             return None;
         }
@@ -715,18 +744,25 @@ fn prepare_user_text(ctx: &mut Ctx, body: &str, style: super::style::Resolved, l
         });
         Some(spans.len() - 1)
     };
+    // The attribution line, then the body: "Message from " stays in the body
+    // face, only the sender name is bold, matching the desktop bubble.
+    if let Some(name) = attribution {
+        push(&mut text, "Message from ", &style, (0.0, 0.0), false, None);
+        push(&mut text, name, &bold, (0.0, 0.0), false, None);
+        push(&mut text, "\n\n", &style, (0.0, 0.0), false, None);
+    }
     for chip in chips {
-        push(&mut text, &body[at..chip.range.start], (0.0, 0.0), false, None);
+        push(&mut text, &body[at..chip.range.start], &style, (0.0, 0.0), false, None);
         let link = chip.open.map(|url| {
             links.push(url);
             (links.len() - 1) as u16
         });
-        if let Some(span) = push(&mut text, &chip.label, chip_pad, true, link) {
+        if let Some(span) = push(&mut text, &chip.label, &style, chip_pad, true, link) {
             badges.push((span, chip.icon));
         }
         at = chip.range.end;
     }
-    push(&mut text, &body[at..], (0.0, 0.0), false, None);
+    push(&mut text, &body[at..], &style, (0.0, 0.0), false, None);
     let p = zeron_text::prepare(
         &ctx.typo.book,
         ctx.cache,

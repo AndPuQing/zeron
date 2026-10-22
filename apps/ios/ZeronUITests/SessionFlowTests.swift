@@ -197,6 +197,41 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "draft-reopened")
     }
 
+    /// A cross-chat message stores the sender's routing header for the agent;
+    /// the transcript must show `Message from <name>` plus the body instead.
+    /// The accessibility label is the full copy text in both states (that is
+    /// the correct VoiceOver/copy contract), so it cannot prove visibility:
+    /// the native `Expand`/`Collapse` control and the row height do that.
+    /// Folded-run coverage lives in the Rust layout tests.
+    func testCrossChatMessageShowsSenderAndBody() {
+        let app = launch(["-route", "chat:chat-attribution"])
+        let collapsed = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Message from 示例会话标题 A'"))
+            .firstMatch
+        XCTAssertTrue(collapsed.waitForExistence(timeout: 15))
+        XCTAssertTrue(collapsed.label.contains("示例分支仍停在 abc1234"), collapsed.label)
+        XCTAssertFalse(collapsed.label.contains("Reply to it with"), collapsed.label)
+        XCTAssertFalse(collapsed.label.contains("a1b2c3d4-1111-4222-8333-444455556666"), collapsed.label)
+        let collapsedHeight = collapsed.frame.height
+        snapshot(app, "cross-chat-collapsed")
+
+        // The bubble's own DisclosureControl is the tap target — not the
+        // painted row. Collapsed rows offer "Expand"; opened ones "Collapse".
+        let expand = app.buttons["Expand"].firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5), "the folded bubble offers Expand")
+        expand.tap()
+        let collapse = app.buttons["Collapse"].firstMatch
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5), "the opened bubble offers Collapse")
+        let opened = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "label BEGINSWITH 'Message from 示例会话标题 A'"))
+            .firstMatch
+        XCTAssertTrue(opened.waitForExistence(timeout: 5))
+        XCTAssertGreaterThan(opened.frame.height, collapsedHeight, "expanding grows the bubble")
+        XCTAssertTrue(opened.label.contains("展开后可以看到这一行结尾"), opened.label)
+        XCTAssertFalse(opened.label.contains("Reply to it with"), opened.label)
+        snapshot(app, "cross-chat-expanded")
+    }
+
     func testQuestionPanelAnswersAndResumes() {
         let app = launch(["-route", "chat:chat-deploy"])
         let input = app.textViews["composer-input"]

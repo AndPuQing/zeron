@@ -153,6 +153,128 @@ fn toggles_expand_tool_groups_and_long_user_messages() {
     assert!(open.placement(0).unwrap().height > folded.placement(0).unwrap().height * 3.0);
 }
 
+/// Text actually painted by `runs` (UTF-16 offsets into `display.text`).
+fn painted_text(d: &display::RowDisplay) -> String {
+    let units: Vec<u16> = d.text.encode_utf16().collect();
+    let mut out = String::new();
+    for r in &d.runs {
+        let start = r.start as usize;
+        let end = (r.start + r.len) as usize;
+        if let Some(slice) = units.get(start..end) {
+            out.push_str(&String::from_utf16_lossy(slice));
+        }
+    }
+    out
+}
+
+/// A cross-chat message stores the routing header the agent needs; the bubble
+/// shows the desktop's `Message from <name>` line instead, so the fold exposes
+/// the body instead of the instruction and the full chat id.
+#[test]
+fn cross_chat_attribution_folds_to_the_body_not_the_routing_header() {
+    const FULL: &str = "a1b2c3d4-1111-4222-8333-444455556666";
+    let body = "第一条：先核对上游 head。\n\
+                第二条：确认 edge 与本地状态一致。\n\
+                第三条：正文应当出现在折叠预览里。\n\
+                第四条：展开后应当看到这一行结尾。";
+    let text = format!(
+        "[Message from Zeron chat 示例会话标题 · 本机 dsh (a1b2c3d4). \
+         Reply to it with the Zeron `send_message` tool, chat {FULL}.]\n\n{body}"
+    );
+    let mut w = worker(390.0);
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text, streaming: false }], false);
+    let folded = w.pass();
+    let d = folded.display(0).unwrap();
+    let painted = painted_text(&d);
+    assert!(painted.contains("Message from 示例会话标题"), "{}", painted);
+    assert!(
+        painted.contains("第一条：先核对上游 head。"),
+        "folded preview must show the body: {painted}"
+    );
+    assert!(!painted.contains("Reply to it with"), "{}", painted);
+    assert!(!painted.contains(FULL), "folded text leaks the routing id: {painted}");
+    assert!(!painted.contains("send_message"), "{}", painted);
+    // The full body is retained for the renderer that expands the bubble.
+    assert!(d.text.contains("第四条：展开后应当看到这一行结尾。"), "{}", d.text);
+    assert!(painted.len() < d.text.len(), "the folded row paints a prefix only");
+
+    let key = folded.placement(0).unwrap().key;
+    w.builder.expanded.insert(key);
+    w.builder.invalidate(key);
+    let open = w.pass();
+    let open_d = open.display(0).unwrap();
+    let open_text = painted_text(&open_d);
+    assert!(open.placement(0).unwrap().height > folded.placement(0).unwrap().height);
+    assert!(open_text.contains("第四条：展开后应当看到这一行结尾。"), "{}", open_text);
+    assert!(!open_text.contains(FULL), "{}", open_text);
+    assert!(!open_text.contains("Reply to it with"), "{}", open_text);
+    // Copy reads the same concise projection: no instruction, no routing id.
+    assert!(open_d.copy_text.contains("Message from 示例会话标题"), "{}", open_d.copy_text);
+    assert!(open_d.copy_text.contains("第四条：展开后应当看到这一行结尾。"), "{}", open_d.copy_text);
+    assert!(!open_d.copy_text.contains(FULL), "{}", open_d.copy_text);
+    assert!(!open_d.copy_text.contains("Reply to it with"), "{}", open_d.copy_text);
+}
+
+/// The attribution line is a prefix, not a replacement: a body that mixes
+/// mentions and an attachment trailer keeps its chips and image widgets, and
+/// the copy text still reads the attachment's plain label.
+#[test]
+fn cross_chat_attribution_keeps_mentions_and_attachments() {
+    const FULL: &str = "a1b2c3d4-1111-4222-8333-444455556666";
+    let body = "[mod.rs](zeron-file:crates/mobile/src/layout/mod.rs) 已改\n\n\
+                Attached images (local files — open them to view):\n- /tmp/uploads/a/shot.png";
+    let text = format!(
+        "[Message from Zeron chat 示例来源 (abc12345). \
+         Reply to it with the Zeron `send_message` tool, chat {FULL}.]\n\n{body}"
+    );
+    let mut w = worker(390.0);
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text, streaming: false }], false);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    let painted = painted_text(&d);
+    assert!(painted.contains("Message from 示例来源"), "{}", painted);
+    assert!(painted.contains("mod.rs"), "{}", painted);
+    assert!(!painted.contains("zeron-file:"), "{}", painted);
+    assert!(!painted.contains("Attached images"), "{}", painted);
+    assert!(
+        d.widgets
+            .iter()
+            .any(|w| matches!(&w.kind, display::WidgetKind::Image { reference } if reference.ends_with("shot.png"))),
+        "the image attachment must survive the attribution projection"
+    );
+    assert!(!d.copy_text.contains(FULL), "{}", d.copy_text);
+    assert!(!d.copy_text.contains("Attached images"), "{}", d.copy_text);
+}
+
+/// Ordinary prompts — including text that merely mentions the tool or a
+/// malformed header — must render exactly as before.
+#[test]
+fn ordinary_and_malformed_prompts_are_untouched() {
+    for text in [
+        "普通消息，只是提到 [Message from Zeron chat 某处] 而已",
+        "Reply to it with the Zeron `send_message` tool, chat 1234",
+        "[Message from Zeron chat 标题]\n\n没有回复指令",
+    ] {
+        let mut w = worker(390.0);
+        w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text: text.into(), streaming: false }], false);
+        let frame = w.pass();
+        let d = frame.display(0).unwrap();
+        // The source must reach layout untouched: row text and copy text are
+        // byte-exact (runs are line-split, so they are not the right oracle).
+        assert_eq!(d.text, text, "must render verbatim");
+        assert_eq!(d.copy_text, text);
+    }
+    // Ordinary prompts keep the historical split: the bubble shows the
+    // trimmed prompt, copy keeps the raw text (leading/trailing blank lines).
+    let text = "  \n\n  前置空白的普通消息\n\n  ";
+    let mut w = worker(390.0);
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text: text.into(), streaming: false }], false);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    assert_eq!(d.text, text.trim());
+    assert_eq!(d.copy_text, text);
+}
+
 /// Thinking renders desktop-style: markdown flattened to styled detail lines
 /// (bold/lists/code/quotes, underlined non-clickable links), not literal
 /// markers (desktop PR #220; the mobile port dropped it).

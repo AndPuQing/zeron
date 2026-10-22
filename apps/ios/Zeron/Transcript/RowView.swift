@@ -156,7 +156,12 @@ final class RowView: UIView {
         // Painted text is invisible to accessibility: one text element per
         // row, followed by the row's native widgets (copy, disclosure…).
         let element = UIAccessibilityElement(accessibilityContainer: self)
-        element.accessibilityLabel = kind == .user ? "You: \(d.copyText)" : (d.copyText.isEmpty ? d.text : d.copyText)
+        // A cross-chat message reads as its sender, not as something the
+        // reader typed: the row text already starts with "Message from …".
+        let userLabel = d.text.hasPrefix("Message from ")
+            ? d.copyText
+            : "You: \(d.copyText)"
+        element.accessibilityLabel = kind == .user ? userLabel : (d.copyText.isEmpty ? d.text : d.copyText)
         element.accessibilityIdentifier = switch kind {
         case .user: "row-user"
         case .markdown: "row-markdown"

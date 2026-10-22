@@ -64,6 +64,7 @@ import sh.zeron.android.design.LocalDarkTheme
 import sh.zeron.android.design.ZIcons
 import sh.zeron.android.design.TranscriptPalette
 import uniffi.zeron_core.LayoutFrame
+import uniffi.zeron_core.RowKind
 import uniffi.zeron_core.RowPlacement
 import kotlin.math.abs
 import kotlin.math.exp
@@ -252,7 +253,16 @@ private fun RowHost(
                 menuAt = it
             })
             .semantics {
+                // Painted text is invisible to TalkBack, so a user row speaks
+                // its copy text. A cross-chat message must not be announced as
+                // the reader's own prompt; its copy text starts with the
+                // sender's "Message from …" attribution instead.
+                if (p.kind == RowKind.USER) {
+                    contentDescription = model.display.copyText
+                }
                 model.display.links.singleOrNull()?.takeIf { it.url.startsWith("zerun://chat/") }?.let { link ->
+                    // The fork chip is not a user row; it keeps its own label
+                    // so "Open source chat" stays announced.
                     contentDescription = model.display.copyText
                     onClick("Open source chat") { actions.openUrl(link.url); true }
                 }
