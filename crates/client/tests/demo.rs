@@ -64,6 +64,9 @@ fn front_page_mirrors_the_desktop_sidebar() {
         [
             "chat-visuals",
             "chat-cjk",
+            // The cross-chat attribution fixture (12 minutes ago) sits between
+            // the CJK demo and the older project chats.
+            "chat-attribution",
             "chat-home",
             "chat-deploy",
             "chat-blog"
