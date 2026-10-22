@@ -695,6 +695,7 @@ async fn claude_strict_resume_rejects_missing_copies_and_a_different_native_id()
         require_native_resume: true,
         worktree: None,
         mcp: None,
+        env: Default::default(),
     };
     let (_missing_mailbox, missing_controls) = controls();
     match harness.run(request.clone(), missing_controls).await {
@@ -933,6 +934,7 @@ mod codex {
                 require_native_resume: true,
                 worktree: None,
                 mcp: None,
+                env: Default::default(),
             };
             let mut events = harness.run(request, controls).await.unwrap();
             let first = tokio::time::timeout(std::time::Duration::from_secs(5), events.next())

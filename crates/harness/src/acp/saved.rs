@@ -170,7 +170,7 @@ impl AcpHarness {
         replay_id: Option<&str>,
     ) -> Result<(Value, SavedSessionHistory), HarnessError> {
         let (_scratch, mut child, _stderr, prompted) =
-            self.spawn_agent(None, false, &[], false).await?;
+            self.spawn_agent(None, false, &[], None, &Default::default(), false).await?;
         let (client, mut incoming) = RpcClient::bounded(
             child
                 .stdin

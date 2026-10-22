@@ -31,17 +31,27 @@ pub use zeron::{Origin, Zeron};
 pub struct McpConfig {
     /// Loopback IPC port of the engine to proxy (`ZERUN_IPC_PORT`, default 27655).
     pub ipc_port: u16,
+    /// The engine's data dir, whose `ipc-token` authenticates the IPC dial
+    /// (`ZERUN_DATA_DIR`, resolved by `zeron_proto::identity`). The token
+    /// itself is resolved at every dial — `ZERON_IPC_TOKEN`, then the
+    /// `ZERON_IPC_TOKEN_FILE` the engine injects, then `{data_dir}/ipc-token`
+    /// — so a long-lived server follows the engine across restarts.
+    pub data_dir: Option<std::path::PathBuf>,
     /// The chat whose agent spawned this server, when injected by the engine.
     pub origin: Origin,
 }
 
 impl McpConfig {
-    /// Resolve from the process environment: `ZERUN_IPC_PORT` for the engine,
-    /// `ZERON_CHAT_ID` / `ZERON_DEVICE_ID` for the originating chat.
+    /// Resolve from the process environment: `ZERUN_IPC_PORT` / `ZERUN_DATA_DIR`
+    /// for the engine, `ZERON_CHAT_ID` / `ZERON_DEVICE_ID` for the originating
+    /// chat (the MCP protocol keys, kept as the harnesses expect them).
     pub fn from_env() -> Self {
         let ipc_port = zeron_proto::identity::ipc_port();
         Self {
             ipc_port,
+            data_dir: zeron_proto::identity::data_dir()
+                .filter(|dir| !dir.is_empty())
+                .map(std::path::PathBuf::from),
             origin: Origin::from_env(),
         }
     }
@@ -49,7 +59,7 @@ impl McpConfig {
 
 /// Run the MCP server on this process's stdin/stdout until stdin closes.
 pub async fn run(config: McpConfig) -> anyhow::Result<()> {
-    let zeron = Zeron::new(format!("ws://127.0.0.1:{}", config.ipc_port), config.origin);
+    let zeron = Zeron::new(config.ipc_port, config.data_dir, config.origin);
     let tools = Tools::new(std::sync::Arc::new(zeron));
     serve_stdio(std::sync::Arc::new(tools)).await
 }

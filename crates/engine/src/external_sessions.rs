@@ -609,6 +609,7 @@ impl ExternalSessionImporter {
                     git_checked_at: None,
                     checkout_id: None,
                     repository_id: None,
+                    github_repo: None,
                     created_at: Utc::now(),
                 };
                 receipt.space = Some(space.clone());
@@ -646,6 +647,7 @@ impl ExternalSessionImporter {
             }),
             last_message_preview: preview,
             last_message_at: last_at,
+            harness_session_harness: None,
             created_at: DateTime::from_timestamp_millis(source.created_at_ms)
                 .unwrap_or_else(Utc::now),
             harness_session_id: Some(copy.native_id.clone()),

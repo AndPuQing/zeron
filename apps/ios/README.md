@@ -115,7 +115,7 @@ Live stack (real edge + headless engine; see `ZeronUITests/LiveStackTests.swift`
 
 ```sh
 (cd edge && npx wrangler dev --port 27650 --var AUTH_MODE:dev) &
-ZERON_DATA_DIR=/tmp/e2e ZERON_IPC_PORT=27811 ZERON_EDGE_URL=http://localhost:27650 \
+ZERUN_DATA_DIR=/tmp/e2e ZERUN_IPC_PORT=27811 ZERON_EDGE_URL=http://localhost:27650 \
   ZERON_EDGE_TOKEN=alice@org1 ZERON_ORG_ID=org1 ZERON_HARNESS=mock target/debug/zeron headless &
 TEST_RUNNER_ZERON_LIVE_EDGE=http://localhost:27650 xcodebuild … -only-testing:ZeronUITests/LiveStackTests test
 ```

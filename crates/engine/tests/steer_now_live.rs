@@ -147,6 +147,7 @@ async fn steer_now_interrupts_a_streaming_answer() {
                     attachments: vec![],
                     worktree: None,
                     resume: None,
+                    env: Default::default(),
                 },
             },
         )

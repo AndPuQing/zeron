@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Linux packaging: build the release binary and produce
 #   target/package/zerun-<version>-linux-<arch>.tar.gz
-# containing the binary, the .desktop entry, and the icon, plus an install.sh
+# containing the binaries (the app and its background engine), the .desktop
+# entry, and the icon, plus an install.sh
 # that installs them into the self-updating ~/.zerun/app layout and links
 # ~/.local (XDG) paths to it.
 #
@@ -27,10 +28,14 @@ else
   cargo build --locked -p zeron
   BIN="$ROOT/target/debug/zerun"
 fi
+# The background engine the app starts: sessions keep running with the app
+# closed, in a process of its own.
+ENGINE_BIN="$(dirname "$BIN")/zerun-engine"
 
 rm -rf "$STAGE" "$TARBALL"
 mkdir -p "$STAGE"
 install -m 755 "$BIN" "$STAGE/zerun"
+install -m 755 "$ENGINE_BIN" "$STAGE/zerun-engine"
 install -m 644 "$ROOT/dist/zeron.desktop" "$STAGE/zerun.desktop"
 install -m 644 "$ROOT/dist/zeron.png" "$STAGE/zerun.png"
 install -m 644 "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"

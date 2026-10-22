@@ -20,3 +20,5 @@ skills-lock.json
 *.jks
 *.keystore
 /apps/android/local.properties
+.dev.vars
+.dev.vars.*

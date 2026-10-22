@@ -293,7 +293,12 @@ impl ClaudeHarness {
             cmd.env("CLAUDE_CONFIG_DIR", root);
         }
         crate::compose_child_path(&mut cmd, exe);
+        // The harness snapshot first; the host-resolved environment (a Cloud
+        // device's `ANTHROPIC_API_KEY` from the user's own key, `GH_TOKEN`, …)
+        // applies last so it wins. Never a Claude.ai subscription token: those
+        // stay inside the CLI's own login.
         self.environment.apply(&mut cmd);
+        crate::apply_run_env(&mut cmd, &request.env);
         cmd.args(Self::launch_args(request));
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));

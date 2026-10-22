@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# macOS packaging: build the release binary for the host arch and produce
+# macOS packaging: build the release binaries for the host arch and produce
 #   target/package/zerun-<version>-macos-<arch>.dmg          (user download)
 #   target/package/zerun-<version>-macos-<arch>-app.tar.gz   (auto-updater)
 # containing Zerun.app (unsigned unless CODESIGN_IDENTITY is set).
@@ -27,6 +27,9 @@ cargo build --release --locked -p zeron
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 755 "$ROOT/target/release/zerun" "$APP/Contents/MacOS/zerun"
+# The background engine the app starts (sessions keep running with the app
+# closed); its own process, named for Activity Monitor.
+install -m 755 "$ROOT/target/release/zerun-engine" "$APP/Contents/MacOS/Zerun Engine"
 sed "s/__VERSION__/$VERSION/" "$ROOT/dist/macos/Info.plist" >"$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 APP="$APP" VERSION="$VERSION" python3 - <<'PY'
@@ -65,7 +68,9 @@ rm -rf "$ICONSET"
 
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   # Hardened runtime + secure timestamp are both notarization requirements.
-  # (No --deep: Apple deprecated it; the bundle is a single Mach-O anyway.)
+  # (No --deep: Apple deprecated it. Nested code is signed first, inside out:
+  # the engine, then the bundle that seals it.)
+  codesign --entitlements "$ROOT/dist/macos/Zerun.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" --identifier work.puqing.zerun.engine "$APP/Contents/MacOS/Zerun Engine"
   codesign --entitlements "$ROOT/dist/macos/Zerun.entitlements" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
 else
   # Ad-hoc signature so the app launches on Apple silicon (Gatekeeper still

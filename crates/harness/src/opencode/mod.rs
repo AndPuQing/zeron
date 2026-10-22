@@ -312,15 +312,27 @@ impl OpencodeHarness {
         cwd: Option<&str>,
         mcp: Option<&zeron_proto::McpServer>,
     ) -> Result<Server, HarnessError> {
+        self.server_with_env(cwd, mcp, &Default::default()).await
+    }
+
+    /// [`Self::server`] for a run: the host-resolved run environment
+    /// ([`RunRequest::env`]) rides the spawned `opencode serve`.
+    async fn server_with_env(
+        &self,
+        cwd: Option<&str>,
+        mcp: Option<&zeron_proto::McpServer>,
+        run_env: &std::collections::BTreeMap<String, String>,
+    ) -> Result<Server, HarnessError> {
         if let Some(base) = &self.base_url {
             return Ok(Server::attached(base.clone()));
         }
         let exe = self.resolve_executable()?;
-        Server::spawn_with_environment(
+        Server::spawn_with_env(
             &exe,
             cwd,
             self.startup_timeout,
             mcp,
+            run_env,
             self.environment.clone(),
         )
         .await
@@ -523,7 +535,9 @@ impl Harness for OpencodeHarness {
         let initial_native_command_selected = selected_native_command(&request.prompt, self.id());
         request.prompt = zeron_proto::invocation::harness_prompt(&request.prompt, self.id());
         let cwd = (!request.cwd.is_empty()).then(|| request.cwd.clone());
-        let server = self.server(cwd.as_deref(), request.mcp.as_ref()).await?;
+        let server = self
+            .server_with_env(cwd.as_deref(), request.mcp.as_ref(), &request.env)
+            .await?;
         let (event_tx, event_rx) = mpsc::channel::<Result<AgentEvent, HarnessError>>(256);
         tokio::spawn(run_session(Session {
             server,
@@ -672,14 +686,21 @@ impl Server {
         startup: Duration,
         mcp: Option<&zeron_proto::McpServer>,
     ) -> Result<Self, HarnessError> {
-        Self::spawn_with_environment(exe, cwd, startup, mcp, Default::default()).await
+        Self::spawn_with_env(exe, cwd, startup, mcp, &Default::default(), Default::default()).await
     }
 
-    async fn spawn_with_environment(
+    /// Spawn `opencode serve` on a free loopback port with a per-run Basic
+    /// password, and wait for a generation-bearing health answer (which
+    /// also resolves [`Protocol`]). `run_env` is the host-resolved run
+    /// environment ([`RunRequest::env`]); `environment` is the harness's own
+    /// snapshot (`with_environment`). The run environment is applied last, so
+    /// it wins over both the inherited env and the snapshot.
+    async fn spawn_with_env(
         exe: &std::path::Path,
         cwd: Option<&str>,
         startup: Duration,
         mcp: Option<&zeron_proto::McpServer>,
+        run_env: &std::collections::BTreeMap<String, String>,
         environment: std::sync::Arc<crate::environment::EnvironmentSnapshot>,
     ) -> Result<Self, HarnessError> {
         let port = free_localhost_port().ok_or_else(|| {
@@ -724,6 +745,7 @@ impl Server {
         }
         crate::compose_child_path(&mut cmd, exe);
         environment.apply(&mut cmd);
+        crate::apply_run_env(&mut cmd, run_env);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }
@@ -4961,11 +4983,12 @@ http.createServer((req, res) => {
                 ])
                 .unwrap(),
         );
-        let mut server = Server::spawn_with_environment(
+        let mut server = Server::spawn_with_env(
             &exe,
             root.path().to_str(),
             Duration::from_secs(5),
             None,
+            &Default::default(),
             environment,
         )
         .await

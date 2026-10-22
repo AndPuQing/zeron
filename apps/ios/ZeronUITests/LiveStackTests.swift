@@ -5,7 +5,7 @@ import XCTest
 /// `TEST_RUNNER_ZERON_LIVE_EDGE=http://localhost:<port>` is set:
 ///
 ///   (cd edge && npx wrangler dev --port 27650 --var AUTH_MODE:dev) &
-///   ZERON_DATA_DIR=/tmp/e ZERON_IPC_PORT=27811 ZERON_EDGE_URL=http://localhost:27650 \
+///   ZERUN_DATA_DIR=/tmp/e ZERUN_IPC_PORT=27811 ZERON_EDGE_URL=http://localhost:27650 \
 ///     ZERON_EDGE_TOKEN=alice@org1 ZERON_ORG_ID=org1 ZERON_HARNESS=mock zeron headless &
 ///   TEST_RUNNER_ZERON_LIVE_EDGE=http://localhost:27650 xcodebuild test \
 ///     -only-testing:ZeronUITests/LiveStackTests …

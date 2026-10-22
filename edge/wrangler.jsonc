@@ -1,6 +1,7 @@
 {
   // Zeron edge: per-session + per-workspace Loro sync DOs, per-device
-  // relay DOs, R2 blobs, and the absorbed WorkOS auth routes.
+  // relay DOs, R2 blobs and the absorbed WorkOS auth routes. The upstream
+  // Cloud control plane and vault are compiled in but unbound here.
   // Design: loro-sessions §2 (topology), §3 (persistence), §6.1 (diff
   // sidecar), §8 (device-room streams), §1.2 (R2 attachments), §3.3 (R2
   // backups); ARCHITECTURE.md §6.
@@ -36,6 +37,8 @@
       { "name": "PREVIEW_ROOMS", "class_name": "PreviewRoom" },
       { "name": "REGISTRY_ROOMS", "class_name": "RegistryRoom" },
       { "name": "CHAT_ROOMS", "class_name": "ChatRoom" }
+      // Cloud binds CLOUD_ACCOUNTS/CLOUD_INDEX here upstream; this fork keeps
+      // them unbound (docs/fork-cloud.md), so /cloud answers available: false.
     ]
   },
   "migrations": [
@@ -57,6 +60,8 @@
     },
     { "tag": "v4", "new_sqlite_classes": ["PreviewRoom"] }
   ],
+  // No `workflows`, `services` (vault) or `triggers` (Cloud billing cron) in
+  // this fork; docs/fork-cloud.md records what a deployment would need.
   "r2_buckets": [
     {
       "binding": "BLOBS",
@@ -79,6 +84,10 @@
     // and logged on /registry/:org/stats, not sent.
     "WORKOS_CLIENT_ID": "client_01M4AN0G973H42GQJY8RAAC0RS",
     "AUTH_MODE": "workos"
+    // Cloud and the credential vault stay unconfigured in this fork: no
+    // CLOUD_* Durable Objects, Workflows, VAULT service binding or cron is
+    // bound, so /cloud answers `available: false` and a deploy creates no
+    // Cloud infrastructure (docs/fork-cloud.md).
   },
   "observability": {
     "enabled": true

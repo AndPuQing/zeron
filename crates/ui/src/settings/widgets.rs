@@ -1520,7 +1520,11 @@ impl<V: 'static> Select<V> {
 #[derive(Clone, Copy)]
 pub enum ActionTone {
     Quiet,
+    /// A bordered secondary action (the provider-environment header's
+    /// "Add variable"): the fork's tone, not part of upstream.
     Outlined,
+    /// The secondary action: a borderless filled pill, the same as a
+    /// dropdown trigger beside it.
     Filled,
     Solid,
     Danger,
