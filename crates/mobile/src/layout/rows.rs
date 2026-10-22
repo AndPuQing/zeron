@@ -557,6 +557,9 @@ impl RowBuilder {
         let attributed = zeron_proto::chat_attribution::attributed_message(parsed.text.trim());
         let visible = attributed.map_or(parsed.text.trim(), |message| message.body.trim());
         let attribution = attributed.map(|message| message.name);
+        // Display keeps the historical trimmed prompt; copy keeps the raw one
+        // for ordinary messages (only an attributed body replaces the header).
+        let copy_source = attributed.map_or(parsed.text.as_str(), |message| message.body);
         let (size, lh) = TYPE.body;
         let style = ctx.typo.style(Family::Sans, Weight::Regular, false, size);
         let lh = ctx.typo.px(lh);
@@ -576,7 +579,7 @@ impl RowBuilder {
         let text = prepare_user_text(ctx, visible, style, bold, attribution, lh, &previews);
         // Copied text reads attachment chips as their plain label, and carries
         // the same attribution a reader sees — never the routing header.
-        let mut body = zeron_proto::attachment_mentions::attachment_mention_prompt(visible);
+        let mut body = zeron_proto::attachment_mentions::attachment_mention_prompt(copy_source);
         if let Some(name) = attribution {
             body = format!("Message from {name}\n\n{body}");
         }

@@ -264,6 +264,15 @@ fn ordinary_and_malformed_prompts_are_untouched() {
         assert_eq!(d.text, text, "must render verbatim");
         assert_eq!(d.copy_text, text);
     }
+    // Ordinary prompts keep the historical split: the bubble shows the
+    // trimmed prompt, copy keeps the raw text (leading/trailing blank lines).
+    let text = "  \n\n  前置空白的普通消息\n\n  ";
+    let mut w = worker(390.0);
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text: text.into(), streaming: false }], false);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    assert_eq!(d.text, text.trim());
+    assert_eq!(d.copy_text, text);
 }
 
 /// Thinking renders desktop-style: markdown flattened to styled detail lines
