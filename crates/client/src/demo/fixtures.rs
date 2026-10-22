@@ -122,6 +122,19 @@ pub(crate) fn chats() -> Vec<DemoChat> {
             )
         },
         DemoChat {
+            last_ago_ms: 12 * MIN,
+            created_ago_ms: 2 * DAY,
+            harness: Codex,
+            model: "gpt-6-astra",
+            ..chat(
+                "chat-attribution",
+                Some("space-edge"),
+                VPS,
+                "Cross-chat handoff",
+                "上游 head 已核对，正文可见",
+            )
+        },
+        DemoChat {
             last_ago_ms: DAY,
             created_ago_ms: 2 * DAY,
             ..chat(

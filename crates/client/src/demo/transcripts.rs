@@ -687,6 +687,43 @@ pub(crate) fn fixture(chat_id: &str, host: &str, last_activity: i64) -> Vec<Sess
         "chat-home" => home(host, now),
         "chat-cjk" => cjk(host, now),
         "chat-visuals" => visuals(host, now),
+        // Two cross-chat messages from another agent, verbatim as the MCP
+        // server stores them: the routing header is for the agent, so the
+        // transcript must show the sender and the body instead.
+        "chat-attribution" => vec![
+            user(
+                "m1",
+                now - 180_000,
+                "[Message from Zeron chat 示例会话标题 A · 本机 dsh (a1b2c3d4). \
+                 Reply to it with the Zeron `send_message` tool, chat \
+                 a1b2c3d4-1111-4222-8333-444455556666.]\n\n\
+                 上游示例分支仍停在 abc1234，没有新的示例变更需要同步；这一段正文应当出现在折叠预览里，\
+                 而不是被来源标题和内部回复指令挤掉。\n\
+                 本地示例分支与示例远端保持一致，未产生新的示例提交，草稿与截图都按原样保留。\n\
+                 折叠时只露出前几行；展开后可以看到这一行结尾，也就是整段正文的最后一句。",
+            ),
+            assistant(
+                "m2",
+                host,
+                now - 150_000,
+                vec![text("t0", "已核对：来源与正文分开显示，路由指令不再进入 bubble。")],
+            ),
+            user(
+                "m3",
+                now - 120_000,
+                "[Message from Zeron chat 示例发布会话 B (b2c3d4e5). \
+                 Reply to it with the Zeron `send_message` tool, chat \
+                 b2c3d4e5-2222-4333-8444-555566667777.]\n\n\
+                 示例版本已准备好，示例构建校验通过。\n\
+                 这条消息用来检查长正文在折叠时仍露出开头，展开后能看到结尾。",
+            ),
+            assistant(
+                "m4",
+                host,
+                now - 90_000,
+                vec![text("t0", "明白，保持当前状态。")],
+            ),
+        ],
         "chat-deploy" => short(
             host,
             now,

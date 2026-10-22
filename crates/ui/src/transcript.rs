@@ -8719,23 +8719,8 @@ impl Transcript {
 /// Keep routing instructions in the stored prompt for agents, but show a
 /// concise attribution in the human transcript (including existing messages).
 fn agent_message_display(text: &str) -> String {
-    let Some(rest) = text.strip_prefix("[Message from Zeron chat ") else {
-        return text.to_owned();
-    };
-    let Some((header, body)) = rest.split_once("]\n\n") else {
-        return text.to_owned();
-    };
-    let Some((label, id)) =
-        header.rsplit_once(". Reply to it with the Zeron `send_message` tool, chat ")
-    else {
-        return text.to_owned();
-    };
-    let Some(id) = id.strip_suffix('.') else {
-        return text.to_owned();
-    };
-    let suffix = format!(" ({id})");
-    let name = label.strip_suffix(&suffix).unwrap_or(label);
-    format!("Message from {name}\n\n{body}")
+    zeron_proto::chat_attribution::attributed_message_display(text)
+        .unwrap_or_else(|| text.to_owned())
 }
 
 /// The bubble text's runs: body text in the sans font, chips as labels in it

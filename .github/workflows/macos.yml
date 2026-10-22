@@ -293,6 +293,7 @@ jobs:
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsKeepsRowsBetweenControls \
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsFoldsUnavailableAndLoadsMore \
             -only-testing:ZeronUITests/SessionFlowTests/testCommandSuggestionsStayCompactAndInsertSkills \
+            -only-testing:ZeronUITests/SessionFlowTests/testCrossChatMessageShowsSenderAndBody \
             CODE_SIGNING_ALLOWED=NO test
       - name: Export iOS screenshots
         if: always()
