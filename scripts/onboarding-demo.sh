@@ -21,4 +21,4 @@ echo "▸ opening a fresh install (data in $DIR)"
 # Embedded: the throwaway install's engine ends with the window.
 exec env ZERUN_DATA_DIR="$DIR/data" ZERUN_IPC_PORT=$IPC ZERON_EMBED_ENGINE=1 \
   ${1:+ZERON_ONBOARDING=$1} RUST_LOG=warn \
-  ./target/debug/zeron
+  ./target/debug/zerun

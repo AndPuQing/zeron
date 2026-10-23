@@ -167,6 +167,7 @@ fn run_request(harness: HarnessId, prompt: &str) -> RunRequest {
         sandbox: SandboxLevel::WorkspaceWrite,
         auto_approve: true,
         resume: None,
+        require_native_resume: false,
         attachments: vec![],
         worktree: None,
         env: Default::default(),

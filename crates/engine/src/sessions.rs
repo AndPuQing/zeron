@@ -5120,7 +5120,7 @@ mod agent_environment_tests {
             .await
             .unwrap();
         let mut first = started.recv().await.unwrap();
-        eventually(|| sessions.inner.resume_for(chat, "/tmp").is_some()).await;
+        eventually(|| sessions.inner.resume_for(chat, "/tmp", HarnessId::Codex).is_some()).await;
         let voice = if owner == "voice" {
             Some(
                 lock(&sessions.inner.runs)

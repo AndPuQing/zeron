@@ -94,4 +94,4 @@ probe QueueCommand "{\"chatId\":\"$(cat "$FANOUT_ID_FILE")\",\"command\":{\"kind
 echo "▸ opening zeron (composer is live — type into it; --slow shows streaming)"
 echo "  'Fan Out Forty Scouts' settles a subagent every 2.5s; send '/fanout 40' to replay"
 # The UI attaches to the daemon, whose IPC bearer lives in the daemon's data dir.
-ZERUN_DATA_DIR="$UI_DIR" ZERUN_IPC_PORT=$IPC ZERON_IPC_TOKEN_FILE="$DAEMON_DIR/ipc-token" RUST_LOG=warn ./target/debug/zeron
+ZERUN_DATA_DIR="$UI_DIR" ZERUN_IPC_PORT=$IPC ZERON_IPC_TOKEN_FILE="$DAEMON_DIR/ipc-token" RUST_LOG=warn ./target/debug/zerun

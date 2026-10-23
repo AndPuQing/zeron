@@ -69,7 +69,7 @@ if [[ "$MODE" == boat ]]; then
     exit 1
   }
   VERSION="$(cat "$ROOT/target/package-dev/latest.txt" 2>/dev/null || true)"
-  TARBALL="$ROOT/target/package-dev/zeron-$VERSION-linux-x86_64.tar.gz"
+  TARBALL="$ROOT/target/package-dev/zerun-$VERSION-linux-x86_64.tar.gz"
   [[ -n "$VERSION" && -f "$TARBALL" ]] || {
     echo "MODE=boat needs a Linux build: run scripts/build-linux-dev.sh" >&2
     exit 1
@@ -121,7 +121,7 @@ trap cleanup EXIT
 trap 'exit 0' INT TERM
 
 log "building zeron"
-(cd "$ROOT" && cargo build -q -p zeron --bin zeron) > "$STATE/build.log" 2>&1 || {
+(cd "$ROOT" && cargo build -q -p zeron --bin zerun) > "$STATE/build.log" 2>&1 || {
   tail -40 "$STATE/build.log"
   exit 1
 }
@@ -179,7 +179,7 @@ gui_env=(ZERUN_DATA_DIR="$STATE/gui/data" ZERUN_IPC_PORT="$GUI_PORT" ZERON_EDGE_
   ZERON_OPEN_ROUTE="${OPEN_ROUTE:-settings/cloud}" ZERON_NO_LOGIN_SHELL=1 RUST_LOG="${GUI_RUST_LOG:-warn}"
   # The engine lives and dies with this window (cleanup kills GUI_PID).
   ZERON_EMBED_ENGINE=1)
-(cd "$STATE/gui" && env "${gui_env[@]}" "$ROOT/target/debug/zeron" > "$STATE/gui/ui.log" 2>&1 &
+(cd "$STATE/gui" && env "${gui_env[@]}" "$ROOT/target/debug/zerun" > "$STATE/gui/ui.log" 2>&1 &
   echo $! > "$STATE/gui/pid")
 GUI_PID="$(cat "$STATE/gui/pid")"
 
@@ -234,7 +234,7 @@ start_session() {
   (cd "$dir" && env -i PATH="$STATE/bin:$PATH" HOME="$dir/home" USER="$USER" GIT_CONFIG_NOSYSTEM=1 \
     ZERON_NO_LOGIN_SHELL=1 ZERUN_DATA_DIR="$dir/data" \
     ZERUN_IPC_PORT="$(cat "$dir/port")" RUST_LOG=info "${env_args[@]}" \
-    "$ROOT/target/debug/zeron" headless >> "$dir/engine.log" 2>&1 & echo $! > "$dir/pid")
+    "$ROOT/target/debug/zerun" headless >> "$dir/engine.log" 2>&1 & echo $! > "$dir/pid")
   log "session machine up: chat $(grep '^ZERON_CLOUD_CHAT=' "$dir/env" | cut -d= -f2) ($id, :$(cat "$dir/port"), log $dir/engine.log)"
 }
 

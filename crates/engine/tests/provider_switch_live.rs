@@ -27,6 +27,7 @@ fn request(harness: HarnessId, prompt: &str, cwd: &str) -> RunRequest {
         sandbox: SandboxLevel::ReadOnly,
         auto_approve: true,
         resume: None,
+        require_native_resume: false,
         attachments: vec![],
         worktree: None,
         env: Default::default(),

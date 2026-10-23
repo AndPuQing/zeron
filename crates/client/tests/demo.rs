@@ -769,3 +769,22 @@ fn provider_switch_needs_a_host_that_switches() {
     model.model = Some("another-model".into());
     client.set_session_config("chat-blog", &model).unwrap();
 }
+
+    picker.refresh();
+    wait_for("rescan", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    picker.load_more();
+    wait_for("rescan next page", Duration::from_secs(5), || {
+        !picker.snapshot().loading
+    });
+    let s = picker.snapshot();
+    assert_eq!(
+        s.rows.len(),
+        2,
+        "only running and missing-directory sources remain"
+    );
+    assert!(s.rows.iter().all(|r| r.disabled_reason.is_some()));
+    picker.close();
+    client.shutdown();
+}

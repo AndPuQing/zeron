@@ -213,6 +213,7 @@ fn request(cwd: &str) -> RunRequest {
         require_native_resume: false,
         worktree: None,
         mcp: None,
+        env: Default::default(),
     }
 }
 

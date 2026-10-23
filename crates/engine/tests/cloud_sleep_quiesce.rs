@@ -145,6 +145,7 @@ fn send(core: &EngineCore, id: &str, prompt: &str) {
                     attachments: Vec::new(),
                     worktree: None,
                     resume: None,
+                    require_native_resume: false,
                     env: Default::default(),
                 },
                 message_id: id.into(),
