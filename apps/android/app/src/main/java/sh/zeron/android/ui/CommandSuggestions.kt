@@ -55,7 +55,9 @@ fun CommandSuggestions(
     modifier: Modifier = Modifier,
     load: suspend () -> ComposerCatalog,
 ) {
-    val query = model.slashQuery()?.second ?: return
+    val query = model.completionQuery() ?: return
+    val kind = if (query.skills) "skills" else "commands"
+    val tag = if (query.skills) "skill" else "slash"
     var catalog by remember(chatId, harness, deviceId) { mutableStateOf<ComposerCatalog?>(null) }
     var error by remember(chatId, harness, deviceId) { mutableStateOf<String?>(null) }
     var retry by remember { mutableStateOf(0) }
@@ -70,16 +72,13 @@ fun CommandSuggestions(
             error = e.message ?: "Could not load commands"
         }
     }
-    val rows = catalog?.commands?.map(model::displayCommand)
-        ?.sortedWith(compareBy({ it.unavailableReason != null }, { it.token }))?.filter {
-        query.isEmpty() || it.token.drop(1).contains(query, ignoreCase = true) || it.description.contains(query, ignoreCase = true)
-    }.orEmpty()
+    val rows = catalog?.let { model.completionRows(it, query) }.orEmpty()
     val selectionContext = model.commandContext
     val scroll = rememberScrollState()
     LaunchedEffect(query) { scroll.scrollTo(0) }
     GlassSurface(
         shape = RoundedCornerShape(12.dp),
-        modifier = modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("slash-menu"),
+        modifier = modifier.fillMaxWidth().padding(bottom = 8.dp).testTag("$tag-menu"),
     ) {
         // Six 48 dp touch rows plus the 4 dp card inset; iOS's 280 grows by the
         // extra touch-row height. The inset sits outside the scroller so a
@@ -92,28 +91,28 @@ fun CommandSuggestions(
                     detail = commandDetail(command),
                     icon = if (command.token.startsWith("$")) ZIcons.Magic else ZIcons.Command,
                     enabled = enabled,
-                    onClick = { model.insertCommand(command, selectionContext) },
-                    testTag = "slash-${command.token}",
+                    onClick = { model.insertCommand(command, selectionContext, query) },
+                    testTag = "$tag-${command.token}",
                 )
             }
             val warning = error ?: catalog?.warning
             if (warning != null) {
                 CommandSuggestionRow(
-                    title = "Retry loading commands",
+                    title = "Retry loading $kind",
                     detail = warning,
                     icon = ZIcons.Refresh,
                     enabled = true,
                     onClick = { retry++ },
-                    testTag = "slash-status",
+                    testTag = "$tag-status",
                 )
             } else if (rows.isEmpty()) {
                 CommandSuggestionRow(
-                    title = if (catalog == null) "Loading commands…" else "No matching commands",
+                    title = if (catalog == null) "Loading $kind…" else "No matching $kind",
                     detail = "",
                     icon = ZIcons.Command,
                     enabled = false,
                     onClick = {},
-                    testTag = "slash-status",
+                    testTag = "$tag-status",
                 )
             }
         }

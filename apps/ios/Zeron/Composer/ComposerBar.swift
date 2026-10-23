@@ -90,9 +90,19 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         return catalog
     }
 
+    /// Shared desktop boundaries. Suppressed during IME composition and when a
+    /// reference was already selected (so the menu does not reopen on it).
+    private func completionQuery() -> ComposerQuery? {
+        guard textView.markedTextRange == nil,
+              let query = ComposerQuery.active(in: textView.text, selection: textView.selectedRange) else { return nil }
+        let token = (textView.text as NSString).substring(with: query.range)
+        if let selected = selectedCommands[token], selected.unavailableReason == nil { return nil }
+        return query
+    }
+
     func refreshLocalCommands() {
-        if let query = SlashQuery.active(in: textView.text, selection: textView.selectedRange) {
-            commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, error: commandError)
+        if let query = completionQuery() {
+            commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, skills: query.skills, error: commandError)
         }
     }
 
@@ -414,7 +424,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     override func didMoveToWindow() {
         super.didMoveToWindow()
         guard let root = findViewController()?.view, suggestions.superview !== root else { return }
-        commandSuggestions.isHidden = true
+        commandSuggestions.dismiss()
         commandSuggestions.translatesAutoresizingMaskIntoConstraints = false
         commandSuggestions.onPick = { [weak self] in self?.insertCommand($0) }
         commandSuggestions.onRetry = { [weak self] in
@@ -471,7 +481,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
     // MARK: Mentions
 
     private func updateMentionQuery() {
-        if commandCatalog != nil, let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange), textView.markedTextRange == nil {
+        if commandCatalog != nil, let q = completionQuery() {
             mentionTask?.cancel()
             mentionQuery = nil
             setSuggestionsVisible(false)
@@ -501,11 +511,11 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         commandTask = nil
         loadedCommands = nil
         commandError = nil
-        commandSuggestions.isHidden = true
+        commandSuggestions.dismiss()
     }
 
-    private func updateCommands(_ query: SlashQuery) {
-        commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, error: commandError)
+    private func updateCommands(_ query: ComposerQuery) {
+        commandSuggestions.show(resolvedCatalog(loadedCommands), query: query.query, skills: query.skills, error: commandError)
         guard loadedCommands == nil, commandError == nil, commandTask == nil, let load = commandCatalog else { return }
         commandTask = Task { [weak self] in
             do {
@@ -513,22 +523,23 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
                 guard !Task.isCancelled, let self else { return }
                 self.loadedCommands = catalog
                 self.commandTask = nil
-                if let q = SlashQuery.active(in: self.textView.text, selection: self.textView.selectedRange) {
-                    self.commandSuggestions.show(self.resolvedCatalog(catalog), query: q.query)
+                if let q = self.completionQuery() {
+                    self.commandSuggestions.show(self.resolvedCatalog(catalog), query: q.query, skills: q.skills)
                 }
             } catch {
                 guard !Task.isCancelled, let self else { return }
                 self.commandTask = nil
                 self.commandError = error.localizedDescription
-                if let q = SlashQuery.active(in: self.textView.text, selection: self.textView.selectedRange) {
-                    self.commandSuggestions.show(nil, query: q.query, error: self.commandError)
+                if let q = self.completionQuery() {
+                    self.commandSuggestions.show(nil, query: q.query, skills: q.skills, error: self.commandError)
                 }
             }
         }
     }
 
     func insertCommand(_ command: ComposerCommand) {
-        guard let q = SlashQuery.active(in: textView.text, selection: textView.selectedRange) else { return }
+        guard let q = completionQuery(),
+              command.token.hasPrefix(q.skills ? "$" : "/") else { return }
         if let local = mobileComposerAction(harness: commandHarness?() ?? "", text: command.insertion), onLocalCommand != nil {
             performLocalCommand(local, range: q.range)
             return
@@ -540,10 +551,18 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             selections: Array(selectedCommands.values), command: command
         )
         let suffix = ns.substring(from: NSMaxRange(q.range))
-        let replacement = selected.token + (suffix.first?.isWhitespace == true ? "" : " ")
+        let following = suffix.first
+        // A following space/newline/punctuation already separates the token, so
+        // do not add another space on top of it.
+        let closingPunctuation: Set<Character> = [")", "]", "}", "*", "_", "~", ",", ".", ";", ":", "!", "?"]
+        let keepSuffix = following.map { $0.isWhitespace || closingPunctuation.contains($0) } ?? false
+        // CRLF is one Swift Character; inspect its first scalar for line endings.
+        let lineBreak = suffix.unicodeScalars.first == "\n" || suffix.unicodeScalars.first == "\r"
+        let advance = following?.isWhitespace == true && !lineBreak ? (String(following!) as NSString).length : 0
+        let replacement = selected.token + (keepSuffix ? "" : " ")
         selectedCommands[selected.token] = selected
         textView.text = ns.replacingCharacters(in: q.range, with: replacement)
-        textView.selectedRange = NSRange(location: q.range.location + (replacement as NSString).length + (suffix.first?.isWhitespace == true ? 1 : 0), length: 0)
+        textView.selectedRange = NSRange(location: q.range.location + (replacement as NSString).length + advance, length: 0)
         closeCommands()
         textChanged()
         UISelectionFeedbackGenerator().selectionChanged()

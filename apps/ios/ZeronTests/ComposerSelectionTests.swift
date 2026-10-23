@@ -14,7 +14,7 @@ final class ComposerSelectionTests: XCTestCase {
     func testInsertingSameNameSkillAfterRestorePreservesBothIdentities() {
         let composer = ComposerBar()
         composer.text = wire
-        composer.textView.text = "/ " + composer.text
+        composer.textView.text = "$ " + composer.text
         composer.textView.selectedRange = NSRange(location: 1, length: 0)
         composer.insertCommand(ComposerCommand(
             token: "$review", description: "", inputHint: nil,
