@@ -21,10 +21,15 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private var shown = SessionChrome()
     private let openedAt = CACurrentMediaTime()
     private var reportedOpen = false
-    private lazy var ellipsisItem = UIBarButtonItem(
-        image: UIImage(systemName: "ellipsis"),
-        menu: sessionMenu(title: "", subtitle: "")
-    )
+    private lazy var ellipsisItem: UIBarButtonItem = {
+        let item = UIBarButtonItem(
+            image: UIImage(systemName: "ellipsis"),
+            menu: sessionMenu(title: "", subtitle: "")
+        )
+        item.accessibilityLabel = "Session options"
+        item.accessibilityIdentifier = "session-menu"
+        return item
+    }()
     private let sideChatsButton = UIButton(type: .system)
     private lazy var sideChatsItem = UIBarButtonItem(customView: sideChatsButton)
     private var sideChatsToken: AnyObject?
@@ -48,23 +53,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             self?.saveDraft()
         }
         navigationItem.largeTitleDisplayMode = .never
-        // The title and "project @ device" head the ⋯ menu instead of
-        // crowding the bar.
-        navigationItem.titleView = UIView()
-        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: sessionMenu(title: "", subtitle: ""))
-        navigationItem.rightBarButtonItem?.accessibilityIdentifier = "session-menu"
-        // The session has its own composer, so the tab bar's voice control
-        // steps aside with the accessory; the call stays a tap away up here.
-        let voiceBar = VoiceBarItem(app: app, host: self)
-        self.voiceBar = voiceBar
-        let menu = navigationItem.rightBarButtonItem!
-        let syncVoice = { [weak self, weak voiceBar] in
-            guard let self, let voiceBar else { return }
-            let items = voiceBar.visible ? [menu, voiceBar.item] : [menu]
-            if self.navigationItem.rightBarButtonItems?.count != items.count {
-                self.navigationItem.setRightBarButtonItems(items, animated: self.view.window != nil)
-            }
-        }
+        navigationItem.rightBarButtonItems = [ellipsisItem]
         // A child's subtitle names its parent and taps through.
         titleView.onSubtitleTap = { [weak self] in
             guard let self, let parent = self.shown.parentChatId else { return }
@@ -259,6 +248,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
 
     private var hasAppeared = false
     private var backgroundObserver: NSObjectProtocol?
+    /// Two-line title: session title over "project @ device", or a tap-through
+    /// "Side chat of …" for a child chat (the ⋯ menu carries the same text).
+    private let titleView = SessionTitleView()
     private var voiceBar: VoiceBarItem?
     private var voiceToken: AnyObject?
 
