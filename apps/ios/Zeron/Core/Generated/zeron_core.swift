@@ -6597,6 +6597,71 @@ public func FfiConverterTypeComposerCommand_lower(_ value: ComposerCommand) -> R
 
 
 /**
+ * A / command or $ skill query; offsets match Swift NSRange and Kotlin String (UTF-16).
+ */
+public struct ComposerCompletion: Equatable, Hashable {
+    public var start: UInt32
+    public var end: UInt32
+    public var query: String
+    public var skills: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(start: UInt32, end: UInt32, query: String, skills: Bool) {
+        self.start = start
+        self.end = end
+        self.query = query
+        self.skills = skills
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ComposerCompletion: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeComposerCompletion: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ComposerCompletion {
+        return
+            try ComposerCompletion(
+                start: FfiConverterUInt32.read(from: &buf), 
+                end: FfiConverterUInt32.read(from: &buf), 
+                query: FfiConverterString.read(from: &buf), 
+                skills: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ComposerCompletion, into buf: inout [UInt8]) {
+        FfiConverterUInt32.write(value.start, into: &buf)
+        FfiConverterUInt32.write(value.end, into: &buf)
+        FfiConverterString.write(value.query, into: &buf)
+        FfiConverterBool.write(value.skills, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCompletion_lift(_ buf: RustBuffer) throws -> ComposerCompletion {
+    return try FfiConverterTypeComposerCompletion.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeComposerCompletion_lower(_ value: ComposerCompletion) -> RustBuffer {
+    return FfiConverterTypeComposerCompletion.lower(value)
+}
+
+
+/**
  * Visible draft and selected reference metadata restored from persisted text.
  */
 public struct ComposerDraft: Equatable, Hashable {
@@ -16898,6 +16963,30 @@ fileprivate struct FfiConverterOptionTypeChatConfig: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeComposerCompletion: FfiConverterRustBuffer {
+    typealias SwiftType = ComposerCompletion?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeComposerCompletion.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeComposerCompletion.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeContextUsage: FfiConverterRustBuffer {
     typealias SwiftType = ContextUsage?
 
@@ -18710,6 +18799,16 @@ public func mobileComposerActionError(action: MobileComposerAction, context: Mob
     )
 })
 }
+public func composerCompletionQuery(text: String, selectionStart: UInt32, selectionEnd: UInt32) -> ComposerCompletion?  {
+    return try!  FfiConverterOptionTypeComposerCompletion.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_composer_completion_query(
+        FfiConverterString.lower(text),
+        FfiConverterUInt32.lower(selectionStart),
+        FfiConverterUInt32.lower(selectionEnd),uniffiCallStatus
+    )
+})
+}
 /**
  * Explain invalid selected references still present in the draft before sending.
  */
@@ -18961,6 +19060,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_mobile_composer_action_error() != 33528) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_composer_completion_query() != 41955) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_composer_selection_error() != 27924) {
