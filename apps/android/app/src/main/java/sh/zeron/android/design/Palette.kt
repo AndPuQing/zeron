@@ -70,6 +70,10 @@ class TranscriptPalette(dark: Boolean, scheme: ColorScheme) {
                 ColorRole.DIFF_ADD_BAR -> c(0x15803D, 0x34D399, 0.55f)
                 ColorRole.DIFF_DEL_BAR -> c(0xDC2626, 0xF87171, 0.55f)
                 ColorRole.DIFF_HUNK -> accent.copy(alpha = if (dark) 0.08f else 0.07f).toArgb()
+                // `dangerWash` / `dangerSoft` (iOS Palette): the action button's
+                // fill, and its darker foreground for text over that fill.
+                ColorRole.DANGER_WASH -> c(0xDC2626, 0xF87171, if (dark) 0.12f else 0.08f)
+                ColorRole.DANGER_SOFT -> c(0xB91C1C, 0xFCA5A5)
             }
         }
     }

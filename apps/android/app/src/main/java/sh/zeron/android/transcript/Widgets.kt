@@ -43,6 +43,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -115,6 +116,12 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
         WidgetKind.Spinner -> ActivityIndicator(Modifier.fillMaxSize().padding(1.dp), color = Color(palette[ColorRole.TEXT_TERTIARY]))
         is WidgetKind.Working -> WorkingIndicator(kind.sinceMs, kind.streaming, palette)
         is WidgetKind.Detail -> Tap("${kind.title} details") { actions.showText(kind.title, w.payload ?: "", true) }
+        // An error card's "Log in" and its kin: the host decides what the
+        // action does (Android explains where the agent signs in).
+        is WidgetKind.Action -> ActionButton(kind.label, palette) {
+            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
+            actions.perform(kind.action, kind.label)
+        }
         is WidgetKind.Icon -> AssetIcon(kind.name, Color(palette[kind.color]))
         is WidgetKind.Chevron -> ZIcon(
             ZIcons.ChevronRight,
@@ -170,6 +177,28 @@ private fun CopyButton(payload: String, palette: TranscriptPalette) {
             null,
             Modifier.size(16.dp),
             tint = if (copied) MaterialTheme.colorScheme.primary else Color(palette[ColorRole.TEXT_TERTIARY]),
+        )
+    }
+}
+
+/** A widget's call-to-action, filled with the danger wash like iOS's capsule. */
+@Composable
+private fun ActionButton(label: String, palette: TranscriptPalette, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(palette[ColorRole.DANGER_WASH]))
+            .semantics { contentDescription = label }
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = Color(palette[ColorRole.DANGER_SOFT]),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

@@ -78,6 +78,8 @@ class TranscriptActions(
     val openUrl: (String) -> Unit,
     val loadImage: suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?,
     val showText: (title: String, text: String, mono: Boolean) -> Unit,
+    /** A widget button (`WidgetKind.Action`): `action` names what, `label` is its title. */
+    val perform: (action: String, label: String) -> Unit = { _, _ -> },
 )
 
 private const val OVERSCAN = 700f

@@ -151,7 +151,10 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
 
     val context = LocalContext.current
     var sheet by remember(chatId) { mutableStateOf<TextSheet?>(null) }
-    val actions = remember(core, chatId, onOpen) {
+    // The action set closes over the execution target, so a late workspace
+    // snapshot or an agent switch rebuilds it instead of pointing at a stale row.
+    val actionTarget = "${row?.harnessLabel ?: ""}\u0000${composer.host.name ?: ""}"
+    val actions = remember(core, chatId, onOpen, actionTarget) {
         TranscriptActions(
             openUrl = { url ->
                 val uri = Uri.parse(url)
@@ -171,6 +174,22 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                 }.getOrNull()
             },
             showText = { title, text, mono -> sheet = TextSheet(title, text, mono) },
+            perform = { action, label ->
+                // Android has no in-app agent account sheet yet: an error card's
+                // "Log in" points at where that agent signs in instead of
+                // pretending to start a sign-in the phone cannot complete.
+                if (action == "sign-in") {
+                    val agent = row?.harnessLabel ?: "this agent"
+                    val computer = composer.host.name ?: "the computer running it"
+                    sheet = TextSheet(
+                        label,
+                        "Sign in to $agent on $computer: open Zerun on that computer, " +
+                            "Settings → Providers, pick $agent and choose Sign in. " +
+                            "Signing in from the phone is not supported yet.",
+                        false,
+                    )
+                }
+            },
         )
     }
 

@@ -73,7 +73,6 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         // The ⋯ menu replaced the centered title; keep the fork's tappable
         // subtitle view as the bar's title so a child still taps through.
         navigationItem.titleView = titleView
-        list.onAction = { [weak self] action in
         sideChatsButton.addAction(UIAction { [weak self] _ in self?.presentSideChats() }, for: .touchUpInside)
         // Voice and side chats share the navigation bar. Rebuild all its
         // items together so either update preserves the other action.

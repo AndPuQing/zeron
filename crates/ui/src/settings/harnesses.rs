@@ -356,14 +356,13 @@ impl HarnessesPage {
     }
 
     fn toggle_agent_details(&mut self, harness: HarnessId, cx: &mut Context<Self>) {
-        // Cloud's harnesses always open: that's where their accounts are added.
-        let cloud = self.targets_cloud();
         if !self.harnesses.ready().is_some_and(|items| {
             items
                 .iter()
-                // The mock harness is never expandable; a disabled agent only on
-                // a Cloud device, which lists it so its accounts can be managed.
-                .any(|item| item.id == harness && (cloud || descriptor_enabled(item)))
+                // The mock harness is never expandable; any other agent opens,
+                // disabled ones included — that row is where its preferences
+                // and (on a Cloud device) its accounts live.
+                .any(|item| item.id == harness && item.id != HarnessId::Mock)
         }) {
             return;
         }
@@ -1828,34 +1827,35 @@ mod tests {
             let state = cx.new(|_| crate::state::AppState::new());
             super::HarnessesPage::new(state, cx)
         });
-        let old = window
+        window
             .update(cx, |page, _, cx| {
+                page.harnesses = super::Loadable::Loading;
+                page.sign_in(None, zeron_proto::HarnessId::Codex, cx);
+                assert_eq!(page.expanded_harness, None, "nothing to open yet");
                 page.harnesses =
                     super::Loadable::Ready(vec![zeron_engine::registry::HarnessDescriptor {
                         id: zeron_proto::HarnessId::Codex,
                         name: "Codex".into(),
+                        supports_steering: false,
+                        steering_mode: zeron_proto::SteeringMode::TurnBoundary,
+                        reasoning_levels: Vec::new(),
                         installed: true,
                         can_install: false,
-                        enabled: Some(false),
-                        supports_steering: true,
-                        steering_mode: zeron_proto::SteeringMode::StepBoundary,
-                        reasoning_levels: vec![],
+                        enabled: Some(true),
                     }]);
-                page.toggle_agent_details(zeron_proto::HarnessId::Codex, cx);
-                let old = page.environment_editor.as_ref().unwrap().downgrade();
-                let id = page.environment_editor.as_ref().unwrap().entity_id();
-                page.set_target_device(Some("remote-device".into()), cx);
-                assert_ne!(page.environment_editor.as_ref().unwrap().entity_id(), id);
-                old
+                page.run_pending_sign_in(cx);
+                assert_eq!(page.expanded_harness, Some(zeron_proto::HarnessId::Codex));
+                assert_eq!(
+                    page.accounts_page
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .embedded_harness(),
+                    Some(zeron_proto::HarnessId::Codex)
+                );
+                assert_eq!(page.pending_sign_in, None, "started once");
             })
             .unwrap();
-        cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
-            .unwrap();
-        cx.run_until_parked();
-        assert!(
-            old.upgrade().is_none(),
-            "dismissal drops transient value state after GPUI releases entities"
-        );
     }
 
     #[gpui::test]
