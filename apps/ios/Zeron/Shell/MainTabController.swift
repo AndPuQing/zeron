@@ -85,6 +85,9 @@ final class MainTabController: UIViewController, AppRouter {
         voiceItem.accessibilityIdentifier = state.live ? "voice-live" : "bottom-voice"
         // Holding the live call must not offer to change its host.
         voiceItem.menu = state.live ? nil : voiceMenu(app: app)
+        // The bar's search opens the field, so it carries the ID the UI tests
+        // (and nothing else) look for before typing.
+        sessionsList.navigationItem.searchBarPlacementBarButtonItem.accessibilityIdentifier = "bottom-search"
         // Fixed spaces split the glass: each control its own shape.
         var items: [UIBarButtonItem] = [settingsItem, .fixedSpace(0), sessionsList.navigationItem.searchBarPlacementBarButtonItem, .fixedSpace(0)]
         if state.voice { items += [voiceItem, .fixedSpace(0)] }

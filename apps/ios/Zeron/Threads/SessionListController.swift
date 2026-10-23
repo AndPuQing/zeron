@@ -502,6 +502,10 @@ class SessionsViewController: SessionListController {
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
         search.searchBar.placeholder = "Search"
+        // The ID the UI tests type into: the sidebar's own field on iPad, the
+        // one search reveals on iPhone.
+        search.searchBar.searchTextField.accessibilityIdentifier =
+            UIDevice.current.userInterfaceIdiom == .pad ? "sidebar-search" : "sessions-search"
         navigationItem.searchController = search
         navigationItem.preferredSearchBarPlacement = .integrated
         navigationItem.searchBarPlacementAllowsToolbarIntegration = true

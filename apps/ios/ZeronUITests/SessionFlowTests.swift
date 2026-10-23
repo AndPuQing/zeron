@@ -14,6 +14,16 @@ final class SessionFlowTests: XCTestCase {
         return app
     }
 
+    /// Empties the composer and waits for the empty state, so a restored draft
+    /// from an earlier launch cannot decide what the next keystroke completes.
+    private func clearComposer(_ input: XCUIElement) {
+        let current = input.value as? String ?? ""
+        if !current.isEmpty {
+            input.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count))
+        }
+        XCTAssertTrue(((input.value as? String ?? "").isEmpty), "composer starts empty, got: \((input.value as? String ?? "").debugDescription)")
+    }
+
     private func snapshot(_ app: XCUIApplication, _ name: String) {
         let shot = XCTAttachment(screenshot: app.screenshot())
         shot.name = name
@@ -351,17 +361,21 @@ final class SessionFlowTests: XCTestCase {
     func testSearchFindsSideChats() {
         let app = launch()
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
-        // iPhone searches from the tab; iPad from the sidebar's own field.
-        let field: XCUIElement
-        if app.tabBars.buttons["Search"].exists {
-            app.tabBars.buttons["Search"].tap()
-            field = app.searchFields.firstMatch
-        } else {
-            field = app.descendants(matching: .any)["sidebar-search"].firstMatch
+        // Open the official entry first: the bottom bar's search on iPhone,
+        // the sidebar's own field on iPad.
+        let toolbarSearch = app.buttons["bottom-search"].firstMatch
+        if toolbarSearch.waitForExistence(timeout: 5) {
+            toolbarSearch.tap()
         }
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap()
-        field.typeText("timing")
+        let field = app.descendants(matching: .any)["sessions-search"].firstMatch
+        let sidebarField = app.descendants(matching: .any)["sidebar-search"].firstMatch
+        XCTAssertTrue(
+            field.waitForExistence(timeout: 5) || sidebarField.waitForExistence(timeout: 1),
+            "search opened from its own entry"
+        )
+        let searchField = field.exists ? field : sidebarField
+        searchField.tap()
+        searchField.typeText("timing")
         XCTAssertTrue(app.staticTexts["Side chats"].waitForExistence(timeout: 5), "side-chat group header")
         XCTAssertTrue(app.cells["session-chat-side"].waitForExistence(timeout: 5))
         snapshot(app, "search-side-chats")
@@ -631,6 +645,9 @@ final class SessionFlowTests: XCTestCase {
             let input = app.textViews["composer-input"]
             XCTAssertTrue(input.waitForExistence(timeout: 10))
             input.tap()
+            // A fresh draft: the previous appearance pass left "/compact" in
+            // this chat's draft, which the app restores on open.
+            clearComposer(input)
             // `$` is the skill menu; `/` must not list skills any more.
             input.typeText("$")
             let list = app.tables["slash-list"]
@@ -655,7 +672,8 @@ final class SessionFlowTests: XCTestCase {
             XCTAssertTrue(app.descendants(matching: .any)["skill-$openai-docs"].waitForNonExistence(timeout: 5))
             snapshot(app, appearance == "1" ? "ios-commands-filtered" : "ios-commands-filtered-dark")
             first.tap()
-            XCTAssertTrue((input.value as? String ?? "").hasPrefix("$imagegen"))
+            let inserted = (input.value as? String ?? "")
+            XCTAssertTrue(inserted.hasPrefix("$imagegen"), "composer holds the inserted skill, got: \(inserted.debugDescription)")
             XCTAssertFalse((input.value as? String ?? "").contains("SKILL.md"))
             XCTAssertTrue(list.waitForNonExistence(timeout: 5))
 
