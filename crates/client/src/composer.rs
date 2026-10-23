@@ -104,7 +104,10 @@ fn decode<T: serde::de::DeserializeOwned>(
     {
         Ok(value) => Some(value),
         Err(e) => {
-            warnings.push(format!("{label} unavailable: {e}. Reopen / to retry."));
+            warnings.push(format!(
+                "{label} unavailable: {e}. Reopen {} to retry.",
+                if label == "Skills" { "$" } else { "/" }
+            ));
             None
         }
     }

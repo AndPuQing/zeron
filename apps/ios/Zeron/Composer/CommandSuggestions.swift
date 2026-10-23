@@ -56,6 +56,11 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
     private var status: (title: String, detail: String?, retry: Bool)?
     private var displayedContext = ""
     private var displayedQuery: String?
+    private var displayedSkills = false
+    /// Incremented on every show/dismiss. Rows remember the value they were
+    /// built with, so a tap that lands after the menu changed is rejected.
+    private var generation = 0
+    private var rowGeneration = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -102,17 +107,33 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
         if abs(height.constant - fitted) > 0.5 { height.constant = fitted }
     }
 
-    func show(_ catalog: ComposerCatalog?, query: String, error: String? = nil) {
-        let resetScroll = displayedQuery != query || displayedContext != context
+    /// Drops pending selections: after this returns, clicks from the old menu
+    /// are rejected even if a row is still on screen mid-animation.
+    func dismiss() {
+        generation += 1
+        isHidden = true
+    }
+
+    func show(_ catalog: ComposerCatalog?, query: String, skills: Bool = false, error: String? = nil) {
+        generation += 1
+        // Rows carry the generation they were built for; a later show/dismiss
+        // bumps `generation` and makes `rowGeneration` stale, rejecting taps.
+        rowGeneration = generation
+        let kind = skills ? "skills" : "commands"
+        accessibilityIdentifier = skills ? "skill-menu" : "slash-menu"
+        let prefix = skills ? "$" : "/"
+        let resetScroll = displayedQuery != query || displayedContext != context || displayedSkills != skills
         displayedContext = context
         displayedQuery = query
+        displayedSkills = skills
         commands = catalog?.commands.filter {
-            query.isEmpty || $0.token.dropFirst().localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query)
+            $0.token.hasPrefix(prefix)
+                && (query.isEmpty || $0.token.dropFirst().localizedCaseInsensitiveContains(query) || $0.description.localizedCaseInsensitiveContains(query))
         } ?? []
         if let warning = error ?? catalog?.warning {
-            status = ("Retry loading commands", warning, true)
+            status = ("Retry loading \(kind)", warning, true)
         } else if commands.isEmpty {
-            status = (catalog == nil ? "Loading commands…" : "No matching commands", nil, false)
+            status = (catalog == nil ? "Loading \(kind)…" : "No matching \(kind)", nil, false)
         } else {
             status = nil
         }
@@ -142,7 +163,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             cell.configure(title: title, detail: detail,
                            image: UIImage(named: command.token.hasPrefix("$") ? "tool-magic-stick-3" : "tool-command"),
                            enabled: enabled)
-            cell.accessibilityIdentifier = "slash-\(command.token)"
+            cell.accessibilityIdentifier = "\(displayedSkills ? "skill" : "slash")-\(command.token)"
             cell.accessibilityLabel = "\(title). \(detail)"
             cell.accessibilityHint = command.unavailableReason == nil ? command.inputHint : nil
         } else if let status {
@@ -150,7 +171,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
             cell.configure(title: status.title, detail: status.detail ?? "",
                            image: status.retry ? UIImage(systemName: "arrow.clockwise") : UIImage(named: "tool-command"),
                            enabled: enabled)
-            cell.accessibilityIdentifier = "slash-status"
+            cell.accessibilityIdentifier = "\(displayedSkills ? "skill" : "slash")-status"
             cell.accessibilityLabel = [status.title, status.detail].compactMap { $0 }.joined(separator: ". ")
             cell.accessibilityHint = nil
         } else {
@@ -162,7 +183,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
     }
 
     func tableView(_ tableView: UITableView, willSelectRowAt indexPath: IndexPath) -> IndexPath? {
-        guard displayedContext == context else { return nil }
+        guard displayedContext == context, rowGeneration == generation, !isHidden else { return nil }
         if indexPath.row < commands.count {
             return commands[indexPath.row].unavailableReason == nil ? indexPath : nil
         }
@@ -171,7 +192,7 @@ final class CommandSuggestions: UIView, UITableViewDataSource, UITableViewDelega
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard displayedContext == context else { return }
+        guard displayedContext == context, rowGeneration == generation, !isHidden else { return }
         if indexPath.row < commands.count {
             let command = commands[indexPath.row]
             if command.unavailableReason == nil { onPick?(command) }

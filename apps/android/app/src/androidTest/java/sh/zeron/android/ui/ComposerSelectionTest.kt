@@ -18,7 +18,7 @@ class ComposerSelectionTest {
     @Test fun insertingSameNameSkillAfterRestorePreservesBothIdentities() {
         val draft = ComposerModel()
         draft.setText(wire())
-        draft.value = TextFieldValue("/ " + draft.text, TextRange(1))
+        draft.value = TextFieldValue("\$ " + draft.text, TextRange(1))
         draft.insertCommand(uniffi.zeron_core.ComposerCommand(
             token = "\$review", description = "", inputHint = null,
             insertion = skillLink("/a/SKILL.md"), unavailableReason = null,

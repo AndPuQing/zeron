@@ -9,14 +9,14 @@ import uniffi.zeron_core.ComposerCommand
 class ComposerCommandTest {
     private val goal = ComposerCommand("/goal", "Goal", "objective", "canonical", null)
 
-    @Test fun onlyLeadingSlashOpensMenu() {
+    @Test fun completionUsesDesktopProseBoundaries() {
         val model = ComposerModel()
-        for (text in listOf("    /goal", "\t/goal", "ask /goal", "/goal ship it", "```\n/goal", "/goal\t")) {
+        for (text in listOf("    /goal", "\t/goal", "/goal ship it", "```\n/goal", "/goal\t")) {
             model.setText(text)
-            assertNull(text, model.slashQuery())
+            assertNull(text, model.completionQuery())
         }
         model.setText("  /go")
-        assertEquals("go", model.slashQuery()?.second)
+        assertEquals("go", model.completionQuery()?.query)
     }
 
     @Test fun completionPreservesArgumentsAndClosesMenu() {
@@ -25,7 +25,7 @@ class ComposerCommandTest {
         model.insertCommand(goal)
         assertEquals("/goal ship it", model.text)
         assertEquals(6, model.value.selection.start)
-        assertNull(model.slashQuery())
+        assertNull(model.completionQuery())
     }
 
     @Test fun disabledCommandAndSelectedTextDoNotChangeDraft() {
@@ -33,7 +33,7 @@ class ComposerCommandTest {
         model.insertCommand(goal.copy(unavailableReason = "Desktop only"))
         assertEquals("/go", model.text)
         model.value = model.value.copy(selection = TextRange(0, 3))
-        assertNull(model.slashQuery())
+        assertNull(model.completionQuery())
     }
 
     @Test fun lateSelectionFromAnotherContextIsIgnored() {
@@ -47,7 +47,59 @@ class ComposerCommandTest {
         val model = ComposerModel("/go")
         model.insertCommand(goal)
         assertEquals("/goal ", model.text)
-        assertNull(model.slashQuery())
+        assertNull(model.completionQuery())
+    }
+
+    @Test fun menusSeparateSkillsAndRejectOldQueries() {
+        val model = ComposerModel("/")
+        val skill = ComposerCommand(
+            "\$model", "Skill", null,
+            "[\$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)", null,
+        )
+        val catalog = uniffi.zeron_core.ComposerCatalog(listOf(goal, skill), null)
+        val slash = model.completionQuery()!!
+        assertEquals(listOf(goal), model.completionRows(catalog, slash))
+        model.setText("\$")
+        val dollar = model.completionQuery()!!
+        assertTrue(dollar.skills)
+        assertEquals(listOf(skill), model.completionRows(catalog, dollar))
+        // A stale click from the previous menu must not edit the draft.
+        model.insertCommand(goal, expectedQuery = slash)
+        assertEquals("\$", model.text)
+        model.value = model.value.copy(composition = TextRange(0, 1))
+        assertNull(model.completionQuery())
+        model.insertCommand(skill, expectedQuery = dollar)
+        assertEquals("\$", model.text)
+    }
+
+    @Test fun inlineSkillPreservesUnicodePunctuationAndIdentityAcrossDraftRestore() {
+        val link = "[\$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)"
+        val skill = ComposerCommand("\$model", "Skill", null, link, null)
+        val model = ComposerModel()
+        model.value = TextFieldValue("👋 use (\$mo) please", TextRange("👋 use (\$mo".length))
+        model.insertCommand(skill)
+        assertEquals("👋 use (\$model) please", model.text)
+        assertNull(model.completionQuery())
+        val encoded = "👋 use ($link) please"
+        assertEquals(encoded, model.encodedDraft())
+        val restored = ComposerModel()
+        restored.setText(model.persistedDraft())
+        assertEquals(encoded, restored.encodedDraft())
+        // Without a leading $ the token cannot open a skill menu.
+        model.setText("/mo")
+        model.insertCommand(skill)
+        assertEquals("/mo", model.text)
+    }
+
+    @Test fun completionKeepsLineBreakAndClosingPunctuation() {
+        for (suffix in listOf("\nnext", "\r\nnext", ")", ",")) {
+            val model = ComposerModel()
+            model.value = TextFieldValue("/go$suffix", TextRange(3))
+            model.insertCommand(goal)
+            assertEquals("/goal$suffix", model.text)
+            assertEquals(5, model.value.selection.start)
+            assertNull(model.completionQuery())
+        }
     }
 }
 
