@@ -574,11 +574,29 @@ impl Normalizer {
                         id: state.id.clone(),
                         status,
                     };
-                    return vec![if let Some(parent) = parent {
+                    let mut events = vec![if let Some(parent) = parent {
                         tag(parent, event)
                     } else {
                         event
                     }];
+                    if f.subtype == "compact_boundary"
+                        && let Some(tokens) = f
+                            .compact_metadata
+                            .as_ref()
+                            .and_then(|m| m.get("post_tokens"))
+                            .and_then(Value::as_u64)
+                    {
+                        let usage = AgentEvent::ContextUsage {
+                            tokens: Some(tokens),
+                            window: None,
+                        };
+                        events.push(if let Some(parent) = parent {
+                            tag(parent, usage)
+                        } else {
+                            usage
+                        });
+                    }
+                    return events;
                 }
 
                 // A background subagent's completion arrives as an UNTAGGED
@@ -682,27 +700,6 @@ impl Normalizer {
                         });
                     }
                     return out;
-                }
-                // Compaction runs a whole model call with nothing streamed.
-                if f.subtype == "status" && f.status.as_deref() == Some("compacting") {
-                    return vec![AgentEvent::ReasoningDelta {
-                        text: String::new(),
-                    }];
-                }
-                // The context shrank: report the new occupancy now rather
-                // than at the next assistant frame.
-                if f.subtype == "compact_boundary" {
-                    return f
-                        .compact_metadata
-                        .as_ref()
-                        .and_then(|m| m.get("post_tokens"))
-                        .and_then(Value::as_u64)
-                        .map(|tokens| AgentEvent::ContextUsage {
-                            tokens: Some(tokens),
-                            window: None,
-                        })
-                        .into_iter()
-                        .collect();
                 }
                 if f.subtype != "init" || self.saw_init {
                     return Vec::new();
@@ -2031,22 +2028,34 @@ mod tests {
 
     #[test]
     fn compaction_is_liveness_then_new_context_usage() {
+        use zeron_proto::CompactionStatus;
+        let mut norm = Normalizer::new();
+        let mut map = |raw| norm.normalize(crate::claude::wire::parse_frame(raw).unwrap(), false);
+        let start = map(r#"{"type":"system","subtype":"status","status":"compacting"}"#);
+        let [AgentEvent::ContextCompaction {
+            id,
+            status: CompactionStatus::InProgress,
+        }] = &start[..]
+        else {
+            panic!("{start:?}");
+        };
         assert_eq!(
-            normalize_one(r#"{"type":"system","subtype":"status","status":"compacting"}"#),
-            vec![AgentEvent::ReasoningDelta {
-                text: String::new()
-            }]
+            map(r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":180000,"post_tokens":9000}}"#),
+            vec![
+                AgentEvent::ContextCompaction {
+                    id: id.clone(),
+                    status: CompactionStatus::Completed,
+                },
+                AgentEvent::ContextUsage {
+                    tokens: Some(9000),
+                    window: None,
+                },
+            ]
         );
-        assert_eq!(
-            normalize_one(
-                r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":180000,"post_tokens":9000}}"#
-            ),
-            vec![AgentEvent::ContextUsage {
-                tokens: Some(9000),
-                window: None
-            }]
-        );
-        assert!(normalize_one(r#"{"type":"system","subtype":"compact_boundary"}"#).is_empty());
+        assert!(matches!(
+            &map(r#"{"type":"system","subtype":"compact_boundary"}"#)[..],
+            [AgentEvent::ContextCompaction { status: CompactionStatus::Completed, .. }]
+        ));
         assert!(
             normalize_one(
                 r#"{"type":"system","subtype":"informational","content":"x","level":"info"}"#

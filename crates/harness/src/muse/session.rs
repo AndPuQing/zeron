@@ -65,7 +65,7 @@ pub(super) struct Runner {
     /// The turn this run is in, and turns joined into it.
     active: Option<String>,
     joined: HashSet<String>,
-    /// The first prompt was sent and its turn has not ended.
+    /// The initial request has not ended, including initialize and resume.
     first: bool,
     interrupting: bool,
     pub error: Option<String>,
@@ -103,7 +103,9 @@ impl Runner {
             norm: Normalizer::default(),
             active: None,
             joined: HashSet::new(),
-            first: false,
+            // Startup already owes the caller a terminal event, even if
+            // initialize/resume fails before turn/start is accepted.
+            first: true,
             interrupting: false,
             error: None,
             pending: HashMap::new(),
