@@ -596,6 +596,16 @@ impl EngineCore {
         // releases the next queued row. Freeze first so quitting never starts
         // recovered work while the engine is being torn down.
         self.doc_host.pause_all_queues();
+        // Decided here, from the auth state at the stop, so every way an
+        // engine goes down (headless, background, in-process) agrees.
+        let auth = self
+            .auth
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if auth.is_some_and(|auth| forgoes_revival(self.workspace_scope, &auth.state())) {
+            self.sessions.forgo_revival();
+        }
         self.sessions.shutdown().await;
         self.terminals.shutdown();
         self.sessions.stop_activity_projection().await;
@@ -1158,6 +1168,16 @@ impl Engine {
     }
 }
 
+/// Whether a stopping engine's cut-off turns stay ended rather than revive on
+/// the next boot ([`EngineCore::shutdown`] asks): a synced engine whose
+/// account is signed out by the time it stops, whichever stop reached it
+/// first — the auth watcher, or the app's StopEngine right after its SignOut.
+/// Sign-out is the user ending the session, like a Stop. A local engine is
+/// signed out as a matter of course.
+pub(crate) fn forgoes_revival(scope: WorkspaceScope, auth: &AuthState) -> bool {
+    scope == WorkspaceScope::Synced && matches!(auth, AuthState::SignedOut)
+}
+
 async fn wait_for_signed_out(state: &mut tokio::sync::watch::Receiver<AuthState>) {
     loop {
         if matches!(&*state.borrow(), AuthState::SignedOut) {
@@ -1708,5 +1728,37 @@ fn replace_empty_device_id(temp_path: &Path, path: &Path) -> std::io::Result<()>
             Err(err) => return Err(err),
         }
         std::fs::hard_link(temp_path, path)
+    }
+}
+
+#[cfg(test)]
+mod revival_tests {
+    use super::*;
+
+    #[test]
+    fn only_a_signed_out_synced_engine_forgoes_revival() {
+        assert!(forgoes_revival(
+            WorkspaceScope::Synced,
+            &AuthState::SignedOut
+        ));
+        let user = AuthUser {
+            id: "u".into(),
+            email: "u@example.com".into(),
+            name: None,
+        };
+        assert!(!forgoes_revival(
+            WorkspaceScope::Synced,
+            &AuthState::SignedIn {
+                user: user.clone(),
+                org_id: Some("o".into()),
+            }
+        ));
+        assert!(!forgoes_revival(
+            WorkspaceScope::Synced,
+            &AuthState::NeedsOrganization { user }
+        ));
+        for scope in [WorkspaceScope::Local, WorkspaceScope::Development] {
+            assert!(!forgoes_revival(scope, &AuthState::SignedOut));
+        }
     }
 }

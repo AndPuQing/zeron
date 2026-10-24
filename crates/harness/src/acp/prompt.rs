@@ -1,11 +1,10 @@
 //! ACP prompt content that keeps images attached through queued follow-ups.
 use serde_json::{Value, json};
-use zeron_proto::HarnessId;
 
 #[derive(Clone, Default)]
 pub(super) struct Prompt {
-    text: String,
-    images: Vec<Value>,
+    pub(super) text: String,
+    pub(super) images: Vec<Value>,
 }
 
 impl std::ops::Deref for Prompt {
@@ -16,16 +15,15 @@ impl std::ops::Deref for Prompt {
 }
 
 impl Prompt {
-    pub async fn new(harness: HarnessId, text: String, attachments: &[String]) -> Self {
+    pub async fn new(text: String, attachments: &[String], inline_images: bool) -> Self {
         use base64::Engine;
         use tokio::io::AsyncReadExt;
         let mut prompt = Self {
             text,
             images: Vec::new(),
         };
-        // Copilot advertises native image prompts. Other ACP agents retain
-        // their existing path-reference behavior.
-        if harness != HarnessId::Copilot {
+        // Inline images only when the agent supports image prompts.
+        if !inline_images {
             return prompt;
         }
         const CAP: u64 = 20 * 1024 * 1024;
@@ -44,7 +42,7 @@ impl Prompt {
                 Ok(bytes) if bytes.len() <= CAP as usize => bytes,
                 Ok(_) => continue,
                 Err(error) => {
-                    tracing::warn!(%error, "Copilot image attachment unreadable; using path reference");
+                    tracing::warn!(%error, "ACP image attachment unreadable; using path reference");
                     continue;
                 }
             };
@@ -77,9 +75,9 @@ impl Prompt {
         }
     }
 
-    pub fn content(self) -> Vec<Value> {
+    pub fn blocks(&self) -> Vec<Value> {
         let mut content = vec![json!({"type":"text", "text":self.text})];
-        content.extend(self.images);
+        content.extend(self.images.iter().cloned());
         content
     }
 }
