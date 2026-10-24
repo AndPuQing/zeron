@@ -54,6 +54,8 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
     match id {
         Mock => vec![],
         Antigravity => vec![Archive],
+        Muse if windows => vec![PowerShell("irm https://dev.meta.ai/install.ps1 | iex")],
+        Muse => vec![Shell("curl -fsSL https://dev.meta.ai/install.sh | sh", "sh")],
         ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
         ClaudeCode => vec![Shell(
             "curl -fsSL https://claude.ai/install.sh | bash",
@@ -173,6 +175,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
         Dsh => "npm install -g @deepseek-ai/dsh",
+        Muse => "curl -fsSL https://dev.meta.ai/install.sh | sh",
         Antigravity | Mock => return None,
     })
 }
@@ -192,6 +195,7 @@ fn cli_and_dir(id: HarnessId) -> (&'static str, &'static str) {
         Devin => ("devin", "~/.local/bin"),
         Dsh => ("dsh", "the npm or bun global bin (~/.bun/bin)"),
         Antigravity => ("agy_acp_server", "~/.zerun/adapters"),
+        Muse => ("muse", "~/.local/bin"),
         Mock => ("mock", "PATH"),
     }
 }
@@ -211,6 +215,7 @@ pub fn installed(id: HarnessId) -> bool {
         Devin => crate::AcpHarness::devin().installed(),
         Antigravity => crate::AcpHarness::antigravity().installed(),
         Dsh => crate::AcpHarness::dsh().installed(),
+        Muse => crate::MuseHarness::new().installed(),
         Mock => false,
     }
 }

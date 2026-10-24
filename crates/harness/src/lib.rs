@@ -336,6 +336,7 @@ pub mod install;
 pub(crate) mod jsonrpc;
 pub(crate) mod lossy_lines;
 pub mod mock;
+pub mod muse;
 mod model_context;
 pub mod omp;
 pub mod opencode;
@@ -626,6 +627,7 @@ pub use codex::CodexHarness;
 pub use cursor::CursorHarness;
 pub use omp::OmpHarness;
 pub use opencode::OpencodeHarness;
+pub use muse::MuseHarness;
 pub use pi::PiHarness;
 
 // ---------------------------------------------------------------------------

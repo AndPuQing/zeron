@@ -108,6 +108,7 @@ pub fn harness_from_env() -> zeron_engine::HarnessId {
         Ok("omp") => zeron_engine::HarnessId::Omp,
         Ok("antigravity") => zeron_engine::HarnessId::Antigravity,
         Ok("dsh") => zeron_engine::HarnessId::Dsh,
+        Ok("muse") => zeron_engine::HarnessId::Muse,
         _ => zeron_engine::HarnessId::ClaudeCode,
     }
 }

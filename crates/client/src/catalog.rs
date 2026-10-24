@@ -169,6 +169,7 @@ pub fn harness_label(id: &str) -> String {
         "opencode" => "OpenCode",
         "antigravity" => "Antigravity",
         "dsh" => "DeepSeek Harness",
+        "muse" => "Muse Code",
         "mock" => "Mock",
         other => return other.to_owned(),
     }
@@ -239,6 +240,13 @@ pub fn fallback_models(harness: &str) -> Vec<ModelInfo> {
                 vec![],
             ),
         ],
+        "muse" => vec![model(
+            "muse-spark-1.2",
+            "Muse Spark 1.2",
+            "Muse Code's default coding model",
+            &[],
+            vec![],
+        )],
         "pi" => vec![model(
             "default",
             "pi default",

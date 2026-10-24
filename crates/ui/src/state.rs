@@ -6820,6 +6820,8 @@ mod tests {
             error: None,
             can_apply: true,
             manual_command: None,
+            compatibility: None,
+            held_back: None,
         };
         assert!(!state.apply_harness_updates(vec![]));
         assert!(state.apply_harness_updates(vec![status(HarnessUpdatePhase::Available)]));

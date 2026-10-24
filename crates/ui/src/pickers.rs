@@ -6444,6 +6444,7 @@ pub(crate) fn harness_brand_icon(harness: HarnessId) -> (&'static str, Option<gp
         HarnessId::Antigravity => (crate::icons::ANTIGRAVITY_MARK, None),
         // DeepSeek's official whale mark, monochrome like the others.
         HarnessId::Dsh => (crate::icons::DSH_MARK, None),
+        HarnessId::Muse => (crate::icons::MUSE_MARK, Some(crate::icons::muse_brand())),
     }
 }
 
