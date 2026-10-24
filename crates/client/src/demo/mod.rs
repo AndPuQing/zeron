@@ -832,7 +832,7 @@ impl DemoHost {
     pub(crate) async fn host_rpc(
         self: &Arc<Self>,
         device_id: &str,
-        method: &'static str,
+        method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value> {
         use zeron_rpc::methods as m;
@@ -1043,7 +1043,7 @@ impl DemoHost {
     pub(crate) async fn host_subscribe(
         self: &Arc<Self>,
         device_id: &str,
-        method: &'static str,
+        method: &str,
         params: serde_json::Value,
     ) -> Result<crate::host_stream::HostStream> {
         use zeron_rpc::methods as m;

@@ -13597,6 +13597,7 @@ dependencies = [
 name = "zeron-client"
 version = "0.3.20"
 dependencies = [
+ "anyhow",
  "async-trait",
  "base64 0.22.1",
  "chrono",
@@ -13615,9 +13616,11 @@ dependencies = [
  "tracing",
  "uuid",
  "zeron-doc",
+ "zeron-preview",
  "zeron-proto",
  "zeron-rpc",
  "zeron-sync",
+ "zeron-term-link",
  "zeron-visual",
  "zeron-voice-session",
 ]
@@ -13680,6 +13683,7 @@ dependencies = [
  "zeron-proto",
  "zeron-rpc",
  "zeron-sync",
+ "zeron-term-link",
  "zeron-update",
  "zeron-visual",
  "zip",
@@ -13906,6 +13910,23 @@ name = "zeron-term"
 version = "0.3.20"
 dependencies = [
  "alacritty_terminal",
+]
+
+[[package]]
+name = "zeron-term-link"
+version = "0.2.121"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "futures",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeron-preview",
+ "zeron-proto",
+ "zeron-rpc",
 ]
 
 [[package]]
