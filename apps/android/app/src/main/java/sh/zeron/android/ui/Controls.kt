@@ -255,7 +255,7 @@ fun AppMenuPopup(expanded: Boolean, onDismiss: () -> Unit, content: @Composable 
     }
 }
 
-data class AlertAction(val label: String, val enabled: Boolean = true, val onClick: () -> Unit)
+data class AlertAction(val label: String, val enabled: Boolean = true, val destructive: Boolean = false, val onClick: () -> Unit)
 
 @Composable
 fun AppAlert(
@@ -278,7 +278,10 @@ fun AppAlert(
                 Row(Modifier.fillMaxWidth()) {
                     actions.forEachIndexed { i, action ->
                         if (i > 0) Box(Modifier.width(0.5.dp).height(46.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                        AppTextButton(action.onClick, Modifier.weight(1f), enabled = action.enabled) { Text(action.label, textAlign = TextAlign.Center) }
+                        AppTextButton(action.onClick, Modifier.weight(1f), enabled = action.enabled,
+                            color = if (action.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary) {
+                            Text(action.label, textAlign = TextAlign.Center)
+                        }
                     }
                 }
             }

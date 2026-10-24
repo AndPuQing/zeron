@@ -157,9 +157,16 @@ class ShellFlowTest {
             assertTrue(device.wait(Until.hasObject(By.text("Editing queued message")), 5_000))
             assertEquals(queued, editor().text)
             editor().text = "Discard these queue edits"
-            requireNotNull(device.wait(Until.findObject(By.desc("Back")), 5_000)).click()
-            findText(title).click()
-            assertEquals(draft, editor().text)
+            requireNotNull(device.wait(Until.findObject(By.desc("Back").pkg(instrumentation.targetContext.packageName)), 5_000)).click()
+            // The outgoing chat stays in the accessibility tree during its exit animation.
+            // Wait for disposal before selecting the same title in the session list.
+            assertTrue(device.wait(Until.gone(By.clazz("android.widget.EditText")), 5_000))
+            assertTrue(device.wait(Until.gone(By.desc("Back").pkg(instrumentation.targetContext.packageName)), 5_000))
+            if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            requireNotNull(device.wait(Until.findObject(By.res("session-$chatId")), 5_000)).click()
+            // Streaming accessibility queries can themselves take longer than five seconds.
+            // Allow another snapshot after the list-to-chat transition, keeping the text assertion strict.
+            assertEquals(draft, editor(timeout = 15_000).text)
             assertFalse(device.hasObject(By.text("Editing queued message")))
             assertEquals(queued, handle.composer().queue.single().visibleText)
         } finally {
@@ -168,7 +175,9 @@ class ShellFlowTest {
         }
     }
 
-    private fun editor() = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000))
+    private fun editor(timeout: Long = 5_000) = requireNotNull(
+        device.wait(Until.findObject(By.clazz("android.widget.EditText")), timeout),
+    ) { "Missing composer editor after ${timeout}ms" }
 
     private fun launch(route: String, fast: Boolean = true, longReply: Boolean = false) {
         val context = instrumentation.targetContext

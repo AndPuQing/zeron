@@ -15,6 +15,7 @@ import sh.zeron.android.R
  * VectorDrawables at build time by scripts/android/svg2vd.py.
  */
 object ZIcons {
+    val Logo = R.drawable.zi_zeron_logo
     val NewSession = R.drawable.zi_pen_new_square
     val Search = R.drawable.zi_magnifer
     val TabSessions = R.drawable.zi_tab_chat

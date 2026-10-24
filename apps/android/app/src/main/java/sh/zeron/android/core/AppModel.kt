@@ -64,6 +64,7 @@ data class LaunchOptions(
     val wallpaper: String? = null,
     val wallpaperEffect: String? = null,
     val voicePreview: Boolean = false,
+    val onboarding: String? = null,
 )
 
 /**
@@ -80,6 +81,7 @@ class AppModel(private val app: Application) {
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()
+    val agentSignIn = DeviceSignIn(scope, client = { _client.value?.let(::CoreAgentLoginClient) })
     val voice = sh.zeron.android.voice.VoiceController(app) { _client.value }
 
     private val _workspace = MutableStateFlow<WorkspaceSnapshot?>(null)
@@ -100,12 +102,20 @@ class AppModel(private val app: Application) {
     val signInError = MutableStateFlow<String?>(null)
 
     private val settings = app.getSharedPreferences("settings", 0)
+    val onboarding = OnboardingState(
+        read = { settings.getString(it, null) },
+        write = { key, value -> settings.edit().putString(key, value).apply() },
+    )
     private val _appearance = MutableStateFlow(
         Appearance(
             runCatching { ThemeMode.valueOf(settings.getString("theme", "System")!!) }.getOrDefault(ThemeMode.System),
         ),
     )
     val appearance: StateFlow<Appearance> = _appearance.asStateFlow()
+
+    var providersDevice: String?
+        get() = settings.getString("providersDevice", null)
+        set(value) { settings.edit().putString("providersDevice", value).apply() }
 
     fun setAppearance(value: Appearance) {
         _appearance.value = value
@@ -150,7 +160,12 @@ class AppModel(private val app: Application) {
 
     fun boot(options: LaunchOptions) {
         launch = options
-        if (_client.value != null) return
+        _client.value?.let { existing ->
+            forcedOnboarding()?.let { forced ->
+                onboarding.attach("${existing.orgId()}/${existing.userId()}", existing.isDemo(), forced)
+            }
+            return
+        }
         if (options.signedOut) credentials.clear()
         watchNetwork()
         // `wallpaper <path>` / `wallpaper none` and `wallpaper-effect <name>`:
@@ -165,6 +180,7 @@ class AppModel(private val app: Application) {
         when {
             options.demo -> start(Credentials.Demo(demoOptions()))
             stored != null -> start(stored)
+            else -> onboarding.attach(null, false, forcedOnboarding())
         }
         // Relative times ("4m") and staleness age without events.
         scope.launch {
@@ -218,6 +234,7 @@ class AppModel(private val app: Application) {
         return try {
             val client = CoreClient(config, credentials, listener)
             if (credentials is Credentials.WorkOs) this.credentials.store(credentials)
+            onboarding.attach("${client.orgId()}/${client.userId()}", demo, forcedOnboarding())
             _client.value = client
             refreshWorkspace()
             client.preloadSessions()
@@ -230,6 +247,10 @@ class AppModel(private val app: Application) {
 
     fun startDemo() {
         start(Credentials.Demo(demoOptions()))
+    }
+
+    private fun forcedOnboarding(): OnboardingStep? = launch.onboarding?.let { name ->
+        OnboardingStep.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
     }
 
     val edgeUrl: String get() = authProductionEdgeUrl()
@@ -297,6 +318,7 @@ class AppModel(private val app: Application) {
     }
 
     fun signOut() {
+        agentSignIn.cancel()
         voice.reset()
         signInState.clear()
         val wasDemo = isDemo
@@ -308,6 +330,7 @@ class AppModel(private val app: Application) {
             credentials.clear()
             coreDir.deleteRecursively()
         }
+        onboarding.signedOut()
     }
 
     val accountName: String
@@ -402,6 +425,10 @@ class AppModel(private val app: Application) {
     fun archive(id: String) = attempt("archive") { _client.value?.archiveSession(id) }
     fun unarchive(id: String) = attempt("unarchive") { _client.value?.unarchiveSession(id) }
     fun rename(id: String, title: String) = attempt("rename") { _client.value?.renameSession(id, title) }
+    fun deleteSession(id: String) {
+        checkNotNull(_client.value) { "Not signed in." }.deleteSession(id)
+        refreshWorkspace()
+    }
     fun setSectionCollapsed(id: String, collapsed: Boolean) = attempt("collapse") { _client.value?.setSectionCollapsed(id, collapsed) }
 
     fun row(id: String): SessionRow? = _client.value?.sessionRow(id)

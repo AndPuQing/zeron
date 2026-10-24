@@ -20,6 +20,10 @@ import uniffi.zeron_core.authCallbackScheme
  */
 class MainActivity : ComponentActivity() {
     private val model get() = (application as ZeronApplication).model
+    private val lifecycleObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) = model.onForeground()
+        override fun onStop(owner: LifecycleOwner) = model.onBackground()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -39,14 +43,12 @@ class MainActivity : ComponentActivity() {
                 wallpaper = extras?.getString("wallpaper"),
                 wallpaperEffect = extras?.getString("wallpaper-effect"),
                 voicePreview = extras?.getBoolean("voice-preview") == true,
+                onboarding = if (savedInstanceState == null) extras?.getString("onboarding") else null,
             ),
         )
         handleCallback(intent)
         if (intent.getBooleanExtra("open-voice", false) && model.voice.state.value.live) model.voice.openStage()
-        ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
-            override fun onStart(owner: LifecycleOwner) = model.onForeground()
-            override fun onStop(owner: LifecycleOwner) = model.onBackground()
-        })
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         setContent { ZeronRoot(model) }
     }
 
@@ -61,8 +63,17 @@ class MainActivity : ComponentActivity() {
         model.updates.onResume(this)
     }
 
+    override fun onDestroy() {
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
+        super.onDestroy()
+    }
+
     private fun handleCallback(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == authCallbackScheme() && data.host == "callback") model.handleCallback(data.toString())
+        if (data.scheme != authCallbackScheme()) return
+        when (data.host) {
+            "callback" -> model.handleCallback(data.toString())
+            "signed-in" -> model.agentSignIn.browserReturned()
+        }
     }
 }

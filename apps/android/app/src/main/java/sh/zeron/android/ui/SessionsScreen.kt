@@ -45,6 +45,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Color
@@ -295,10 +296,11 @@ fun SessionItem(
 ) {
     var menu by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
     Box {
         Row(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            Modifier.fillMaxWidth().testTag("session-${row.id}").clip(RoundedCornerShape(16.dp))
                 .pressable(onLongClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.LongPress)
                     menu = true
@@ -334,10 +336,12 @@ fun SessionItem(
                 if (row.parentChatId == null) MenuAction(if (row.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(row.id, !row.pinned) } else null,
                 MenuAction("Rename", ZIcons.Rename) { renaming = true },
                 MenuAction(if (row.archived) "Unarchive" else "Archive", ZIcons.Archive) { archive(row) },
+                MenuAction("Delete", ZIcons.Delete, destructive = true) { deleting = true },
             ),
         )
     }
     if (renaming) RenameDialog(row.title, onDismiss = { renaming = false }) { model.rename(row.id, it) }
+    if (deleting) DeleteSessionDialog(model, row, onDismiss = { deleting = false }, onDeleted = { deleting = false })
 }
 
 /** Project monogram + name, then the branch — the desktop sidebar subline. */

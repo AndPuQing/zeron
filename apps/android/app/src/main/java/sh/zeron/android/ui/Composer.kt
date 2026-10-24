@@ -55,6 +55,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -330,6 +331,7 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     val harness = row?.harness ?: "claude-code"
     var models by remember(c.chatId, c.host.deviceId, harness) { mutableStateOf<List<ModelInfo>?>(null) }
     var menu by remember { mutableStateOf<String?>(null) }
+    var configError by remember(c.chatId) { mutableStateOf<String?>(null) }
 
     fun open(which: String) {
         menu = which
@@ -343,15 +345,16 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     fun setConfig(change: (ChatConfig) -> ChatConfig) {
         val current = client.sessionConfig(c.chatId) ?: ChatConfig(harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
         runCatching { client.setSessionConfig(c.chatId, change(current)) }
+            .onFailure { configError = it.message ?: "Couldn't update this chat." }
     }
 
     val modelLabel = row?.modelLabel ?: row?.harnessLabel
     if (modelLabel != null) {
-        ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = { open("model") }) {
-            ChoiceMenu(menu == "model", { menu = null }, listOf(MenuSection(row?.harnessLabel, models.orEmpty().map { m ->
-                MenuChoice(m.label, m.id == row?.model, m.description) { setConfig { it.copy(model = m.id) } }
-            })))
-        }
+        ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = { menu = "model" })
+    }
+    if (menu == "model") key(c.chatId, c.host.deviceId) { SessionModelPicker(client, c, row, onDismiss = { menu = null }) }
+    configError?.let { message ->
+        AppAlert("Couldn't update this chat", onDismiss = { configError = null }, actions = listOf(AlertAction("OK") { configError = null })) { Text(message) }
     }
     row?.reasoning?.takeIf { it.isNotEmpty() }?.let { level ->
         ContextChip(reasoningLabel(level), leading = { ZIcon(ZIcons.Effort, null, Modifier.size(16.dp)) }, onClick = { open("effort") }) {
