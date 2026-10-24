@@ -19,7 +19,7 @@ SOURCES = [
     ("", os.path.join(ROOT, "apps/ios/Zeron/Assets.xcassets/ToolIcons/*/*.svg")),
 ]
 # Brand marks are drawn from path data at runtime (their own colors).
-SKIP = re.compile(r"-mark$|^zeron-logo$")
+SKIP = re.compile(r"-mark$")
 INHERITED = ("fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
              "fill-rule", "fill-opacity", "stroke-opacity", "opacity")
 

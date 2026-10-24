@@ -64,6 +64,7 @@ data class LaunchOptions(
     val wallpaper: String? = null,
     val wallpaperEffect: String? = null,
     val voicePreview: Boolean = false,
+    val onboarding: String? = null,
 )
 
 /**
@@ -101,6 +102,10 @@ class AppModel(private val app: Application) {
     val signInError = MutableStateFlow<String?>(null)
 
     private val settings = app.getSharedPreferences("settings", 0)
+    val onboarding = OnboardingState(
+        read = { settings.getString(it, null) },
+        write = { key, value -> settings.edit().putString(key, value).apply() },
+    )
     private val _appearance = MutableStateFlow(
         Appearance(
             runCatching { ThemeMode.valueOf(settings.getString("theme", "System")!!) }.getOrDefault(ThemeMode.System),
@@ -155,7 +160,12 @@ class AppModel(private val app: Application) {
 
     fun boot(options: LaunchOptions) {
         launch = options
-        if (_client.value != null) return
+        _client.value?.let { existing ->
+            forcedOnboarding()?.let { forced ->
+                onboarding.attach("${existing.orgId()}/${existing.userId()}", existing.isDemo(), forced)
+            }
+            return
+        }
         if (options.signedOut) credentials.clear()
         watchNetwork()
         // `wallpaper <path>` / `wallpaper none` and `wallpaper-effect <name>`:
@@ -170,6 +180,7 @@ class AppModel(private val app: Application) {
         when {
             options.demo -> start(Credentials.Demo(demoOptions()))
             stored != null -> start(stored)
+            else -> onboarding.attach(null, false, forcedOnboarding())
         }
         // Relative times ("4m") and staleness age without events.
         scope.launch {
@@ -223,6 +234,7 @@ class AppModel(private val app: Application) {
         return try {
             val client = CoreClient(config, credentials, listener)
             if (credentials is Credentials.WorkOs) this.credentials.store(credentials)
+            onboarding.attach("${client.orgId()}/${client.userId()}", demo, forcedOnboarding())
             _client.value = client
             refreshWorkspace()
             client.preloadSessions()
@@ -235,6 +247,10 @@ class AppModel(private val app: Application) {
 
     fun startDemo() {
         start(Credentials.Demo(demoOptions()))
+    }
+
+    private fun forcedOnboarding(): OnboardingStep? = launch.onboarding?.let { name ->
+        OnboardingStep.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
     }
 
     val edgeUrl: String get() = authProductionEdgeUrl()
@@ -314,6 +330,7 @@ class AppModel(private val app: Application) {
             credentials.clear()
             coreDir.deleteRecursively()
         }
+        onboarding.signedOut()
     }
 
     val accountName: String

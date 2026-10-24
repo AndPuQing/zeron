@@ -39,6 +39,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import sh.zeron.android.core.AppModel
+import sh.zeron.android.core.OnboardingStep
 import sh.zeron.android.design.GlassScene
 import sh.zeron.android.design.ZIcons
 import sh.zeron.android.design.ZeronTheme
@@ -49,8 +50,28 @@ fun ZeronRoot(model: AppModel) {
     ZeronTheme(appearance) {
         Surface(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }, color = MaterialTheme.colorScheme.background) {
             val client by model.client.collectAsState()
-            AnimatedContent(client != null, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "root") { signedIn ->
-                if (signedIn) MainNav(model) else SignInScreen(model)
+            val onboarding by model.onboarding.step.collectAsState()
+            var startNewSession by rememberSaveable { mutableStateOf(false) }
+            LaunchedEffect(client) { if (client == null) startNewSession = false }
+            val destination = when {
+                onboarding == OnboardingStep.WELCOME -> "welcome"
+                onboarding != null -> "onboarding"
+                client != null -> "main"
+                else -> "welcome"
+            }
+            AnimatedContent(destination, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "root") { page ->
+                when (page) {
+                    "main" -> MainNav(model, startNewSession)
+                    "onboarding" -> onboarding?.let { step ->
+                        OnboardingScreen(model, step) { start ->
+                            if (model.onboarding.step.value == OnboardingStep.DONE) {
+                                startNewSession = start
+                                model.onboarding.finish()
+                            }
+                        }
+                    }
+                    else -> SignInScreen(model)
+                }
             }
         }
         UpdateDialog(model.updates)
@@ -71,7 +92,7 @@ object Routes {
 }
 
 @Composable
-private fun MainNav(model: AppModel) {
+private fun MainNav(model: AppModel, startNewSession: Boolean) {
     val nav = rememberNavController()
     val client by model.client.collectAsState()
     val draftStore: ComposerDrafts = viewModel()
@@ -89,7 +110,7 @@ private fun MainNav(model: AppModel) {
         if (launchHandled) return@LaunchedEffect
         launchHandled = true
         if (model.launch.voicePreview && !model.voice.state.value.live) model.voice.preview()
-        when (val route = model.launch.route) {
+        when (val route = if (startNewSession) "new" else model.launch.route) {
             null -> Unit
             "new" -> nav.navigate(Routes.NEW)
             "search" -> nav.navigate(Routes.SEARCH)

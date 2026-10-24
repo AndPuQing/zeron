@@ -74,6 +74,8 @@ class ProviderParityFlowTest {
     @Test fun recreationKeepsTheRouteTextAndCanonicalSkill() {
         launch("chat:chat-deploy")
         val input = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 10_000))
+        input.click()
+        device.waitForIdle()
         input.text = "\$imag"
         requireNotNull(device.wait(Until.findObject(By.descStartsWith("Imagegen")), 10_000)).click()
         await { device.findObject(By.clazz("android.widget.EditText"))?.text?.startsWith("\$imagegen") == true }

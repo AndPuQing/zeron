@@ -29,7 +29,7 @@ import uniffi.zeron_core.*
 import kotlin.math.roundToInt
 
 @Composable
-fun ProvidersScreen(model: AppModel, initialDevice: String?, initialHarness: String?, signIn: Boolean, onBack: () -> Unit) {
+fun ProvidersScreen(model: AppModel, initialDevice: String?, initialHarness: String?, signIn: Boolean, onBack: () -> Unit, embedded: Boolean = false) {
     val client by model.client.collectAsState()
     val workspace by model.workspace.collectAsState()
     val hosts = workspace?.devices.orEmpty().filter { it.isExecutionHost }
@@ -50,9 +50,11 @@ fun ProvidersScreen(model: AppModel, initialDevice: String?, initialHarness: Str
     val id = device
     val selected = harness
     val core = client
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-        ScreenHeader(if (selected == null) "Providers" else harnessLabel(selected), host?.name) {
-            TonalCircleButton(ZIcons.Back, "Back", onClick = back)
+    Column(Modifier.fillMaxSize().then(if (embedded) Modifier else Modifier.statusBarsPadding().navigationBarsPadding()).imePadding()) {
+        if (!embedded || selected != null) {
+            ScreenHeader(if (selected == null) "Providers" else harnessLabel(selected), host?.name) {
+                TonalCircleButton(ZIcons.Back, "Back", onClick = back)
+            }
         }
         if (id == null || core == null) {
             Text("No computers yet", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(24.dp))

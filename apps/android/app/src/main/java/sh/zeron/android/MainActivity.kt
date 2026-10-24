@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
                 wallpaper = extras?.getString("wallpaper"),
                 wallpaperEffect = extras?.getString("wallpaper-effect"),
                 voicePreview = extras?.getBoolean("voice-preview") == true,
+                onboarding = if (savedInstanceState == null) extras?.getString("onboarding") else null,
             ),
         )
         handleCallback(intent)

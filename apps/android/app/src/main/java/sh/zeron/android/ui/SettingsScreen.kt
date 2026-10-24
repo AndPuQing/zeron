@@ -163,7 +163,7 @@ fun IconTile(icon: Int, content: Color = MaterialTheme.colorScheme.onSurfaceVari
 }
 
 @Composable
-private fun WallpaperSettings(model: AppModel) {
+internal fun WallpaperSettings(model: AppModel, modifier: Modifier = Modifier.padding(horizontal = 20.dp)) {
     val store = model.wallpaper
     val state by store.state.collectAsState()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -172,7 +172,7 @@ private fun WallpaperSettings(model: AppModel) {
     ) { uri -> if (uri != null) scope.launch { store.set(uri, "Photo") } }
     var effects by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
     val rows = if (state.set) 3 else 1
-    Column(Modifier.padding(horizontal = 20.dp)) {
+    Column(modifier) {
         GroupedRow(0, rows,
             onClick = { picker.launch(androidx.activity.result.PickVisualMediaRequest(androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly)) },
             leadingContent = { IconTile(ZIcons.Image) },
