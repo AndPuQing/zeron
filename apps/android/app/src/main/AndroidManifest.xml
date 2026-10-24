@@ -53,6 +53,12 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="zerun-dev" android:host="callback" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="zerun-dev" android:host="signed-in" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

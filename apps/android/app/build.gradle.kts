@@ -171,6 +171,7 @@ dependencies {
     implementation("${libs.jna.get()}@aar")
     debugImplementation(libs.compose.ui.tooling)
     testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.kotlinx.coroutines.test)
     // The Android AAR has no desktop jnidispatch; JVM tests need the matching JAR.
     testRuntimeOnly("${libs.jna.get()}@jar")
     androidTestImplementation("androidx.test:runner:1.7.0")

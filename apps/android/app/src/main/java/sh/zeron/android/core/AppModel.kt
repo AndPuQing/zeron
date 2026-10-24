@@ -80,6 +80,7 @@ class AppModel(private val app: Application) {
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()
+    val agentSignIn = DeviceSignIn(scope, client = { _client.value?.let(::CoreAgentLoginClient) })
     val voice = sh.zeron.android.voice.VoiceController(app) { _client.value }
 
     private val _workspace = MutableStateFlow<WorkspaceSnapshot?>(null)
@@ -106,6 +107,10 @@ class AppModel(private val app: Application) {
         ),
     )
     val appearance: StateFlow<Appearance> = _appearance.asStateFlow()
+
+    var providersDevice: String?
+        get() = settings.getString("providersDevice", null)
+        set(value) { settings.edit().putString("providersDevice", value).apply() }
 
     fun setAppearance(value: Appearance) {
         _appearance.value = value
@@ -297,6 +302,7 @@ class AppModel(private val app: Application) {
     }
 
     fun signOut() {
+        agentSignIn.cancel()
         voice.reset()
         signInState.clear()
         val wasDemo = isDemo
@@ -402,6 +408,10 @@ class AppModel(private val app: Application) {
     fun archive(id: String) = attempt("archive") { _client.value?.archiveSession(id) }
     fun unarchive(id: String) = attempt("unarchive") { _client.value?.unarchiveSession(id) }
     fun rename(id: String, title: String) = attempt("rename") { _client.value?.renameSession(id, title) }
+    fun deleteSession(id: String) {
+        checkNotNull(_client.value) { "Not signed in." }.deleteSession(id)
+        refreshWorkspace()
+    }
     fun setSectionCollapsed(id: String, collapsed: Boolean) = attempt("collapse") { _client.value?.setSectionCollapsed(id, collapsed) }
 
     fun row(id: String): SessionRow? = _client.value?.sessionRow(id)

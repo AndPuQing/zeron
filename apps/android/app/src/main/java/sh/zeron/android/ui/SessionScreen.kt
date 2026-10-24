@@ -84,7 +84,7 @@ private data class SideChatError(val title: String, val message: String)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, draft: ComposerModel = remember(chatId) { ComposerModel() }) {
+fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (String) -> Unit, onAgentAccounts: (String, String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, draft: ComposerModel = remember(chatId) { ComposerModel() }) {
     val client by model.client.collectAsState()
     val core = client ?: return
     val handle: SessionHandle = remember(core, chatId) { runCatching { core.openSession(chatId) }.getOrNull() } ?: run {
@@ -153,8 +153,8 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
     var sheet by remember(chatId) { mutableStateOf<TextSheet?>(null) }
     // The action set closes over the execution target, so a late workspace
     // snapshot or an agent switch rebuilds it instead of pointing at a stale row.
-    val actionTarget = "${row?.harnessLabel ?: ""}\u0000${composer.host.name ?: ""}"
-    val actions = remember(core, chatId, onOpen, actionTarget) {
+    val actionTarget = "${row?.harness.orEmpty()}\u0000${composer.host.deviceId}"
+    val actions = remember(core, chatId, onOpen, onAgentAccounts, actionTarget) {
         TranscriptActions(
             openUrl = { url ->
                 val uri = Uri.parse(url)
@@ -175,19 +175,11 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
             },
             showText = { title, text, mono -> sheet = TextSheet(title, text, mono) },
             perform = { action, label ->
-                // Android has no in-app agent account sheet yet: an error card's
-                // "Log in" points at where that agent signs in instead of
-                // pretending to start a sign-in the phone cannot complete.
                 if (action == "sign-in") {
-                    val agent = row?.harnessLabel ?: "this agent"
-                    val computer = composer.host.name ?: "the computer running it"
-                    sheet = TextSheet(
-                        label,
-                        "Sign in to $agent on $computer: open Zerun on that computer, " +
-                            "Settings → Providers, pick $agent and choose Sign in. " +
-                            "Signing in from the phone is not supported yet.",
-                        false,
-                    )
+                    val device = handle.composer().host.deviceId
+                    val agent = model.row(chatId)?.harness
+                    if (device.isNotBlank() && agent != null) onAgentAccounts(device, agent)
+                    else sheet = TextSheet(label, "The computer or agent for this chat isn't available yet.", false)
                 }
             },
         )
@@ -197,6 +189,7 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
     val subtitle = if (row?.parentChatId != null) "Side chat of ${parent?.title ?: "main chat"}"
         else composer.host.name?.let { "$project @ $it" } ?: project
     var overflow by remember(chatId) { mutableStateOf(false) }
+    var deleting by rememberSaveable(chatId) { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
 
     val density = LocalDensity.current
@@ -275,6 +268,7 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
                             MenuAction("Copy transcript", ZIcons.Copy) { transcript.frame?.let { clipboard.setText(AnnotatedString(it.plainText())) } },
                             row?.takeIf { it.parentChatId == null }?.let { r -> MenuAction(if (r.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(chatId, !r.pinned) } },
                             row?.let { MenuAction(if (it.archived) "Unarchive" else "Archive", ZIcons.Archive) { if (it.archived) model.unarchive(chatId) else model.archive(chatId); onBack() } },
+                            row?.let { MenuAction("Delete", ZIcons.Delete, destructive = true) { deleting = true } },
                         ),
                     )
                 }
@@ -317,6 +311,10 @@ fun SessionScreen(model: AppModel, chatId: String, onBack: () -> Unit, onOpen: (
     sideChatError?.let { error ->
         AppAlert(error.title, onDismiss = { sideChatError = null },
             actions = listOf(AlertAction("OK") { sideChatError = null })) { Text(error.message) }
+    }
+
+    if (deleting) row?.let { r ->
+        DeleteSessionDialog(model, r, onDismiss = { deleting = false }, onDeleted = { deleting = false; onBack() })
     }
 
     sheet?.let { s ->

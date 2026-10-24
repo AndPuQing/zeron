@@ -23,6 +23,23 @@ The chooser shows only sessions not yet imported, supports batches of up to 200,
 cancellation and retry. Imports are saved in **Archived**; source history stays
 on the host. Update the host if the device picker says an update is required.
 
+Settings → **Providers** manages the agents on a selected computer: enable or
+disable agents, inspect accounts and usage, switch accounts, or remove a saved
+login. Sign in from the phone using the provider's browser, device code, or
+authorization-code flow. The computer must be online; credentials remain on
+that computer. Leaving the account page or cancelling ends the pending login.
+Returning from the browser alone does not confirm success: Zerun waits for the
+computer's result. Account changes apply to new sessions; running sessions keep
+their account snapshot.
+
+A chat's model picker can switch agent between turns when the computer supports
+it. Provider-specific reasoning and model options are cleared on a switch;
+pending or queued messages must finish first. The session list's long-press menu
+and the chat menu offer permanent deletion with confirmation. Rotation or folding
+keeps navigation and the in-memory composer, including attachments and skill
+selections; this does not provide draft recovery after process termination.
+Cloud provisioning remains disabled in this fork.
+
 ## Build & run
 
 Requires JDK 21, the Android SDK (platform 37.0, Build Tools 36.0.0,

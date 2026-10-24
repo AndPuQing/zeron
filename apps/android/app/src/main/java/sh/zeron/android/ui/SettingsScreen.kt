@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
@@ -38,7 +39,7 @@ import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.coreVersion
 
 @Composable
-fun SettingsScreen(model: AppModel) {
+fun SettingsScreen(model: AppModel, onProviders: () -> Unit) {
     val update by model.updates.state.collectAsState()
     val appearance by model.appearance.collectAsState()
     val workspace by model.workspace.collectAsState()
@@ -59,6 +60,15 @@ fun SettingsScreen(model: AppModel) {
                         }
                     }, supportingContent = { Text(model.accountDetail) },
                 ) { Text(model.accountName) }
+            }
+            section("Agents")
+            item {
+                GroupedRow(0, 1, modifier = Modifier.padding(horizontal = 20.dp).testTag("settings-providers"),
+                    onClick = onProviders,
+                    leadingContent = { IconTile(ZIcons.Laptop) },
+                    supportingContent = { Text("Manage agents and accounts on your computers") },
+                    trailingContent = { ZIcon(ZIcons.ChevronRight, null, Modifier.size(14.dp)) },
+                ) { Text("Providers") }
             }
             section("Voice")
             item { VoiceSettingsRow(model) }

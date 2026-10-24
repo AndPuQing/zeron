@@ -28,8 +28,13 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -42,13 +47,14 @@ import sh.zeron.android.design.ZeronTheme
 fun ZeronRoot(model: AppModel) {
     val appearance by model.appearance.collectAsState()
     ZeronTheme(appearance) {
-        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(Modifier.fillMaxSize().semantics { testTagsAsResourceId = true }, color = MaterialTheme.colorScheme.background) {
             val client by model.client.collectAsState()
             AnimatedContent(client != null, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "root") { signedIn ->
                 if (signedIn) MainNav(model) else SignInScreen(model)
             }
         }
         UpdateDialog(model.updates)
+        AgentSignInBrowser(model)
     }
 }
 
@@ -58,13 +64,19 @@ object Routes {
     const val NEW = "new"
     const val SEARCH = "search"
     const val IMPORT = "import"
+    const val PROVIDERS = "providers?device={device}&harness={harness}&login={login}"
     fun chat(id: String) = "chat/$id"
+    fun providers(device: String? = null, harness: String? = null, signIn: Boolean = false) =
+        "providers?device=${android.net.Uri.encode(device.orEmpty())}&harness=${android.net.Uri.encode(harness.orEmpty())}&login=$signIn"
 }
 
 @Composable
 private fun MainNav(model: AppModel) {
     val nav = rememberNavController()
-    val drafts = remember(model) { mutableMapOf<String, ComposerModel>() }
+    val client by model.client.collectAsState()
+    val draftStore: ComposerDrafts = viewModel()
+    val drafts = draftStore.forClient(client)
+    var launchHandled by rememberSaveable { mutableStateOf(false) }
     val navigateAction: (MobileComposerAction) -> Unit = { action ->
         when (action) {
             MobileComposerAction.NEW -> nav.navigate(Routes.NEW) { launchSingleTop = true }
@@ -74,6 +86,8 @@ private fun MainNav(model: AppModel) {
         }
     }
     LaunchedEffect(Unit) {
+        if (launchHandled) return@LaunchedEffect
+        launchHandled = true
         if (model.launch.voicePreview && !model.voice.state.value.live) model.voice.preview()
         when (val route = model.launch.route) {
             null -> Unit
@@ -87,7 +101,8 @@ private fun MainNav(model: AppModel) {
         composable(Routes.HOME) { Home(model, nav) }
         composable(Routes.CHAT) { entry ->
             val id = entry.arguments?.getString("id") ?: return@composable
-            SessionScreen(model, id, onNavigate = navigateAction, draft = drafts.getOrPut(id) { ComposerModel() }, onBack = { nav.popBackStack() }, onOpen = { target ->
+            SessionScreen(model, id, onNavigate = navigateAction, draft = drafts.getOrPut(id) { ComposerModel() }, onBack = { nav.popBackStack() },
+                onAgentAccounts = { device, harness -> nav.navigate(Routes.providers(device, harness, signIn = true)) { launchSingleTop = true } }, onOpen = { target ->
                 val currentId = nav.currentBackStackEntry?.arguments?.getString("id")
                 val route = Routes.chat(target)
                 // Reuse the source page when returning from a fork or its seam.
@@ -107,7 +122,19 @@ private fun MainNav(model: AppModel) {
                 nav.navigate(Routes.chat(id))
             })
         }
-        composable("appearance") { SettingsScreen(model) }
+        composable("appearance") { SettingsScreen(model, onProviders = { nav.navigate(Routes.providers()) }) }
+        composable(Routes.PROVIDERS, arguments = listOf(
+            navArgument("device") { defaultValue = "" },
+            navArgument("harness") { defaultValue = "" },
+            navArgument("login") { type = NavType.BoolType; defaultValue = false },
+        )) { entry ->
+            ProvidersScreen(model,
+                initialDevice = entry.arguments?.getString("device")?.takeIf { it.isNotEmpty() },
+                initialHarness = entry.arguments?.getString("harness")?.takeIf { it.isNotEmpty() },
+                signIn = entry.arguments?.getBoolean("login") == true,
+                onBack = { nav.popBackStack() },
+            )
+        }
         composable(Routes.IMPORT) { SessionImportScreen(model, onClose = { nav.popBackStack() }) }
         composable(Routes.SEARCH) {
             SearchScreen(model, onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.chat(it)) })
@@ -130,7 +157,7 @@ private fun Home(model: AppModel, nav: NavHostController) {
             Box(source.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
                 when (tab) {
                     Tab.Sessions -> SessionsScreen(model, onOpen = { nav.navigate(Routes.chat(it)) }, onImport = { nav.navigate(Routes.IMPORT) })
-                    Tab.Settings -> SettingsScreen(model)
+                    Tab.Settings -> SettingsScreen(model, onProviders = { nav.navigate(Routes.providers()) })
                 }
             }
         },
@@ -155,6 +182,23 @@ private fun Home(model: AppModel, nav: NavHostController) {
                     TonalCircleButton(ZIcons.Search, "Search", onClick = { nav.navigate(Routes.SEARCH) }, size = 64.dp, iconSize = 28.dp)
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun AgentSignInBrowser(model: AppModel) {
+    val state by model.agentSignIn.state.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(state?.browserRequest) {
+        val current = state ?: return@LaunchedEffect
+        val url = current.url ?: return@LaunchedEffect
+        if (!current.busy || !current.browserPending) return@LaunchedEffect
+        try {
+            openAgentBrowser(context, url)
+            model.agentSignIn.browserOpened(current.browserRequest)
+        } catch (_: Exception) {
+            model.agentSignIn.browserFailed()
         }
     }
 }
