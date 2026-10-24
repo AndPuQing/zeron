@@ -73,7 +73,10 @@ fn front_page_mirrors_the_desktop_sidebar() {
         ]
     );
     assert_eq!(ids(&ws.archived), ["chat-oklch", "chat-presence"]);
-    assert_eq!(ids(ws.children("chat-veil")), ["chat-side"]);
+    assert_eq!(
+        ids(ws.children("chat-veil")),
+        ["chat-side-easing", "chat-side"]
+    );
 
     let veil = ws.session("chat-veil").unwrap();
     assert_eq!(veil.indicator, ChatIndicator::Working);
@@ -745,7 +748,9 @@ fn importing_external_history_publishes_sessions_and_retries_only_failed_items()
 fn provider_switch_needs_a_host_that_switches() {
     let (client, _dir) = demo(fast());
     let switched = |chat: &str| {
-        let mut config = client.session_config(chat).expect("demo chats have a config");
+        let mut config = client
+            .session_config(chat)
+            .expect("demo chats have a config");
         use zeron_proto::HarnessId;
         config.harness = if config.harness == HarnessId::Codex {
             HarnessId::ClaudeCode

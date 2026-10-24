@@ -13,6 +13,7 @@
 
 mod cloud;
 mod composer_actions;
+pub(crate) mod companions;
 mod providers;
 pub use providers::UsageWindowInfo;
 mod session;

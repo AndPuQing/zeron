@@ -13762,6 +13762,7 @@ dependencies = [
  "zeron-proto",
  "zeron-sync",
  "zeron-syntax",
+ "zeron-term",
  "zeron-text",
  "zeron-veil",
  "zeron-visual",
@@ -13901,6 +13902,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "zeron-term"
+version = "0.3.20"
+dependencies = [
+ "alacritty_terminal",
+]
+
+[[package]]
 name = "zeron-text"
 version = "0.3.20"
 dependencies = [
@@ -14003,6 +14011,7 @@ dependencies = [
  "zeron-proto",
  "zeron-rpc",
  "zeron-syntax",
+ "zeron-term",
  "zeron-theme",
  "zeron-update",
  "zeron-veil",

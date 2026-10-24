@@ -468,6 +468,24 @@ impl ClientInner {
         }
     }
 
+    /// A host stream (terminal output, a subagent's transcript): the relay's
+    /// subscription live, the demo host's channel offline.
+    pub(crate) async fn host_subscribe(
+        self: &Arc<Self>,
+        device_id: &str,
+        method: &'static str,
+        params: serde_json::Value,
+    ) -> Result<crate::host_stream::HostStream> {
+        match self.backend() {
+            Backend::Demo(demo) => demo.host_subscribe(device_id, method, params).await,
+            Backend::Live(live) => live
+                .relay
+                .subscribe(device_id, method, params)
+                .await
+                .map(crate::host_stream::HostStream::Live),
+        }
+    }
+
     /// Fresh socket for the chat's room (retry delivery).
     pub(crate) fn kick_room(&self, chat_id: &str) {
         if let Some(room) = self.session_core(chat_id).and_then(|c| c.room()) {
