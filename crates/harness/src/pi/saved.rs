@@ -553,9 +553,11 @@ mod tests {
         assert_eq!(records.last().unwrap()["data"]["retained"], true);
         assert!(records.iter().any(|r| r["id"] == "abandoned"));
         let store = sessions::Store::new(None, Some(dir.path().into()));
+        // The resolver hands Node a plain Windows path; discovery retains
+        // canonical locators. Both must identify the exact same native file.
         assert_eq!(
-            store.resolve(&copy.native_id, dir.path()).unwrap(),
-            *copy.locator.as_ref().unwrap()
+            store.resolve(&copy.native_id, dir.path()).unwrap().canonicalize().unwrap(),
+            copy.locator.as_ref().unwrap().canonicalize().unwrap()
         );
         assert_eq!(
             harness
