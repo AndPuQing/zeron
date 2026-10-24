@@ -26,21 +26,29 @@ adb shell am start -n work.puqing.zerun.android/sh.zeron.android.MainActivity \
   offered agents, enable switches and account summaries.
 - `accounts.png`: open Claude Code to see the active account, switch action,
   plans, usage windows, removal actions and the add-account entry.
-- `model-picker.png`: launch with `--es route chat:chat-deploy`, tap the composer,
-  then its model chip, and select the Codex tab. The list comes from the shared
+- `model-picker.png` / `model-picker-dark.png`: light and dark captures of the
+  model sheet, following the iOS layout: left-aligned title and computer name,
+  circular close control, capsule agent strip and a soft violet current-model
+  highlight. Launch with `--es route chat:chat-deploy`, tap the composer and its
+  model chip, browse Codex and choose GPT-6.1-Sol, then reopen the sheet. The
+  screenshots show that committed selection. The list comes from the shared
   core catalog. Selecting a tab alone does not change the chat's agent; picking
-  a model commits the choice. The tab strip scrolls horizontally.
+  a model commits the choice. When names do not fit, only the selected agent
+  keeps its name; the other icons retain full accessibility labels. The strip
+  scrolls horizontally. Change Appearance in Settings for each capture.
 - `delete-confirmation.png`: close the picker, open the chat's More menu and
   choose Delete. The capture stops at confirmation; Cancel was used afterward.
 
 ## Verification boundary
 
-Local verification: 45 JVM unit tests and 8 selected emulator UI tests passed,
-with no failures or skips, and Debug packaging succeeded. The UI selection was
-`ProviderParityFlowTest` (5 tests), plus `ShellFlowTest`'s
-`newSessionDraftKeepsItsTargetAfterClose`,
-`newSessionDraftKeepsItsTargetAfterSystemBack`, and
-`leavingQueuedEditRestoresTheUnsentDraft`.
+After the model sheet update, 45 JVM unit tests and all 5
+`ProviderParityFlowTest` emulator UI tests passed with no failures or skips;
+Debug packaging succeeded. The agent-switch test selects the icon-only Codex
+tab by its accessibility label and asserts that browsing leaves the chat
+configuration unchanged before choosing a model. At the preceding revision
+(`1add963a`), these tests and 3 `ShellFlowTest` close, system-Back and queued-edit
+draft regressions passed together (8 tests); the shell implementation did not
+change in this visual update.
 
 The suite retains strict draft, queue, skill-identity and attachment assertions.
 Navigation waits select the app's Back control and the session row by id after

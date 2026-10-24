@@ -48,9 +48,10 @@ class ProviderParityFlowTest {
             await { canSwitchAgent(core.openSession("chat-deploy").composer()) }
             requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).click()
             text(model.row("chat-deploy")!!.modelLabel!!).click()
-            text("Codex").click()
+            requireNotNull(device.wait(Until.findObject(By.desc("Codex")), 5_000)).click()
             val host = core.openSession("chat-deploy").composer().host.deviceId
             val picked = runBlocking { core.listModels(host, "codex") }.first()
+            assertEquals("Browsing an agent's models must not change the chat", original, core.sessionConfig("chat-deploy"))
             text(picked.label).click()
             await { core.sessionConfig("chat-deploy")?.harness == "codex" }
             val config = core.sessionConfig("chat-deploy")!!
