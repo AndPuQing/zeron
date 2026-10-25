@@ -1,20 +1,32 @@
 package sh.zeron.android.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.DropdownMenuGroup
 import androidx.compose.material3.DropdownMenuItem
@@ -26,29 +38,41 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.width
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 
 /** What the composer's trailing button does right now. */
 enum class ComposerAction { Send, Queue, Stop }
 
-/** Send / queue / stop: circular controls inside the glass composer. */
+/** Send / queue / stop: one control whose shape morphs on press. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 internal fun ActionButton(action: ComposerAction, hasText: Boolean, onClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
@@ -58,28 +82,35 @@ internal fun ActionButton(action: ComposerAction, hasText: Boolean, onClick: () 
         label = "action",
     ) { stop ->
         if (stop) {
-            Surface(
+            FilledTonalIconButton(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     onClick()
                 },
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.onSurface,
-                contentColor = MaterialTheme.colorScheme.background,
-                modifier = Modifier.size(34.dp),
-            ) { Box(contentAlignment = Alignment.Center) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Stop, "Stop", Modifier.size(16.dp)) } }
+                shapes = IconButtonDefaults.shapes(),
+                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                ),
+                modifier = Modifier.size(40.dp),
+            ) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Stop, "Stop", Modifier.size(18.dp)) }
         } else {
-            Surface(
+            FilledIconButton(
                 onClick = {
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     onClick()
                 },
                 enabled = hasText,
-                shape = CircleShape,
-                color = if (hasText) MaterialTheme.colorScheme.primary else sh.zeron.android.design.glassControlFill(),
-                contentColor = if (hasText) Color.White else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
-                modifier = Modifier.size(34.dp),
-            ) { Box(contentAlignment = Alignment.Center) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Send, if (action == ComposerAction.Queue) "Queue" else "Send", Modifier.size(20.dp)) } }
+                shapes = IconButtonDefaults.shapes(),
+                colors = IconButtonDefaults.filledIconButtonColors(
+                    // White on the accent in both appearances, like iOS (the
+                    // dark scheme's on-primary is a navy that muddies the arrow).
+                    contentColor = Color.White,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                ),
+                modifier = Modifier.size(40.dp),
+            ) { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Send, if (action == ComposerAction.Queue) "Queue" else "Send", Modifier.size(22.dp)) }
         }
     }
 }
@@ -101,12 +132,12 @@ fun ContextChip(
             contentColor = tint,
         ) {
             Row(
-                Modifier.heightIn(min = 32.dp).padding(start = 10.dp, end = 12.dp),
+                Modifier.heightIn(min = 34.dp).padding(start = 10.dp, end = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 Box(Modifier.size(16.dp), contentAlignment = Alignment.Center) { leading() }
-                Text(label, style = MaterialTheme.typography.labelMedium.copy(fontSize = 13.5.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
         menu()
@@ -129,19 +160,45 @@ class MenuAction(
     val destructive: Boolean = false,
     val enabled: Boolean = true,
     val supporting: String? = null,
+    /** A toggle's state (a trailing check), or null for a plain action. */
+    val checked: Boolean? = null,
     val onClick: () -> Unit,
 )
 
-/** Compact system-style rows: text first, action glyph at the trailing edge. */
+/** An expressive action menu (one segmented group). */
 @Composable
-fun ActionMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<MenuAction>) {
-    AppMenuPopup(expanded, onDismiss) {
-        actions.forEachIndexed { i, action ->
-            if (i > 0) Hairline()
-            MenuRow(action.label, action.supporting, action.enabled, destructive = action.destructive,
-                trailing = { sh.zeron.android.design.ZIcon(action.icon, null, Modifier.size(20.dp)) }) {
-                onDismiss()
-                action.onClick()
+fun ActionMenu(expanded: Boolean, onDismiss: () -> Unit, actions: List<MenuAction>) =
+    GroupedActionMenu(expanded, onDismiss, listOf(actions))
+
+/** An expressive action menu in separate groups (iOS inline menus), optionally headed by a label. */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+fun GroupedActionMenu(expanded: Boolean, onDismiss: () -> Unit, groups: List<List<MenuAction>>, header: String? = null) {
+    val shown = groups.filter { it.isNotEmpty() }
+    DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
+        shown.forEachIndexed { g, actions ->
+            if (g > 0) androidx.compose.foundation.layout.Spacer(Modifier.size(MenuDefaults.GroupSpacing))
+            DropdownMenuGroup(shapes = MenuDefaults.groupShape(g, shown.size)) {
+                if (g == 0 && header != null) MenuDefaults.Label { Text(header, style = MaterialTheme.typography.labelMedium, maxLines = 2) }
+                actions.forEachIndexed { i, a ->
+                    val tint = if (a.destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                    DropdownMenuItem(
+                        onClick = {
+                            onDismiss()
+                            a.onClick()
+                        },
+                        text = { Text(a.label, color = tint) },
+                        enabled = a.enabled,
+                        supportingText = a.supporting?.let { { Text(it) } },
+                        shape = MenuDefaults.itemShape(i, actions.size).shape,
+                        leadingIcon = { sh.zeron.android.design.ZIcon(a.icon, null, Modifier.size(20.dp), tint = tint) },
+                        trailingIcon = if (a.checked == true) {
+                            { sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Check, "On", Modifier.size(20.dp), tint = tint) }
+                        } else {
+                            null
+                        },
+                    )
+                }
             }
         }
     }
@@ -176,24 +233,6 @@ internal fun MenuRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.45f)) }
             }
             trailing?.invoke()
-        }
-    }
-}
-
-/** Groups share the fork's compact menu rows and trailing action glyphs. */
-@Composable
-fun GroupedActionMenu(expanded: Boolean, onDismiss: () -> Unit, groups: List<List<MenuAction>>, header: String? = null) {
-    AppMenuPopup(expanded, onDismiss) {
-        header?.let { Text(it, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.labelMedium) }
-        groups.filter { it.isNotEmpty() }.forEachIndexed { groupIndex, actions ->
-            if (groupIndex > 0) Hairline()
-            actions.forEach { action ->
-                MenuRow(action.label, action.supporting, action.enabled, destructive = action.destructive,
-                    trailing = { sh.zeron.android.design.ZIcon(action.icon, null, Modifier.size(20.dp)) }) {
-                    onDismiss()
-                    action.onClick()
-                }
-            }
         }
     }
 }

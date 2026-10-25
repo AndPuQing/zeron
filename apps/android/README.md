@@ -71,6 +71,15 @@ The application ID is `work.puqing.zerun.android`, the display name is `Zerun`,
 and WorkOS returns to `zerun-dev://callback`. Endpoints and WorkOS settings
 come from the shared Rust core. Kotlin packages retain `sh.zeron.android`.
 The pending OAuth state survives process recreation and is consumed once.
+Account and agent sign-in, welcome pages, voice and interactive visuals use the
+upstream implementations. Tokens migrate from legacy app-private JSON into
+Android Keystore encrypted storage on first read. Existing completed welcome
+flows migrate to the upstream completion preference.
+
+After signing in, the welcome flow covers appearance, sync, GitHub, agents and
+notifications. It skips the GitHub step when Cloud is unavailable; all choices
+remain available in Settings. The demo can open a particular welcome page with
+`--es route welcome:appearance` (also `sync`, `agents`, `notifications`, `done`).
 
 The app version follows the workspace's numeric version in `Cargo.toml`.
 Android `versionCode` is `major * 1,000,000 + minor * 1,000 + patch`; minor
@@ -198,8 +207,9 @@ the app during an incomplete download requires downloading again.
 Agent visuals render directly in Android transcripts using the shared Rust
 Luau runtime, layout, charts, canvas drawing and GPU renderer. Buttons, tabs,
 toggles and sliders forward touch and accessibility actions to that runtime;
-charts support scrubbing, and 3D scenes support touch orbiting. Mostly vertical
-drags over charts and sliders scroll the transcript. Animation pauses when a
+charts support scrubbing, and 3D scenes support touch orbiting. Vertical drags
+over charts scroll the transcript; slider gestures adjust the value, following
+the upstream touch behavior. Animation pauses when a
 visual leaves the viewport or the app enters the background, and follows the
 system animation setting. Scenes and shaders require a usable Vulkan adapter;
 the visual shows an error if rendering is unavailable.
@@ -236,13 +246,13 @@ is optional; allow it to access call controls from the notification drawer.
 An ongoing foreground service keeps the call alive while the screen is locked.
 Mute and hang-up act locally first. Audio-focus loss ends the call without an
 automatic retry. A connected headset takes priority; otherwise the speaker
-control and proximity sensor choose the loudspeaker or earpiece. Removing the
-app from Recents ends the call, and the service never restarts a call after
-process death.
+control and proximity sensor choose the loudspeaker or earpiece. The service
+never restarts a call after process death.
 
 Debug builds accept `--ez demo true --ez voice-preview true` to show a scripted
-call without audio or networking. `VoiceMediaTest` checks cancellation, mute,
-permission failure and native SDP preparation without microphone capture;
+call without audio or networking; add `--ez voice-stage true` to open its stage.
+`VoiceMediaTest` checks old-call callback isolation and native SDP preparation
+without microphone capture;
 `VoiceLoopbackTest` checks local negotiation, deferred capture and audio release;
 `VoiceFlowTest` checks call UI, recreation, settings and background notification
 controls. These offline checks do not verify real-provider audio, ARM devices,
@@ -265,7 +275,7 @@ iterating on Kotlin; `ZERON_ANDROID_ABIS=arm64-v8a` builds one ABI.
 core/        AppModel (owns CoreClient, republishes snapshots as flows),
              CredentialStore, Fonts + AndroidMeasurer (Minikin fallback
              measurement for glyphs Geist lacks)
-design/      ZeronTheme, GlassScene + GlassSurface, transcript palette
+design/      Upstream Material Expressive theme, transcript palette
 transcript/  TranscriptState (layout engine + viewport: anchoring, follow the
              tail), Transcript (virtualized rows over LayoutFrame), RowModel
              (canvas painter for Rust display lists, streaming veil, fades),
@@ -291,7 +301,9 @@ adb shell am start -n work.puqing.zerun.android/sh.zeron.android.MainActivity \
 | `--ez fast true` / `--ez longreply true` | Demo stream speed / reply length |
 | `--ez big true` / `--ez huge true` | Demo transcripts with 120 / 600 turns |
 | `--es route chat:<id>` / `new` / `search` / `settings` | Open a screen at launch |
-| `--ez voice-preview true` | Debug-only scripted voice call; requires the offline demo |
+| `--ez voice-preview true` | Debug-only scripted voice call without audio or network traffic |
+| `--ez voice-stage true` | Open the scripted call's stage at launch |
+| `--es route welcome:<step>` | Preview an upstream welcome page in the offline demo |
 | `--ez signedout true` | Clear stored credentials |
 | `--es wallpaper <path>` / `none` | Set (or clear) the wallpaper from a file the app can read, e.g. `adb push art.jpg /data/local/tmp/ && adb shell run-as work.puqing.zerun.android cp /data/local/tmp/art.jpg files/` then `--es wallpaper /data/user/0/work.puqing.zerun.android/files/art.jpg` |
 | `--es wallpaper-effect <none\|dither\|ascii\|halftone\|scanlines>` | Wallpaper effect |
@@ -304,10 +316,19 @@ Ctrl+N, Ctrl+Shift+F, Ctrl+B and Ctrl+J navigate the shell with a hardware keybo
 New sessions group project checkouts across hosts, can add a typed project folder,
 and use the searchable, swipeable model sheet.
 
-The fork retains its existing voice media/service generation guards, Providers
-login flow, onboarding, updater/signing and composer draft storage. Closing an
-unused side chat does not delete it automatically: an unsent attachment or queued
-edit can still belong to its retained composer. Cloud modules are present but
-provisioning remains disabled by this fork's edge configuration. New screenshots
-imported with these modules are upstream reference assets, not captures of this
-fork's current UI.
+Navigation, phone/tablet layouts, account/agent login, onboarding, voice and
+interactive visuals follow upstream; the upstream voice controller also isolates
+callbacks by call generation. The fork retains updater/signing, canonical/attachment composer draft storage and
+search results that include side chats with their parent-session labels.
+Phones use the upstream Sessions bottom app bar and page stack; tablets use
+the sidebar, companion inspector and a settings dialog with its own page stack.
+Session import is available in Sessions → Session options → Import sessions.
+Closing an unused side chat does not delete it automatically: an unsent
+attachment or queued edit can still belong to its retained composer. Cloud
+modules are present but provisioning remains disabled by this fork's edge
+configuration. Screenshots imported with the companion modules are upstream
+reference assets, not captures of this fork's current UI.
+
+For actual captures of this fork's aligned phone/tablet layouts, onboarding,
+voice preview, interactive visuals and message image viewer, see the
+[screenshots and verification notes](../../docs/screenshots/android-upstream-alignment/README.md).

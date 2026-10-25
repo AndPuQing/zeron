@@ -36,7 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
 import sh.zeron.android.core.AppModel
+import uniffi.zeron_core.CoreClient
 import uniffi.zeron_core.SubagentState
 
 /** What the inspector column shows, a stack per session (iPad's inspector navigation). */
@@ -47,6 +49,20 @@ sealed interface InspectorPage {
     data class Terminal(val terminalId: String?, val chat: String? = null) : InspectorPage
     data class Subagent(val parent: String, val doc: String, val title: String, val running: Boolean) : InspectorPage
     data class SideChat(val id: String) : InspectorPage
+}
+
+/** Keep the selected session and inspector when folding recreates the activity. */
+class TabletShellStore : ViewModel() {
+    private var owner: CoreClient? = null
+    private var shell = TabletShellState()
+
+    fun forClient(client: CoreClient?): TabletShellState {
+        if (owner !== client) {
+            shell = TabletShellState()
+            owner = client
+        }
+        return shell
+    }
 }
 
 /**
@@ -185,7 +201,7 @@ fun TabletShell(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun InspectorPageContent(model: AppModel, shell: TabletShellState, chatId: String, page: InspectorPage,
-    drafts: MutableMap<String, ComposerModel>, onOpen: (String) -> Unit, onAgentAccounts: (String, String) -> Unit) {
+    drafts: MutableMap<String, ComposerModel>, onOpen: (String) -> Unit, onOpenAccounts: (AccountsTarget, Boolean) -> Unit) {
     when (page) {
         is InspectorPage.Companions -> Column(Modifier.fillMaxSize()) {
             val c = rememberCompanions(model, chatId)
@@ -232,7 +248,7 @@ fun InspectorPageContent(model: AppModel, shell: TabletShellState, chatId: Strin
         is InspectorPage.SideChat -> SessionScreen(
             model,
             page.id,
-            draft = drafts.getOrPut(page.id) { ComposerModel(model.drafts.load(page.id)) }, onOpen = onOpen, onAgentAccounts = onAgentAccounts,
+            draft = drafts.getOrPut(page.id) { ComposerModel(model.drafts.load(page.id)) }, onOpen = onOpen, onOpenAccounts = onOpenAccounts,
             onBack = shell::pop,
             onOpenSideChat = { id -> shell.push(chatId, InspectorPage.SideChat(id)) },
             onOpenTerminal = { chat, terminal -> shell.push(chatId, InspectorPage.Terminal(terminal, chat)) },

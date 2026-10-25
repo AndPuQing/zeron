@@ -34,7 +34,7 @@ class SessionImportFlowTest {
     @Test
     fun entrySelectionFiltersAndImportSurviveRecreation() {
         launchFresh("home")
-        find("Import").click()
+        openImport()
         find("Import sessions")
         find("Improve import navigation").click()
         find("Import 1 selected")
@@ -59,6 +59,7 @@ class SessionImportFlowTest {
         await { !device.hasObject(By.text("Improve import navigation")) }
         find("Close").click()
         await { device.hasObject(By.text("Sessions")) }
+        find("Session options").click()
         find("Archived").click()
         find("Improve import navigation")
         assertTrue(rows().any { it.title == "Improve import navigation" && it.archived })
@@ -97,7 +98,7 @@ class SessionImportFlowTest {
         assertEquals(1, rows().count { it.title == "Review the deployment workflow" })
         assertEquals(1, rows().count { it.title == "Polish the mobile layout" })
         find("Close").click()
-        find("Import").click()
+        openImport()
         find("Import sessions")
         assertFalse(device.hasObject(By.text("Improve import navigation")))
         assertFalse(device.hasObject(By.text("Review the deployment workflow")))
@@ -133,6 +134,11 @@ class SessionImportFlowTest {
         find("Load more sessions").click()
         await { !device.hasObject(By.text("Load more sessions")) }
         assertFalse(device.hasObject(By.text("Verify native session forks")))
+    }
+
+    private fun openImport() {
+        find("Session options").click()
+        find("Import sessions…").click()
     }
 
     private fun rows() = model.workspace.value?.let { ws ->

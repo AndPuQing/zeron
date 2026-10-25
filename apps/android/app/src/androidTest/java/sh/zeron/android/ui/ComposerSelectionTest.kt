@@ -30,6 +30,14 @@ class ComposerSelectionTest {
         assertEquals(draft.encoded(), reopened.encoded())
     }
 
+    @Test fun constructorRestoresCanonicalDraftFromStorage() {
+        val original = ComposerModel()
+        original.setText(wire())
+        val restored = ComposerModel(original.persistedDraft())
+        assertEquals(original.text, restored.text)
+        assertEquals(original.encoded(), restored.encoded())
+    }
+
     @Test fun contextChangesRemainInvalidAfterRestoringDraft() {
         val draft = ComposerModel()
         draft.commandContext = "host:agent:project-a"

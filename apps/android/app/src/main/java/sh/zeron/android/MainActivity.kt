@@ -8,9 +8,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.lifecycle.DefaultLifecycleObserver
-import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.ProcessLifecycleOwner
 import sh.zeron.android.core.LaunchOptions
 import sh.zeron.android.ui.ZeronRoot
 import uniffi.zeron_core.authCallbackScheme
@@ -22,10 +19,6 @@ import uniffi.zeron_core.authCallbackScheme
  */
 class MainActivity : ComponentActivity() {
     private val model get() = (application as ZeronApplication).model
-    private val lifecycleObserver = object : DefaultLifecycleObserver {
-        override fun onStart(owner: LifecycleOwner) = model.onForeground()
-        override fun onStop(owner: LifecycleOwner) = model.onBackground()
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -48,12 +41,12 @@ class MainActivity : ComponentActivity() {
                 wallpaper = extras?.getString("wallpaper"),
                 wallpaperEffect = extras?.getString("wallpaper-effect"),
                 voicePreview = extras?.getBoolean("voice-preview") == true,
-                onboarding = if (savedInstanceState == null) extras?.getString("onboarding") else null,
+                voiceStage = extras?.getBoolean("voice-stage") == true,
+                remoteVoice = extras?.getBoolean("remote-voice") == true,
+                voiceSelfTest = extras?.getBoolean("voice-selftest") == true,
             ),
         )
         handleCallback(intent)
-        if (intent.getBooleanExtra("open-voice", false) && model.voice.state.value.live) model.voice.openStage()
-        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
         setContent { ZeronRoot(model) }
     }
 
@@ -94,27 +87,22 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleCallback(intent)
-        if (intent.getBooleanExtra("open-voice", false) && model.voice.state.value.live) model.voice.openStage()
+    }
+
+    private fun handleCallback(intent: Intent?) {
+        // The call notification (or `zerun-dev://voice`) returns to the stage.
+        if (sh.zeron.android.voice.VoiceController.opensStage(intent)) {
+            if (model.voice.live) model.voice.requestStage()
+            return
+        }
+        val data = intent?.data ?: return
+        if (data.scheme != authCallbackScheme()) return
+        if (data.host == "callback") model.handleCallback(data.toString()) else model.browser.links.tryEmit(data)
     }
 
     override fun onResume() {
         super.onResume()
         model.updates.onResume(this)
         model.browser.resumes.tryEmit(Unit)
-    }
-
-    override fun onDestroy() {
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
-        super.onDestroy()
-    }
-
-    private fun handleCallback(intent: Intent?) {
-        val data = intent?.data ?: return
-        if (data.scheme != authCallbackScheme()) return
-        when (data.host) {
-            "callback" -> model.handleCallback(data.toString())
-            "signed-in" -> model.agentSignIn.browserReturned()
-        }
-        if (data.host != "callback") model.browser.links.tryEmit(data)
     }
 }

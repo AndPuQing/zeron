@@ -2,7 +2,6 @@ package sh.zeron.android.ui
 
 import uniffi.zeron_core.MobileComposerAction
 import uniffi.zeron_core.MobileComposerContext
-
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,14 +13,17 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -40,12 +42,9 @@ import androidx.compose.foundation.background
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.selected
 import kotlinx.coroutines.launch
 import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.HarnessMark
-import sh.zeron.android.design.GlassScene
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.ModelInfo
@@ -56,6 +55,9 @@ import uniffi.zeron_core.harnessLabel
 import uniffi.zeron_core.reasoningLabel
 
 private data class ModelChoice(val harness: String, val harnessLabel: String, val model: ModelInfo)
+
+/** Cloud's catalog in [modelCache] (no device id is empty or starts with NUL). */
+private const val CLOUD_MODELS = "\u0000cloud"
 
 /** The last catalog each host reported, so chips open on real model names. */
 private val modelCache = HashMap<String, List<ModelChoice>>()
@@ -71,18 +73,62 @@ private fun catalogModels(): List<ModelChoice> = fallbackHarnesses().filter { it
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewSessionScreen(model: AppModel, onClose: (() -> Unit)?, onCreated: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, composer: ComposerModel = remember { ComposerModel() }, focusOnAppear: Boolean = true) {
+fun NewSessionScreen(
+    model: AppModel,
+    onClose: (() -> Unit)?,
+    onCreated: (String) -> Unit,
+    onOpenBilling: () -> Unit = {},
+    onNavigate: (MobileComposerAction) -> Unit = {},
+    composer: ComposerModel = remember { ComposerModel(model.newSessionText).apply { images.addAll(model.newSessionImages) } },
+    /** Focus the prompt at once (a large screen's page at launch waits: the keyboard would cover the column). */
+    focusOnAppear: Boolean = true,
+) {
     val workspace by model.workspace.collectAsState()
     val client by model.client.collectAsState()
     var draft by remember { mutableStateOf(model.lastDraft) }
+    // What was set up when the page was last closed unsent comes back.
+    var created by remember { mutableStateOf(false) }
+    fun rememberDraft() {
+        if (created) return
+        model.lastDraft = draft
+        model.newSessionText = composer.persistedDraft()
+        model.newSessionImages = composer.images.toList()
+    }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        // The app can be killed in the background: keep the draft first.
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) rememberDraft()
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            rememberDraft()
+        }
+    }
+    var newProject by remember { mutableStateOf(false) }
     val focus = remember { FocusRequester() }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    var newProject by remember { mutableStateOf(false) }
-    val projects = workspace?.projects.orEmpty().filter { !it.isCloud }
+    val cloud = model.cloud
+    LaunchedEffect(Unit) { if (cloud.info == null) cloud.refresh() }
+    // A Cloud project runs only on Cloud: hidden where this account isn't offered it.
+    val projects = workspace?.projects.orEmpty().filter { !it.isCloud || model.cloudOffered }
     val hosts = workspace?.devices.orEmpty().filter { it.isExecutionHost }
     val project = projects.firstOrNull { it.id == draft.projectId }
+    // On its own Cloud machine: a Cloud project, or Cloud picked for a project whose repository Cloud reaches.
+    val runsOnCloud = project != null && (project.isCloud || (draft.cloud && (cloud.reaches(project.githubRepo) || model.isDemo && model.cloudOffered)))
+    val cloudReach = project != null && model.cloudOffered && (project.isCloud || cloud.reaches(project.githubRepo) || model.isDemo && project.githubRepo != null)
+    // `route new:cloud` (screenshots): open on Cloud for the first project Cloud can run.
+    LaunchedEffect(projects.size) {
+        if (model.launch.route == "new:cloud" && !draft.cloud) {
+            projects.firstOrNull { it.isCloud || it.githubRepo != null }?.let { draft = draft.copy(projectId = it.id, hostId = null, branch = null, cloud = true) }
+        }
+    }
+    var starting by remember { mutableStateOf(false) }
+    var cloudFailure by remember { mutableStateOf<String?>(null) }
+    var cloudProject by remember { mutableStateOf(false) }
     LaunchedEffect(workspace) {
         if (draft.projectId == null && draft.hostId == null) {
             draft = draft.copy(projectId = (projects.firstOrNull { it.deviceOnline } ?: projects.firstOrNull())?.id)
@@ -94,11 +140,28 @@ fun NewSessionScreen(model: AppModel, onClose: (() -> Unit)?, onCreated: (String
     }
     val deviceId = project?.deviceId ?: draft.hostId ?: ""
     composer.commandContext = "$deviceId:${draft.harness}:${project?.id}"
+    // Cloud runs the agents it has accounts for (Claude Code, Codex), listed by the edge.
+    val modelsKey = if (runsOnCloud) CLOUD_MODELS else deviceId
 
     // Models for the draft's host: cached (or the built-in catalog) at once, then the host's own list.
-    var models by remember(deviceId) { mutableStateOf(modelCache[deviceId] ?: catalogModels()) }
-    LaunchedEffect(deviceId, client) {
+    var models by remember(modelsKey) {
+        mutableStateOf(modelCache[modelsKey] ?: catalogModels().filter { !runsOnCloud || it.harness in sh.zeron.android.core.CloudStore.harnesses })
+    }
+    LaunchedEffect(modelsKey, models) {
+        if (runsOnCloud && models.none { it.harness == draft.harness }) models.firstOrNull()?.let { draft = draft.copy(harness = it.harness, model = null, effort = null) }
+    }
+    LaunchedEffect(modelsKey, client) {
         val c = client ?: return@LaunchedEffect
+        if (runsOnCloud) {
+            val fresh = sh.zeron.android.core.CloudStore.agents.flatMap { a ->
+                runCatching { c.cloudModels(a.harness) }.getOrNull().orEmpty().map { ModelChoice(a.harness, a.name, it) }
+            }
+            if (fresh.isNotEmpty()) {
+                modelCache[CLOUD_MODELS] = fresh
+                models = fresh
+            }
+            return@LaunchedEffect
+        }
         if (deviceId.isEmpty()) return@LaunchedEffect
         val harnesses = runCatching { c.listHarnesses(deviceId) }.getOrNull() ?: return@LaunchedEffect
         val fresh = harnesses.filter { it.offered }.flatMap { h ->
@@ -114,12 +177,48 @@ fun NewSessionScreen(model: AppModel, onClose: (() -> Unit)?, onCreated: (String
 
     LaunchedEffect(Unit) { if (focusOnAppear) focus.requestFocus() }
 
+    /** Cloud: the edge mints the machine first (a moment), then the chat opens with the message waiting in it. */
+    fun createOnCloud() {
+        if (starting) return
+        fun outOfCredits() = scope.launch {
+            if (snackbar.showSnackbar(sh.zeron.android.core.CloudStore.OUT_OF_CREDITS, "Add credits") == androidx.compose.material3.SnackbarResult.ActionPerformed) onOpenBilling()
+        }
+        if (cloud.outOfCredits) {
+            outOfCredits()
+            return
+        }
+        starting = true
+        scope.launch {
+            try {
+                val id = model.createCloudSession(draft.copy(model = draft.model ?: choice?.model?.id), composer.encoded(), composer.images.map { it.outgoing })
+                created = true
+                composer.clear()
+                model.newSessionText = ""
+                model.newSessionImages = emptyList()
+                onCreated(id)
+            } catch (e: Exception) {
+                if (sh.zeron.android.core.CloudStore.isOutOfCredits(e)) outOfCredits() else cloudFailure = sh.zeron.android.core.CloudStore.message(e)
+            } finally {
+                starting = false
+            }
+        }
+    }
+
     fun create() {
         if (composer.selectionError != null) return
         if (composer.performLocalCommand()) return
         model.lastDraft = draft
+        if (runsOnCloud) return createOnCloud()
         val id = model.createSession(draft.copy(model = draft.model ?: choice?.model?.id), composer.encoded(), composer.images.map { it.outgoing })
-        if (id != null) { composer.clear(); onCreated(id) } else scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+        if (id != null) {
+            created = true
+            composer.clear()
+            model.newSessionText = ""
+            model.newSessionImages = emptyList()
+            onCreated(id)
+        } else {
+            scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+        }
     }
 
     var modelRequest by remember { mutableStateOf(0) }
@@ -142,90 +241,127 @@ fun NewSessionScreen(model: AppModel, onClose: (() -> Unit)?, onCreated: (String
     }
 
     var composerBounds by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
-    GlassScene(
-        modifier = Modifier.fillMaxSize(),
-        background = { source ->
-            Box(source.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                sh.zeron.android.design.WallpaperHero(model.wallpaper, cutout = { composerBounds })
-            }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    sh.zeron.android.design.WallpaperHero(model.wallpaper, cutout = { composerBounds })
+    Scaffold(
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        snackbarHost = { SnackbarHost(snackbar) },
+        topBar = {
+            TopAppBar(
+                title = { Text("New session", style = MaterialTheme.typography.titleLargeEmphasized, modifier = Modifier.padding(start = 12.dp)) },
+                navigationIcon = { onClose?.let { TonalCircleButton(ZIcons.Close, "Close", onClick = it, modifier = Modifier.padding(start = 8.dp), size = 44.dp) } },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
+            )
         },
-    ) {
-        Scaffold(
-            containerColor = androidx.compose.ui.graphics.Color.Transparent,
-            snackbarHost = { AppSnackbarHost(snackbar) },
-            topBar = {
-                Box(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
-                    onClose?.let { TonalCircleButton(ZIcons.Close, "Close", onClick = it) }
+    ) { padding ->
+        Column(
+            Modifier
+                .padding(top = padding.calculateTopPadding())
+                .fillMaxSize()
+                .imePadding()
+                .navigationBarsPadding(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            // The headline lives in the free space above the composer.
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    HarnessMark(draft.harness, 40.dp, tint = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        "What are we building?",
+                        style = MaterialTheme.typography.headlineSmall,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 32.dp),
+                    )
                 }
-            },
-        ) { padding ->
-            Column(
-                Modifier
-                    .padding(top = padding.calculateTopPadding())
-                    .fillMaxSize()
-                    .imePadding()
-                    .navigationBarsPadding(),
-                horizontalAlignment = Alignment.CenterHorizontally,
+            }
+            // "Starting on Cloud…" above the composer while the machine is minted.
+            androidx.compose.animation.AnimatedVisibility(starting) {
+                androidx.compose.material3.Surface(shape = androidx.compose.foundation.shape.RoundedCornerShape(50), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.padding(bottom = 10.dp)) {
+                    androidx.compose.foundation.layout.Row(Modifier.padding(start = 10.dp, end = 18.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        androidx.compose.material3.LoadingIndicator(Modifier.size(28.dp))
+                        androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
+                        Text("Starting on Cloud…", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+            }
+            CommandSuggestions(
+                composer, "new:${project?.id}", draft.harness, deviceId,
+                modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
             ) {
-                // The headline lives in the free space above the composer.
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        HarnessMark(draft.harness, 40.dp, tint = MaterialTheme.colorScheme.onSurface)
-                        Text(
-                            "What are we building?",
-                            style = MaterialTheme.typography.headlineSmall,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 32.dp),
-                        )
-                    }
+                val c = client ?: error("Sign in before loading commands")
+                c.newSessionComposerCatalog(deviceId, draft.harness, project?.id)
+            }
+            MentionSuggestions(
+                composer,
+                search = { q ->
+                    val c = client
+                    if (c == null || project == null) emptyList() else c.searchFiles(project.deviceId, null, project.id, q)
+                },
+                modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
+            )
+            ComposerSurface(
+                model = composer,
+                placeholder = "Describe the task",
+                action = ComposerAction.Send,
+                onAction = ::create,
+                alwaysCard = true,
+                focusRequester = focus,
+                modifier = Modifier
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = 8.dp)
+                    .widthIn(max = 768.dp)
+                    .onGloballyPositioned { composerBounds = it.boundsInRoot() },
+            ) {
+                ProjectChip(draft, projects, onPick = { draft = it }, onNewProject = { newProject = true }, onNewCloudProject = if (model.cloudOffered) ({ cloudProject = true }) else null)
+                HostChip(draft, project, projects, hosts, runsOnCloud, cloudReach, cloud.credits) { draft = it }
+                if (runsOnCloud && project?.githubRepo != null) {
+                    CloudBranchChip(model, draft, project.githubRepo!!) { draft = it }
+                } else if (project != null && project.gitDetected) {
+                    BranchChip(model, draft, project.deviceId, project.path) { draft = it }
                 }
-                CommandSuggestions(
-                    composer, "new:${project?.id}", draft.harness, deviceId,
-                    modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
-                ) {
-                    val c = client ?: error("Sign in before loading commands")
-                    c.newSessionComposerCatalog(deviceId, draft.harness, project?.id)
-                }
-                MentionSuggestions(
-                    composer,
-                    search = { q ->
-                        val c = client
-                        if (c == null || project == null) emptyList() else c.searchFiles(project.deviceId, null, project.id, q)
-                    },
-                    modifier = Modifier.padding(horizontal = 12.dp).widthIn(max = 768.dp),
-                )
-                ComposerSurface(
-                    model = composer,
-                    placeholder = "Describe the task",
-                    action = ComposerAction.Send,
-                    onAction = ::create,
-                    alwaysCard = true,
-                    focusRequester = focus,
-                    modifier = Modifier
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 8.dp)
-                        .widthIn(max = 768.dp)
-                        .onGloballyPositioned { composerBounds = it.boundsInRoot() },
-                ) {
-                    ProjectChip(draft, projects, onPick = { draft = it }, onNewProject = { newProject = true })
-                    if (project != null) {
-                        if (project.gitDetected) BranchChip(model, draft, project.deviceId, project.path) { draft = it }
-                    }
-                    HostChip(draft, project, projects, hosts) { draft = it }
-                    ModelChip(draft, choice, models, modelRequest = modelRequest,
-                        host = project?.deviceName ?: hosts.firstOrNull { it.id == draft.hostId }?.name ?: "This computer", hostIcon = ZIcons.Laptop) { draft = it }
-                    val efforts = choice?.model?.reasoningLevels.orEmpty()
-                    if (efforts.isNotEmpty()) {
-                        val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
-                        EffortChip(effort, efforts) { draft = draft.copy(effort = it) }
-                    }
+                ModelChip(
+                    draft,
+                    choice,
+                    models,
+                    host = if (runsOnCloud) "Cloud" else project?.deviceName ?: hosts.firstOrNull { it.id == draft.hostId }?.name ?: "This computer",
+                    hostIcon = if (runsOnCloud) ZIcons.Cloud else ZIcons.Laptop,
+                    openAtStart = model.launch.companion == "model-picker",
+                    modelRequest = modelRequest,
+                ) { draft = it }
+                val efforts = choice?.model?.reasoningLevels.orEmpty()
+                if (efforts.isNotEmpty()) {
+                    val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
+                    EffortChip(effort, efforts) { draft = draft.copy(effort = it) }
                 }
             }
         }
     }
-    if (newProject) NewProjectScreen(model, onDismiss = { newProject = false }) { id ->
-        draft = draft.copy(projectId = id, hostId = null, branch = null)
+    if (cloudProject) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { cloudProject = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            CloudRepoPickerScreen(model, onBack = { cloudProject = false }, onCreated = { id ->
+                cloudProject = false
+                draft = draft.copy(projectId = id, hostId = null, branch = null, cloud = true)
+            })
+        }
     }
+    cloudFailure?.let { message ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { cloudFailure = null },
+            icon = { ZIcon(ZIcons.Cloud, null) },
+            title = { Text("Couldn't start on Cloud") },
+            text = { Text(message) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { cloudFailure = null }) { Text("OK") } },
+        )
+    }
+    if (newProject) {
+        NewProjectScreen(model, onDismiss = { newProject = false }) { id ->
+            draft = draft.copy(projectId = id, hostId = null, branch = null)
+        }
+    }
+}
 }
 
 @Composable
@@ -363,20 +499,40 @@ private fun ProjectRow(
     mono: Boolean,
     onClick: () -> Unit,
 ) {
-    GroupedRow(index, count,
-        modifier = Modifier.padding(horizontal = 20.dp).semantics { this.selected = selected },
-        onClick = onClick, leadingContent = leading,
+    androidx.compose.material3.SegmentedListItem(
+        onClick = onClick,
+        shapes = segmentedShapes(index, count),
+        colors = androidx.compose.material3.ListItemDefaults.segmentedColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else cardColor(),
+        ),
+        leadingContent = leading,
         supportingContent = {
-            Text(supporting, style = MaterialTheme.typography.bodySmall,
+            Text(
+                supporting,
+                style = MaterialTheme.typography.bodySmall,
                 fontFamily = if (mono) sh.zeron.android.design.GeistMono else null,
-                maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+            )
         },
-        trailingContent = {
-            if (selected) ZIcon(ZIcons.Check, "Selected", Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+        trailingContent = if (selected) {
+            {
+                Box(
+                    Modifier.size(28.dp).clip(androidx.compose.foundation.shape.CircleShape).background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) { ZIcon(ZIcons.Check, "Selected", Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+            }
+        } else {
+            null
         },
-    ) { Text(title) }
+        modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = androidx.compose.material3.ListItemDefaults.SegmentedGap),
+    ) { Text(title, style = MaterialTheme.typography.titleMedium) }
 }
 
+/**
+ * With a project: its checkouts, by host (the path tells apart several on
+ * one host). Without: every host — project-less sessions run in its home.
+ */
 @Composable
 private fun HostChip(
     draft: sh.zeron.android.core.NewSessionDraft,
@@ -499,15 +655,14 @@ private fun ModelChip(
             open = true
         }
     }
-    var currentAgentOnly by remember { mutableStateOf(false) }
-    LaunchedEffect(modelRequest) { if (modelRequest > 0) { currentAgentOnly = true; open = true } }
+    LaunchedEffect(modelRequest) { if (modelRequest > 0) open = true }
     // Never the harness name in place of a model.
     val title = choice?.model?.label ?: draft.model?.let { modelLabel(draft.harness, it) }
         ?: fallbackModels(draft.harness).firstOrNull()?.label ?: harnessLabel(draft.harness)
-    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { currentAgentOnly = false; open = true })
+    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { open = true })
     if (open) {
         // A tab per provider the target runs (the draft's first), each listing the models already loaded for it.
-        val order = if (currentAgentOnly) listOf(draft.harness) else (listOf(draft.harness) + models.map { it.harness }).distinct()
+        val order = (listOf(draft.harness) + models.map { it.harness }).distinct()
         val tabs = order.mapNotNull { h ->
             val list = models.filter { it.harness == h }
             val first = list.firstOrNull() ?: return@mapNotNull null

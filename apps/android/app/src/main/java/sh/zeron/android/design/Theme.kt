@@ -1,30 +1,33 @@
 package sh.zeron.android.design
 
+import android.os.Build
 import android.app.Activity
 import android.content.ContextWrapper
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.SideEffect
+import androidx.core.view.WindowCompat
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import androidx.core.view.WindowCompat
 
 /** Zeron Light / Zeron Dark (crates/theme builtins): cool neutrals, violet accent. */
 private val ZeronLight = lightColorScheme(
@@ -129,49 +132,49 @@ object LocalAssets {
     lateinit var manager: android.content.res.AssetManager
 }
 
-/** UIKit shell type sizes, independent of Material's display and label scales. */
+private fun TextStyle.geist() = copy(fontFamily = Geist)
+
 private fun zeronTypography(): Typography {
-    fun type(size: Float, line: Float, weight: FontWeight = FontWeight.Normal) = TextStyle(
-        fontFamily = Geist, fontWeight = weight, fontSize = size.sp, lineHeight = line.sp,
-        letterSpacing = 0.sp, platformStyle = PlatformTextStyle(includeFontPadding = false),
-    )
+    val base = Typography()
+    fun TextStyle.w(weight: FontWeight, tracking: Float? = null) =
+        geist().copy(fontWeight = weight, letterSpacing = tracking?.sp ?: letterSpacing)
     return Typography(
-        displayLarge = type(34f, 41f, FontWeight.SemiBold),
-        displayMedium = type(34f, 41f, FontWeight.SemiBold),
-        displaySmall = type(30f, 36f, FontWeight.SemiBold),
-        headlineLarge = type(30f, 36f, FontWeight.SemiBold),
-        headlineMedium = type(28f, 34f, FontWeight.SemiBold),
-        headlineSmall = type(22f, 28f, FontWeight.SemiBold),
-        titleLarge = type(20f, 25f, FontWeight.SemiBold),
-        titleMedium = type(16.5f, 22f, FontWeight.Medium),
-        titleSmall = type(15f, 20f, FontWeight.Medium),
-        bodyLarge = type(17f, 24f),
-        bodyMedium = type(15f, 21f),
-        bodySmall = type(13f, 18f),
-        labelLarge = type(15f, 20f, FontWeight.Medium),
-        labelMedium = type(13f, 18f, FontWeight.Medium),
-        labelSmall = type(11f, 14f, FontWeight.Medium),
-        displayLargeEmphasized = type(34f, 41f, FontWeight.SemiBold),
-        displayMediumEmphasized = type(34f, 41f, FontWeight.SemiBold),
-        displaySmallEmphasized = type(30f, 36f, FontWeight.SemiBold),
-        headlineLargeEmphasized = type(30f, 36f, FontWeight.SemiBold),
-        headlineMediumEmphasized = type(28f, 34f, FontWeight.SemiBold),
-        headlineSmallEmphasized = type(22f, 28f, FontWeight.SemiBold),
-        titleLargeEmphasized = type(20f, 25f, FontWeight.SemiBold),
-        titleMediumEmphasized = type(16.5f, 22f, FontWeight.SemiBold),
-        titleSmallEmphasized = type(15f, 20f, FontWeight.SemiBold),
-        bodyLargeEmphasized = type(17f, 24f, FontWeight.SemiBold),
-        bodyMediumEmphasized = type(15f, 21f, FontWeight.Medium),
-        bodySmallEmphasized = type(13f, 18f, FontWeight.Medium),
-        labelLargeEmphasized = type(15f, 20f, FontWeight.SemiBold),
-        labelMediumEmphasized = type(13f, 18f, FontWeight.SemiBold),
-        labelSmallEmphasized = type(11f, 14f, FontWeight.SemiBold),
+        displayLarge = base.displayLarge.w(FontWeight.SemiBold, -1.5f),
+        displayMedium = base.displayMedium.w(FontWeight.SemiBold, -1.2f),
+        displaySmall = base.displaySmall.w(FontWeight.SemiBold, -1f),
+        headlineLarge = base.headlineLarge.w(FontWeight.SemiBold, -0.6f),
+        headlineMedium = base.headlineMedium.w(FontWeight.SemiBold, -0.4f),
+        headlineSmall = base.headlineSmall.w(FontWeight.SemiBold, -0.3f),
+        titleLarge = base.titleLarge.w(FontWeight.SemiBold, -0.2f),
+        titleMedium = base.titleMedium.w(FontWeight.Medium),
+        titleSmall = base.titleSmall.w(FontWeight.Medium),
+        bodyLarge = base.bodyLarge.geist().copy(fontSize = 16.5.sp, lineHeight = 24.sp, letterSpacing = 0.sp),
+        bodyMedium = base.bodyMedium.geist().copy(letterSpacing = 0.sp),
+        bodySmall = base.bodySmall.geist().copy(letterSpacing = 0.sp),
+        labelLarge = base.labelLarge.w(FontWeight.Medium, 0f),
+        labelMedium = base.labelMedium.w(FontWeight.Medium, 0f),
+        labelSmall = base.labelSmall.w(FontWeight.Medium, 0f),
+        displayLargeEmphasized = base.displayLarge.w(FontWeight.Bold, -1.5f),
+        displayMediumEmphasized = base.displayMedium.w(FontWeight.Bold, -1.2f),
+        displaySmallEmphasized = base.displaySmall.w(FontWeight.Bold, -1f),
+        headlineLargeEmphasized = base.headlineLarge.w(FontWeight.Bold, -0.6f),
+        headlineMediumEmphasized = base.headlineMedium.w(FontWeight.Bold, -0.4f),
+        headlineSmallEmphasized = base.headlineSmall.w(FontWeight.Bold, -0.3f),
+        titleLargeEmphasized = base.titleLarge.w(FontWeight.Bold, -0.2f),
+        titleMediumEmphasized = base.titleMedium.w(FontWeight.SemiBold),
+        titleSmallEmphasized = base.titleSmall.w(FontWeight.SemiBold),
+        bodyLargeEmphasized = base.bodyLarge.w(FontWeight.Medium, 0f).copy(fontSize = 16.5.sp, lineHeight = 24.sp),
+        bodyMediumEmphasized = base.bodyMedium.w(FontWeight.Medium, 0f),
+        bodySmallEmphasized = base.bodySmall.w(FontWeight.Medium, 0f),
+        labelLargeEmphasized = base.labelLarge.w(FontWeight.SemiBold, 0f),
+        labelMediumEmphasized = base.labelMedium.w(FontWeight.SemiBold, 0f),
+        labelSmallEmphasized = base.labelSmall.w(FontWeight.SemiBold, 0f),
     )
 }
 
 enum class ThemeMode { System, Light, Dark }
 
-data class Appearance(val mode: ThemeMode = ThemeMode.System)
+data class Appearance(val mode: ThemeMode = ThemeMode.System, val dynamicColor: Boolean = false)
 
 /** Whether the resolved theme is dark (the transcript palette follows it). */
 val LocalDarkTheme = staticCompositionLocalOf { false }
@@ -184,7 +187,13 @@ fun ZeronTheme(appearance: Appearance = Appearance(), content: @Composable () ->
         ThemeMode.Light -> false
         ThemeMode.Dark -> true
     }
-    val scheme = if (dark) ZeronDark else ZeronLight
+    val context = LocalContext.current
+    val scheme: ColorScheme = when {
+        appearance.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dark -> ZeronDark
+        else -> ZeronLight
+    }
     val typography = remember { zeronTypography() }
     val view = LocalView.current
     val activity = remember(view) {
@@ -198,10 +207,10 @@ fun ZeronTheme(appearance: Appearance = Appearance(), content: @Composable () ->
             }
         }
     }
-    CompositionLocalProvider(LocalDarkTheme provides dark, LocalRippleConfiguration provides null) {
-        MaterialTheme(
+    CompositionLocalProvider(LocalDarkTheme provides dark) {
+        MaterialExpressiveTheme(
             colorScheme = scheme,
-            motionScheme = MotionScheme.standard(),
+            motionScheme = MotionScheme.expressive(),
             typography = typography,
             content = content,
         )

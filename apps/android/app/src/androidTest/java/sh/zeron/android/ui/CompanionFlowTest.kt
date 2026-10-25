@@ -38,7 +38,7 @@ class CompanionFlowTest {
             while (!tab.session.text(false).contains("companion-regression") && SystemClock.uptimeMillis() < outputDeadline) SystemClock.sleep(100)
             assertTrue(tab.session.text(false).contains("companion-regression"))
             requireNotNull(device.findObject(By.desc("Back"))).click()
-            requireNotNull(device.wait(Until.findObject(By.desc("Companions")), 5_000)).click()
+            requireNotNull(device.wait(Until.findObject(By.desc("Agents, side chats and terminals")), 5_000)).click()
             assertTrue(device.wait(Until.hasObject(By.text("Terminals")), 5_000))
             assertTrue(device.wait(Until.hasObject(By.text(tab.name)), 5_000))
         } finally { instrumentation.runOnMainSync { model.terminals.close(tab) } }
