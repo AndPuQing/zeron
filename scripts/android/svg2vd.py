@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SOURCES = [
+    ("", os.path.join(ROOT, "apps/android/icons/*.svg")),
     ("", os.path.join(ROOT, "crates/ui/assets/icons/*.svg")),
     ("", os.path.join(ROOT, "apps/ios/Zeron/Assets.xcassets/TabIcons/*/*.svg")),
     ("", os.path.join(ROOT, "apps/ios/Zeron/Assets.xcassets/ToolIcons/*/*.svg")),

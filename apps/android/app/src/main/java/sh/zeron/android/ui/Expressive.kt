@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsTopHeight
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -26,8 +27,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -130,6 +133,7 @@ fun FloatingNavBar(items: List<NavItem>, modifier: Modifier = Modifier, trailing
         ) {
             Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (item in items) {
+                    val tone = MaterialTheme.colorScheme.secondaryContainer
                     val bg by animateColorAsState(
                         if (item.selected) glassControlFill() else Color.Transparent,
                         MaterialTheme.motionScheme.defaultEffectsSpec(),
@@ -190,7 +194,26 @@ fun NewSessionBar(summary: String?, onClick: () -> Unit, modifier: Modifier = Mo
 
 val FloatingChromePadding = PaddingValues(bottom = 176.dp)
 
-/** The page tone behind the status bar once content scrolls under it. */
+/** The page tone behind the status bar once `list` scrolls content under it. */
+@Composable
+fun BoxScope.StatusBarScrim(list: LazyListState) {
+    // Derived: a raw scroll-offset read would recompose the calling screen on every scroll frame.
+    val scrolled by remember(list) { derivedStateOf { list.firstVisibleItemIndex > 0 || list.firstVisibleItemScrollOffset > 0 } }
+    // Fades from the page tone at zero alpha: Color.Transparent is black, so mid-fade is a grey band.
+    val background = MaterialTheme.colorScheme.background
+    val color by animateColorAsState(
+        if (scrolled) background else background.copy(alpha = 0f),
+        label = "status-scrim",
+    )
+    Box(
+        Modifier
+            .align(Alignment.TopCenter)
+            .fillMaxWidth()
+            .windowInsetsTopHeight(androidx.compose.foundation.layout.WindowInsets.statusBars)
+            .background(color),
+    )
+}
+
 @Composable
 fun BoxScope.StatusBarScrim(scrolled: Boolean) {
     val color by animateColorAsState(

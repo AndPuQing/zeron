@@ -54,7 +54,6 @@ object ZIcons {
     val Sun = R.drawable.zi_sun
     val Moon = R.drawable.zi_moon
     val Magic = R.drawable.zi_magic_stick_3
-    val Command = R.drawable.zi_command
     val Info = R.drawable.zi_info_circle
     val Logout = R.drawable.zi_logout_2
     val Offline = R.drawable.zi_wifi_off
@@ -67,6 +66,32 @@ object ZIcons {
     val MicrophoneOff = R.drawable.zi_microphone_off
     val HangUp = R.drawable.zi_phone_hang_up
     val Speaker = R.drawable.zi_volume_loud
+    val Collapse = R.drawable.zi_collapse_arrows
+    val Sort = R.drawable.zi_sort_vertical
+    val FolderTree = R.drawable.zi_folder_tree
+    val Worktree = R.drawable.zi_worktree
+    val Restart = R.drawable.zi_restart
+    val Command = R.drawable.zi_command
+    val Settings = R.drawable.zi_settings
+    val Terminal = R.drawable.zi_terminal
+    val Fork = R.drawable.zi_fork
+    val Bot = R.drawable.zi_bot
+    val SideChats = R.drawable.zi_chats
+    val Companions = R.drawable.zi_layers
+    val Keyboard = R.drawable.zi_keyboard
+    val KeyboardHide = R.drawable.zi_keyboard_hide
+    val Paste = R.drawable.zi_clipboard
+    val ArrowUp = R.drawable.zi_alt_arrow_up
+    val ArrowLeft = R.drawable.zi_alt_arrow_left
+    val ArrowRight = R.drawable.zi_alt_arrow_right
+    val Minus = R.drawable.zi_minus
+    val Cloud = R.drawable.zi_cloud
+    val Wallet = R.drawable.zi_wallet
+    val Key = R.drawable.zi_key_minimalistic
+    val Globe = R.drawable.zi_global
+    val GitHub = R.drawable.zi_github
+    val Share = R.drawable.zi_share
+    val Zeron = R.drawable.zi_zeron
 }
 
 @Composable

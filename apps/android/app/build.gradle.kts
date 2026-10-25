@@ -64,6 +64,7 @@ val genIcons by tasks.registering(Exec::class) {
     val out = iconsOut.get().asFile
     inputs.dir(repoRoot.resolve("apps/ios/Zeron/Assets.xcassets"))
     inputs.dir(repoRoot.resolve("crates/ui/assets/icons"))
+    inputs.dir(repoRoot.resolve("apps/android/icons"))
     inputs.file(repoRoot.resolve("scripts/android/svg2vd.py"))
     outputs.dir(out)
     commandLine("bash", repoRoot.resolve("scripts/android/gen-icons.sh").path, out.resolve("assets/icons").path, out.resolve("res").path)
@@ -79,6 +80,7 @@ android {
         applicationId = "work.puqing.zerun.android"
         minSdk = 29
         targetSdk = 37
+        ndk { abiFilters += (System.getenv("ZERON_ANDROID_ABIS") ?: "arm64-v8a x86_64").split(" ").filter { it.isNotBlank() } }
         versionCode = forkVersionCode.toInt()
         versionName = forkVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -134,7 +136,12 @@ android {
         res.directories.add(iconsOut.get().asFile.resolve("res").path)
     }
 
-    packaging { jniLibs { useLegacyPackaging = false } }
+    // Compressed: the APK is downloaded from the release feed, not delivered by Play
+    // (which compresses for transfer itself); about a third of the size.
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+        dex { useLegacyPackaging = true }
+    }
 }
 
 // JVM unit tests use the host library built for UniFFI metadata, not Android's .so.

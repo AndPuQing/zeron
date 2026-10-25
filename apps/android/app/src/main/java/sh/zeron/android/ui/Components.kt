@@ -136,3 +136,36 @@ fun StatusLabel(row: SessionRow) {
 
 @Composable
 fun chipContainer(): Color = glassControlFill()
+
+/** Segmented list shapes, with a lone item rounded like a whole group. */
+@Composable
+fun segmentedShapes(index: Int, count: Int): androidx.compose.material3.ListItemShapes =
+    if (count == 1) {
+        androidx.compose.material3.ListItemDefaults.shapes(shape = RoundedCornerShape(24.dp))
+    } else {
+        androidx.compose.material3.ListItemDefaults.segmentedShapes(index, count)
+    }
+
+/** Inside a full-screen dialog: status and navigation bar icons that read on the page (dark on light). */
+@Composable
+fun DialogSystemBars(lightIcons: Boolean = LocalDarkTheme.current) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    androidx.compose.runtime.SideEffect {
+        val window = (view.parent as? androidx.compose.ui.window.DialogWindowProvider)?.window ?: return@SideEffect
+        androidx.core.view.WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !lightIcons
+            isAppearanceLightNavigationBars = !lightIcons
+        }
+    }
+}
+
+@Composable
+fun composerContainer(): Color =
+    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
+
+@Composable
+fun HarnessTile(row: uniffi.zeron_core.SessionRow) {
+    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        sh.zeron.android.design.HarnessMark(row.harness, 24.dp, tint = MaterialTheme.colorScheme.onSurface)
+    }
+}

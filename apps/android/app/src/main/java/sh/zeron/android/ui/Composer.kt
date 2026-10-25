@@ -114,6 +114,10 @@ fun Composer(
     onNavigate: (MobileComposerAction) -> Unit,
     onSideChat: suspend (Boolean) -> Unit,
     onArchived: () -> Unit,
+    /** Asked before a new message goes out; false keeps it (a Cloud chat out of credits). */
+    beforeSend: () -> Boolean = { true },
+    /** Open the model picker once (a debug launch extra, for screenshots). */
+    openModelPicker: Boolean = false,
 ) {
     draft.commandContext = "${c.chatId}:${c.host.deviceId}:${row?.harness}"
     val scope = rememberCoroutineScope()
@@ -201,6 +205,7 @@ fun Composer(
             restoreStash()
             return
         }
+        if (!beforeSend()) return
         val body = draft.encoded()
         try {
             val queued = running && delivery == Delivery.Queue
@@ -213,6 +218,8 @@ fun Composer(
                     if (running && delivery == Delivery.Steer) BusyPolicy.STEER else BusyPolicy.QUEUE,
                 ),
             )
+            model.noteDeliveryActivity()
+            model.drafts.save(c.chatId, "")
             draft.clear()
             error = null
             delivery = Delivery.Queue
@@ -348,7 +355,9 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
             .onFailure { configError = it.message ?: "Couldn't update this chat." }
     }
 
-    val modelLabel = row?.modelLabel ?: row?.harnessLabel
+    // No model of its own: it runs the provider's default, so that's the one named.
+    val fallback = remember(harness) { fallbackModels(harness).firstOrNull() }
+    val modelLabel = row?.modelLabel ?: fallback?.label ?: row?.harnessLabel
     if (modelLabel != null) {
         ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = { menu = "model" })
     }
@@ -398,84 +407,6 @@ fun StatusBanner(text: String, action: Pair<String, () -> Unit>?) {
         Row(Modifier.padding(start = 16.dp, end = if (action != null) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(vertical = 10.dp).weight(1f, fill = false))
             action?.let { (label, run) -> AppTextButton(onClick = run) { Text(label) } }
-        }
-    }
-}
-
-/** The agent asked something: pick its options, or type when it offers none. */
-@OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalLayoutApi::class)
-@Composable
-fun QuestionPanel(input: InputRequest, onSubmit: (List<UserInputAnswer>) -> Unit) {
-    val picked = remember(input.requestId) { input.questions.associate { it.id to mutableStateListOf<String>() } }
-    val typed = remember(input.requestId) {
-        input.questions.associate { it.id to mutableStateOf(it.prefill.orEmpty()) }
-    }
-    GlassSurface(
-        shape = RoundedCornerShape(GlassMetrics.cardRadius),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            for (q in input.questions) {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (q.header.isNotEmpty()) Text(q.header, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-                    Text(q.question, style = MaterialTheme.typography.bodyLarge)
-                    if (q.options.isEmpty()) {
-                        // Free-text questions (dsh elicitation fields) have no
-                        // buttons; without this field they could never be
-                        // answered and the run would wait forever.
-                        AppTextField(
-                            value = typed.getValue(q.id).value,
-                            onValueChange = { typed.getValue(q.id).value = it },
-                            singleLine = !q.multiline,
-                            minLines = if (q.multiline) 3 else 1,
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            val selection = picked.getValue(q.id)
-                            q.options.forEachIndexed { index, option ->
-                                val chosen = option in selection
-                                Surface(shape = RoundedCornerShape(14.dp),
-                                    color = if (chosen) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else chipContainer(),
-                                    contentColor = if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                ) {
-                                    Row(Modifier.fillMaxWidth().pressable(role = if (q.multiSelect) Role.Checkbox else Role.RadioButton) {
-                                        if (!q.multiSelect) selection.clear()
-                                        if (!chosen) selection.add(option) else selection.remove(option)
-                                    }.semantics { selected = chosen }.padding(horizontal = 14.dp, vertical = 12.dp),
-                                        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        if (chosen) ZIcon(ZIcons.Check, null, Modifier.size(18.dp))
-                                        else Text("${index + 1}", style = MaterialTheme.typography.bodyMedium)
-                                        Text(option, style = MaterialTheme.typography.titleMedium)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            val ready = input.questions.all { q ->
-                picked.getValue(q.id).isNotEmpty() || typed.getValue(q.id).value.isNotBlank()
-            }
-            AppButton(
-                onClick = {
-                    onSubmit(
-                        input.questions.map { q ->
-                            val text = typed.getValue(q.id).value
-                            // Typed text overrides picks, matching the desktop
-                            // and iOS panels.
-                            val labels = if (text.isNotBlank()) listOf(text) else picked.getValue(q.id).toList()
-                            UserInputAnswer(q.id, labels)
-                        }
-                    )
-                },
-                enabled = ready,
-                modifier = Modifier.align(Alignment.End),
-            ) {
-                ZIcon(ZIcons.Send, null, Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text("Answer")
-            }
         }
     }
 }

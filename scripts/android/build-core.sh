@@ -30,8 +30,8 @@ cd "$ROOT"
 # The host library supplies UniFFI metadata and backs JVM unit tests. Build it
 # and bindgen together
 # in the dev profile; the Android libraries below still use the mobile profile.
-CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p zeron-mobile --lib \
-  --bin uniffi-bindgen --features bindgen
+CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p zeron-mobile --lib
+CARGO_PROFILE_DEV_DEBUG=0 cargo build --locked -p zeron-mobile-bindgen
 HOST_LIB="$ROOT/target/debug/libzeron_mobile.$([[ "$(uname)" == Darwin ]] && echo dylib || echo so)"
 "$ROOT/target/debug/uniffi-bindgen" generate --library "$HOST_LIB" --language kotlin \
   --metadata-no-deps --no-format --out-dir "$OUT/kotlin"
@@ -40,5 +40,5 @@ echo "kotlin bindings: $OUT/kotlin"
 # Luau links the NDK C++ runtime; cargo-ndk also copies it into each ABI's
 # jniLibs directory so Android can load the mobile core.
 cargo ndk "${ABIS[@]}" --link-libcxx-shared -o "$OUT/jniLibs" \
-  build --locked -p zeron-mobile --lib --profile mobile
+  build --locked -p zeron-mobile --lib --profile "${ZERON_ANDROID_PROFILE:-mobile}"
 echo "jniLibs: $OUT/jniLibs"

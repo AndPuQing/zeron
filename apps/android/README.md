@@ -295,3 +295,19 @@ adb shell am start -n work.puqing.zerun.android/sh.zeron.android.MainActivity \
 | `--ez signedout true` | Clear stored credentials |
 | `--es wallpaper <path>` / `none` | Set (or clear) the wallpaper from a file the app can read, e.g. `adb push art.jpg /data/local/tmp/ && adb shell run-as work.puqing.zerun.android cp /data/local/tmp/art.jpg files/` then `--es wallpaper /data/user/0/work.puqing.zerun.android/files/art.jpg` |
 | `--es wallpaper-effect <none\|dither\|ascii\|halftone\|scanlines>` | Wallpaper effect |
+
+## Synced companion features
+
+Sessions can open a host terminal, subagent transcripts and a companions sheet.
+On tablets and unfolded foldables, the session and companions use separate columns;
+Ctrl+N, Ctrl+Shift+F, Ctrl+B and Ctrl+J navigate the shell with a hardware keyboard.
+New sessions group project checkouts across hosts, can add a typed project folder,
+and use the searchable, swipeable model sheet.
+
+The fork retains its existing voice media/service generation guards, Providers
+login flow, onboarding, updater/signing and composer draft storage. Closing an
+unused side chat does not delete it automatically: an unsent attachment or queued
+edit can still belong to its retained composer. Cloud modules are present but
+provisioning remains disabled by this fork's edge configuration. New screenshots
+imported with these modules are upstream reference assets, not captures of this
+fork's current UI.

@@ -19,10 +19,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.overscroll
 import androidx.compose.foundation.rememberOverscrollEffect
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.FileCopy
-import androidx.compose.material.icons.outlined.TextFields
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -80,6 +76,12 @@ class TranscriptActions(
     val showText: (title: String, text: String, mono: Boolean) -> Unit,
     /** A widget button (`WidgetKind.Action`): `action` names what, `label` is its title. */
     val perform: (action: String, label: String) -> Unit = { _, _ -> },
+    /** Open an attachment full size (a tapped image, or an image chip's upload). */
+    val openImage: (String) -> Unit = {},
+    /** A subagent card was tapped: its transcript doc, title, and whether it still runs. */
+    val openSubagent: (docId: String, title: String, running: Boolean) -> Unit = { _, _, _ -> },
+    /** An in-transcript button (`sign-in` on an error card). */
+    val act: (String) -> Unit = {},
 )
 
 private const val OVERSCAN = 700f

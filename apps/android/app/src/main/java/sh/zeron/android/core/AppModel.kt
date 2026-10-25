@@ -7,6 +7,8 @@ import android.net.NetworkCapabilities
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
+import android.os.SystemClock
+import uniffi.zeron_core.SendState
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
@@ -61,6 +63,12 @@ data class LaunchOptions(
     val noProjects: Boolean = false,
     val signedOut: Boolean = false,
     val route: String? = null,
+    /** `--es companion companions|terminal|side-chat:<id>|subagent:<tool id>`: open it over the routed chat (screenshots). */
+    val companion: String? = null,
+    /** `--ez terminal-demo true`: the opened terminal types a short script. */
+    val terminalDemo: Boolean = false,
+    /** `--ez cloud true`: offer Cloud in the demo (its pages read the demo's Cloud). */
+    val cloud: Boolean = false,
     val wallpaper: String? = null,
     val wallpaperEffect: String? = null,
     val voicePreview: Boolean = false,
@@ -101,6 +109,13 @@ class AppModel(private val app: Application) {
     val orgChoice = MutableStateFlow<Pair<List<AuthOrg>, CompletableDeferred<AuthOrg?>>?>(null)
     val signInError = MutableStateFlow<String?>(null)
 
+    val drafts = Drafts(app)
+    data class Toast(val message: String, val action: String?, val run: (() -> Unit)?)
+    val toasts = MutableSharedFlow<Toast>(extraBufferCapacity = 8)
+    fun toast(message: String, action: String? = null, run: (() -> Unit)? = null) {
+        toasts.tryEmit(Toast(message, action, run))
+    }
+
     private val settings = app.getSharedPreferences("settings", 0)
     val onboarding = OnboardingState(
         read = { settings.getString(it, null) },
@@ -138,9 +153,19 @@ class AppModel(private val app: Application) {
                     .putString("draft.harness", value.harness)
                     .putString("draft.model", value.model)
                     .putString("draft.effort", value.effort)
+                    .putBoolean("draft.cloud", value.cloud)
                     .apply()
             }
         }
+
+    private fun storedDraft() = NewSessionDraft(
+        projectId = settings.getString("draft.project", null),
+        hostId = settings.getString("draft.host", null),
+        harness = settings.getString("draft.harness", null) ?: "claude-code",
+        model = settings.getString("draft.model", null),
+        effort = settings.getString("draft.effort", null),
+        cloud = settings.getBoolean("draft.cloud", false),
+    )
 
     var launch = LaunchOptions()
         private set
@@ -238,10 +263,23 @@ class AppModel(private val app: Application) {
             _client.value = client
             refreshWorkspace()
             client.preloadSessions()
+            cloud.refresh()
+            backfillProfile()
             true
         } catch (e: Exception) {
             Log.e("Zeron", "core start failed", e)
             false
+        }
+    }
+
+    private fun backfillProfile() {
+        val stored = credentials.stored() as? Credentials.WorkOs ?: return
+        if (credentials.profile.orgName != null) return
+        scope.launch {
+            val orgs = runCatching { authListOrgs(edgeUrl, stored.tokens.accessToken) }.getOrNull() ?: return@launch
+            val org = orgs.firstOrNull { it.organizationId == stored.orgId } ?: return@launch
+            credentials.profile = credentials.profile.copy(orgName = org.name)
+            refreshWorkspace()
         }
     }
 
@@ -322,6 +360,10 @@ class AppModel(private val app: Application) {
         voice.reset()
         signInState.clear()
         val wasDemo = isDemo
+        endDeliveryHold()
+        lastDeliveryActivity = 0L
+        terminals.signOut()
+        cloud.reset()
         _client.value?.shutdown()
         _client.value = null
         _workspace.value = null
@@ -372,15 +414,27 @@ class AppModel(private val app: Application) {
         val client = _client.value ?: return
         _workspace.value = client.workspace()
         voice.refresh()
+        sweepFreshSideChats()
     }
 
     fun onForeground() {
+        endDeliveryHold()
         updates.onForeground()
         _client.value?.onForeground()
         refreshWorkspace()
     }
 
+    private var lastDeliveryActivity = 0L
+    fun noteDeliveryActivity() { lastDeliveryActivity = SystemClock.elapsedRealtime() }
+    private fun endDeliveryHold() = DeliveryService.release(app)
     fun onBackground() {
+        endDeliveryHold()
+        val recent = lastDeliveryActivity != 0L && SystemClock.elapsedRealtime() - lastDeliveryActivity < 120_000
+        val pending = _workspace.value?.let { ws ->
+            (ws.front.pinned + ws.front.sections.flatMap { it.sessions } + ws.front.recent)
+                .any { it.sendState == SendState.SENDING || it.sendState == SendState.QUEUED }
+        } == true
+        if (_client.value != null && !isDemo && (recent || pending)) DeliveryService.hold(app, 25_000)
         _client.value?.onBackground()
     }
 
@@ -425,6 +479,8 @@ class AppModel(private val app: Application) {
     fun archive(id: String) = attempt("archive") { _client.value?.archiveSession(id) }
     fun unarchive(id: String) = attempt("unarchive") { _client.value?.unarchiveSession(id) }
     fun rename(id: String, title: String) = attempt("rename") { _client.value?.renameSession(id, title) }
+    fun markSeen(id: String) = attempt("seen") { _client.value?.markSeen(id) }
+
     fun deleteSession(id: String) {
         checkNotNull(_client.value) { "Not signed in." }.deleteSession(id)
         refreshWorkspace()
@@ -440,7 +496,10 @@ class AppModel(private val app: Application) {
         val client = checkNotNull(_client.value) { "Not signed in." }
         check(_sideChatBusy.compareAndSet(false, true)) { "A side chat is already being created." }
         return try {
-            client.createSideChat(parentId, null).also { refreshWorkspace() }
+            client.createSideChat(parentId, null).also {
+                freshSideChats = freshSideChats + it
+                refreshWorkspace()
+            }
         } finally {
             _sideChatBusy.value = false
         }
@@ -456,6 +515,105 @@ class AppModel(private val app: Application) {
         } finally {
             _sideChatBusy.value = false
         }
+    }
+
+    /** Delete for good (the desktop's "Delete session"). */
+    fun delete(id: String) = attempt("delete") {
+        _client.value?.deleteSession(id)
+        drafts.save(id, "")
+        refreshWorkspace()
+    }
+
+    /** A device's name ("MacBook Pro"), or a stand-in. */
+    fun deviceName(deviceId: String): String =
+        _workspace.value?.devices?.firstOrNull { it.id == deviceId }?.name ?: "its computer"
+
+    // ── companions (side chats, subagents, terminals) ──────────────────────
+
+    /** Cloud for this account (status, GitHub, agent logins, billing). */
+    val cloud = CloudStore(scope, { _client.value }, { refreshWorkspace() })
+
+    /** Pages opened in the browser that hand back through a `zeron://` link. */
+    val browser = BrowserReturns()
+
+    /** Cloud is offered here (the demo shows it with `--ez cloud true`). */
+    val cloudOffered: Boolean get() = if (isDemo) launch.cloud else cloud.available
+
+    /** Every chat's terminals (shells on their hosts). */
+    val terminals = TerminalStore(app) { _client.value }
+
+    /** A session's side chats, newest first. */
+    fun sideChats(chatId: String): List<SessionRow> =
+        _client.value?.childSessions(chatId).orEmpty().filter { !it.archived }
+
+    /** The subagents a session's agent spawned (its open transcript). */
+    fun sessionSubagents(chatId: String): List<uniffi.zeron_core.SubagentRow> {
+        val client = _client.value ?: return emptyList()
+        if ("--sub--" in chatId) return emptyList()
+        val handle = client.session(chatId) ?: runCatching { client.openSession(chatId) }.getOrNull()
+        return handle?.subagents().orEmpty()
+    }
+
+    /**
+     * Side chats started here that nothing has been sent in yet: closed
+     * unused, they go (the desktop only writes one at its first send). Kept
+     * across launches, so one left open when the app was killed goes too.
+     */
+    private var freshSideChats: Set<String> = settings.getStringSet("freshSideChats", emptySet())!!.toSet()
+        set(value) {
+            field = value
+            settings.edit().putStringSet("freshSideChats", value).apply()
+        }
+
+    fun isFreshSideChat(id: String) = id in freshSideChats
+    fun forgetFreshSideChat(id: String) { freshSideChats = freshSideChats - id }
+
+    /** Chats with a session screen up (the sweep leaves those alone). */
+    val openChats = HashSet<String>()
+
+    /** A chat that got a message is no longer a fresh, unused side chat. */
+    private fun sweepFreshSideChats() {
+        if (freshSideChats.isEmpty()) return
+        for (id in freshSideChats) {
+            val row = row(id) ?: continue
+            if (row.preview != null) {
+                forgetFreshSideChat(id)
+            }
+        }
+    }
+
+    /** Open composers by chat: text handed to a chat (terminal output) lands in its draft. */
+    val composerSinks = HashMap<String, (String) -> Unit>()
+
+    /** Text into a chat's composer, after what's there (or its saved draft when it isn't open). */
+    fun appendToComposer(chatId: String, text: String) {
+        composerSinks[chatId]?.let { return it(text) }
+        val draft = drafts.load(chatId)
+        drafts.save(chatId, if (draft.isEmpty()) text else draft + "\n" + text)
+    }
+
+    /** A Cloud chat created whose first message didn't go out yet (key → chat). */
+    private var unsentCloudChat: Pair<String, String>? = null
+
+    /**
+     * A session on its own Cloud machine in `draft.projectId` (a Cloud
+     * project, or any project whose repository Cloud reaches): the edge mints
+     * the machine, then the first message is sent as usual — it waits in the
+     * chat until the machine is up.
+     */
+    suspend fun createCloudSession(draft: NewSessionDraft, text: String, attachments: List<uniffi.zeron_core.OutgoingAttachment>): String {
+        val client = _client.value ?: throw uniffi.zeron_core.CoreException.Closed()
+        val spaceId = draft.projectId ?: throw uniffi.zeron_core.CoreException.InvalidArgument("Choose a project")
+        val config = ChatConfig(draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        // A retry after a failed first send reuses that chat (and machine), while nothing it was made with changed.
+        val key = "$spaceId|${draft.branch.orEmpty()}|${draft.harness}|${draft.model.orEmpty()}"
+        val chatId = unsentCloudChat?.takeIf { it.first == key && client.sessionRow(it.second) != null }?.second
+            ?: client.createCloudSession(spaceId, config, draft.branch, null).also { unsentCloudChat = key to it }
+        client.openSession(chatId).send(SendRequest(text, attachments, null, BusyPolicy.QUEUE))
+        unsentCloudChat = null
+        noteDeliveryActivity()
+        refreshWorkspace()
+        return chatId
     }
 
     /** Create the chat and send its first message. */
@@ -491,4 +649,6 @@ data class NewSessionDraft(
     val effort: String? = null,
     val branch: String? = null,
     val worktree: Boolean = false,
+    /** Run on its own Cloud machine (a project whose repository Cloud reaches). */
+    val cloud: Boolean = false,
 )

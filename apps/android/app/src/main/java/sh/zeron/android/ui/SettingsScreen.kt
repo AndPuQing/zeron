@@ -158,7 +158,7 @@ private fun LazyListScope.section(title: String) {
 
 /** Settings use unboxed, secondary glyphs, matching the iOS grouped cells. */
 @Composable
-fun IconTile(icon: Int, content: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
+fun IconTile(icon: Int, container: Color = Color.Transparent, content: Color = MaterialTheme.colorScheme.onSurfaceVariant) {
     Box(Modifier.size(22.dp), contentAlignment = Alignment.Center) { ZIcon(icon, null, Modifier.size(20.dp), tint = content) }
 }
 

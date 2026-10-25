@@ -1,7 +1,9 @@
 package sh.zeron.android
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +42,9 @@ class MainActivity : ComponentActivity() {
                 noProjects = extras?.getBoolean("noprojects") == true,
                 signedOut = extras?.getBoolean("signedout") == true,
                 route = extras?.getString("route"),
+                companion = extras?.getString("companion"),
+                terminalDemo = extras?.getBoolean("terminal-demo") == true,
+                cloud = extras?.getBoolean("cloud") == true,
                 wallpaper = extras?.getString("wallpaper"),
                 wallpaperEffect = extras?.getString("wallpaper-effect"),
                 voicePreview = extras?.getBoolean("voice-preview") == true,
@@ -52,6 +57,40 @@ class MainActivity : ComponentActivity() {
         setContent { ZeronRoot(model) }
     }
 
+    // Some OEMs (Nothing OS) hold third-party windows below the panel's peak rate unless they ask for
+    // a display mode. Ask while the user is touching the app and for a while after (flings, the next
+    // gesture: each switch costs one long frame), then hand the choice back so an idle screen doesn't
+    // stay pinned at the peak rate.
+    private val fastestModeId by lazy { fastestDisplayModeId() }
+    private val releaseFastestMode = Runnable { preferDisplayMode(0) }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                window.decorView.removeCallbacks(releaseFastestMode)
+                preferDisplayMode(fastestModeId)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                window.decorView.postDelayed(releaseFastestMode, 10_000)
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    private fun preferDisplayMode(id: Int) {
+        if (window.attributes.preferredDisplayModeId != id) {
+            window.attributes = window.attributes.apply { preferredDisplayModeId = id }
+        }
+    }
+
+    private fun fastestDisplayModeId(): Int {
+        @Suppress("DEPRECATION")
+        val display = (if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay) ?: return 0
+        val current = display.mode
+        return display.supportedModes
+            .filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+            .maxByOrNull { it.refreshRate }?.modeId ?: 0
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleCallback(intent)
@@ -61,6 +100,7 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         model.updates.onResume(this)
+        model.browser.resumes.tryEmit(Unit)
     }
 
     override fun onDestroy() {
@@ -75,5 +115,6 @@ class MainActivity : ComponentActivity() {
             "callback" -> model.handleCallback(data.toString())
             "signed-in" -> model.agentSignIn.browserReturned()
         }
+        if (data.host != "callback") model.browser.links.tryEmit(data)
     }
 }

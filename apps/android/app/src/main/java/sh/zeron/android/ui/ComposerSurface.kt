@@ -15,6 +15,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.DropdownMenuGroup
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuPopup
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -166,6 +176,24 @@ internal fun MenuRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.45f)) }
             }
             trailing?.invoke()
+        }
+    }
+}
+
+/** Groups share the fork's compact menu rows and trailing action glyphs. */
+@Composable
+fun GroupedActionMenu(expanded: Boolean, onDismiss: () -> Unit, groups: List<List<MenuAction>>, header: String? = null) {
+    AppMenuPopup(expanded, onDismiss) {
+        header?.let { Text(it, modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.labelMedium) }
+        groups.filter { it.isNotEmpty() }.forEachIndexed { groupIndex, actions ->
+            if (groupIndex > 0) Hairline()
+            actions.forEach { action ->
+                MenuRow(action.label, action.supporting, action.enabled, destructive = action.destructive,
+                    trailing = { sh.zeron.android.design.ZIcon(action.icon, null, Modifier.size(20.dp)) }) {
+                    onDismiss()
+                    action.onClick()
+                }
+            }
         }
     }
 }

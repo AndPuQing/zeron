@@ -71,7 +71,7 @@ private fun catalogModels(): List<ModelChoice> = fallbackHarnesses().filter { it
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, composer: ComposerModel = remember { ComposerModel() }) {
+fun NewSessionScreen(model: AppModel, onClose: (() -> Unit)?, onCreated: (String) -> Unit, onNavigate: (MobileComposerAction) -> Unit = {}, composer: ComposerModel = remember { ComposerModel() }, focusOnAppear: Boolean = true) {
     val workspace by model.workspace.collectAsState()
     val client by model.client.collectAsState()
     var draft by remember { mutableStateOf(model.lastDraft) }
@@ -79,7 +79,8 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    val projects = workspace?.projects.orEmpty()
+    var newProject by remember { mutableStateOf(false) }
+    val projects = workspace?.projects.orEmpty().filter { !it.isCloud }
     val hosts = workspace?.devices.orEmpty().filter { it.isExecutionHost }
     val project = projects.firstOrNull { it.id == draft.projectId }
     LaunchedEffect(workspace) {
@@ -111,7 +112,7 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
     val choice = models.firstOrNull { it.harness == draft.harness && it.model.id == draft.model }
         ?: models.firstOrNull { it.harness == draft.harness }
 
-    LaunchedEffect(Unit) { focus.requestFocus() }
+    LaunchedEffect(Unit) { if (focusOnAppear) focus.requestFocus() }
 
     fun create() {
         if (composer.selectionError != null) return
@@ -154,7 +155,7 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
             snackbarHost = { AppSnackbarHost(snackbar) },
             topBar = {
                 Box(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterStart) {
-                    TonalCircleButton(ZIcons.Close, "Close", onClick = onClose)
+                    onClose?.let { TonalCircleButton(ZIcons.Close, "Close", onClick = it) }
                 }
             },
         ) { padding ->
@@ -206,13 +207,13 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
                         .widthIn(max = 768.dp)
                         .onGloballyPositioned { composerBounds = it.boundsInRoot() },
                 ) {
-                    ProjectChip(draft, projects, onPick = { draft = it })
+                    ProjectChip(draft, projects, onPick = { draft = it }, onNewProject = { newProject = true })
                     if (project != null) {
                         if (project.gitDetected) BranchChip(model, draft, project.deviceId, project.path) { draft = it }
-                    } else {
-                        HostChip(draft, hosts) { draft = it }
                     }
-                    ModelChip(draft, choice, models, modelRequest) { draft = it }
+                    HostChip(draft, project, projects, hosts) { draft = it }
+                    ModelChip(draft, choice, models, modelRequest = modelRequest,
+                        host = project?.deviceName ?: hosts.firstOrNull { it.id == draft.hostId }?.name ?: "This computer", hostIcon = ZIcons.Laptop) { draft = it }
                     val efforts = choice?.model?.reasoningLevels.orEmpty()
                     if (efforts.isNotEmpty()) {
                         val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
@@ -222,6 +223,9 @@ fun NewSessionScreen(model: AppModel, onClose: () -> Unit, onCreated: (String) -
             }
         }
     }
+    if (newProject) NewProjectScreen(model, onDismiss = { newProject = false }) { id ->
+        draft = draft.copy(projectId = id, hostId = null, branch = null)
+    }
 }
 
 @Composable
@@ -229,67 +233,80 @@ private fun ProjectChip(
     draft: sh.zeron.android.core.NewSessionDraft,
     projects: List<uniffi.zeron_core.ProjectView>,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
+    onNewProject: () -> Unit,
+    /** Make a GitHub repository a project on Cloud (when Cloud is offered). */
+    onNewCloudProject: (() -> Unit)? = null,
 ) {
     var open by remember { mutableStateOf(false) }
     val project = projects.firstOrNull { it.id == draft.projectId }
     ContextChip(
-        project?.name ?: "No project",
+        project?.groupName ?: "No project",
         leading = {
-            if (project != null) ProjectTile(project.name, project.colorIndex.toInt(), 18.dp)
+            if (project != null) ProjectTile(project.groupName, project.colorIndex.toInt(), 18.dp)
             else ZIcon(ZIcons.Home, null, Modifier.size(16.dp))
         },
         onClick = { open = true },
     )
-    if (open) ProjectSheet(draft, projects, onDismiss = { open = false }) {
+    if (open) ProjectSheet(draft, projects, onDismiss = { open = false }, onNewProject = {
+        open = false
+        onNewProject()
+    }, onNewCloudProject = onNewCloudProject?.let { run -> { open = false; run() } }) {
         onPick(it)
         open = false
     }
 }
 
-/** Projects grouped by the machine they live on; the choice keeps its tile and gains a check. */
+/**
+ * One entry per project — checkouts of one repository, on any device, are
+ * one entry listing their hosts; the host chip then picks which.
+ */
 @Composable
 private fun ProjectSheet(
     draft: sh.zeron.android.core.NewSessionDraft,
     projects: List<uniffi.zeron_core.ProjectView>,
     onDismiss: () -> Unit,
+    onNewProject: () -> Unit,
+    onNewCloudProject: (() -> Unit)?,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
-    AppSheet("Project", onDismiss) {
-        androidx.compose.foundation.lazy.LazyColumn(Modifier.weight(1f, fill = false), contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
-            val byDevice = projects.groupBy { it.deviceId }.values.sortedByDescending { it.first().deviceOnline }
-            for (group in byDevice) {
-                val host = group.first()
-                item("h-${host.deviceId}") {
-                    androidx.compose.foundation.layout.Row(
-                        Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
+    val sheet = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val picked = projects.firstOrNull { it.id == draft.projectId }
+    val groups = remember(projects) {
+        projects.groupBy { it.groupKey }.values.sortedBy { it.first().groupName.lowercase() }
+    }
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheet,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+    ) {
+        androidx.compose.foundation.lazy.LazyColumn(contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 24.dp)) {
+            item {
+                Text(
+                    "Project",
+                    style = MaterialTheme.typography.headlineSmallEmphasized,
+                    modifier = Modifier.padding(start = 24.dp, bottom = 16.dp),
+                )
+            }
+            groups.forEachIndexed { i, members ->
+                val first = members.first()
+                item(first.groupKey) {
+                    val hosts = members.map { it.deviceName ?: "Host" }.distinct().sortedBy { it.lowercase() }
+                    ProjectRow(
+                        selected = first.groupKey == picked?.groupKey,
+                        index = i,
+                        count = groups.size,
+                        leading = { ProjectTile(first.groupName, first.colorIndex.toInt(), 40.dp) },
+                        title = first.groupName,
+                        supporting = hosts.joinToString(", "),
+                        mono = false,
                     ) {
-                        ZIcon(ZIcons.Laptop, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.size(8.dp))
-                        Text(host.deviceName ?: "Host", style = MaterialTheme.typography.titleSmallEmphasized, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.size(8.dp))
-                        Box(
-                            Modifier.size(8.dp).clip(androidx.compose.foundation.shape.CircleShape).background(
-                                if (host.deviceOnline) successColor() else MaterialTheme.colorScheme.outlineVariant,
-                            ),
-                        )
-                        if (!host.deviceOnline) {
-                            Spacer(Modifier.size(6.dp))
-                            Text("Offline", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
-                        }
-                    }
-                }
-                group.forEachIndexed { i, p ->
-                    item(p.id) {
-                        ProjectRow(
-                            selected = p.id == draft.projectId,
-                            index = i,
-                            count = group.size,
-                            leading = { ProjectTile(p.name, p.colorIndex.toInt(), 40.dp) },
-                            title = p.name,
-                            supporting = p.path.replace(Regex("^/(Users|home)/[^/]+"), "~"),
-                            mono = true,
-                        ) { onPick(draft.copy(projectId = p.id, hostId = null, branch = null)) }
+                        // Keep the host when it has a checkout of the project, else the first reachable one.
+                        val device = picked?.deviceId ?: draft.hostId
+                        val pick = members.firstOrNull { it.id == draft.projectId }
+                            ?: members.firstOrNull { it.deviceId == device }
+                            ?: members.firstOrNull { it.deviceOnline }
+                            ?: first
+                        onPick(draft.copy(projectId = pick.id, hostId = null, branch = if (pick.id == draft.projectId && !draft.cloud) draft.branch else null, cloud = pick.isCloud))
                     }
                 }
             }
@@ -298,12 +315,38 @@ private fun ProjectSheet(
                 ProjectRow(
                     selected = draft.projectId == null,
                     index = 0,
-                    count = 1,
+                    count = if (onNewCloudProject != null) 3 else 2,
                     leading = { IconTile(ZIcons.Home) },
                     title = "No project",
                     supporting = "Run in a host's home folder",
                     mono = false,
-                ) { onPick(draft.copy(projectId = null, hostId = draft.hostId ?: projects.firstOrNull()?.deviceId, worktree = false)) }
+                ) { onPick(draft.copy(projectId = null, hostId = draft.hostId ?: picked?.deviceId ?: projects.firstOrNull()?.deviceId, worktree = false)) }
+            }
+            item("new") {
+                ProjectRow(
+                    selected = false,
+                    index = 1,
+                    count = if (onNewCloudProject != null) 3 else 2,
+                    leading = { IconTile(ZIcons.Plus) },
+                    title = "New project…",
+                    supporting = "Pick a folder on one of your computers",
+                    mono = false,
+                    onClick = onNewProject,
+                )
+            }
+            if (onNewCloudProject != null) {
+                item("new-cloud") {
+                    ProjectRow(
+                        selected = false,
+                        index = 2,
+                        count = 3,
+                        leading = { IconTile(ZIcons.Cloud) },
+                        title = "New Cloud project…",
+                        supporting = "A GitHub repository, run on Cloud machines",
+                        mono = false,
+                        onClick = onNewCloudProject,
+                    )
+                }
             }
         }
     }
@@ -337,18 +380,70 @@ private fun ProjectRow(
 @Composable
 private fun HostChip(
     draft: sh.zeron.android.core.NewSessionDraft,
+    project: uniffi.zeron_core.ProjectView?,
+    projects: List<uniffi.zeron_core.ProjectView>,
     hosts: List<uniffi.zeron_core.DeviceView>,
+    /** The session runs on its own Cloud machine. */
+    onCloud: Boolean = false,
+    /** Cloud can run this project's sessions. */
+    cloudOffered: Boolean = false,
+    credits: Double? = null,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
+    val checkouts = remember(project, projects) {
+        if (project == null) emptyList()
+        else projects.filter { it.groupKey == project.groupKey && !it.isCloud }.sortedWith(compareBy({ (it.deviceName ?: "").lowercase() }, { it.path }))
+    }
+    val title = when {
+        onCloud -> "Cloud"
+        project != null -> project.deviceName ?: "Host"
+        else -> hosts.firstOrNull { it.id == draft.hostId }?.name ?: "Choose host"
+    }
+    ContextChip(title, leading = { ZIcon(if (onCloud) ZIcons.Cloud else ZIcons.Laptop, null, Modifier.size(16.dp)) }, onClick = { open = true }) {
+        val choices = if (checkouts.isNotEmpty()) {
+            checkouts.map { p ->
+                val shared = checkouts.count { it.deviceId == p.deviceId } > 1
+                MenuChoice(p.deviceName ?: "Host", p.id == draft.projectId && !onCloud, if (shared) p.path else if (p.deviceOnline) "Online" else "Offline") {
+                    onPick(draft.copy(projectId = p.id, hostId = null, branch = if (p.id == draft.projectId && !onCloud) draft.branch else null, cloud = false))
+                }
+            }
+        } else {
+            hosts.map { h -> MenuChoice(h.name, h.id == draft.hostId, if (h.online) "Online" else "Offline") { onPick(draft.copy(hostId = h.id)) } }
+        }
+        // Its own machine on Cloud, from a branch of the repository.
+        val cloudChoice = if (cloudOffered) listOf(
+            MenuChoice("Cloud", onCloud, credits?.let { "${sh.zeron.android.core.CloudStore.credits(it)} credits left" } ?: "Its own machine", leading = { ZIcon(ZIcons.Cloud, null, Modifier.size(20.dp)) }) {
+                onPick(draft.copy(cloud = true, branch = null, worktree = false))
+            },
+        ) else emptyList()
+        ChoiceMenu(open, { open = false }, listOf(MenuSection("Run on", choices), MenuSection(null, cloudChoice)))
+    }
+}
+
+/** A Cloud session starts from a branch of the repository (GitHub's, through Cloud). */
+@Composable
+private fun CloudBranchChip(
+    model: AppModel,
+    draft: sh.zeron.android.core.NewSessionDraft,
+    repo: String,
+    onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
+) {
+    var open by remember { mutableStateOf(false) }
+    var branches by remember(repo) { mutableStateOf<List<String>?>(null) }
+    val client by model.client.collectAsState()
+    LaunchedEffect(open, repo) {
+        if (open && branches == null) branches = runCatching { client?.githubBranches(repo) }.getOrNull().orEmpty()
+    }
     ContextChip(
-        hosts.firstOrNull { it.id == draft.hostId }?.name ?: "Choose host",
-        leading = { ZIcon(ZIcons.Laptop, null, Modifier.size(16.dp)) },
+        draft.branch?.let { "From $it" } ?: "Default branch",
+        leading = { ZIcon(ZIcons.Branch, null, Modifier.size(16.dp)) },
         onClick = { open = true },
     ) {
-        ChoiceMenu(open, { open = false }, listOf(MenuSection("Run on", hosts.map { h ->
-            MenuChoice(h.name, h.id == draft.hostId, if (h.online) "Online" else "Offline") { onPick(draft.copy(hostId = h.id)) }
-        })))
+        ChoiceMenu(open, { open = false }, listOf(
+            MenuSection(null, listOf(MenuChoice("Default branch", draft.branch == null) { onPick(draft.copy(branch = null)) })),
+            MenuSection("Branch", branches.orEmpty().map { b -> MenuChoice(b, b == draft.branch) { onPick(draft.copy(branch = b)) } }),
+        ))
     }
 }
 
@@ -391,26 +486,45 @@ private fun ModelChip(
     draft: sh.zeron.android.core.NewSessionDraft,
     choice: ModelChoice?,
     models: List<ModelChoice>,
-    modelRequest: Int,
+    host: String,
+    @androidx.annotation.DrawableRes hostIcon: Int,
+    openAtStart: Boolean = false,
+    modelRequest: Int = 0,
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
-    var currentAgentOnly by remember { mutableStateOf(false) }
-    LaunchedEffect(modelRequest) {
-        if (modelRequest > 0) { currentAgentOnly = true; open = true }
+    LaunchedEffect(Unit) {
+        if (openAtStart) {
+            kotlinx.coroutines.delay(600)
+            open = true
+        }
     }
-    val offeredModels = if (currentAgentOnly) models.filter { it.harness == draft.harness } else models
+    var currentAgentOnly by remember { mutableStateOf(false) }
+    LaunchedEffect(modelRequest) { if (modelRequest > 0) { currentAgentOnly = true; open = true } }
     // Never the harness name in place of a model.
     val title = choice?.model?.label ?: draft.model?.let { modelLabel(draft.harness, it) }
         ?: fallbackModels(draft.harness).firstOrNull()?.label ?: harnessLabel(draft.harness)
-    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { currentAgentOnly = false; open = true }) {
-        ChoiceMenu(open, { open = false }, offeredModels.groupBy { it.harness }.map { (harness, list) ->
-            MenuSection(list.first().harnessLabel, list.map { m ->
-                MenuChoice(m.model.label, m.harness == draft.harness && m.model.id == choice?.model?.id, leading = { HarnessMark(harness, 18.dp) }) {
-                    onPick(draft.copy(harness = m.harness, model = m.model.id, effort = null))
-                }
-            })
-        })
+    ContextChip(title, leading = { HarnessMark(draft.harness, 14.dp) }, onClick = { currentAgentOnly = false; open = true })
+    if (open) {
+        // A tab per provider the target runs (the draft's first), each listing the models already loaded for it.
+        val order = if (currentAgentOnly) listOf(draft.harness) else (listOf(draft.harness) + models.map { it.harness }).distinct()
+        val tabs = order.mapNotNull { h ->
+            val list = models.filter { it.harness == h }
+            val first = list.firstOrNull() ?: return@mapNotNull null
+            val rows = list.map { ModelPickerRow(it.model.id, it.model.label, it.model.description) }
+            ModelPickerTab(h, first.harnessLabel) { rows }
+        }
+        ModelPickerSheet(
+            tabs,
+            draft.harness,
+            draft.model ?: choice?.model?.id,
+            host = host,
+            hostIcon = hostIcon,
+            onPick = { harness, row ->
+                onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort))
+            },
+            onDismiss = { open = false },
+        )
     }
 }
 
