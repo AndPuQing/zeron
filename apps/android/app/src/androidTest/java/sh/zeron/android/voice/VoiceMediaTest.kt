@@ -1,142 +1,81 @@
 package sh.zeron.android.voice
 
 import android.Manifest
+import android.content.Intent
 import android.media.AudioManager
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
-import uniffi.zeron_core.*
+import sh.zeron.android.ZeronApplication
+import uniffi.zeron_core.VoiceEndReason
 
-/** Media lifecycle checks use no provider, audio uploads or account credentials. */
+/** Offline regressions exercise the upstream controller and real WebRTC peer. */
 class VoiceMediaTest {
-    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val instrumentation = InstrumentationRegistry.getInstrumentation()
+    private val context = instrumentation.targetContext
+    private val controller get() = (context.applicationContext as ZeronApplication).model.voice
 
-    @Test fun cancelledOfferIgnoresLateReplyAndMute() = runBlocking {
-        val entered = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
-        val peer = object : FakePeer() {
-            override suspend fun offer(): String {
-                entered.complete(Unit)
-                return withContext(NonCancellable) { release.await(); "late-offer" }
+    @Test fun oldCallCallbacksCannotEndOrOverwriteTheNextCall() {
+        launch()
+        instrumentation.runOnMainSync {
+            assertTrue(controller.preview())
+            val oldGeneration = generation()
+            val oldState = requireNotNull(controller.snapshot.value.state).copy(chatId = "stale-call")
+            controller.stop()
+            assertTrue(controller.preview())
+            val next = controller.snapshot.value
+            try {
+                controller.receive(oldState, oldGeneration)
+                controller.closed(VoiceEndReason.CONNECTION_LOST, oldGeneration)
+                assertEquals(next, controller.snapshot.value)
+                assertTrue(controller.live)
+                // The active generation still receives changes and can end normally.
+                controller.receive(oldState.copy(chatId = "current-call"), generation())
+                assertEquals("current-call", controller.snapshot.value.chatId)
+                controller.closed(VoiceEndReason.CONNECTION_LOST, generation())
+                assertFalse(controller.live)
+            } finally { controller.stop(); controller.dismissNotice(); controller.dismissEndReason() }
+        }
+    }
+
+    @Test fun nativeOfferDoesNotCaptureAndClosePreventsReuse() = runBlocking {
+        instrumentation.uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
+        launch()
+        val audio = context.getSystemService(AudioManager::class.java)
+        val before = audio.activeRecordingConfigurations.size
+        repeat(2) {
+            val peer = withContext(Dispatchers.Main) { VoicePeer(context, controller, true) }
+            try {
+                val offer = withContext(Dispatchers.Main) { peer.prepare(); peer.offer() }
+                assertTrue(offer.contains("m=audio"))
+                assertTrue(offer.contains("m=application"))
+                assertTrue(offer.contains("a=ice-ufrag:"))
+                assertTrue(offer.toByteArray().size <= 65_536)
+                assertEquals(before, audio.activeRecordingConfigurations.size)
+            } finally { withContext(Dispatchers.Main) { peer.close(); peer.close() } }
+            withContext(Dispatchers.Main) {
+                try { peer.prepare(); fail("Closed peer was reused") }
+                catch (failure: VoicePeer.Failure) { assertEquals(VoicePeer.Failure.Kind.Closed, failure.kind) }
             }
         }
-        val call = FakeCall()
-        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, { fail("unexpected failure") }) { _, _ -> peer }.also { it.call = call } }
-        try {
-            media.onRequest(request(1u, VoiceMediaOperation.OFFER))
-            withTimeout(5_000) { entered.await() }
-            withContext(Dispatchers.Main) { media.close(); media.close() }
-            release.complete(Unit)
-            media.onRequest(request(2u, VoiceMediaOperation.SET_MUTED))
-            delay(150)
-            withContext(Dispatchers.Main) {
-                assertTrue(call.replies.isEmpty())
-                assertEquals(1, peer.closes)
-                assertEquals(0, peer.activations)
-            }
-        } finally { release.complete(Unit); withContext(Dispatchers.Main) { media.close() } }
+        withTimeout(5_000) { while (audio.activeRecordingConfigurations.size != before) delay(20) }
     }
 
-    @Test fun permissionFailureIsReportedAndCloseIsIdempotent() = runBlocking {
-        val peer = object : FakePeer() { override suspend fun prepare() { throw NativeVoicePeer.PermissionDenied() } }
-        val call = FakeCall()
-        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
-        try {
-            media.onRequest(request(1u, VoiceMediaOperation.PREPARE))
-            assertEquals(VoiceMediaFailure.PERMISSION_DENIED, withTimeout(5_000) { call.reply.await() })
-            media.onRequest(request(2u, VoiceMediaOperation.CLOSE))
-            delay(50)
-            withContext(Dispatchers.Main) { media.close(); assertEquals(1, peer.closes) }
-        } finally { withContext(Dispatchers.Main) { media.close() } }
+    private fun generation(): Long = VoiceController::class.java.getDeclaredField("generation").let {
+        it.isAccessible = true
+        it.getLong(controller)
     }
 
-    @Test fun muteIsImmediateAfterHostActivation() = runBlocking {
-        val peer = FakePeer()
-        val call = FakeCall()
-        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
-        try {
-            withContext(Dispatchers.Main) { media.muteLocally(true); assertFalse(peer.localMute) }
-            media.onRequest(request(1u, VoiceMediaOperation.SET_MUTED))
-            withTimeout(5_000) { call.reply.await() }
-            withContext(Dispatchers.Main) {
-                media.muteLocally(true)
-                assertTrue(peer.localMute)
-                assertEquals(1, peer.activations)
-                media.close()
-                media.muteLocally(false)
-                assertTrue(peer.localMute)
-            }
-        } finally { withContext(Dispatchers.Main) { media.close() } }
-    }
-
-    @Test fun negotiationTimeoutRepliesInsteadOfLeavingCoreWaiting() = runBlocking {
-        val peer = object : FakePeer() { override suspend fun offer(): String = withTimeout(20) { awaitCancellation() } }
-        val call = FakeCall()
-        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
-        try {
-            media.onRequest(request(1u, VoiceMediaOperation.OFFER))
-            assertEquals(VoiceMediaFailure.UNAVAILABLE, withTimeout(5_000) { call.reply.await() })
-        } finally { withContext(Dispatchers.Main) { media.close() } }
-    }
-
-    @Test fun earlyLocalMuteOverridesQueuedActivationAndLateMuteState() = runBlocking {
-        val peer = FakePeer()
-        val call = FakeCall()
-        val media = withContext(Dispatchers.Main) { NativeVoiceMedia(context, {}) { _, _ -> peer }.also { it.call = call } }
-        try {
-            withContext(Dispatchers.Main) { media.muteLocally(true) }
-            media.onRequest(request(1u, VoiceMediaOperation.SET_MUTED))
-            withTimeout(5_000) { call.reply.await() }
-            withContext(Dispatchers.Main) {
-                assertTrue(peer.lastMute)
-                media.onRequest(request(2u, VoiceMediaOperation.SET_MUTED))
-                assertTrue(peer.lastMute)
-            }
-        } finally { withContext(Dispatchers.Main) { media.close() } }
-    }
-
-    @Test fun nativeOfferDoesNotOpenMicrophoneAndCanBeRepeated() = runBlocking {
-        InstrumentationRegistry.getInstrumentation().uiAutomation.grantRuntimePermission(context.packageName, Manifest.permission.RECORD_AUDIO)
-        val audio = context.getSystemService(AudioManager::class.java)
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val before = audio.activeRecordingConfigurations.size
-        try {
-            repeat(2) {
-                val peer = withContext(Dispatchers.Main) { NativeVoicePeer(context, scope) { fail("native audio failed") } }
-                try {
-                    val offer = withContext(Dispatchers.Main) { peer.prepare(); peer.offer() }
-                    assertTrue(offer.contains("m=audio"))
-                    assertTrue(offer.contains("m=application"))
-                    assertTrue(offer.contains("a=ice-ufrag:"))
-                    assertTrue(offer.toByteArray().size <= 65_536)
-                    assertEquals(before, audio.activeRecordingConfigurations.size)
-                } finally { withContext(Dispatchers.Main) { peer.close(); peer.close() } }
-            }
-            assertEquals(before, audio.activeRecordingConfigurations.size)
-        } finally { scope.cancel() }
-    }
-
-    private fun request(id: ULong, operation: VoiceMediaOperation) = VoiceMediaRequest(id, operation, null, false)
-    private open class FakePeer : VoicePeer {
-        var closes = 0
-        var activations = 0
-        var localMute = false
-        var lastMute = false
-        override suspend fun prepare() = Unit
-        override suspend fun offer() = "offer"
-        override suspend fun applyAnswer(answer: String) = Unit
-        override fun setMuted(muted: Boolean) { activations++; lastMute = muted }
-        override fun muteLocally(muted: Boolean) { localMute = muted }
-        override fun setSpeaker(enabled: Boolean) = Unit
-        override suspend fun levels() = 0.toUShort() to 0.toUShort()
-        override fun close() { closes++ }
-    }
-    private class FakeCall : VoiceCallInterface {
-        val replies = mutableListOf<VoiceMediaFailure?>()
-        val reply = CompletableDeferred<VoiceMediaFailure?>()
-        override fun completeMedia(requestId: ULong, failure: VoiceMediaFailure?, sdp: String?, microphone: UShort, speaker: UShort) { replies.add(failure); reply.complete(failure) }
-        override fun setMuted(muted: Boolean) = Unit
-        override fun stop() = Unit
+    private fun launch() {
+        instrumentation.runOnMainSync { controller.stop() }
+        context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra("demo", true).putExtra("fast", true).putExtra("route", "home"))
+        assertTrue(UiDevice.getInstance(instrumentation).wait(Until.hasObject(By.desc("New session")), 10_000))
+        instrumentation.waitForIdleSync()
     }
 }

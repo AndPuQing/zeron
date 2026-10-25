@@ -10,8 +10,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -30,7 +30,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material3.DropdownMenuGroup
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.DropdownMenuPopup
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -58,17 +63,20 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import sh.zeron.android.design.GeistMono
-import sh.zeron.android.design.GlassMetrics
-import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.FileMatch
 
 /**
- * The composer, shared by sessions and the new-session page. One glass
+ * The composer, shared by sessions and the new-session page. One tonal
  * surface with two states: a resting one-line capsule — [+] Message… [↑] —
  * and, while focused or holding a draft, a card with staged photos and the
  * full-width prompt above a toolbar of context chips.
@@ -88,8 +96,10 @@ fun ComposerSurface(
     var focused by remember { mutableStateOf(false) }
     val card = alwaysCard || focused || model.hasContent
     val selectionError = model.selectionError
-    GlassSurface(
-        shape = RoundedCornerShape(GlassMetrics.composerRadius),
+    Surface(
+        shape = RoundedCornerShape(28.dp),
+        color = composerContainer(),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
         modifier = modifier.fillMaxWidth(),
     ) {
         Column(Modifier.animateContentSize(MaterialTheme.motionScheme.defaultSpatialSpec())) {
@@ -118,7 +128,14 @@ fun ComposerSurface(
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(focusRequester)
-                            .onFocusChanged { focused = it.isFocused },
+                            .onFocusChanged { focused = it.isFocused }
+                            // Hardware keyboards: Ctrl/⌘+Enter sends (plain Enter is a newline).
+                            .onPreviewKeyEvent { e ->
+                                val send = e.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                                    e.key == androidx.compose.ui.input.key.Key.Enter && (e.isCtrlPressed || e.isMetaPressed)
+                                if (send && action != ComposerAction.Stop && model.hasContent) onAction()
+                                send
+                            },
                     )
                 }
                 if (!card) {
@@ -186,7 +203,7 @@ private fun StagedThumbnails(model: ComposerModel) {
     }
 }
 
-/** [+] → Photos / Files / Paste image, staged into the composer. */
+/** [+] → Photos / Take photo / Files / Paste image, staged into the composer. */
 @Composable
 private fun AttachButton(model: ComposerModel, enabled: Boolean) {
     val context = LocalContext.current
@@ -199,8 +216,17 @@ private fun AttachButton(model: ComposerModel, enabled: Boolean) {
     }
     val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(Staging.MAX_IMAGES)) { add(it) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { add(it) }
+    // The camera writes into a cache file the FileProvider shares with it.
+    var capture by remember { mutableStateOf<Uri?>(null) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { saved ->
+        val uri = capture
+        if (saved && uri != null) add(listOf(uri))
+    }
+    val hasCamera = remember { context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY) }
     Box {
-        PlainIconButton(ZIcons.Plus, "Attach", onClick = { open = true }, enabled = enabled && model.images.size < Staging.MAX_IMAGES, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        IconButton(onClick = { open = true }, enabled = enabled && model.images.size < Staging.MAX_IMAGES) {
+            ZIcon(ZIcons.Plus, "Attach", Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         val clip = if (open) context.getSystemService(android.content.ClipboardManager::class.java)?.primaryClip else null
         val pasted = clip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
             ?.takeIf { context.contentResolver.getType(it)?.startsWith("image/") == true }
@@ -208,7 +234,18 @@ private fun AttachButton(model: ComposerModel, enabled: Boolean) {
             open,
             { open = false },
             listOfNotNull(
-                MenuAction("Photos", ZIcons.Image) { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                MenuAction("Photos", ZIcons.Gallery) { photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                if (hasCamera) {
+                    MenuAction("Take photo", ZIcons.Camera) {
+                        val dir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
+                        val file = java.io.File(dir, "capture-${System.currentTimeMillis()}.jpg")
+                        val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                        capture = uri
+                        camera.launch(uri)
+                    }
+                } else {
+                    null
+                },
                 MenuAction("Files", ZIcons.Folder) { files.launch(arrayOf("image/*")) },
                 pasted?.let { uri -> MenuAction("Paste image", ZIcons.Copy) { add(listOf(uri)) } },
             ),
@@ -230,8 +267,10 @@ fun MentionSuggestions(model: ComposerModel, search: suspend (String) -> List<Fi
         files = runCatching { search(query) }.getOrDefault(emptyList()).take(5)
     }
     AnimatedVisibility(query != null && files.isNotEmpty(), enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically(), modifier = modifier) {
-        GlassSurface(
-            shape = RoundedCornerShape(18.dp),
+        Surface(
+            shape = RoundedCornerShape(24.dp),
+            color = composerContainer(),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
         ) {
             Column(Modifier.padding(6.dp)) {
@@ -261,24 +300,40 @@ fun MentionSuggestions(model: ComposerModel, search: suspend (String) -> List<Fi
     }
 }
 
-/** System-style choice groups: a checkmark, never a filled selection tile. */
+/** An expressive choice menu: one group, inline section labels, a trailing check on the choice. */
 @Composable
 fun ChoiceMenu(expanded: Boolean, onDismiss: () -> Unit, sections: List<MenuSection>) {
-    AppMenuPopup(expanded, onDismiss) {
-        sections.filter { it.choices.isNotEmpty() }.forEachIndexed { group, section ->
-            if (group > 0) Box(Modifier.fillMaxWidth().size(6.dp).background(sh.zeron.android.design.glassControlFill()))
-            section.title?.let { title ->
-                Text(title, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 6.dp))
-            }
-            section.choices.forEachIndexed { index, choice ->
-                if (index > 0) Hairline(Modifier.padding(start = 44.dp))
-                MenuRow(choice.label, choice.supporting, selected = choice.selected, selectable = true,
-                    leading = { Box(Modifier.size(16.dp)) { if (choice.selected) ZIcon(ZIcons.Check, null, Modifier.size(16.dp)) } },
-                    trailing = choice.leading,
-                ) {
-                    choice.onClick()
-                    onDismiss()
+    DropdownMenuPopup(expanded = expanded, onDismissRequest = onDismiss) {
+        val groups = sections.filter { it.choices.isNotEmpty() }
+        val all = groups.sumOf { it.choices.size }
+        DropdownMenuGroup(shapes = MenuDefaults.groupShape(0, 1)) {
+            var index = 0
+            groups.forEach { section ->
+                section.title?.let { title -> MenuDefaults.Label { Text(title, style = MaterialTheme.typography.labelMedium) } }
+                section.choices.forEach { choice ->
+                    DropdownMenuItem(
+                        selected = choice.selected,
+                        onClick = {
+                            choice.onClick()
+                            onDismiss()
+                        },
+                        text = { Text(choice.label) },
+                        supportingText = choice.supporting?.let { { Text(it) } },
+                        shapes = MenuDefaults.itemShape(index++, all),
+                        leadingIcon = choice.leading,
+                        selectedLeadingIcon = choice.leading,
+                        trailingIcon = if (choice.selected) {
+                            { ZIcon(ZIcons.Check, null, Modifier.size(20.dp)) }
+                        } else {
+                            null
+                        },
+                        colors = MenuDefaults.selectableItemColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedTrailingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        ),
+                    )
                 }
             }
         }

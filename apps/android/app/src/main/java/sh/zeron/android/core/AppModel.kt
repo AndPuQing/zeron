@@ -4,7 +4,6 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.SystemClock
@@ -16,6 +15,11 @@ import kotlinx.coroutines.CompletableDeferred
 import sh.zeron.android.design.Appearance
 import sh.zeron.android.design.ThemeMode
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import uniffi.zeron_core.ConnectivityState
+import uniffi.zeron_core.ProjectView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -71,8 +75,14 @@ data class LaunchOptions(
     val cloud: Boolean = false,
     val wallpaper: String? = null,
     val wallpaperEffect: String? = null,
+    /** `--ez voice-preview true`: the scripted call (debuggable builds). */
     val voicePreview: Boolean = false,
-    val onboarding: String? = null,
+    /** `--ez voice-stage true`: open the call stage at launch (with the preview). */
+    val voiceStage: Boolean = false,
+    /** `--ez remote-voice true`: offer voice before any host advertises it. */
+    val remoteVoice: Boolean = false,
+    /** `--ez voice-selftest true`: log a host-less WebRTC offer (debuggable builds). */
+    val voiceSelfTest: Boolean = false,
 )
 
 /**
@@ -89,8 +99,9 @@ class AppModel(private val app: Application) {
 
     private val _client = MutableStateFlow<CoreClient?>(null)
     val client: StateFlow<CoreClient?> = _client.asStateFlow()
-    val agentSignIn = DeviceSignIn(scope, client = { _client.value?.let(::CoreAgentLoginClient) })
-    val voice = sh.zeron.android.voice.VoiceController(app) { _client.value }
+    val voice: sh.zeron.android.voice.VoiceController by lazy {
+        sh.zeron.android.voice.VoiceController(app, client, workspace)
+    }
 
     private val _workspace = MutableStateFlow<WorkspaceSnapshot?>(null)
     val workspace: StateFlow<WorkspaceSnapshot?> = _workspace.asStateFlow()
@@ -117,36 +128,56 @@ class AppModel(private val app: Application) {
     }
 
     private val settings = app.getSharedPreferences("settings", 0)
-    val onboarding = OnboardingState(
-        read = { settings.getString(it, null) },
-        write = { key, value -> settings.edit().putString(key, value).apply() },
-    )
     private val _appearance = MutableStateFlow(
         Appearance(
             runCatching { ThemeMode.valueOf(settings.getString("theme", "System")!!) }.getOrDefault(ThemeMode.System),
+            settings.getBoolean("dynamicColor", false),
         ),
     )
     val appearance: StateFlow<Appearance> = _appearance.asStateFlow()
 
-    var providersDevice: String?
-        get() = settings.getString("providersDevice", null)
-        set(value) { settings.edit().putString("providersDevice", value).apply() }
-
     fun setAppearance(value: Appearance) {
         _appearance.value = value
-        settings.edit().putString("theme", value.mode.name).remove("dynamicColor").apply()
+        settings.edit().putString("theme", value.mode.name).putBoolean("dynamicColor", value.dynamicColor).apply()
     }
 
-    var lastDraft: NewSessionDraft = NewSessionDraft(
-        projectId = settings.getString("draft.project", null),
-        hostId = settings.getString("draft.host", null),
-        harness = settings.getString("draft.harness", null) ?: "claude-code",
-        model = settings.getString("draft.model", null),
-        effort = settings.getString("draft.effort", null),
-    )
+    /** Sessions grouped by project in place of the flat Recent list. */
+    private val _groupByProject = MutableStateFlow(settings.getBoolean("groupByProject", false))
+    val groupByProject: StateFlow<Boolean> = _groupByProject.asStateFlow()
+
+    fun setGroupByProject(on: Boolean) {
+        _groupByProject.value = on
+        settings.edit().putBoolean("groupByProject", on).apply()
+    }
+
+    /** Folded sidebar groups (pinned, recent, project groups), kept on this device. */
+    private val _collapsed = MutableStateFlow(settings.getStringSet("collapsedGroups", emptySet())!!.toSet())
+    val collapsed: StateFlow<Set<String>> = _collapsed.asStateFlow()
+
+    fun setGroupCollapsed(id: String, collapsed: Boolean) {
+        _collapsed.value = if (collapsed) _collapsed.value + id else _collapsed.value - id
+        settings.edit().putStringSet("collapsedGroups", _collapsed.value).apply()
+    }
+
+    /** The demo keeps the new-session page in memory only: one run's leftovers must not seed the next. */
+    private val persistsNewSession get() = !launch.demo
+    private var volatileNewSessionText = ""
+
+    /** What was typed on the new-session page when it was closed unsent. */
+    var newSessionText: String
+        get() = if (persistsNewSession) drafts.load(Drafts.NEW_SESSION) else volatileNewSessionText
+        set(value) {
+            if (persistsNewSession) drafts.save(Drafts.NEW_SESSION, value) else volatileNewSessionText = value
+        }
+
+    /** Images staged there (this launch only). */
+    var newSessionImages: List<sh.zeron.android.ui.StagedImage> = emptyList()
+
+    /** The new-session page's options (project, host, branch, model, effort), kept across launches. */
+    var lastDraft: NewSessionDraft = storedDraft()
         set(value) {
             field = value
-            if (!launch.demo) {
+            if (persistsNewSession) {
                 settings.edit()
                     .putString("draft.project", value.projectId)
                     .putString("draft.host", value.hostId)
@@ -172,10 +203,10 @@ class AppModel(private val app: Application) {
 
     val isDemo: Boolean get() = _client.value?.isDemo() == true
     private var refreshScheduled = false
-    private val signInState = SignInState(
-        read = { settings.getString("auth.pendingState", null) },
-        write = { settings.edit().putString("auth.pendingState", it).apply() },
-    )
+    /** The pending sign-in's OAuth `state` (persisted: the process may die while the browser is up). */
+    private var authState: String?
+        get() = settings.getString("authState", null)
+        set(value) = settings.edit().putString("authState", value).apply()
 
     private val listener = object : ClientListener {
         override fun onEvent(event: ClientEvent) {
@@ -185,13 +216,10 @@ class AppModel(private val app: Application) {
 
     fun boot(options: LaunchOptions) {
         launch = options
-        _client.value?.let { existing ->
-            forcedOnboarding()?.let { forced ->
-                onboarding.attach("${existing.orgId()}/${existing.userId()}", existing.isDemo(), forced)
-            }
-            return
-        }
+        if (_client.value != null) return
         if (options.signedOut) credentials.clear()
+        // The demo starts from the in-memory defaults, never a real account's options.
+        if (options.demo) lastDraft = NewSessionDraft()
         watchNetwork()
         // `wallpaper <path>` / `wallpaper none` and `wallpaper-effect <name>`:
         // set the wallpaper at launch (screenshots, tests).
@@ -201,11 +229,14 @@ class AppModel(private val app: Application) {
         options.wallpaperEffect?.let { name ->
             WallpaperStore.effects.firstOrNull { it.name.equals(name, ignoreCase = true) }?.let(wallpaper::setEffect)
         }
+        if (options.remoteVoice) voice.forced = true
+        if (options.voicePreview && voice.preview() && options.voiceStage) voice.requestStage()
+        if (options.voiceSelfTest) voice.selfTest()
         val stored = credentials.stored()
         when {
-            options.demo -> start(Credentials.Demo(demoOptions()))
+            // A `route` with nobody signed in opens on the demo (screenshots, tests).
+            options.demo || options.route != null && stored == null -> start(Credentials.Demo(demoOptions()))
             stored != null -> start(stored)
-            else -> onboarding.attach(null, false, forcedOnboarding())
         }
         // Relative times ("4m") and staleness age without events.
         scope.launch {
@@ -243,7 +274,6 @@ class AppModel(private val app: Application) {
     }
 
     private fun start(credentials: Credentials): Boolean {
-        voice.reset()
         val demo = credentials is Credentials.Demo
         val dir = if (demo) File(app.filesDir, "demo") else coreDir
         if (!demo) claimCoreDir(credentials)
@@ -259,7 +289,6 @@ class AppModel(private val app: Application) {
         return try {
             val client = CoreClient(config, credentials, listener)
             if (credentials is Credentials.WorkOs) this.credentials.store(credentials)
-            onboarding.attach("${client.orgId()}/${client.userId()}", demo, forcedOnboarding())
             _client.value = client
             refreshWorkspace()
             client.preloadSessions()
@@ -287,10 +316,6 @@ class AppModel(private val app: Application) {
         start(Credentials.Demo(demoOptions()))
     }
 
-    private fun forcedOnboarding(): OnboardingStep? = launch.onboarding?.let { name ->
-        OnboardingStep.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
-    }
-
     val edgeUrl: String get() = authProductionEdgeUrl()
 
     private val deviceId: String
@@ -309,24 +334,25 @@ class AppModel(private val app: Application) {
 
     /** The WorkOS authorize URL to open in a Custom Tab. */
     fun beginSignIn(): String {
-        signInError.value = null
-        return workosAuthorizeUrl(signInState.begin())
+        val state = UUID.randomUUID().toString()
+        authState = state
+        return workosAuthorizeUrl(state)
     }
 
-    /** `zerun-dev://callback?code=…`: verify state → tokens → org → client. */
+    /** `zerun-dev://callback?code=…`: code → tokens → org → client. */
     fun handleCallback(url: String) {
-        val cb = parseAuthCallback(url) ?: return
-        val returnedState = when (cb) {
-            is AuthCallback.Code -> cb.state
-            is AuthCallback.Error -> Uri.parse(url).getQueryParameter("state")
-        }
-        if (!signInState.accept(returnedState)) {
-            signInError.value = "Sign-in didn't complete. Try signing in again."
-            return
-        }
-        when (cb) {
-            is AuthCallback.Code -> scope.launch { signIn(cb.code) }
+        when (val cb = parseAuthCallback(url)) {
+            is AuthCallback.Code -> {
+                // Only the sign-in this app started (a forged callback could sign in as someone else).
+                if (authState == null || cb.state != authState) {
+                    signInError.value = "Sign-in was interrupted. Try again."
+                    return
+                }
+                authState = null
+                scope.launch { signIn(cb.code) }
+            }
             is AuthCallback.Error -> signInError.value = cb.description ?: cb.error
+            null -> Unit
         }
     }
 
@@ -358,9 +384,7 @@ class AppModel(private val app: Application) {
     fun signOut() = signOutLocally(forget = true)
 
     private fun signOutLocally(forget: Boolean) {
-        agentSignIn.cancel()
-        voice.reset()
-        signInState.clear()
+        voice.stop()
         val wasDemo = isDemo
         endDeliveryHold()
         lastDeliveryActivity = 0L
@@ -375,7 +399,8 @@ class AppModel(private val app: Application) {
             if (forget) coreDir.deleteRecursively()
         }
         lastDraft = NewSessionDraft()
-        onboarding.signedOut()
+        newSessionText = ""
+        newSessionImages = emptyList()
     }
 
     val accountName: String
@@ -416,7 +441,6 @@ class AppModel(private val app: Application) {
     fun refreshWorkspace() {
         val client = _client.value ?: return
         _workspace.value = client.workspace()
-        voice.refresh()
         sweepFreshSideChats()
     }
 
@@ -441,10 +465,24 @@ class AppModel(private val app: Application) {
         _client.value?.onBackground()
     }
 
-    /** Pull to refresh: redial and re-probe, then settle for a beat. */
-    suspend fun refresh() {
+    /**
+     * Pull to refresh: redial the registry and rooms and re-probe health (the
+     * same resync as returning to the foreground), then return once the
+     * workspace has updated — at least [minimum] ms so the spinner doesn't
+     * flicker, at most [maximum] if nothing changes.
+     */
+    suspend fun refresh(minimum: Long = 600, maximum: Long = 3_000) {
+        val started = SystemClock.elapsedRealtime()
+        val before = _workspace.value
         onForeground()
-        delay(700)
+        withTimeoutOrNull(maximum) {
+            // A reconnecting/offline blip from the redial isn't the resync landing.
+            combine(_workspace, _connectivity) { ws, c -> ws to c }.first { (ws, c) ->
+                ws != before && c?.state != ConnectivityState.RECONNECTING && c?.state != ConnectivityState.OFFLINE
+            }
+        }
+        val wait = minimum - (SystemClock.elapsedRealtime() - started)
+        if (wait > 0) delay(wait)
     }
 
     private fun watchNetwork() {
@@ -479,7 +517,11 @@ class AppModel(private val app: Application) {
         if (pinned) c.pinSession(id) else c.unpinSession(id)
     }
 
-    fun archive(id: String) = attempt("archive") { _client.value?.archiveSession(id) }
+    /** Archive from anywhere, with an Undo snackbar. */
+    fun archive(id: String) {
+        attempt("archive") { _client.value?.archiveSession(id) }
+        toast("Archived", "Undo") { unarchive(id) }
+    }
     fun unarchive(id: String) = attempt("unarchive") { _client.value?.unarchiveSession(id) }
     fun rename(id: String, title: String) = attempt("rename") { _client.value?.renameSession(id, title) }
     fun markSeen(id: String) = attempt("seen") { _client.value?.markSeen(id) }
@@ -489,6 +531,17 @@ class AppModel(private val app: Application) {
         refreshWorkspace()
     }
     fun setSectionCollapsed(id: String, collapsed: Boolean) = attempt("collapse") { _client.value?.setSectionCollapsed(id, collapsed) }
+
+    fun move(id: String, toSection: String?) = attempt("assign") { _client.value?.assignSection(id, toSection) }
+    fun movePin(id: String, after: String?, before: String?) = attempt("move pin") { _client.value?.movePin(id, after, before) }
+    fun createSection(name: String): String? = try {
+        _client.value?.createSection(name)
+    } catch (e: Exception) {
+        Log.w("Zeron", "section failed", e)
+        null
+    }
+    fun renameSection(id: String, name: String) = attempt("rename section") { _client.value?.renameSection(id, name) }
+    fun deleteSection(id: String) = attempt("delete section") { _client.value?.deleteSection(id) }
 
     fun row(id: String): SessionRow? = _client.value?.sessionRow(id)
 
@@ -557,11 +610,7 @@ class AppModel(private val app: Application) {
         return handle?.subagents().orEmpty()
     }
 
-    /**
-     * Side chats started here that nothing has been sent in yet: closed
-     * unused, they go (the desktop only writes one at its first send). Kept
-     * across launches, so one left open when the app was killed goes too.
-     */
+    /** Side chats started here without a sent message; retained until explicitly deleted. */
     private var freshSideChats: Set<String> = settings.getStringSet("freshSideChats", emptySet())!!.toSet()
         set(value) {
             field = value
@@ -646,6 +695,31 @@ class AppModel(private val app: Application) {
             null
         }
     }
+}
+
+/** A Group by Project bucket: checkouts of one repository, or a device's home. */
+data class ProjectGroup(val id: String, val name: String, val sessions: List<SessionRow>)
+
+/**
+ * Like the desktop's project grouping: checkouts of one repository share a
+ * group (named for its representative), project-less sessions group per
+ * device. Groups and rows keep the incoming recency order.
+ */
+fun projectGroups(rows: List<SessionRow>, projects: List<ProjectView>): List<ProjectGroup> {
+    val byId = HashMap<String, ProjectView>()
+    for (p in projects) byId.putIfAbsent(p.id, p)
+    val groups = LinkedHashMap<String, Pair<String, MutableList<SessionRow>>>()
+    for (row in rows) {
+        val ref = row.project
+        val (id, name) = if (ref != null) {
+            val project = byId[ref.id]
+            ("project:" + (project?.groupKey ?: ref.id)) to (project?.groupName ?: ref.name)
+        } else {
+            ("home:" + row.deviceId) to (row.deviceName?.let { "Home · $it" } ?: "Home")
+        }
+        groups.getOrPut(id) { name to mutableListOf() }.second.add(row)
+    }
+    return groups.map { (id, v) -> ProjectGroup(id, v.first, v.second) }
 }
 
 /** The new-session page's options (kept across launches). */

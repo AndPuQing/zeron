@@ -6,6 +6,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -16,39 +18,31 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import sh.zeron.android.design.GlassMetrics
-import sh.zeron.android.design.GlassSurface
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
-import sh.zeron.android.design.glassControlFill
 
-/** Round glass toolbar control, matching the UIKit glass button. */
+/** A round tonal icon button whose shape morphs on press. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun TonalCircleButton(
@@ -56,23 +50,19 @@ fun TonalCircleButton(
     contentDescription: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    size: Dp = GlassMetrics.control,
-    // Back and close have more padding inside their SVG viewports.
-    iconSize: Dp = if (icon == ZIcons.Back || icon == ZIcons.Close) 28.dp else 24.dp,
-    container: Color = Color.Transparent,
+    size: Dp = 48.dp,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
     content: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    GlassSurface(
+    FilledTonalIconButton(
         onClick = onClick,
-        tint = container.copy(alpha = if (container == Color.Transparent) 0f else 0.16f),
-        contentColor = content,
+        shapes = IconButtonDefaults.shapes(),
+        colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = container, contentColor = content),
         modifier = modifier.size(size),
-    ) {
-        Box(contentAlignment = Alignment.Center) { ZIcon(icon, contentDescription, Modifier.size(iconSize), tint = content) }
-    }
+    ) { ZIcon(icon, contentDescription, Modifier.size(22.dp)) }
 }
 
-/** Page title and glass actions, with the same 30pt title hierarchy as iOS. */
+/** The big expressive page title with a status line and round actions. */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ScreenHeader(title: String, subtitle: String?, modifier: Modifier = Modifier, actions: @Composable RowScope.() -> Unit = {}) {
@@ -81,7 +71,7 @@ fun ScreenHeader(title: String, subtitle: String?, modifier: Modifier = Modifier
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onSurface)
+            Text(title, style = MaterialTheme.typography.displaySmallEmphasized, color = MaterialTheme.colorScheme.onSurface)
             if (subtitle != null) {
                 Spacer(Modifier.height(2.dp))
                 Text(subtitle, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
@@ -91,18 +81,18 @@ fun ScreenHeader(title: String, subtitle: String?, modifier: Modifier = Modifier
     }
 }
 
-/** A compact neutral filter, matching the shell’s quiet selection wash. */
+/** A filter pill: filled when selected, tonal otherwise, with an optional count. */
 @Composable
 fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = null, @DrawableRes icon: Int? = null) {
     val container by animateColorAsState(
-        if (selected) glassControlFill() else Color.Transparent,
+        if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "pill",
     )
-    val fg = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-    Surface(onClick = onClick, shape = RoundedCornerShape(9.dp), color = container, contentColor = fg, modifier = Modifier.semantics { this.selected = selected }) {
+    val fg = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    Surface(onClick = onClick, shape = RoundedCornerShape(50), color = container, contentColor = fg) {
         Row(
-            Modifier.heightIn(min = 36.dp).padding(horizontal = 12.dp),
+            Modifier.heightIn(min = 40.dp).padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -112,10 +102,10 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = nu
                 Box(
                     Modifier
                         .clip(CircleShape)
-                        .background(if (selected) fg.copy(alpha = 0.2f) else glassControlFill())
+                        .background(if (selected) fg.copy(alpha = 0.2f) else MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
                         .padding(horizontal = 7.dp, vertical = 1.dp),
                 ) {
-                    Text("$count", style = MaterialTheme.typography.labelMedium, color = fg)
+                    Text("$count", style = MaterialTheme.typography.labelMedium, color = if (selected) fg else MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -128,14 +118,17 @@ class NavItem(val label: String, @DrawableRes val icon: Int, val selected: Boole
 @Composable
 fun FloatingNavBar(items: List<NavItem>, modifier: Modifier = Modifier, trailing: (@Composable () -> Unit)? = null) {
     Row(modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-        GlassSurface(
+        Surface(
+            shape = RoundedCornerShape(36.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 0.dp,
             modifier = Modifier.weight(1f),
         ) {
             Row(Modifier.padding(6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 for (item in items) {
                     val tone = MaterialTheme.colorScheme.secondaryContainer
                     val bg by animateColorAsState(
-                        if (item.selected) glassControlFill() else Color.Transparent,
+                        if (item.selected) tone else tone.copy(alpha = 0f),
                         MaterialTheme.motionScheme.defaultEffectsSpec(),
                         label = "nav",
                     )
@@ -143,10 +136,10 @@ fun FloatingNavBar(items: List<NavItem>, modifier: Modifier = Modifier, trailing
                         onClick = item.onClick,
                         shape = RoundedCornerShape(30.dp),
                         color = bg,
-                        contentColor = if (item.selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.weight(1f).semantics { selected = item.selected; role = Role.Tab },
+                        contentColor = if (item.selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
                     ) {
-                        Column(Modifier.padding(vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Column(Modifier.padding(vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                             ZIcon(item.icon, null, Modifier.size(24.dp))
                             Spacer(Modifier.height(2.dp))
                             Text(item.label, style = if (item.selected) MaterialTheme.typography.labelMediumEmphasized else MaterialTheme.typography.labelMedium)
@@ -168,26 +161,37 @@ fun FloatingNavBar(items: List<NavItem>, modifier: Modifier = Modifier, trailing
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun NewSessionBar(summary: String?, onClick: () -> Unit, modifier: Modifier = Modifier, trailing: @Composable (() -> Unit)? = null) {
-    GlassSurface(
+fun NewSessionBar(
+    summary: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** A call is up: the voice strip takes the label's place. */
+    voiceLive: Boolean = false,
+    /** Voice at the trailing end (idle button, or the live call strip with `Modifier.weight(1f)`). */
+    voice: (@Composable RowScope.() -> Unit)? = null,
+) {
+    Surface(
         onClick = onClick,
+        shape = RoundedCornerShape(32.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
         modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp),
     ) {
-        Row(Modifier.padding(7.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
-                Modifier.size(34.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                Modifier.size(48.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center,
-            ) { ZIcon(ZIcons.NewSession, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary) }
-            Spacer(Modifier.width(11.dp))
-            Text("New session", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            if (summary != null) {
+            ) { ZIcon(ZIcons.NewSession, null, Modifier.size(22.dp), tint = MaterialTheme.colorScheme.onPrimary) }
+            Spacer(Modifier.width(14.dp))
+            if (!voiceLive) Text("New session", style = MaterialTheme.typography.titleMediumEmphasized, modifier = Modifier.weight(1f))
+            if (summary != null && !voiceLive) {
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 12.dp)) {
                     Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                     Spacer(Modifier.width(6.dp))
-                    Text(summary, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(summary, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            trailing?.invoke()
+            voice?.invoke(this)
         }
     }
 }
@@ -203,21 +207,6 @@ fun BoxScope.StatusBarScrim(list: LazyListState) {
     val background = MaterialTheme.colorScheme.background
     val color by animateColorAsState(
         if (scrolled) background else background.copy(alpha = 0f),
-        label = "status-scrim",
-    )
-    Box(
-        Modifier
-            .align(Alignment.TopCenter)
-            .fillMaxWidth()
-            .windowInsetsTopHeight(androidx.compose.foundation.layout.WindowInsets.statusBars)
-            .background(color),
-    )
-}
-
-@Composable
-fun BoxScope.StatusBarScrim(scrolled: Boolean) {
-    val color by animateColorAsState(
-        if (scrolled) MaterialTheme.colorScheme.background else Color.Transparent,
         label = "status-scrim",
     )
     Box(

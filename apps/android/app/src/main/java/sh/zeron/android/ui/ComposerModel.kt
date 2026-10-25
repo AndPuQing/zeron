@@ -58,6 +58,8 @@ class ComposerModel(initial: String = "") {
     private var localFailure by mutableStateOf<Pair<String, String>?>(null)
     val localError: String? get() = localFailure?.takeIf { it.first == text }?.second
 
+    init { setText(initial) }
+
     fun displayCommand(command: uniffi.zeron_core.ComposerCommand): uniffi.zeron_core.ComposerCommand {
         val actions = localActions ?: return command
         val local = uniffi.zeron_core.mobileComposerAction(actions.harness, command.insertion) ?: return command

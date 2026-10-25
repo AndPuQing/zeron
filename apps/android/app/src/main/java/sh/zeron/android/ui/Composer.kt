@@ -53,6 +53,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.key
@@ -253,6 +254,20 @@ fun Composer(
         try { client.renameSession(c.chatId, title) } catch (e: Exception) { error = e.message }
     }
 
+    fun saveDraft() = model.drafts.save(c.chatId, stash?.first ?: draft.persistedDraft())
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(c.chatId, lifecycle) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) saveDraft()
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            saveDraft()
+        }
+    }
+    LaunchedEffect(openModelPicker) { if (openModelPicker) { kotlinx.coroutines.delay(600); modelRequest++ } }
+
     // The composer survives navigation; a queued edit must not become its next draft.
     DisposableEffect(c.chatId, draft) {
         onDispose {
@@ -400,13 +415,15 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
 
 @Composable
 fun StatusBanner(text: String, action: Pair<String, () -> Unit>?) {
-    GlassSurface(
+    Surface(
         shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
     ) {
         Row(Modifier.padding(start = 16.dp, end = if (action != null) 4.dp else 16.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(text, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(vertical = 10.dp).weight(1f, fill = false))
-            action?.let { (label, run) -> AppTextButton(onClick = run) { Text(label) } }
+            action?.let { (label, run) -> TextButton(onClick = run) { Text(label) } }
         }
     }
 }
@@ -418,9 +435,10 @@ fun QueuePanel(queue: List<QueueItem>, handle: SessionHandle, editingId: String?
     Column(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         queue.forEachIndexed { i, item ->
             val editing = item.id == editingId
-            GlassSurface(
+            Surface(
                 shape = segmentShape(i, queue.size, outer = 20.dp, inner = 6.dp),
-                tint = if (editing) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+                color = if (editing) MaterialTheme.colorScheme.secondaryContainer else composerContainer(),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 Row(Modifier.padding(start = 14.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {

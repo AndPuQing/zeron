@@ -1,7 +1,10 @@
 package sh.zeron.android.ui
 
 import android.content.Intent
+import android.graphics.Rect
 import android.os.SystemClock
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
@@ -13,6 +16,10 @@ import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import java.io.File
 import sh.zeron.android.ZeronApplication
 
 /** Exercise Android UI against the shared native demo, without opening a real authorization page. */
@@ -22,6 +29,14 @@ class ProviderParityFlowTest {
     private val model get() = (instrumentation.targetContext.applicationContext as ZeronApplication).model
     private val core get() = model.client.value!!
 
+    @get:Rule val failureCapture = object : TestWatcher() {
+        override fun failed(error: Throwable, description: Description) {
+            val folder = File(instrumentation.targetContext.cacheDir, "upstream-flow-failures").apply { mkdirs() }
+            device.takeScreenshot(File(folder, "${description.methodName}.png"))
+            device.dumpWindowHierarchy(File(folder, "${description.methodName}.xml"))
+        }
+    }
+
     @Test fun providersShowAccountsAndCanSwitchTheActiveAccount() {
         launch("settings")
         text("Providers").click()
@@ -29,11 +44,11 @@ class ProviderParityFlowTest {
         val original = runBlocking { core.deviceAgentAccounts(computer) }.first { it.harness == "claude-code" && it.active }
         val other = runBlocking { core.deviceAgentAccounts(computer) }.first { it.harness == "claude-code" && !it.active && it.switchable }
         try {
-            requireNotNull(device.wait(Until.findObject(By.res("provider-claude-code")), 10_000)).click()
-            assertTrue(device.wait(Until.hasObject(By.res("account-${original.id}")), 10_000))
-            requireNotNull(device.wait(Until.findObject(By.res("account-switch-${other.id}")), 5_000)).click()
+            text("Claude Code").click()
+            text(original.email ?: original.displayName ?: "Account")
+            text(other.email ?: other.displayName ?: "Account").click()
             await { runBlocking { core.deviceAgentAccounts(computer) }.any { it.id == other.id && it.active } }
-            assertTrue(device.wait(Until.hasObject(By.res("account-switch-${original.id}")), 5_000))
+            text(original.email ?: original.displayName ?: "Account").longClick()
             text("Remove account").click()
             text("Remove account?")
             text("Cancel").click()
@@ -47,8 +62,8 @@ class ProviderParityFlowTest {
         try {
             await { canSwitchAgent(core.openSession("chat-deploy").composer()) }
             requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).click()
-            text(model.row("chat-deploy")!!.modelLabel!!).click()
-            requireNotNull(device.wait(Until.findObject(By.desc("Codex")), 5_000)).click()
+            expandedModelChip(model.row("chat-deploy")!!.modelLabel!!).click()
+            stableProviderTab("Codex").click()
             val host = core.openSession("chat-deploy").composer().host.deviceId
             val picked = runBlocking { core.listModels(host, "codex") }.first()
             assertEquals("Browsing an agent's models must not change the chat", original, core.sessionConfig("chat-deploy"))
@@ -125,6 +140,50 @@ class ProviderParityFlowTest {
         assertNotNull(model.row("chat-deploy"))
     }
 
+    private fun stableProviderTab(label: String): androidx.test.uiautomator.UiObject2 {
+        var previous: Rect? = null
+        var movedAt = SystemClock.uptimeMillis()
+        lateinit var result: androidx.test.uiautomator.UiObject2
+        await {
+            var imeVisible = false
+            instrumentation.runOnMainSync {
+                val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+                imeVisible = ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            val tab = device.findObject(By.desc(label)) ?: return@await false
+            val bounds = tab.visibleBounds
+            if (bounds != previous) { previous = bounds; movedAt = SystemClock.uptimeMillis() }
+            if (imeVisible || SystemClock.uptimeMillis() - movedAt < 300) return@await false
+            result = tab
+            true
+        }
+        return result
+    }
+
+    private fun expandedModelChip(label: String): androidx.test.uiautomator.UiObject2 {
+        var previous: Rect? = null
+        var movedAt = SystemClock.uptimeMillis()
+        lateinit var result: androidx.test.uiautomator.UiObject2
+        // Accessibility can become idle before the IME starts animating. Require the chip
+        // to be above the keyboard and stationary, then use its current screen bounds.
+        await {
+            var imeBottom = 0
+            instrumentation.runOnMainSync {
+                val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+                imeBottom = ViewCompat.getRootWindowInsets(activity.window.decorView)?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            val chip = device.findObject(By.text(label)) ?: return@await false
+            val bounds = chip.visibleBounds
+            if (bounds != previous) { previous = bounds; movedAt = SystemClock.uptimeMillis() }
+            if (imeBottom == 0 || bounds.bottom >= device.displayHeight - imeBottom || SystemClock.uptimeMillis() - movedAt < 300) return@await false
+            result = chip
+            true
+        }
+        return result
+    }
+
     private fun text(value: String): androidx.test.uiautomator.UiObject2 {
         return device.wait(Until.findObject(By.text(value)), 10_000) ?: run {
             device.executeShellCommand("screencap -p /sdcard/parity-model-failure.png")
@@ -135,6 +194,10 @@ class ProviderParityFlowTest {
         }
     }
     private fun launch(route: String) {
+        var previous: android.app.Activity? = null
+        instrumentation.runOnMainSync {
+            previous = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()
+        }
         val context = instrumentation.targetContext
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
@@ -144,13 +207,16 @@ class ProviderParityFlowTest {
         await {
             var ready = false
             instrumentation.runOnMainSync {
-                ready = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).any { it.intent.getStringExtra("route") == route }
+                ready = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).any { it !== previous && it.intent.getStringExtra("route") == route }
             }
             ready
         }
         device.waitForIdle()
         if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
-        if (route.startsWith("chat:")) text(core.sessionRow(route.removePrefix("chat:"))!!.title)
+        if (route.startsWith("chat:")) {
+            val row = core.sessionRow(route.removePrefix("chat:"))!!
+            text(if (row.parentChatId != null) "Side chat" else row.title)
+        }
     }
     private fun await(condition: () -> Boolean) {
         val deadline = SystemClock.uptimeMillis() + 15_000

@@ -3,45 +3,45 @@ package sh.zeron.android.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.Home
-import sh.zeron.android.design.ActivityIndicator
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import sh.zeron.android.design.GeistMono
 import sh.zeron.android.design.LocalDarkTheme
 import sh.zeron.android.design.ProjectColors
-import sh.zeron.android.design.glassControlFill
 import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.SessionRow
 import uniffi.zeron_core.projectColorIndex
 
 /**
- * Continuous outer corners for grouped settings on both platforms.
+ * Grouped-list corners (Android 16 settings style): the group's outer
+ * corners are large, the seams between items small.
  */
-fun segmentShape(index: Int, count: Int, outer: Dp = 20.dp, inner: Dp = 0.dp): Shape {
+fun segmentShape(index: Int, count: Int, outer: Dp = 24.dp, inner: Dp = 6.dp): Shape {
     val top = if (index == 0) outer else inner
     val bottom = if (index == count - 1) outer else inner
     return RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
@@ -54,10 +54,27 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier, trailing: @Compos
         Text(
             text,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.align(Alignment.CenterStart),
         )
         trailing?.let { Box(Modifier.align(Alignment.CenterEnd)) { it() } }
+    }
+}
+
+/**
+ * A group of items with segmented corners and 2dp seams.
+ */
+@Composable
+fun SegmentedGroup(
+    count: Int,
+    modifier: Modifier = Modifier,
+    item: @Composable (index: Int, shape: Shape) -> Unit,
+) {
+    Column(modifier.padding(horizontal = 12.dp)) {
+        for (i in 0 until count) {
+            item(i, segmentShape(i, count))
+            if (i < count - 1) Spacer(Modifier.height(2.dp))
+        }
     }
 }
 
@@ -66,18 +83,22 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier, trailing: @Compos
 @Composable
 fun ProjectTile(name: String?, colorIndex: Int, size: Dp = 40.dp, modifier: Modifier = Modifier) {
     val tone = ProjectColors.color(colorIndex, LocalDarkTheme.current)
-    val shape = if (name == null) CircleShape else RoundedCornerShape(size * (3f / 13f))
+    // Expressive shapes: projects are "cookies", projectless sessions a circle.
+    val shape = when {
+        name == null -> CircleShape
+        size < 28.dp -> RoundedCornerShape(size * 0.28f)
+        else -> MaterialShapes.Cookie9Sided.toShape()
+    }
     Box(
-        modifier.size(size).clip(shape).background(tone.copy(alpha = 0.08f)),
+        modifier.size(size).clip(shape).background(tone.copy(alpha = 0.16f)),
         contentAlignment = Alignment.Center,
     ) {
         if (name != null) {
             val fontSize = (size.value * if (size < 28.dp) 0.62f else 0.42f).sp
             Text(
                 name.trim().take(1).uppercase(),
-                color = tone.copy(alpha = 0.85f),
-                fontFamily = GeistMono,
-                fontWeight = FontWeight.Medium,
+                color = tone,
+                fontWeight = FontWeight.SemiBold,
                 fontSize = fontSize,
                 style = androidx.compose.ui.text.TextStyle(
                     lineHeight = fontSize,
@@ -111,31 +132,34 @@ fun StatusLabel(row: SessionRow) {
                 sh.zeron.android.design.ZIcon(sh.zeron.android.design.ZIcons.Check, null, Modifier.size(15.dp), tint = color)
             }
             Spacer(Modifier.width(5.dp))
-            Text(text, style = MaterialTheme.typography.labelMedium, color = color)
+            Text(text, style = MaterialTheme.typography.labelLarge, color = color)
         }
     }
+    // A send that never reached the host outranks the live state; a finished
+    // run reads Done only until it's been seen.
+    if (row.sendState == uniffi.zeron_core.SendState.FAILED) return label("Failed", MaterialTheme.colorScheme.error, dot = true)
     when (row.indicator) {
-        ChatIndicator.WORKING -> Row(verticalAlignment = Alignment.CenterVertically) {
-            ActivityIndicator(Modifier.size(12.dp))
-            Spacer(Modifier.width(5.dp))
-            Text("Working", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+        ChatIndicator.WORKING -> LoadingIndicator(Modifier.size(26.dp))
         ChatIndicator.AWAITING_INPUT -> label("Input", MaterialTheme.colorScheme.primary, dot = true)
         ChatIndicator.ERRORED -> label("Failed", MaterialTheme.colorScheme.error, dot = true)
-        ChatIndicator.COMPLETED, ChatIndicator.IDLE -> if (row.indicator == ChatIndicator.COMPLETED && row.unseen) {
-            label("Done", successColor(), dot = false)
-        } else Row(verticalAlignment = Alignment.CenterVertically) {
+        ChatIndicator.COMPLETED, ChatIndicator.IDLE -> if (row.indicator == ChatIndicator.COMPLETED && row.unseen) label("Done", successColor(), dot = false) else Row(verticalAlignment = Alignment.CenterVertically) {
             if (row.unseen) {
                 Box(Modifier.size(7.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
                 Spacer(Modifier.width(5.dp))
             }
-            Text(row.timeLabel, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.outline)
+            Text(row.timeLabel, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.outline)
         }
     }
 }
 
+/** The composer's surface: bright in light (like a sheet of paper), raised in dark. */
 @Composable
-fun chipContainer(): Color = glassControlFill()
+fun composerContainer(): Color =
+    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
+
+@Composable
+fun chipContainer(): Color =
+    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainer
 
 /** Segmented list shapes, with a lone item rounded like a whole group. */
 @Composable
@@ -156,16 +180,5 @@ fun DialogSystemBars(lightIcons: Boolean = LocalDarkTheme.current) {
             isAppearanceLightStatusBars = !lightIcons
             isAppearanceLightNavigationBars = !lightIcons
         }
-    }
-}
-
-@Composable
-fun composerContainer(): Color =
-    if (LocalDarkTheme.current) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLowest
-
-@Composable
-fun HarnessTile(row: uniffi.zeron_core.SessionRow) {
-    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-        sh.zeron.android.design.HarnessMark(row.harness, 24.dp, tint = MaterialTheme.colorScheme.onSurface)
     }
 }

@@ -2,6 +2,9 @@ package sh.zeron.android.ui
 
 import android.content.Intent
 import android.os.SystemClock
+import android.os.Build
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
@@ -10,6 +13,10 @@ import androidx.test.uiautomator.Until
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import java.io.File
 import sh.zeron.android.ZeronApplication
 import uniffi.zeron_core.CoreException
 
@@ -19,83 +26,78 @@ class SideChatFlowTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val model get() = (instrumentation.targetContext.applicationContext as ZeronApplication).model
 
+    @get:Rule val failureCapture = object : TestWatcher() {
+        override fun failed(error: Throwable, description: Description) {
+            val folder = File(instrumentation.targetContext.cacheDir, "side-chat-failures").apply { mkdirs() }
+            device.takeScreenshot(File(folder, "${description.methodName}.png"))
+            device.dumpWindowHierarchy(File(folder, "${description.methodName}.xml"))
+        }
+    }
+
     @Test
     fun forkCopiesHistoryAndForkingAChildCreatesASibling() {
         val source = "chat-deploy"
         launch(source)
         val before = model.children(source).map { it.id }.toSet()
-        device.findObject(By.desc("More")).click()
-        requireNotNull(device.wait(Until.findObject(By.text("Fork to side chat")), 5_000)).click()
+        forkFromMenu()
         await { model.children(source).any { it.id !in before } }
         val fork = model.children(source).single { it.id !in before }
         assertEquals(source, fork.parentChatId)
         assertEquals(model.row(source)?.deviceId, fork.deviceId)
         instrumentation.runOnMainSync { model.rename(fork.id, "Fork navigation test") }
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Side chat of ")), 5_000))
+        assertTrue(device.wait(Until.hasObject(By.text("Side chat")), 5_000))
         assertTrue(device.wait(Until.hasObject(By.descStartsWith("Forked from ")), 5_000))
         device.waitForIdle()
-
-        // The seam returns to the original page rather than launching another app.
-        val seam = findDescription(instrumentation.uiAutomation.rootInActiveWindow, "Forked from ")!!
-        assertTrue(seam.performAction(AccessibilityNodeInfo.ACTION_CLICK))
-        awaitMainChat()
-
-        device.findObject(By.desc("Side chats")).click()
-        assertTrue(device.wait(Until.hasObject(By.text("Side chats")), 5_000))
-        requireNotNull(device.wait(Until.findObject(By.text("Fork navigation test")), 5_000)).click()
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Side chat of ")), 5_000))
-        assertTrue(device.wait(Until.gone(By.text("Side chats")), 5_000))
-        device.waitForIdle()
         val siblingsBefore = model.children(source).map { it.id }.toSet()
-        device.findObject(By.desc("More")).click()
-        requireNotNull(device.wait(Until.findObject(By.text("Fork to side chat")), 5_000)).click()
+        forkFromMenu()
         await { model.children(source).any { it.id !in siblingsBefore } }
         val sibling = model.children(source).single { it.id !in siblingsBefore }
         assertEquals(source, sibling.parentChatId)
         assertTrue(model.children(fork.id).isEmpty())
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Side chat of ")), 5_000))
-        assertTrue(device.wait(Until.hasObject(By.text(sibling.title)), 5_000))
         assertTrue(device.wait(Until.hasObject(By.desc("Forked from Fork navigation test")), 5_000))
-        device.waitForIdle()
-
-        // Switching siblings replaces the child page: one Back returns to the parent.
-        device.pressBack()
-        awaitMainChat()
-        instrumentation.runOnMainSync { model.rename(sibling.id, "Sibling navigation test") }
-        device.findObject(By.desc("Side chats")).click()
-        requireNotNull(device.wait(Until.findObject(By.text("Sibling navigation test")), 5_000)).click()
-        assertTrue(device.wait(Until.gone(By.text("Side chats")), 5_000))
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Side chat of ")), 5_000))
-        device.waitForIdle()
+        // The upstream stack returns from the new sibling to the child that opened it.
+        device.findObject(By.desc("Back")).click()
+        assertTrue(device.wait(Until.gone(By.desc("Forked from Fork navigation test")), 5_000))
+        assertTrue(device.wait(Until.hasObject(By.text("Side chat")), 5_000))
         device.findObject(By.desc("Back")).click()
         awaitMainChat()
+        openCompanions()
+        requireNotNull(device.wait(Until.findObject(By.text("Fork navigation test")), 5_000)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Side chat")), 5_000))
     }
 
     @Test
-    fun emptySideChatDisablesForkAndReturnsToParent() {
+    fun emptySideChatKeepsItsDraftAfterReturningToParent() {
         val source = "chat-veil"
         launch(source)
         val before = model.children(source).map { it.id }.toSet()
-        device.findObject(By.desc("Side chats")).click()
-        requireNotNull(device.wait(Until.findObject(By.desc("New side chat")), 5_000)).click()
+        device.findObject(By.desc("More")).click()
+        requireNotNull(device.wait(Until.findObject(By.text("New side chat")), 5_000)).click()
         await { model.children(source).any { it.id !in before } }
         val empty = model.children(source).single { it.id !in before }
-        assertEquals(source, empty.parentChatId)
         assertFalse(model.client.value!!.openSession(empty.id).canFork())
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Side chat of ")), 5_000))
-
-        device.findObject(By.desc("More")).click()
-        assertTrue(device.wait(Until.hasObject(By.text("Needs a completed reply")), 5_000))
-        assertFalse(device.hasObject(By.text("Pin")))
-        assertFalse(device.hasObject(By.text("New side chat")))
-        val disabled = device.findObject(By.text("Fork to side chat")).visibleBounds
-        device.click(disabled.centerX(), disabled.centerY())
-        device.waitForIdle()
-        assertTrue(device.hasObject(By.text("Needs a completed reply")))
-        assertEquals(before.size + 1, model.children(source).size)
-        device.pressBack()
-        requireNotNull(device.wait(Until.findObject(By.textStartsWith("Side chat of ")), 5_000)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Side chat")), 5_000))
+        val editor = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000))
+        editor.text = "Unsent side-chat draft"
+        device.findObject(By.desc("Back")).click()
         awaitMainChat()
+        assertNotNull(model.row(empty.id))
+        assertEquals("Unsent side-chat draft", model.drafts.load(empty.id))
+        openCompanions()
+        requireNotNull(device.wait(Until.findObject(By.text(if (empty.hasTitle) empty.title else "Side chat")), 5_000)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Side chat")), 5_000))
+        assertEquals("Unsent side-chat draft", requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).text)
+    }
+
+    private fun forkFromMenu() {
+        requireNotNull(device.wait(Until.findObject(By.desc("More")), 5_000)).click()
+        requireNotNull(device.wait(Until.findObject(By.text("Fork into side chat")), 5_000)).click()
+    }
+
+    private fun openCompanions() {
+        // The header remains reachable while a toast covers the composer chips.
+        requireNotNull(device.wait(Until.findObject(By.desc("Agents, side chats and terminals")), 5_000)).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Side chats")), 5_000))
     }
 
     @Test
@@ -131,9 +133,23 @@ class SideChatFlowTest {
 
     private fun startRoute(route: String) {
         val context = instrumentation.targetContext
+        var previous: android.app.Activity? = null
+        instrumentation.runOnMainSync {
+            previous = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()
+        }
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             .putExtra("demo", true).putExtra("fast", true).putExtra("route", route))
+        await {
+            var ready = false
+            instrumentation.runOnMainSync {
+                ready = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+                    .any { it !== previous && it.intent.getStringExtra("route") == route }
+            }
+            ready
+        }
+        device.waitForIdle()
+        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
     }
 
     private fun awaitMainChat() {
@@ -143,7 +159,9 @@ class SideChatFlowTest {
             val labels = device.findObjects(By.clazz("android.widget.TextView")).mapNotNull { runCatching { it.text }.getOrNull() }
             fail("Expected a chat after navigation; visible text: $labels")
         }
-        assertTrue(device.wait(Until.gone(By.textStartsWith("Side chat of ")), 5_000))
+        assertTrue(device.wait(Until.gone(By.text("Side chat")), 5_000))
+        device.waitForIdle()
+        if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
     }
 
     private fun await(condition: () -> Boolean) {

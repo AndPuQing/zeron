@@ -27,7 +27,7 @@ class CommandMenuFlowTest {
         launch("chat:chat-deploy")
         val chatEditor = editor()
         chatEditor.click()
-        chatEditor.text = "/"
+        chatEditor.text = "\$"
         val first = requireRow("Imagegen.")
         device.waitForIdle()
 
@@ -42,7 +42,7 @@ class CommandMenuFlowTest {
         val chatLeft = first.visibleBounds.left
         val chatRight = first.visibleBounds.right
 
-        chatEditor.text = "/imag"
+        chatEditor.text = "\$imag"
         assertTrue(device.wait(Until.gone(By.descStartsWith("Openai Docs")), 5_000))
         val filtered = requireRow("Imagegen.")
         filtered.click()
@@ -57,7 +57,7 @@ class CommandMenuFlowTest {
         launch("new")
         val newEditor = editor()
         newEditor.click()
-        newEditor.text = "/"
+        newEditor.text = "\$"
         val newRow = requireRow("Imagegen.")
         device.waitForIdle()
         assertInsetMenu(newRow)
@@ -110,15 +110,27 @@ class CommandMenuFlowTest {
 
     private fun launch(route: String) {
         val context = instrumentation.targetContext
+        var previous: android.app.Activity? = null
+        instrumentation.runOnMainSync {
+            previous = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).firstOrNull()
+        }
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             .putExtra("demo", true).putExtra("fast", true).putExtra("route", route))
-        assertTrue(device.wait(Until.hasObject(By.pkg(context.packageName)), 20_000))
         val deadline = SystemClock.uptimeMillis() + 15_000
-        while (!device.hasObject(By.clazz("android.widget.EditText"))) {
-            if (SystemClock.uptimeMillis() > deadline) error("Composer did not appear")
+        while (true) {
+            var ready = false
+            instrumentation.runOnMainSync {
+                ready = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED)
+                    .any { it !== previous && it.intent.getStringExtra("route") == route }
+            }
+            if (ready) break
+            if (SystemClock.uptimeMillis() > deadline) error("New activity did not appear")
             SystemClock.sleep(50)
         }
         device.waitForIdle()
+        if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+        assertTrue(device.wait(Until.hasObject(By.desc(if (route == "new") "Close" else "More")), 10_000))
+        editor()
     }
 }

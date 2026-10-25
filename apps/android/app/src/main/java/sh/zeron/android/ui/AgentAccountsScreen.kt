@@ -527,5 +527,3 @@ private fun PasteCodeDialog(onDismiss: () -> Unit, onCode: (String) -> Unit) {
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }
-
-private fun deviceAccountTitle(a: uniffi.zeron_core.DeviceAccountInfo): String = a.email ?: a.displayName ?: if (a.apiKey) "API key" else "Account"

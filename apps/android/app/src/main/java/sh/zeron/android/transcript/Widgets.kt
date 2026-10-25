@@ -136,7 +136,7 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
             state.toggleDetail(key, kind.detail, kind.open)
         }
         WidgetKind.Shimmer -> Shimmer(state, model, w, palette)
-        is WidgetKind.Visual -> VisualWidget(state, kind.id, actions)
+        is WidgetKind.Visual -> VisualWidget(state, model, kind.id, actions.openUrl)
         is WidgetKind.Subagent -> SubagentCard(kind, palette) { doc ->
             haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
             actions.openSubagent(doc, kind.title, kind.running)
@@ -308,11 +308,18 @@ private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions
         if (value == null) value = actions.loadImage(reference)?.also { images.put(reference, it) }
     }
     val radius = if (minOf(w.w, w.h) > 120) 14.dp else 12.dp
-    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(radius)), contentAlignment = Alignment.Center) {
+    val pending = reference.startsWith("pending://")
+    Box(
+        Modifier
+            .fillMaxSize()
+            .clip(RoundedCornerShape(radius))
+            .clickable(enabled = image != null && !pending, onClickLabel = "Open image") { actions.openImage(reference) },
+        contentAlignment = Alignment.Center,
+    ) {
         image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
             ?: Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh))
         // Still being escorted to the host: a scrim and a progress ring that fills with the transfer.
-        val p = if (reference.startsWith("pending://")) progress() else null
+        val p = if (pending) progress() else null
         androidx.compose.animation.AnimatedVisibility(p != null, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.38f)), contentAlignment = Alignment.Center) {
                 val side = minOf(w.w, w.h)

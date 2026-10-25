@@ -12,7 +12,6 @@ import org.junit.Assert.*
 import org.junit.Test
 import sh.zeron.android.MainActivity
 import sh.zeron.android.ZeronApplication
-import sh.zeron.android.core.OnboardingStep
 import sh.zeron.android.design.ThemeMode
 
 /** Exercise the UI in preview mode; never log in or mark a real account as onboarded. */
@@ -21,31 +20,28 @@ class OnboardingFlowTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val model get() = (instrumentation.targetContext.applicationContext as ZeronApplication).model
 
-    @Test fun welcomeCanConfigureAppearanceBrowseAgentsAndStartASession() {
+    @Test fun upstreamStepsConfigureAppearanceSkipCloudAndStartASession() {
         val original = model.appearance.value
         try {
-            launch("welcome")
-            text("Get started").click()
+            launch("appearance")
             text("Make it yours")
             text("Light").click()
             assertEquals(ThemeMode.Light, model.appearance.value.mode)
             text("Continue").click()
             text("Sync your work")
-            text("You're exploring the offline demo.")
             text("Continue").click()
             text("Your agents")
-            requireNotNull(device.wait(Until.findObject(By.res("provider-claude-code")), 10_000)).click()
-            text("Claude Code")
-            requireNotNull(device.wait(Until.findObject(By.desc("Back").pkg(instrumentation.targetContext.packageName)), 5_000)).click()
-            assertTrue(device.wait(Until.hasObject(By.res("provider-claude-code")), 5_000))
+            assertFalse(device.hasObject(By.text("Connect GitHub")))
             text("Continue").click()
+            text("Stay in the loop")
+            text("Not now").click()
             text("You're all set")
+            assertFalse(device.hasObject(By.text("Cloud agents")))
             text("Start a session").click()
             assertTrue(device.wait(Until.hasObject(By.desc("Close").pkg(instrumentation.targetContext.packageName)), 10_000))
-            assertNull(model.onboarding.step.value)
             recreate()
-            assertNull(model.onboarding.step.value)
             assertTrue(device.wait(Until.hasObject(By.desc("Close").pkg(instrumentation.targetContext.packageName)), 10_000))
+            assertFalse(device.hasObject(By.text("Make it yours")))
         } finally { reset(original) }
     }
 
@@ -59,19 +55,14 @@ class OnboardingFlowTest {
             text("Sync your work")
             recreate()
             text("Sync your work")
-            assertEquals(OnboardingStep.SYNC, model.onboarding.step.value)
             assertEquals(ThemeMode.Dark, model.appearance.value.mode)
             device.pressBack()
             text("Make it yours")
-            device.pressBack()
-            text("Welcome to Zerun")
-            text("Get started")
         } finally { reset(original) }
     }
 
     private fun reset(appearance: sh.zeron.android.design.Appearance) = instrumentation.runOnMainSync {
         model.setAppearance(appearance)
-        model.onboarding.attach("demo/test", true)
     }
 
     private fun text(value: String) = requireNotNull(device.wait(Until.findObject(By.text(value)), 10_000)) { "Missing text: $value" }
@@ -80,9 +71,9 @@ class OnboardingFlowTest {
         val context = instrumentation.targetContext
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            .putExtra("demo", true).putExtra("fast", true).putExtra("onboarding", step))
-        val wanted = OnboardingStep.valueOf(step.uppercase())
-        await { model.isDemo && model.onboarding.step.value == wanted }
+            .putExtra("demo", true).putExtra("fast", true).putExtra("route", "welcome:$step"))
+        await { model.isDemo }
+        text(if (step == "appearance") "Make it yours" else "Your agents")
         device.waitForIdle()
     }
 

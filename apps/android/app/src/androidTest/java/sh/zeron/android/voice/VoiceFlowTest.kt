@@ -14,6 +14,10 @@ import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.Rule
+import org.junit.rules.TestWatcher
+import org.junit.runner.Description
+import java.io.File
 import sh.zeron.android.ZeronApplication
 import uniffi.zeron_core.defaultVoiceStyles
 
@@ -24,56 +28,71 @@ class VoiceFlowTest {
     private val device = UiDevice.getInstance(instrumentation)
     private val model get() = (context.applicationContext as ZeronApplication).model
 
+    @get:Rule val failureCapture = object : TestWatcher() {
+        override fun failed(error: Throwable, description: Description) {
+            val folder = File(instrumentation.targetContext.cacheDir, "upstream-flow-failures").apply { mkdirs() }
+            device.takeScreenshot(File(folder, "${description.methodName}.png"))
+            device.dumpWindowHierarchy(File(folder, "${description.methodName}.xml"))
+        }
+    }
+
     @Test fun previewMinimizesSurvivesRecreationAndEnds() {
         val before = context.getSystemService(AudioManager::class.java).activeRecordingConfigurations.size
         launch(preview = true)
         findDescription("Mute microphone").click()
-        await { model.voice.state.value.muted }
+        await { model.voice.snapshot.value.muted }
         findDescription("Unmute microphone")
-        val id = model.voice.state.value.sessionId
+        val since = model.voice.snapshot.value.activeSince
         findDescription("Back to Zerun").click()
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Codex voice ·")), 5_000))
+        assertTrue(device.wait(Until.hasObject(By.descStartsWith("Voice call,")), 5_000))
         instrumentation.runOnMainSync {
             ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).first().recreate()
         }
-        assertTrue(device.wait(Until.hasObject(By.textStartsWith("Codex voice ·")), 10_000))
-        assertEquals(id, model.voice.state.value.sessionId)
-        device.findObject(By.textStartsWith("Codex voice ·")).click()
+        assertTrue(device.wait(Until.hasObject(By.descStartsWith("Voice call,")), 10_000))
+        assertEquals(since, model.voice.snapshot.value.activeSince)
+        device.findObject(By.descStartsWith("Voice call,")).click()
         findDescription("End call").click()
-        await { !model.voice.state.value.live }
-        findDescription("Back to Zerun").click()
-        assertTrue(device.wait(Until.hasObject(By.text("New session")), 5_000))
+        await { !model.voice.snapshot.value.live }
+        assertTrue(device.wait(Until.hasObject(By.desc("New session")), 5_000))
         assertEquals(before, context.getSystemService(AudioManager::class.java).activeRecordingConfigurations.size)
     }
 
-    @Test fun microphoneDenialExplainsRecoveryWithoutStartingACall() {
-        launch()
-        instrumentation.runOnMainSync { model.voice.permissionDenied() }
-        assertTrue(device.wait(Until.hasObject(By.text("Android Settings")), 5_000))
-        assertTrue(device.hasObject(By.textContains("Allow microphone access")))
-        device.findObject(By.text("Close")).click()
-        await { !model.voice.state.value.stageOpen }
-        assertFalse(model.voice.state.value.live)
-        assertNull(model.voice.state.value.endReason)
+    @Test fun microphoneDenialExplainsRecoveryWithoutStartingAudio() {
+        val before = context.getSystemService(AudioManager::class.java).activeRecordingConfigurations.size
+        launch(preview = true)
+        instrumentation.runOnMainSync {
+            model.voice.closed(uniffi.zeron_core.VoiceEndReason.MICROPHONE_DENIED, generation())
+        }
+        assertTrue(device.wait(Until.hasObject(By.textContains("needs microphone access")), 5_000))
+        assertTrue(device.wait(Until.hasObject(By.text("Open Settings")), 5_000))
+        assertFalse(model.voice.live)
+        assertEquals(before, context.getSystemService(AudioManager::class.java).activeRecordingConfigurations.size)
+        findDescription("Back to Zerun").click()
+        await { model.voice.snapshot.value.endReason == null }
     }
 
     @Test fun voiceSelectionPersistsWhenSettingsReopens() {
         launch()
-        val original = model.voice.state.value.selectedStyle
+        val original = model.voice.selectedStyle.value
         try {
-            findDescription("Voice settings").click()
+            repeat(6) {
+                if (device.findObjects(By.text("Voice")).isEmpty()) device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 30)
+            }
+            device.findObjects(By.text("Voice")).last().click()
             assertTrue(device.wait(Until.hasObject(By.text("Codex runs on")), 5_000))
+            val current = VoiceController.styleLabel(original)
+            repeat(6) {
+                if (!device.hasObject(By.text(current))) device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
+            }
+            text(current).click()
             val choice = defaultVoiceStyles().first()
             val label = choice.replaceFirstChar { it.titlecase() }
-            repeat(5) {
-                if (!device.hasObject(By.text(label))) device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 3, 20)
-            }
             requireNotNull(device.wait(Until.findObject(By.text(label)), 5_000)).click()
-            await { model.voice.state.value.selectedStyle == choice }
-            findDescription("Close voice settings").click()
-            findDescription("Voice settings").click()
-            assertEquals(choice, model.voice.state.value.selectedStyle)
-            findDescription("Close voice settings").click()
+            await { model.voice.selectedStyle.value == choice }
+            device.pressBack()
+            device.findObjects(By.text("Voice")).last().click()
+            assertEquals(choice, model.voice.selectedStyle.value)
+            device.pressBack()
         } finally { instrumentation.runOnMainSync { model.voice.selectStyle(original) } }
     }
 
@@ -84,25 +103,36 @@ class VoiceFlowTest {
         val manager = context.getSystemService(NotificationManager::class.java)
         try {
             instrumentation.runOnMainSync { VoiceCallService.start(context) }
-            await { manager.activeNotifications.any { it.id == 3461 } }
+            await { manager.activeNotifications.any { it.id == 0x766f } }
             device.pressHome()
-            manager.activeNotifications.single { it.id == 3461 }.notification.actions[0].actionIntent.send()
-            await { model.voice.state.value.muted }
-            manager.activeNotifications.single { it.id == 3461 }.notification.actions[1].actionIntent.send()
-            await { !model.voice.state.value.live }
-            await { manager.activeNotifications.none { it.id == 3461 } }
+            manager.activeNotifications.single { it.id == 0x766f }.notification.actions.single { it.title.toString().equals("Mute", ignoreCase = true) }.actionIntent.send()
+            await { model.voice.snapshot.value.muted }
+            manager.activeNotifications.single { it.id == 0x766f }.notification.actions.first { it.title.toString().contains("hang", ignoreCase = true) || it.title.toString().contains("end", ignoreCase = true) }.actionIntent.send()
+            await { !model.voice.snapshot.value.live }
+            await { manager.activeNotifications.none { it.id == 0x766f } }
         } finally { instrumentation.runOnMainSync { model.voice.stop() } }
     }
 
+    private fun generation(): Long = VoiceController::class.java.getDeclaredField("generation").let {
+        it.isAccessible = true
+        it.getLong(model.voice)
+    }
+
+    private fun text(value: String) = requireNotNull(device.wait(Until.findObject(By.text(value)), 10_000)) { value }
+
     private fun launch(preview: Boolean = false) {
-        instrumentation.runOnMainSync { model.voice.stop(); model.voice.closeStage(); model.voice.closeSettings() }
+        instrumentation.runOnMainSync { model.voice.stop(); model.voice.forced = true }
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            .putExtra("demo", true).putExtra("fast", true).putExtra("voice-preview", preview)
+            .putExtra("demo", true).putExtra("fast", true)
             .putExtra("route", if (preview) "home" else "settings"))
-        if (preview) findDescription("Mute microphone") else findDescription("Voice settings")
+        if (preview) findDescription("New session") else text("Providers")
         assertTrue(model.isDemo)
         device.waitForIdle()
+        if (preview) {
+            instrumentation.runOnMainSync { assertTrue(model.voice.preview()); model.voice.requestStage() }
+            findDescription("Mute microphone")
+        }
     }
     private fun findDescription(value: String) = requireNotNull(device.wait(Until.findObject(By.desc(value)), 10_000)) { value }
     private fun await(condition: () -> Boolean) {

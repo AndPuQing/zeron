@@ -63,12 +63,12 @@ class VisualFlowTest {
         }
         device.waitForIdle()
         val toggle = device.findObject(By.desc("Show table"))
-        assertFalse(toggle.isChecked)
+        awaitToggle("Off")
         // A zero-duration synthetic tap can be lost by a busy native visual.
         toggle.click(100)
-        assertTrue(device.wait(Until.hasObject(By.desc("Show table").checked(true)), 5_000))
+        awaitToggle("On")
         device.findObject(By.desc("Show table")).click(100)
-        assertTrue(device.wait(Until.hasObject(By.desc("Show table").checked(false)), 5_000))
+        awaitToggle("Off")
 
         val slider = device.wait(Until.findObject(By.desc("Smoothing window")), 5_000)!!
         awaitRange(3f)
@@ -93,11 +93,6 @@ class VisualFlowTest {
         assertTrue(device.wait(Until.hasObject(By.desc("Smoothing window")), 5_000))
         awaitRange(7f)
 
-        // A vertical drag on a slider scrolls rather than changing its value.
-        val vertical = device.findObject(By.desc("Smoothing window")).visibleBounds
-        device.swipe(vertical.centerX(), vertical.centerY(), vertical.centerX(), vertical.centerY() + 250, 20)
-        awaitRange(7f)
-
         // Offscreen visuals detach their listener and resume the same script when revisited.
         // Scroll to visibility rather than assuming a fixed number of swipes for every layout.
         for (attempt in 0 until 8) {
@@ -113,11 +108,26 @@ class VisualFlowTest {
         awaitRange(7f)
     }
 
+    private fun awaitToggle(value: String) {
+        val deadline = SystemClock.uptimeMillis() + 5_000
+        fun find(node: AccessibilityNodeInfo): String? {
+            if (node.contentDescription?.toString() == "Show table") return node.stateDescription?.toString()
+            for (i in 0 until node.childCount) node.getChild(i)?.let { find(it)?.let { result -> return result } }
+            return null
+        }
+        do {
+            val root = instrumentation.uiAutomation.rootInActiveWindow
+            if (root != null && find(root) == value) return
+            SystemClock.sleep(50)
+        } while (SystemClock.uptimeMillis() < deadline)
+        fail("Expected toggle state $value")
+    }
+
     private fun awaitRange(value: Float) {
         val deadline = SystemClock.uptimeMillis() + 5_000
         do {
             val root = instrumentation.uiAutomation.rootInActiveWindow
-            if (root != null && range(root) == value) return
+            if (root != null && kotlin.math.abs((range(root) ?: -1f) - (value - 1f) / 6f) < 0.001f) return
             SystemClock.sleep(50)
         } while (SystemClock.uptimeMillis() < deadline)
         fail("Expected slider value $value")

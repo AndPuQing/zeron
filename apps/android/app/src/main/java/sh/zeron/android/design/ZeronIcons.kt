@@ -60,6 +60,8 @@ object ZIcons {
     val Chat = R.drawable.zi_chat_round_line
     val Refresh = R.drawable.zi_refresh
     val Text = R.drawable.zi_document
+    val Gallery = R.drawable.zi_gallery
+    val Camera = R.drawable.zi_camera
     val Image = R.drawable.zi_file_image
     val Link = R.drawable.zi_arrow_up_right
     val Microphone = R.drawable.zi_microphone

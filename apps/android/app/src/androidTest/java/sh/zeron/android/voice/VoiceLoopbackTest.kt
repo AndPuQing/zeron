@@ -14,6 +14,7 @@ import kotlinx.coroutines.*
 import org.junit.Assert.*
 import org.junit.Test
 import org.webrtc.*
+import sh.zeron.android.ZeronApplication
 
 /** A real local WebRTC answerer validates the media contract without any provider. */
 class VoiceLoopbackTest {
@@ -30,13 +31,13 @@ class VoiceLoopbackTest {
         val audio = context.getSystemService(AudioManager::class.java)
         val before = audio.activeRecordingConfigurations.size
         val previousMode = audio.mode
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        val client = withContext(Dispatchers.Main) { NativeVoicePeer(context, scope) { fail("Unexpected media failure") } }
+        val client = withContext(Dispatchers.Main) { VoicePeer(context, (context.applicationContext as ZeronApplication).model.voice, true).also { it.onFailure = { fail("Unexpected media failure") } } }
         var factory: PeerConnectionFactory? = null
         var server: PeerConnection? = null
         val events = AtomicReference<DataChannel?>()
         try {
             val offer = withContext(Dispatchers.Main) { client.prepare(); client.offer() }
+            assertTrue("Loopback needs a network interface with ICE candidates", offer.lineSequence().any { it.startsWith("a=candidate:") })
             factory = withContext(Dispatchers.Main) { PeerConnectionFactory.builder().createPeerConnectionFactory() }
             server = withContext(Dispatchers.Main) {
                 checkNotNull(checkNotNull(factory).createPeerConnection(PeerConnection.RTCConfiguration(emptyList()).apply {
@@ -61,7 +62,7 @@ class VoiceLoopbackTest {
                 val answer = checkNotNull(description(true) { remote.createAnswer(it, MediaConstraints()) })
                 description(false) { remote.setLocalDescription(it, answer) }
                 withTimeout(25_000) { while (remote.iceGatheringState() != PeerConnection.IceGatheringState.COMPLETE) delay(20) }
-                client.applyAnswer(checkNotNull(remote.localDescription).description)
+                client.apply(checkNotNull(remote.localDescription).description)
             }
             withTimeout(5_000) { while (events.get()?.state() != DataChannel.State.OPEN) delay(20) }
             assertEquals("oai-events", events.get()?.label())
@@ -71,7 +72,7 @@ class VoiceLoopbackTest {
             withContext(Dispatchers.Main) { client.setMuted(false) }
             withTimeout(5_000) { while (audio.activeRecordingConfigurations.size <= before) delay(20) }
             assertEquals(AudioManager.MODE_IN_COMMUNICATION, audio.mode)
-            withContext(Dispatchers.Main) { client.muteLocally(true) }
+            withContext(Dispatchers.Main) { client.setMuted(true) }
         } finally {
             withContext(Dispatchers.Main) {
                 client.close()
@@ -79,7 +80,6 @@ class VoiceLoopbackTest {
                 server?.close(); server?.dispose()
                 factory?.dispose()
             }
-            scope.cancel()
         }
         withTimeout(5_000) { while (audio.activeRecordingConfigurations.size != before || audio.mode != previousMode) delay(20) }
     }
