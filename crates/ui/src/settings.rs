@@ -459,7 +459,7 @@ impl PullRequestDestination {
     pub fn description(self) -> &'static str {
         match self {
             Self::Native => {
-                "Inspect them in Zeron, beside the conversation or the Pull requests board."
+                "Inspect them in Zerun, beside the conversation or the Pull requests board."
             }
             Self::Browser => {
                 "Open them in a Browser tab beside the conversation, or in the default browser when none is shown."

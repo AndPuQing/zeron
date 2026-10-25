@@ -148,6 +148,12 @@ class ComposerModel(initial: String = "") {
     val text: String get() = value.text
     val hasContent: Boolean get() = value.text.isNotBlank() || images.isNotEmpty()
 
+    /** A terminal's output preserves the skill identities and any staged attachments. */
+    fun appendText(text: String) {
+        val current = encodedDraft()
+        setText(if (current.isEmpty()) text else current + (if (current.endsWith("\n")) "" else "\n") + text)
+    }
+
     fun setText(s: String) {
         commands.clear()
         val text = if (s.contains("zeron-invoke:") || s.startsWith("zeron-composer-draft-v1:")) {

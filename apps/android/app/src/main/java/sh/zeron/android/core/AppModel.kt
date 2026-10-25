@@ -355,7 +355,9 @@ class AppModel(private val app: Application) {
         }
     }
 
-    fun signOut() {
+    fun signOut() = signOutLocally(forget = true)
+
+    private fun signOutLocally(forget: Boolean) {
         agentSignIn.cancel()
         voice.reset()
         signInState.clear()
@@ -370,8 +372,9 @@ class AppModel(private val app: Application) {
         _connectivity.value = null
         if (!wasDemo) {
             credentials.clear()
-            coreDir.deleteRecursively()
+            if (forget) coreDir.deleteRecursively()
         }
+        lastDraft = NewSessionDraft()
         onboarding.signedOut()
     }
 
@@ -396,7 +399,7 @@ class AppModel(private val app: Application) {
             is ClientEvent.ComposerChanged -> _sessionEvents.tryEmit(event.chatId)
             is ClientEvent.ConnectivityChanged -> _connectivity.value = event.connectivity
             is ClientEvent.AuthRefreshed -> credentials.updateTokens(event.tokens)
-            is ClientEvent.AuthExpired -> signOut()
+            is ClientEvent.AuthExpired -> signOutLocally(forget = false)
         }
     }
 
@@ -583,13 +586,17 @@ class AppModel(private val app: Application) {
     }
 
     /** Open composers by chat: text handed to a chat (terminal output) lands in its draft. */
+    // The shell's ViewModel owns these across navigation and recreation.
+    var retainedComposers: Map<String, sh.zeron.android.ui.ComposerModel> = emptyMap()
+        internal set
     val composerSinks = HashMap<String, (String) -> Unit>()
 
     /** Text into a chat's composer, after what's there (or its saved draft when it isn't open). */
     fun appendToComposer(chatId: String, text: String) {
         composerSinks[chatId]?.let { return it(text) }
-        val draft = drafts.load(chatId)
-        drafts.save(chatId, if (draft.isEmpty()) text else draft + "\n" + text)
+        val composer = retainedComposers[chatId] ?: sh.zeron.android.ui.ComposerModel(drafts.load(chatId))
+        composer.appendText(text)
+        drafts.save(chatId, composer.persistedDraft())
     }
 
     /** A Cloud chat created whose first message didn't go out yet (key → chat). */
@@ -631,6 +638,7 @@ class AppModel(private val app: Application) {
             val project = _workspace.value?.projects?.firstOrNull { it.id == draft.projectId }
             val worktree = if (draft.worktree && project != null) WorktreeSpec(project.path, draft.branch ?: "HEAD", project.id) else null
             handle.send(SendRequest(text, attachments, worktree, BusyPolicy.QUEUE))
+            noteDeliveryActivity()
             refreshWorkspace()
             chatId
         } catch (e: Exception) {

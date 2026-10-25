@@ -233,8 +233,7 @@ fun SessionScreen(
     // Text handed to this chat (a terminal's output) lands after what's typed.
     DisposableEffect(chatId) {
         model.composerSinks[chatId] = { text ->
-            val current = draft.encodedDraft()
-            draft.setText(if (current.isEmpty()) text else current + (if (current.endsWith("\n")) "" else "\n") + text)
+            draft.appendText(text)
             model.drafts.save(chatId, draft.persistedDraft())
         }
         onDispose { model.composerSinks.remove(chatId) }

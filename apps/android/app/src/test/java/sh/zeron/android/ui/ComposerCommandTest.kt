@@ -9,6 +9,16 @@ import uniffi.zeron_core.ComposerCommand
 class ComposerCommandTest {
     private val goal = ComposerCommand("/goal", "Goal", "objective", "canonical", null)
 
+    @Test fun terminalOutputKeepsCanonicalSkillIdentity() {
+        val link = "[\$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)"
+        val model = ComposerModel("\$")
+        model.insertCommand(ComposerCommand("\$model", "Skill", null, link, null))
+        model.appendText("terminal output")
+        assertTrue(model.text.endsWith("\nterminal output"))
+        assertTrue(model.encoded().contains(link))
+        assertEquals(model.encoded(), ComposerModel(model.persistedDraft()).encoded())
+    }
+
     @Test fun completionUsesDesktopProseBoundaries() {
         val model = ComposerModel()
         for (text in listOf("    /goal", "\t/goal", "/goal ship it", "```\n/goal", "/goal\t")) {

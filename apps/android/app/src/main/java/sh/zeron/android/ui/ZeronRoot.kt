@@ -106,6 +106,10 @@ private fun MainNav(model: AppModel, startNewSession: Boolean) {
     val client by model.client.collectAsState()
     val draftStore: ComposerDrafts = viewModel()
     val drafts = draftStore.forClient(client)
+    androidx.compose.runtime.DisposableEffect(model, drafts, client) {
+        model.retainedComposers = drafts
+        onDispose { if (model.retainedComposers === drafts) model.retainedComposers = emptyMap() }
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val wide = maxWidth >= 700.dp && maxHeight >= 480.dp
     val roomy = maxWidth >= 1100.dp

@@ -67,8 +67,8 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -125,7 +125,7 @@ fun ModelPickerSheet(
     host: String,
     @DrawableRes hostIcon: Int,
     note: String? = null,
-    onPick: (harness: String, row: ModelPickerRow) -> Unit,
+    onPick: suspend (harness: String, row: ModelPickerRow) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val sheet = rememberModalBottomSheetState()
@@ -136,6 +136,7 @@ fun ModelPickerSheet(
     val rows = remember { mutableStateMapOf<String, List<ModelPickerRow>>() }
     var current by remember { mutableStateOf(harness to model) }
     var picked by remember { mutableStateOf(false) }
+    var pickError by remember { mutableStateOf<String?>(null) }
 
     // The current provider first, then the rest, so a swipe lands on a loaded
     // list; a provider that joins later (the host's list arrived) loads then.
@@ -161,14 +162,18 @@ fun ModelPickerSheet(
     fun pick(tab: ModelPickerTab, row: ModelPickerRow) {
         if (picked) return
         picked = true
-        current = tab.harness to row.id
-        view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-        onPick(tab.harness, row)
-        // A beat to see the selection land.
+        pickError = null
         scope.launch {
-            delay(220)
-            sheet.hide()
-            onDismiss()
+            try {
+                onPick(tab.harness, row)
+                current = tab.harness to row.id
+                view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                delay(220)
+                sheet.hide()
+                onDismiss()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (e: Exception) { pickError = e.message ?: "Couldn't change the model." }
+            finally { picked = false }
         }
     }
 
@@ -224,6 +229,7 @@ fun ModelPickerSheet(
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 18.dp),
             )
         }
+        pickError?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) }
         Spacer(Modifier.height(10.dp))
         HorizontalPager(pager, modifier = Modifier.fillMaxWidth().height(pagerHeight), beyondViewportPageCount = 1, verticalAlignment = Alignment.Top) { ix ->
             val tab = tabs[ix]
@@ -424,6 +430,7 @@ private fun ProviderSwitcher(tabs: List<ModelPickerTab>, pager: PagerState, onSe
                             .onGloballyPositioned { bounds[ix] = it.boundsInParent() }
                             .clip(CircleShape)
                             .semantics {
+                                contentDescription = tab.label
                                 role = Role.Tab
                                 selected = ix == pager.currentPage
                             }

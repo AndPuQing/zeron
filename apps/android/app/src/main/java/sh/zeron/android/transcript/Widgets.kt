@@ -136,7 +136,7 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
             state.toggleDetail(key, kind.detail, kind.open)
         }
         WidgetKind.Shimmer -> Shimmer(state, model, w, palette)
-        is WidgetKind.Visual -> VisualWidget(state, model, kind.id, actions.openUrl)
+        is WidgetKind.Visual -> VisualWidget(state, kind.id, actions)
         is WidgetKind.Subagent -> SubagentCard(kind, palette) { doc ->
             haptics.performHapticFeedback(HapticFeedbackType.ContextClick)
             actions.openSubagent(doc, kind.title, kind.running)
