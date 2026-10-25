@@ -327,6 +327,10 @@ fun SessionScreen(
                     }
                 }
                 Spacer(Modifier.width(8.dp))
+                TonalCircleButton(ZIcons.Companions, "Companions", onClick = {
+                    onShowCompanions?.invoke(null) ?: run { companionsSheet = null; showCompanions = true }
+                }, size = 44.dp)
+                Spacer(Modifier.width(8.dp))
                 Box {
                     TonalCircleButton(ZIcons.More, "More", onClick = { overflow = true })
                     ActionMenu(

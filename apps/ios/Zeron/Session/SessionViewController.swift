@@ -556,11 +556,8 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         guard !tornDown else { return }
         tornDown = true
         if Self.liveSessions[chatId]?.session === self { Self.liveSessions[chatId] = nil }
-        // A side chat started here and left without a word: gone.
-        if app.freshSideChats.contains(chatId), source.isUnused, Drafts.load(chatId).isEmpty, app.row(chatId)?.preview == nil {
-            app.forgetFreshSideChat(chatId)
-            app.delete(chatId)
-        }
+        // Keep side chats until explicitly deleted: an empty transcript
+        // can still have an unsent draft or staged attachments.
         if mainShell != nil, !isCompanion { (splitViewController as? SplitRootController)?.sessionDidClose(chatId) }
         source.detach()
         engine.close()

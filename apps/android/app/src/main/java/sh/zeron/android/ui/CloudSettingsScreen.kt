@@ -71,7 +71,7 @@ fun CloudSettingsScreen(
         cloud.problem?.let { problem -> item("problem") { ProblemCard(problem, onBilling = onOpenBilling) } }
 
         // GitHub: the account Cloud clones and pushes as.
-        cloudSection("GitHub", footer = "Cloud agents clone and push to the repositories the Zeron GitHub App is installed on.") {
+        cloudSection("GitHub", footer = "Cloud agents clone and push to the repositories the connected GitHub App is installed on.") {
             Box {
                 CloudRow(
                     0, 1,

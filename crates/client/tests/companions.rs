@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use zeron_client::events::NullListener;
 use zeron_client::{
-    Client, ClientConfig, Credentials, DemoOptions, MessageRole, MessageStatus,
+    Client, ClientConfig, Credentials, DemoOptions, MessagePart, MessageRole, MessageStatus,
     SessionMessageEntry, StreamSpeed, SubagentSink, SubagentState, TerminalSink, TerminalUpdate,
 };
 
@@ -212,7 +212,9 @@ fn side_chats_start_fresh_or_fork_the_conversation() {
     // The fork keeps a single child level: new side chats require the root.
     assert!(client.create_side_chat(&fresh, None).is_err());
 
-    let fork = block_on(client.fork_side_chat("chat-veil", None)).unwrap().id;
+    let fork = block_on(client.fork_side_chat("chat-veil", None))
+        .unwrap()
+        .id;
     wait_for("the fork's row", Duration::from_secs(5), || {
         client.workspace().session(&fork).is_some()
     });
@@ -230,10 +232,16 @@ fn side_chats_start_fresh_or_fork_the_conversation() {
         copy.snapshot().transcript_len > 0
     });
     let entries = copy.snapshot().transcript_messages();
-    let last = entries.last().unwrap();
-    assert_eq!(last.role, MessageRole::Assistant);
+    let seam = entries.last().unwrap();
+    assert_eq!(seam.role, MessageRole::System);
+    assert!(seam.parts.iter().any(|part| matches!(
+        part,
+        MessagePart::Fork { source_chat_id, .. } if source_chat_id == "chat-veil"
+    )));
+    let last_reply = entries.get(entries.len() - 2).unwrap();
+    assert_eq!(last_reply.role, MessageRole::Assistant);
     assert_eq!(
-        last.status,
+        last_reply.status,
         Some(MessageStatus::Complete),
         "through the latest completed reply"
     );

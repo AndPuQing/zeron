@@ -67,6 +67,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
@@ -128,7 +129,7 @@ fun ModelPickerSheet(
     onPick: suspend (harness: String, row: ModelPickerRow) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val sheet = rememberModalBottomSheetState()
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
     val view = LocalView.current
     val start = tabs.indexOfFirst { it.harness == harness }.coerceAtLeast(0)
@@ -238,6 +239,7 @@ fun ModelPickerSheet(
                 rows[tab.harness],
                 notice = tab.footer ?: if (ix == start) note else null,
                 current = current,
+                active = ix == pager.settledPage && !pager.isScrollInProgress,
                 onPick = { pick(tab, it) },
             )
         }
@@ -251,6 +253,7 @@ private fun ProviderPage(
     rows: List<ModelPickerRow>?,
     notice: String?,
     current: Pair<String, String?>,
+    active: Boolean,
     onPick: (ModelPickerRow) -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -258,7 +261,9 @@ private fun ProviderPage(
         val q = query.trim().lowercase()
         if (q.isEmpty()) rows.orEmpty() else rows.orEmpty().filter { it.label.lowercase().contains(q) || it.id.lowercase().contains(q) }
     }
-    Column(Modifier.fillMaxSize()) {
+    // Preloaded pages still paint during a swipe, but only the settled page
+    // exposes rows to accessibility and automation.
+    Column(Modifier.fillMaxSize().then(if (active) Modifier else Modifier.clearAndSetSemantics {})) {
         if ((rows?.size ?: 0) > SEARCH_THRESHOLD) {
             OutlinedTextField(
                 query,

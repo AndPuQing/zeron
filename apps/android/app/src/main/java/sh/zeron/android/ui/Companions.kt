@@ -335,7 +335,7 @@ fun CompanionsContent(
 
 fun forkError(e: Exception): String = when (e) {
     is CoreException.HostUnavailable -> "Its computer isn't reachable right now"
-    is CoreException.Unsupported -> "Its computer needs a newer Zeron to fork"
+    is CoreException.Unsupported -> "Its computer needs a newer Zerun to fork"
     else -> "Couldn't fork this chat"
 }
 

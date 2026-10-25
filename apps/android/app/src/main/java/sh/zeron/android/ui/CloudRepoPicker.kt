@@ -153,7 +153,7 @@ fun CloudRepoPickerScreen(model: AppModel, onBack: () -> Unit, onCreated: (proje
                 val connected = cloud.githubConnected
                 EmptyRepos(
                     if (connected) "No repositories" else "Connect GitHub",
-                    if (connected) "Cloud reaches the repositories the Zeron GitHub App is installed on." else "Cloud projects are GitHub repositories. Connect GitHub to pick one.",
+                    if (connected) "Cloud reaches the repositories the connected GitHub App is installed on." else "Cloud projects are GitHub repositories. Connect GitHub to pick one.",
                     icon = ZIcons.GitHub,
                 ) {
                     if (connected) {
