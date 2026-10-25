@@ -120,7 +120,12 @@ final class SessionFlowTests: XCTestCase {
         unavailable.tap()
         XCTAssertFalse(app.staticTexts["Archived project notes"].exists)
 
-        list.swipeUp()
+        // This first page is shorter than the table: its midpoint can be
+        // empty space. Start the paging gesture on an actual session row.
+        let pagingRow = list.cells.containing(.staticText, identifier: "Review the deployment workflow").firstMatch
+        XCTAssertTrue(pagingRow.isHittable)
+        pagingRow.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.8))
+            .press(forDuration: 0.05, thenDragTo: list.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.05)))
         XCTAssertTrue(app.cells.containing(.staticText, identifier: "Polish the mobile layout").firstMatch.waitForExistence(timeout: 10))
         list.swipeDown()
         let agents = app.buttons["import-agents"]
@@ -338,7 +343,7 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
         let branch = app.buttons["side-chats"]
         XCTAssertTrue(branch.waitForExistence(timeout: 10), "branch button appears for a chat with side chats")
-        XCTAssertEqual(branch.value as? String, "1")
+        XCTAssertEqual(branch.value as? String, "2")
         branch.tap()
         XCTAssertTrue(app.navigationBars["Side chats"].waitForExistence(timeout: 5))
         let row = app.cells["session-chat-side"]
@@ -463,7 +468,7 @@ final class SessionFlowTests: XCTestCase {
         let app = launch(["-route", "chat:chat-veil"])
         let branch = app.buttons["side-chats"]
         XCTAssertTrue(branch.waitForExistence(timeout: 10))
-        XCTAssertEqual(branch.value as? String, "1")
+        XCTAssertEqual(branch.value as? String, "2")
         branch.tap()
         XCTAssertTrue(app.navigationBars["Side chats"].waitForExistence(timeout: 5))
         let row = app.cells["session-chat-side"]
@@ -472,9 +477,18 @@ final class SessionFlowTests: XCTestCase {
         app.buttons["Archive"].tap()
         // The sheet and the branch button both see the registry change.
         XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves the sheet")
-        XCTAssertFalse(app.buttons["side-chats"].exists, "the parent's count clears behind the sheet")
+        let remaining = app.cells["session-chat-side-easing"]
+        XCTAssertTrue(remaining.exists, "archiving one child preserves its sibling")
         app.buttons["side-chats-close"].tap()
-        XCTAssertFalse(app.buttons["side-chats"].exists)
+        XCTAssertTrue(branch.waitForExistence(timeout: 5))
+        XCTAssertEqual(branch.value as? String, "1", "the parent's count drops after archiving one child")
+        branch.tap()
+        XCTAssertTrue(remaining.waitForExistence(timeout: 5))
+        remaining.swipeLeft()
+        app.buttons["Archive"].tap()
+        XCTAssertTrue(remaining.waitForNonExistence(timeout: 5))
+        app.buttons["side-chats-close"].tap()
+        XCTAssertFalse(branch.exists, "archiving the final child clears the parent's button")
         snapshot(app, "side-chat-archived")
     }
 
