@@ -120,7 +120,10 @@ fn main() -> anyhow::Result<()> {
             &device,
             &path,
             shot.screenshot.name.clone().into(),
-            shot.screenshot.image.clone(),
+            shot.screenshot
+                .image()
+                .expect("a staged appshot PNG contains an image")
+                .clone(),
         );
         paths.push(path);
         shots.push(shot);
