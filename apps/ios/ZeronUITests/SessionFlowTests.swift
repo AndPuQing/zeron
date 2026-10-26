@@ -52,19 +52,16 @@ final class SessionFlowTests: XCTestCase {
 
     private func archive(_ row: XCUIElement, in panel: XCUIElement, app: XCUIApplication) {
         reveal(row, in: panel)
-        row.swipeLeft()
-        let action = panel.buttons["Archive"]
-        XCTAssertTrue(action.waitForExistence(timeout: 5))
-        XCTAssertTrue(action.isEnabled)
-        // UIKit's contextual action can have a visible frame but no AX hit
-        // point inside a sheet. Anchor the touch to the app, because even
-        // a coordinate anchored to the action asks AX for that hit point.
-        let frame = action.frame
+        // Companions uses UIKit's default full-swipe action. Traverse the
+        // visible row instead of querying the transient Archive button,
+        // whose AX frame/hit point is unstable in the medium sheet.
+        let frame = row.frame.intersection(panel.frame)
         XCTAssertFalse(frame.isEmpty)
         XCTAssertTrue(frame.midX.isFinite && frame.midY.isFinite)
-        XCTAssertTrue(panel.frame.contains(frame))
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
-            .withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let start = origin.withOffset(CGVector(dx: frame.maxX - 12, dy: frame.midY))
+        let end = origin.withOffset(CGVector(dx: frame.minX + 12, dy: frame.midY))
+        start.press(forDuration: 0.1, thenDragTo: end)
         XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves Companions")
     }
 
