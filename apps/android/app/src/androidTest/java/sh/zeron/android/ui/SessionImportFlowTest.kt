@@ -58,7 +58,7 @@ class SessionImportFlowTest {
         find("Not imported")
         await { !device.hasObject(By.text("Improve import navigation")) }
         find("Close").click()
-        await { device.hasObject(By.text("Sessions")) }
+        await { device.hasObject(By.text("Search sessions")) }
         find("Session options").click()
         find("Archived").click()
         find("Improve import navigation")
@@ -156,7 +156,7 @@ class SessionImportFlowTest {
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             .putExtra("demo", true).putExtra("fast", true).putExtra("route", route))
         await { model.isDemo && model.workspace.value != null }
-        find(if (route == "home") "Sessions" else "Import sessions")
+        find(if (route == "home") "Search sessions" else "Import sessions")
     }
 
     private fun find(text: String): UiObject2 {

@@ -15,8 +15,8 @@ export async function releaseRoute(request: Request, env: Env, url: URL): Promis
   const object = await env.RELEASES.get(key);
   if (!object) return json({ error: "not_found" }, 404);
   // latest.txt / manifest.json flip on release; artifacts are immutable by
-  // name — unless uploaded with their own policy (the Android APK's stable
-  // name is replaced by every build: `no-cache`).
+  // name, unless uploaded with their own policy. Deployments that replace a
+  // stable artifact name can set `no-cache`; this fork publishes versioned APKs.
   const mutable = key.endsWith(".txt") || key.endsWith(".json");
   const headers = new Headers({
     "content-type": key.endsWith(".txt")

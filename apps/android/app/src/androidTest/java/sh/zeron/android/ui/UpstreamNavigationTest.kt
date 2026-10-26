@@ -3,6 +3,9 @@ package sh.zeron.android.ui
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.ViewModelProvider
 import androidx.test.platform.app.InstrumentationRegistry
@@ -35,7 +38,7 @@ class UpstreamNavigationTest {
         }
     }
 
-    @Test fun phoneBottomActionsAndBackStack() {
+    @Test fun phoneSearchBarActionsAndBackStack() {
         launch("home")
         capture("phone-sessions")
         description("Settings").click()
@@ -46,9 +49,11 @@ class UpstreamNavigationTest {
         text("Providers")
         description("Back").click()
         awaitPhoneHome()
-        description("Search").click()
+        description("Search sessions").click()
         editor().text = "Streaming veil"
         text(model.row("chat-veil")!!.title)
+        // Settle the IME before tapping the in-app navigation control.
+        dismissKeyboard()
         description("Back").click()
         awaitPhoneHome()
         description("New session").click()
@@ -67,13 +72,25 @@ class UpstreamNavigationTest {
         assertTrue(device.wait(Until.hasObject(By.desc("New session")), 5_000))
     }
 
+    @Test fun collapsedNewSessionFabKeepsAccessibleAction() {
+        launch("home")
+        description("New session")
+        device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4,
+            device.displayWidth / 2, device.displayHeight / 3, 30)
+        assertTrue(device.wait(Until.gone(By.text("New session")), 5_000))
+        description("New session").click()
+        editor()
+        description("Close").click()
+        awaitPhoneHome()
+    }
+
     @Test fun tabletSettingsDialogAndInspectorKeepTheSelectedChat() {
         try {
             device.executeShellCommand("wm size 3000x2000")
             launch("chat:chat-deploy")
             description("More")
             capture("tablet-before-settings")
-            assertTrue(device.wait(Until.hasObject(By.text("Sessions")), 10_000))
+            assertTrue(device.wait(Until.hasObject(By.desc("Session options")), 10_000))
             val draft = composer()
             instrumentation.runOnMainSync { draft.setText("Keep the tablet draft") }
             capture("tablet-chat")
@@ -113,7 +130,7 @@ class UpstreamNavigationTest {
         val encoded = draft.encodedDraft()
         try {
             device.executeShellCommand("wm size 3000x2000")
-            assertTrue(device.wait(Until.hasObject(By.text("Sessions")), 15_000))
+            assertTrue(device.wait(Until.hasObject(By.desc("Session options")), 15_000))
             description("More")
             assertSame(draft, composer())
             instrumentation.runOnMainSync {
@@ -121,7 +138,7 @@ class UpstreamNavigationTest {
                 assertEquals(1, draft.images.size)
             }
             device.executeShellCommand("wm size reset")
-            assertTrue(device.wait(Until.gone(By.text("Sessions")), 15_000))
+            assertTrue(device.wait(Until.gone(By.desc("Session options")), 15_000))
             description("More")
             assertSame(draft, composer())
             instrumentation.runOnMainSync {
@@ -136,11 +153,11 @@ class UpstreamNavigationTest {
     }
 
     private fun awaitPhoneHome() {
-        // The underlying bottom bar appears before outgoing pages finish their transition.
+        // The underlying search bar appears before outgoing pages finish their transition.
         assertTrue(device.wait(Until.gone(By.desc("Close").pkg(context.packageName)), 5_000))
         assertTrue(device.wait(Until.gone(By.desc("Back").pkg(context.packageName)), 5_000))
         assertTrue(device.wait(Until.gone(By.clazz("android.widget.EditText").pkg(context.packageName)), 5_000))
-        text("Sessions")
+        text("Search sessions")
         device.waitForIdle()
         if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
     }
@@ -152,6 +169,24 @@ class UpstreamNavigationTest {
             result = ViewModelProvider(activity)[ComposerDrafts::class.java].forClient(model.client.value).getValue("chat-deploy")
         }
         return result
+    }
+
+    private fun dismissKeyboard() {
+        instrumentation.runOnMainSync {
+            val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+            WindowCompat.getInsetsController(activity.window, activity.window.decorView).hide(WindowInsetsCompat.Type.ime())
+        }
+        val deadline = SystemClock.uptimeMillis() + 5_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            var visible = false
+            instrumentation.runOnMainSync {
+                val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+                visible = ViewCompat.getRootWindowInsets(activity.window.decorView)?.isVisible(WindowInsetsCompat.Type.ime()) == true
+            }
+            if (!visible) return
+            SystemClock.sleep(50)
+        }
+        error("Keyboard did not close before navigating back")
     }
 
     private fun launch(route: String) {
@@ -176,7 +211,7 @@ class UpstreamNavigationTest {
         if (Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
     }
 
-    private fun description(value: String) = stable(By.desc(value), value)
+    private fun description(value: String) = stable(if (value == "Settings") By.descStartsWith("Settings,") else By.desc(value), value)
     private fun text(value: String) = stable(By.text(value), value)
 
     private fun stable(selector: androidx.test.uiautomator.BySelector, label: String): androidx.test.uiautomator.UiObject2 {

@@ -4,6 +4,7 @@ import android.net.Uri
 import uniffi.zeron_core.MobileComposerAction
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -524,10 +525,8 @@ private fun androidx.compose.foundation.layout.BoxScope.Toasts(model: AppModel, 
 }
 
 /**
- * The front page: the Sessions list over a Material 3 bottom app bar —
- * Settings, Search and voice as its actions, New session as its FAB (iOS's
- * bottom bar: Settings · Search · voice · New session). The bar slides away
- * while the list scrolls down and comes back on the way up.
+ * The front page: a Sessions search bar with account and voice actions,
+ * and an extended New session FAB that collapses while scrolling down.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
@@ -585,7 +584,8 @@ private fun Home(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .navigationBarsPadding()
-                .padding(16.dp),
+                .padding(16.dp)
+                .semantics { contentDescription = "New session" },
         )
     }
 }

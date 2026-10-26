@@ -320,7 +320,7 @@ Navigation, phone/tablet layouts, account/agent login, onboarding, voice and
 interactive visuals follow upstream; the upstream voice controller also isolates
 callbacks by call generation. The fork retains updater/signing, canonical/attachment composer draft storage and
 search results that include side chats with their parent-session labels.
-Phones use the upstream Sessions bottom app bar and page stack; tablets use
+Phones use the upstream Sessions search bar, account avatar and extended New session FAB; tablets use
 the sidebar, companion inspector and a settings dialog with its own page stack.
 Session import is available in Sessions → Session options → Import sessions.
 Closing an unused side chat does not delete it automatically: an unsent
