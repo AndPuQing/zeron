@@ -28,18 +28,6 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private var shown = SessionChrome()
     private let openedAt = CACurrentMediaTime()
     private var reportedOpen = false
-    private lazy var ellipsisItem: UIBarButtonItem = {
-        let item = UIBarButtonItem(
-            image: UIImage(systemName: "ellipsis"),
-            menu: sessionMenu(title: "", subtitle: "")
-        )
-        item.accessibilityLabel = "Session options"
-        item.accessibilityIdentifier = "session-menu"
-        return item
-    }()
-    private let sideChatsButton = UIButton(type: .system)
-    private lazy var sideChatsItem = UIBarButtonItem(customView: sideChatsButton)
-    private var sideChatsToken: AnyObject?
 
     init?(app: AppModel, chatId: String) {
         guard let source = app.sessionSource(chatId) else { return nil }
@@ -60,42 +48,47 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             self?.saveDraft()
         }
         navigationItem.largeTitleDisplayMode = .never
+        // The title and "project @ device" head the ⋯ menu instead of
+        // crowding the bar.
+        navigationItem.titleView = UIView()
+        navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: sessionMenu(title: "", subtitle: ""))
+        navigationItem.rightBarButtonItem?.accessibilityIdentifier = "session-menu"
         companionsItem = UIBarButtonItem(image: UIImage(systemName: "square.stack.3d.up"), primaryAction: UIAction { [weak self] _ in
             self?.showCompanions(section: nil)
         })
         companionsItem.accessibilityLabel = "Agents, side chats and terminals"
         companionsItem.accessibilityIdentifier = "session-companions"
-        navigationItem.rightBarButtonItems = [ellipsisItem, companionsItem!]
-        // A child's subtitle names its parent and taps through.
-        titleView.onSubtitleTap = { [weak self] in
-            guard let self, let parent = self.shown.parentChatId else { return }
-            self.router?.openChildSession(parent)
-        }
-        // The ⋯ menu replaced the centered title; keep the fork's tappable
-        // subtitle view as the bar's title so a child still taps through.
-        navigationItem.titleView = titleView
-        sideChatsButton.addAction(UIAction { [weak self] _ in self?.presentSideChats() }, for: .touchUpInside)
-        // Voice and side chats share the navigation bar. Rebuild all its
-        // items together so either update preserves the other action.
-        voiceBar = VoiceBarItem(app: app, host: self)
-        // Join the vertical navigation bar on iPhone Duo.
+        // The session has its own composer, so the tab bar's voice control
+        // steps aside with the accessory; the call stays a tap away up here.
+        let voiceBar = VoiceBarItem(app: app, host: self)
+        self.voiceBar = voiceBar
+        // A custom view reads as horizontal-only; on iPhone Duo it joins ⋯ in
+        // the vertical bar.
         #if compiler(>=6.4)
-        if #available(iOS 27.1, *) { voiceBar?.item.axisBehavior = .verticalPreferred }
+        if #available(iOS 27.1, *) { voiceBar.item.axisBehavior = .verticalPreferred }
         #endif
-        voiceToken = app.voice.observe { [weak self] in self?.updateSideChatsButton() }
-        sideChatsToken = app.observe { [weak self] in self?.updateSideChatsButton() }
-        updateSideChatsButton()
+        let menu = navigationItem.rightBarButtonItem!
+        let companions = companionsItem!
+        let syncVoice = { [weak self, weak voiceBar] in
+            guard let self, let voiceBar else { return }
+            let items = voiceBar.visible ? [menu, companions, voiceBar.item] : [menu, companions]
+            if self.navigationItem.rightBarButtonItems?.count != items.count {
+                self.navigationItem.setRightBarButtonItems(items, animated: self.view.window != nil)
+            }
+        }
+        voiceToken = app.voice.observe(syncVoice)
+        hostsToken = app.observe(syncVoice)
+        syncVoice()
 
         list.frame = view.bounds
         list.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         list.accessibilityIdentifier = "transcript"
         list.imageLoader = { [weak self] ref, iv in self?.source.loadImage(ref, into: iv) }
         list.imageFetcher = { [weak self] ref in await self?.source.image(ref) }
-        // The fork seam's "Forked from …" link: reveal the source chat
-        // (already below in the stack when opened from its child).
+        // The fork seam's "Forked from …" link uses the shell's normal route.
         list.onOpenChat = { [weak self] id in
             guard let self, id != self.chatId else { return }
-            self.router?.openChildSession(id)
+            self.router?.openSession(id)
         }
         // Hidden while following (the runway glide and tail spring travel).
         // An error card's "Log in": that provider's sign-in, started at once.
@@ -332,7 +325,12 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             badge.foregroundColor = .white
             return badge
         }() : nil
-
+        if parentId != nil, navigationItem.subtitle == nil {
+            let parent = parentId.flatMap { app.row($0)?.title } ?? ""
+            navigationItem.titleView = nil
+            navigationItem.title = "Side chat"
+            navigationItem.subtitle = parent
+        }
     }
 
     /// A companion screen (subagent, terminal, side chat): beside the
@@ -408,11 +406,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     /// shells, so the move doesn't read as closing the session.
     var relocating = false
     private var backgroundObserver: NSObjectProtocol?
-    /// Two-line title: session title over "project @ device", or a tap-through
-    /// "Side chat of …" for a child chat (the ⋯ menu carries the same text).
-    private let titleView = SessionTitleView()
     private var voiceBar: VoiceBarItem?
     private var voiceToken: AnyObject?
+    private var hostsToken: AnyObject?
 
     deinit {
         if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
@@ -760,7 +756,6 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         let c = source.chrome
         let old = shown
         shown = c
-        titleView.set(title: c.title, subtitle: c.subtitle, linked: c.parentChatId != nil)
         if c.title != old.title || c.subtitle != old.subtitle || navigationItem.title == nil {
             navigationItem.title = c.title
             navigationItem.rightBarButtonItem?.menu = sessionMenu(title: c.title, subtitle: c.subtitle)
@@ -832,7 +827,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
                     latest.model = model.id
                     latest.reasoning = nil
                     do { try client.setSessionConfig(chatId: self.chatId, config: latest) }
-                    catch { self.presentSideChatError("Couldn't change model", error) }
+                    catch { self.presentSessionError("Couldn't change model", error) }
                 })
             }
             sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
@@ -848,7 +843,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             alert.addAction(UIAlertAction(title: "Rename", style: .default) { [weak self] _ in
                 guard let self, let name = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty else { return }
                 do { try client.renameSession(chatId: self.chatId, title: name) }
-                catch { self.presentSideChatError("Couldn't rename this chat", error) }
+                catch { self.presentSessionError("Couldn't rename this chat", error) }
             })
             present(alert, animated: true)
         case .archive:
@@ -860,12 +855,12 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
             guard let reply = try client.openSession(chatId: chatId).latestAssistantReply() else { throw CancellationError() }
             UIPasteboard.general.string = reply
         case .side:
-            router?.openChildSession(try app.createSideChat(parentId: chatId))
+            openSideChat(try app.createSideChat(parentId: chatId))
         case .fork:
             let identity = source.commandContext
             let id = try await app.forkSideChat(sourceId: chatId)
             guard identity == source.commandContext, view.window != nil else { return }
-            router?.openChildSession(id)
+            openSideChat(id)
         }
     }
 
@@ -876,26 +871,21 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         let header = subtitle.isEmpty ? title : "\(title)\n\(subtitle)"
         return UIMenu(title: header, children: [UIDeferredMenuElement.uncached { [weak self] done in
             guard let self else { return done([]) }
-            let row = self.app.row(self.chatId)
-            let isChild = row?.parentChatId != nil
-            let pinned = self.app.session(self.chatId)?.pinned ?? false
-            var actions: [UIMenuElement] = []
-            // Pin and new-child are top-level-only concepts (one level of
-            // side chats); a child forks as a sibling below.
-            if !isChild {
-                actions.append(UIAction(title: pinned ? "Unpin" : "Pin", image: UIImage(systemName: pinned ? "pin.slash" : "pin")) { _ in self.app.setPinned(self.chatId, !pinned) })
-                actions.append(UIAction(title: "New Side Chat", image: UIImage(systemName: "plus.bubble")) { _ in self.newSideChat() })
-            }
-            // Same boundary as the engine: a working tail may still fork the
-            // last completed reply, so only a source without one is disabled.
-            let forkDisabled = !self.source.canFork || self.app.sideChatBusy
-            let fork = UIAction(title: "Fork to Side Chat", image: UIImage(systemName: "arrow.triangle.branch"), attributes: forkDisabled ? .disabled : []) { _ in self.forkToSideChat() }
-            if forkDisabled {
-                fork.subtitle = self.app.sideChatBusy ? "Forking…" : "Needs a completed reply"
-            }
-            actions.append(fork)
-            actions.append(UIAction(title: "Terminal", image: UIImage(systemName: "apple.terminal")) { _ in self.openTerminal() })
-            done(actions + [
+            let vm = self.app.session(self.chatId)
+            let pinned = vm?.pinned ?? false
+            let isSide = self.parentId != nil
+            let companions = UIMenu(options: .displayInline, children: [
+                UIAction(title: "New Side Chat", image: UIImage(systemName: "bubble.left.and.text.bubble.right")) { _ in
+                    guard let root = isSide ? self.parentId : self.chatId else { return }
+                    do { self.openSideChat(try self.app.createSideChat(parentId: root)) }
+                    catch { self.presentSessionError("Couldn't create a side chat", error) }
+                },
+                UIAction(title: "Fork Into Side Chat", image: UIImage(systemName: "arrow.triangle.branch")) { _ in self.fork() },
+                UIAction(title: "Terminal", image: UIImage(systemName: "apple.terminal")) { _ in self.openTerminal() },
+            ])
+            done([
+                companions,
+                UIAction(title: pinned ? "Unpin" : "Pin", image: UIImage(systemName: pinned ? "pin.slash" : "pin")) { _ in self.app.setPinned(self.chatId, !pinned) },
                 UIAction(title: "Copy Transcript", image: UIImage(systemName: "doc.on.doc")) { _ in
                     UIPasteboard.general.string = self.engine.frame().plainText()
                 },
@@ -910,83 +900,39 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         }])
     }
 
-    /// The branch button: present once the chat has side chats, tinted when
-    /// one is working or waiting, with the count beside the glyph.
-    private func updateSideChatsButton() {
-        let children = app.children(of: chatId)
-        var items = [ellipsisItem, companionsItem!]
-        if let voiceBar, voiceBar.visible { items.append(voiceBar.item) }
-        defer {
-            navigationItem.setRightBarButtonItems(items, animated: view.window != nil)
-        }
-        guard !children.isEmpty else {
-            return
-        }
-        let working = children.contains { $0.status == .working }
-        let awaiting = children.contains { $0.status == .awaiting }
-        let tone = working ? StatusTone.working : awaiting ? StatusTone.input : Palette.secondary
-        var config = UIButton.Configuration.plain()
-        config.image = UIImage(systemName: "arrow.triangle.branch", withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-        config.imagePadding = 4
-        config.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 6, bottom: 6, trailing: 8)
-        config.baseForegroundColor = tone
-        var title = AttributedString("\(children.count)")
-        title.font = Fonts.ui(.sansMedium, 13)
-        title.foregroundColor = tone
-        config.attributedTitle = title
-        sideChatsButton.configuration = config
-        sideChatsButton.accessibilityLabel = "Side chats"
-        sideChatsButton.accessibilityValue = "\(children.count)"
-        sideChatsButton.accessibilityIdentifier = "side-chats"
-        items.append(sideChatsItem)
-    }
-
-    private func presentSideChats() {
-        let sheet = SideChatsSheetController(app: app, parentId: chatId, currentChatId: chatId)
-        let nav = UINavigationController(rootViewController: sheet)
-        nav.navigationBar.titleTextAttributes = [.font: Fonts.ui(.sansSemibold, 17), .foregroundColor: Palette.text]
-        nav.navigationBar.tintColor = Palette.text
-        if traitCollection.horizontalSizeClass == .regular {
-            // iPad: a popover off the branch button, over the transcript.
-            nav.modalPresentationStyle = .popover
-            nav.popoverPresentationController?.barButtonItem = sideChatsItem
-            nav.preferredContentSize = CGSize(width: 380, height: 520)
-        } else {
-            nav.modalPresentationStyle = .pageSheet
-            if let sheet = nav.sheetPresentationController {
-                sheet.detents = [.medium(), .large()]
-                sheet.prefersGrabberVisible = true
-            }
-        }
-        present(nav, animated: true)
-    }
-
-    private func newSideChat() {
-        do {
-            router?.openChildSession(try app.createSideChat(parentId: chatId))
-        } catch {
-            presentSideChatError("Couldn't create a side chat", error)
-        }
-    }
-
-    private func forkToSideChat() {
-        guard !app.sideChatBusy else { return }
-        Task { @MainActor [weak self] in
-            guard let self else { return }
+    private func fork() {
+        Toast.show("Forking…", in: view.window)
+        Task { @MainActor in
             do {
                 let id = try await app.forkSideChat(sourceId: chatId)
-                router?.openChildSession(id)
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                openSideChat(id)
             } catch {
-                presentSideChatError("Couldn't fork this chat", error)
+                Toast.show(CompanionsViewController.forkError(error), in: view.window)
             }
         }
     }
 
-    private func presentSideChatError(_ title: String, _ error: Error) {
-        let alert = UIAlertController(title: title, message: sideChatErrorMessage(error), preferredStyle: .alert)
+    private func presentSessionError(_ title: String, _ error: Error) {
+        let message: String
+        if let core = error as? CoreError {
+            switch core {
+            case let .NotFound(payload), let .InvalidArgument(payload), let .HostUnavailable(payload),
+                 let .Unsupported(payload), let .HostError(payload), let .Network(payload),
+                 let .Auth(payload), let .Storage(payload), let .NotImplemented(payload),
+                 let .Internal(payload):
+                message = payload
+            case .Closed:
+                message = "Not signed in."
+            }
+        } else {
+            message = error.localizedDescription
+        }
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
+
     /// Off this session once it's gone from the list. Beside the iPad
     /// sidebar there's nothing to pop back to.
     private func leave() {
@@ -1053,57 +999,6 @@ extension UIViewController {
         let y = view.convert(CGPoint(x: 0, y: middle), from: window).y
         let safeBottom = view.bounds.maxY - view.safeAreaInsets.bottom
         return (safeBottom - y - ComposerBar.restHeight / 2).rounded()
-    }
-}
-
-/// Two-line navigation title: session title over "project @ device", or a
-/// tap-through "Side chat of …" for child chats.
-final class SessionTitleView: UIView {
-    private let title = FadingLabel()
-    private let subtitle = FadingLabel()
-    /// Fired when the subtitle names a parent chat.
-    var onSubtitleTap: (() -> Void)?
-    private var subtitleLinked = false
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        title.font = Fonts.ui(.sansSemibold, 16)
-        title.textColor = Palette.text
-        title.fitsAlignment = .center
-        subtitle.font = Fonts.ui(.sans, 12)
-        subtitle.textColor = Palette.secondary
-        subtitle.fitsAlignment = .center
-        subtitle.isUserInteractionEnabled = true
-        subtitle.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(subtitleTapped)))
-        let stack = UIStackView(arrangedSubviews: [title, subtitle])
-        stack.axis = .vertical
-        stack.alignment = .center
-        stack.spacing = 1
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.topAnchor.constraint(equalTo: topAnchor),
-            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
-            widthAnchor.constraint(lessThanOrEqualToConstant: 240),
-        ])
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    func set(title t: String, subtitle s: String, linked: Bool = false) {
-        title.text = t
-        subtitle.text = s
-        subtitle.isHidden = s.isEmpty
-        subtitleLinked = linked && !s.isEmpty
-        subtitle.textColor = subtitleLinked ? Palette.accent : Palette.secondary
-        subtitle.accessibilityTraits = subtitleLinked ? .button : .staticText
-    }
-
-    @objc private func subtitleTapped() {
-        guard subtitleLinked else { return }
-        onSubtitleTap?()
     }
 }
 

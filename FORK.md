@@ -49,6 +49,7 @@ conflicts.
 | Desktop isolation | Unix data `~/.zerun`, Windows data `%LOCALAPPDATA%\Zerun`, Linux service `zerun.service`, Windows installer AppId `94F099C7-A9D5-5A32-B951-50AE16E29A01`, IPC 27655, loopback callback 27642; overrides use `ZERUN_*` |
 | Android | follow upstream navigation, phone/tablet layouts, account/agent login, onboarding, voice and interactive visual implementations; retain canonical/attachment draft storage, session import, side-chat search and explicit side-chat deletion; app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
+| iOS companions | follow upstream Companions for subagents, side chats, terminals and their navigation; retain side-chat search, canonical/attachment drafts and explicit deletion |
 | Mobile side chats | retain empty side chats until explicitly deleted; closing a page or background refresh must not delete a session that may own an unsent draft or attachments |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |

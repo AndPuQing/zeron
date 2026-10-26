@@ -37,9 +37,6 @@ struct SessionChrome: Equatable {
 
     var title = ""
     var subtitle = ""
-    /// Set when this chat hangs off another: the title's subtitle becomes a
-    /// tap-through back to the parent.
-    var parentChatId: String?
     var running = false
     var canSteer = false
     var placeholder = "Message"
@@ -50,7 +47,7 @@ struct SessionChrome: Equatable {
     var error: String?
 
     static func == (a: SessionChrome, b: SessionChrome) -> Bool {
-        a.title == b.title && a.subtitle == b.subtitle && a.parentChatId == b.parentChatId && a.running == b.running && a.canSteer == b.canSteer
+        a.title == b.title && a.subtitle == b.subtitle && a.running == b.running && a.canSteer == b.canSteer
             && a.placeholder == b.placeholder && a.chips == b.chips && a.banner == b.banner
             && a.questions?.requestId == b.questions?.requestId && a.questions?.items == b.questions?.items
             && a.queue == b.queue && a.error == b.error

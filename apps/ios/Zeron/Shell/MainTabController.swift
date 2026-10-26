@@ -217,22 +217,6 @@ final class MainTabController: UIViewController, AppRouter {
         nav.popToRootViewController(animated: false)
         nav.pushViewController(session, animated: true)
     }
-
-    /// Push a side chat on the current stack so back returns to its parent;
-    /// an existing copy is revealed instead of pushed twice.
-    func openChildSession(_ chatId: String) {
-        if presentedViewController != nil { dismiss(animated: true) }
-        // The shell owns one Sessions stack (`nav`), so a side chat goes on
-        // the same stack the parent sits on: back returns to it.
-        if let existing = nav.viewControllers.first(where: { ($0 as? SessionViewController)?.chatId == chatId }) {
-            nav.popToViewController(existing, animated: true)
-            return
-        }
-        guard let session = SessionViewController(app: app, chatId: chatId) else {
-            return showSessionOpenError()
-        }
-        nav.pushViewController(session, animated: true)
-    }
 }
 
 extension UIViewController {

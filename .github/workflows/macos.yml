@@ -235,7 +235,7 @@ jobs:
           path: ${{ runner.temp }}/ios-include
           retention-days: 1
 
-  # iOS unit tests and side-chat UI regressions in the simulator (only when
+  # iOS unit tests and companion UI regressions in the simulator (only when
   # iOS or the mobile core changed, see `changes`).
   # Waiting for macos-frame-source keeps a run to two macOS runners at a time.
   # Do not boot the simulator in the background: hundreds of launchd_sim daemons starve the 3-vCPU
@@ -283,7 +283,7 @@ jobs:
         with:
           name: ios-ffi-include
           path: target/ios-core/iphonesimulator/include
-      - name: Run iOS unit tests and side-chat UI regressions
+      - name: Run iOS unit tests and companion UI regressions
         working-directory: apps/ios
         env:
           # Reuse the core built above instead of rebuilding it in the Xcode build phase.
@@ -293,12 +293,12 @@ jobs:
             -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID" \
             -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
             -only-testing:ZeronTests \
-            -only-testing:ZeronUITests/SessionFlowTests/testSideChatsSheetAndForkSeam \
+            -only-testing:ZeronUITests/SessionFlowTests/testCompanionsSideChatAndForkSeam \
             -only-testing:ZeronUITests/SessionFlowTests/testSearchFindsSideChats \
-            -only-testing:ZeronUITests/SessionFlowTests/testNewSideChatFromMenu \
-            -only-testing:ZeronUITests/SessionFlowTests/testSheetForkEnablesWhenFirstReplyLands \
-            -only-testing:ZeronUITests/SessionFlowTests/testArchivingSideChatUpdatesParent \
-            -only-testing:ZeronUITests/SessionFlowTests/testForkToSideChatFromMenu \
+            -only-testing:ZeronUITests/SessionFlowTests/testNewSideChatKeepsDraftThroughCompanions \
+            -only-testing:ZeronUITests/SessionFlowTests/testCompanionsOpenSubagent \
+            -only-testing:ZeronUITests/SessionFlowTests/testArchivingSideChatUpdatesCompanions \
+            -only-testing:ZeronUITests/SessionFlowTests/testForkIntoSideChatFromMenu \
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsKeepsRowsBetweenControls \
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsFoldsUnavailableAndLoadsMore \
             -only-testing:ZeronUITests/SessionFlowTests/testCommandSuggestionsStayCompactAndInsertSkills \
