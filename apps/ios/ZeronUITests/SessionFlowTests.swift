@@ -50,19 +50,21 @@ final class SessionFlowTests: XCTestCase {
         panel.cells.matching(NSPredicate(format: "identifier == 'companion-side-chat' AND label BEGINSWITH %@", title)).firstMatch
     }
 
-    private func archive(_ row: XCUIElement, in panel: XCUIElement) {
+    private func archive(_ row: XCUIElement, in panel: XCUIElement, app: XCUIApplication) {
         reveal(row, in: panel)
         row.swipeLeft()
         let action = panel.buttons["Archive"]
         XCTAssertTrue(action.waitForExistence(timeout: 5))
         XCTAssertTrue(action.isEnabled)
         // UIKit's contextual action can have a visible frame but no AX hit
-        // point inside a sheet. Use that action's own bounds, not a global
-        // Archive selector or a fixed screen position.
+        // point inside a sheet. Anchor the touch to the app, because even
+        // a coordinate anchored to the action asks AX for that hit point.
         let frame = action.frame
         XCTAssertFalse(frame.isEmpty)
+        XCTAssertTrue(frame.midX.isFinite && frame.midY.isFinite)
         XCTAssertTrue(panel.frame.contains(frame))
-        action.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+            .withOffset(CGVector(dx: frame.midX, dy: frame.midY)).tap()
         XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves Companions")
     }
 
@@ -464,9 +466,9 @@ final class SessionFlowTests: XCTestCase {
         let app = launch(["-route", "chat:chat-veil"])
         let panel = openCompanions(app)
         let row = sideChatRow("Side chat: veil timing", in: panel)
-        archive(row, in: panel)
+        archive(row, in: panel, app: app)
         let remaining = sideChatRow("Spring vs. power curve for the veil", in: panel)
-        archive(remaining, in: panel)
+        archive(remaining, in: panel, app: app)
         XCTAssertTrue(app.staticTexts["Ask something on the side without derailing the main thread."].waitForExistence(timeout: 5))
         snapshot(app, "companions-side-chats-archived")
     }
