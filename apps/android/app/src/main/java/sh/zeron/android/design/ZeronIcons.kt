@@ -94,6 +94,7 @@ object ZIcons {
     val GitHub = R.drawable.zi_github
     val Share = R.drawable.zi_share
     val Zeron = R.drawable.zi_zeron
+    val Menu = R.drawable.zi_menu
 }
 
 @Composable
