@@ -50,6 +50,22 @@ final class SessionFlowTests: XCTestCase {
         panel.cells.matching(NSPredicate(format: "identifier == 'companion-side-chat' AND label BEGINSWITH %@", title)).firstMatch
     }
 
+    private func archive(_ row: XCUIElement, in panel: XCUIElement) {
+        reveal(row, in: panel)
+        row.swipeLeft()
+        let action = panel.buttons["Archive"]
+        XCTAssertTrue(action.waitForExistence(timeout: 5))
+        XCTAssertTrue(action.isEnabled)
+        // UIKit's contextual action can have a visible frame but no AX hit
+        // point inside a sheet. Use that action's own bounds, not a global
+        // Archive selector or a fixed screen position.
+        let frame = action.frame
+        XCTAssertFalse(frame.isEmpty)
+        XCTAssertTrue(panel.frame.contains(frame))
+        action.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves Companions")
+    }
+
     private func openImport(_ app: XCUIApplication) {
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -448,15 +464,9 @@ final class SessionFlowTests: XCTestCase {
         let app = launch(["-route", "chat:chat-veil"])
         let panel = openCompanions(app)
         let row = sideChatRow("Side chat: veil timing", in: panel)
-        reveal(row, in: panel)
-        row.swipeLeft()
-        app.buttons["Archive"].tap()
-        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves Companions")
+        archive(row, in: panel)
         let remaining = sideChatRow("Spring vs. power curve for the veil", in: panel)
-        reveal(remaining, in: panel)
-        remaining.swipeLeft()
-        app.buttons["Archive"].tap()
-        XCTAssertTrue(remaining.waitForNonExistence(timeout: 5))
+        archive(remaining, in: panel)
         XCTAssertTrue(app.staticTexts["Ask something on the side without derailing the main thread."].waitForExistence(timeout: 5))
         snapshot(app, "companions-side-chats-archived")
     }
@@ -468,7 +478,15 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
         app.buttons["session-menu"].tap()
         snapshot(app, "session-menu")
-        app.buttons["Fork Into Side Chat"].tap()
+        let fork = app.buttons["Fork Into Side Chat"]
+        XCTAssertTrue(fork.waitForExistence(timeout: 5))
+        XCTAssertTrue(fork.isEnabled)
+        XCTAssertTrue(fork.isHittable)
+        // A 50ms synthesized tap left this native menu item focused without
+        // activating it. Give touch-up a short dwell and verify activation
+        // before waiting for the asynchronous fork result.
+        fork.press(forDuration: 0.15)
+        XCTAssertTrue(fork.waitForNonExistence(timeout: 5), "the fork menu action was activated")
         let seam = app.staticTexts["Forked from Wrangler deploy hygiene"]
         XCTAssertTrue(seam.waitForExistence(timeout: 15), "the fork opens with its seam")
         XCTAssertTrue(app.textViews["composer-input"].waitForExistence(timeout: 5))
