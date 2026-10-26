@@ -75,7 +75,14 @@ final class RowView: UIView {
         linkElements = d.links.map { l in
             let e = UIAccessibilityElement(accessibilityContainer: self)
             let url = URL(string: l.url)
-            e.accessibilityLabel = url?.scheme == "zerun" && url?.host == "chat" ? "Open source chat" : (url?.host() ?? l.url)
+            // Captions and fork seams both open another chat in the app.
+            if url?.scheme == "zeron-chat" {
+                e.accessibilityLabel = "Open sending chat"
+            } else if url?.scheme == "zerun", url?.host == "chat" {
+                e.accessibilityLabel = "Open source chat"
+            } else {
+                e.accessibilityLabel = url?.host() ?? l.url
+            }
             e.accessibilityValue = l.url
             e.accessibilityTraits = .link
             e.accessibilityIdentifier = "transcript-link"
@@ -161,12 +168,7 @@ final class RowView: UIView {
         // Painted text is invisible to accessibility: one text element per
         // row, followed by the row's native widgets (copy, disclosure…).
         let element = UIAccessibilityElement(accessibilityContainer: self)
-        // A cross-chat message reads as its sender, not as something the
-        // reader typed: the row text already starts with "Message from …".
-        let userLabel = d.text.hasPrefix("Message from ")
-            ? d.copyText
-            : "You: \(d.copyText)"
-        element.accessibilityLabel = kind == .user ? userLabel : (d.copyText.isEmpty ? d.text : d.copyText)
+        element.accessibilityLabel = kind == .user ? "You: \(d.copyText)" : (d.copyText.isEmpty ? d.text : d.copyText)
         element.accessibilityIdentifier = switch kind {
         case .user: "row-user"
         case .markdown: "row-markdown"

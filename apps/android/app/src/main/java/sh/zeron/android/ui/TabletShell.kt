@@ -251,6 +251,7 @@ fun InspectorPageContent(model: AppModel, shell: TabletShellState, chatId: Strin
             draft = drafts.getOrPut(page.id) { ComposerModel(model.drafts.load(page.id)) }, onOpen = onOpen, onOpenAccounts = onOpenAccounts,
             onBack = shell::pop,
             onOpenSideChat = { id -> shell.push(chatId, InspectorPage.SideChat(id)) },
+            onOpenChat = shell::select,
             onOpenTerminal = { chat, terminal -> shell.push(chatId, InspectorPage.Terminal(terminal, chat)) },
             onOpenSubagent = { parent, doc, title, running -> shell.push(chatId, InspectorPage.Subagent(parent, doc, title, running)) },
         )

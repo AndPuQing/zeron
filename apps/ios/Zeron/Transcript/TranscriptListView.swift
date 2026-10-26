@@ -127,8 +127,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     var imageLoader: ((String, UIImageView) -> Void)?
     /// An attachment's picture, for an image chip opened full size.
     var imageFetcher: ((String) async -> UIImage?)?
-    /// An in-transcript chat link (`zerun://chat/<id>`): the fork seam opens
-    /// the chat it was forked from.
+    /// A sender caption or fork seam opens its chat through the shell.
     var onOpenChat: ((String) -> Void)?
 
     // MARK: Runway (desktop transcript.rs `OwnTurnAnchor`)
@@ -712,6 +711,14 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
                 guard let image = await self?.imageFetcher?(reference), let view, let vc else { return }
                 vc.present(ImageViewer(image: image, source: view), animated: true)
             }
+            return
+        }
+        // A sender caption opens the chat that sent the message.
+        if url.scheme == "zeron-chat" {
+            guard let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "id" })?.value
+            else { return }
+            onOpenChat?(id)
             return
         }
         if url.scheme == "http" || url.scheme == "https" {

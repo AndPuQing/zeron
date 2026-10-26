@@ -895,28 +895,37 @@ fn short(host: &str, now: i64, prompt: &str, reply: &str) -> Vec<SessionMessageE
     ]
 }
 
-/// A forked side chat: the fork seam the engine writes, then its own turn.
-fn side(
-    host: &str,
-    now: i64,
-    source_id: &str,
-    source_title: &str,
-    prompt: &str,
-    reply: &str,
-) -> Vec<SessionMessageEntry> {
-    let mut entries = vec![entry(
-        "m0",
-        MessageRole::System,
-        host,
-        now - 150_000,
-        vec![MessagePart::Fork {
-            id: "fork".into(),
-            source_chat_id: source_id.into(),
-            source_title: source_title.into(),
-        }],
-    )];
-    entries.extend(short(host, now, prompt, reply));
-    entries
+/// A side chat another chat messaged through Zeron's `send_message`: its
+/// header names the Codex side chat that sent it.
+fn side(host: &str, now: i64) -> Vec<SessionMessageEntry> {
+    let sent = zeron_proto::agent_messages::agent_message(
+        "Spring vs. power curve for the veil (chat-sid)",
+        "chat-side-easing",
+        "Keeping the power curve for the veil. Which EMA window should the fade track so the cadence stays steady?",
+    );
+    vec![
+        // Keep the fork seam used by the source-chat navigation regression.
+        entry(
+            "m0",
+            MessageRole::System,
+            host,
+            now - 320_000,
+            vec![MessagePart::Fork {
+                id: "fork".into(),
+                source_chat_id: "chat-veil".into(),
+                source_title: "Streaming veil on transcript rows".into(),
+            }],
+        ),
+        user("m1", now - 300_000, "What EMA window does the veil use?"),
+        assistant("m2", host, now - 280_000, vec![text("t0", "α = 0.2 over inter-append gaps, seeded from the first two chunks.")]),
+        user("m3", now - 120_000, &sent),
+        assistant(
+            "m4",
+            host,
+            now - 100_000,
+            vec![text("t0", "Track α = 0.2: it settles within five appends and ignores a single slow chunk. I've replied to your chat with the numbers.")],
+        ),
+    ]
 }
 
 /// Fixture transcript for a demo chat (`None` = starts empty).
@@ -986,14 +995,7 @@ pub(crate) fn fixture(chat_id: &str, host: &str, last_activity: i64) -> Vec<Sess
             "Draft the launch post outline.",
             "## Outline\n\n1. Why a phone viewport\n2. The CRDT under the hood\n3. What's next",
         ),
-        "chat-side" => side(
-            host,
-            now,
-            "chat-veil",
-            "Streaming veil on transcript rows",
-            "What EMA window does the veil use?",
-            "α = 0.2 over inter-append gaps, seeded from the first two chunks.",
-        ),
+        "chat-side" => side(host, now),
         "chat-side-easing" => short(
             host,
             now,

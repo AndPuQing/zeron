@@ -247,7 +247,8 @@ final class SessionFlowTests: XCTestCase {
     }
 
     /// A cross-chat message stores the sender's routing header for the agent;
-    /// the transcript must show `Message from <name>` plus the body instead.
+    /// the transcript shows the sender above the bubble, with only its body
+    /// in the copy/accessibility text.
     /// The accessibility label is the full copy text in both states (that is
     /// the correct VoiceOver/copy contract), so it cannot prove visibility:
     /// the native `Expand`/`Collapse` control and the row height do that.
@@ -255,11 +256,12 @@ final class SessionFlowTests: XCTestCase {
     func testCrossChatMessageShowsSenderAndBody() {
         let app = launch(["-route", "chat:chat-attribution"])
         let collapsed = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH 'Message from 示例会话标题 A'"))
+            .matching(NSPredicate(format: "label BEGINSWITH 'You: 上游示例分支仍停在 abc1234'"))
             .firstMatch
         XCTAssertTrue(collapsed.waitForExistence(timeout: 15))
         XCTAssertTrue(collapsed.label.contains("示例分支仍停在 abc1234"), collapsed.label)
         XCTAssertFalse(collapsed.label.contains("Reply to it with"), collapsed.label)
+        XCTAssertFalse(collapsed.label.contains("Message from "), collapsed.label)
         XCTAssertFalse(collapsed.label.contains("a1b2c3d4-1111-4222-8333-444455556666"), collapsed.label)
         let collapsedHeight = collapsed.frame.height
         snapshot(app, "cross-chat-collapsed")
@@ -272,7 +274,7 @@ final class SessionFlowTests: XCTestCase {
         let collapse = app.buttons["Collapse"].firstMatch
         XCTAssertTrue(collapse.waitForExistence(timeout: 5), "the opened bubble offers Collapse")
         let opened = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "label BEGINSWITH 'Message from 示例会话标题 A'"))
+            .matching(NSPredicate(format: "label BEGINSWITH 'You: 上游示例分支仍停在 abc1234'"))
             .firstMatch
         XCTAssertTrue(opened.waitForExistence(timeout: 5))
         XCTAssertGreaterThan(opened.frame.height, collapsedHeight, "expanding grows the bubble")

@@ -121,6 +121,30 @@ fn streaming_converges_to_full_parse() {
     }
 }
 
+#[test]
+fn agent_messages_show_their_sender_over_the_bubble() {
+    let mut w = worker(390.0);
+    let id = "cd27c5c2-0000-4000-8000-000000000000";
+    let text = zeron_proto::agent_messages::agent_message("Windows lane (cd27c5c2)", id, "Windows lane: done.");
+    w.input = debug_input(vec![DebugEntry { id: "u".into(), user: true, text, streaming: false }], false);
+    let frame = w.pass();
+    let d = frame.display(0).unwrap();
+    assert!(d.text.starts_with("Message from \u{2060} Windows lane"), "{}", d.text);
+    assert!(d.text.contains("Windows lane: done."), "{}", d.text);
+    assert!(!d.text.contains("send_message") && !d.text.contains("cd27c5c2"), "{}", d.text);
+    assert_eq!(frame.message_text(0).as_deref(), Some("Windows lane: done."));
+    // The sender's mark (a chat glyph: the workspace doesn't list it), and
+    // no link to a chat that doesn't open.
+    assert!(d.widgets.iter().any(|w| matches!(&w.kind, display::WidgetKind::Icon { name, .. } if name == "bubble.left")));
+    assert!(d.links.is_empty());
+    // The caption sits over the bubble: its runs end above the bubble's fill.
+    let bubble = d.boxes.iter().find(|b| b.color == display::ColorRole::UserBubble).unwrap();
+    let caption = d.runs.first().unwrap();
+    assert!(caption.baseline < bubble.y, "{caption:?} {bubble:?}");
+    // No wider than the bubble: nothing of it starts left of the bubble.
+    assert!(d.runs.iter().filter(|r| r.baseline < bubble.y).all(|r| r.x >= bubble.x - 0.5), "{:?} {bubble:?}", d.runs);
+}
+
 fn transcript_one(text: &str) -> TranscriptInput {
     debug_input(vec![DebugEntry { id: "a".into(), user: false, text: text.into(), streaming: false }], false)
 }
@@ -168,14 +192,16 @@ fn painted_text(d: &display::RowDisplay) -> String {
 }
 
 /// A cross-chat message stores the routing header the agent needs; the bubble
-/// shows the desktop's `Message from <name>` line instead, so the fold exposes
-/// the body instead of the instruction and the full chat id.
+/// shows its sender above the bubble, so the fold exposes the body instead of
+/// the instruction and the full chat id.
 #[test]
 fn cross_chat_attribution_folds_to_the_body_not_the_routing_header() {
     const FULL: &str = "a1b2c3d4-1111-4222-8333-444455556666";
     let body = "第一条：先核对上游 head。\n\
                 第二条：确认 edge 与本地状态一致。\n\
                 第三条：正文应当出现在折叠预览里。\n\
+                后续核对一。\n后续核对二。\n后续核对三。\n\
+                后续核对四。\n后续核对五。\n后续核对六。\n\
                 第四条：展开后应当看到这一行结尾。";
     let text = format!(
         "[Message from Zeron chat 示例会话标题 · 本机 dsh (a1b2c3d4). \
@@ -186,7 +212,7 @@ fn cross_chat_attribution_folds_to_the_body_not_the_routing_header() {
     let folded = w.pass();
     let d = folded.display(0).unwrap();
     let painted = painted_text(&d);
-    assert!(painted.contains("Message from 示例会话标题"), "{}", painted);
+    assert!(d.text.starts_with("Message from \u{2060} 示例会话标题"), "{}", d.text);
     assert!(
         painted.contains("第一条：先核对上游 head。"),
         "folded preview must show the body: {painted}"
@@ -208,16 +234,12 @@ fn cross_chat_attribution_folds_to_the_body_not_the_routing_header() {
     assert!(open_text.contains("第四条：展开后应当看到这一行结尾。"), "{}", open_text);
     assert!(!open_text.contains(FULL), "{}", open_text);
     assert!(!open_text.contains("Reply to it with"), "{}", open_text);
-    // Copy reads the same concise projection: no instruction, no routing id.
-    assert!(open_d.copy_text.contains("Message from 示例会话标题"), "{}", open_d.copy_text);
-    assert!(open_d.copy_text.contains("第四条：展开后应当看到这一行结尾。"), "{}", open_d.copy_text);
-    assert!(!open_d.copy_text.contains(FULL), "{}", open_d.copy_text);
-    assert!(!open_d.copy_text.contains("Reply to it with"), "{}", open_d.copy_text);
+    // The upstream caption is outside the copied bubble: only its body.
+    assert_eq!(open_d.copy_text, body);
 }
 
-/// The attribution line is a prefix, not a replacement: a body that mixes
-/// mentions and an attachment trailer keeps its chips and image widgets, and
-/// the copy text still reads the attachment's plain label.
+/// Moving the sender outside the bubble preserves canonical chips and image
+/// widgets, and the copy text still reads the attachment's plain label.
 #[test]
 fn cross_chat_attribution_keeps_mentions_and_attachments() {
     const FULL: &str = "a1b2c3d4-1111-4222-8333-444455556666";
@@ -232,7 +254,7 @@ fn cross_chat_attribution_keeps_mentions_and_attachments() {
     let frame = w.pass();
     let d = frame.display(0).unwrap();
     let painted = painted_text(&d);
-    assert!(painted.contains("Message from 示例来源"), "{}", painted);
+    assert!(d.text.starts_with("Message from \u{2060} 示例来源"), "{}", d.text);
     assert!(painted.contains("mod.rs"), "{}", painted);
     assert!(!painted.contains("zeron-file:"), "{}", painted);
     assert!(!painted.contains("Attached images"), "{}", painted);
@@ -568,7 +590,7 @@ fn bench_layout_passes() {
             continuation_of: None,
             duration_ms: None,
         }));
-        w.input = TranscriptInput { entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true };
+        w.input = TranscriptInput { entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, workspace: None };
         let t = Instant::now();
         w.pass();
         total += t.elapsed();

@@ -85,11 +85,6 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         list.accessibilityIdentifier = "transcript"
         list.imageLoader = { [weak self] ref, iv in self?.source.loadImage(ref, into: iv) }
         list.imageFetcher = { [weak self] ref in await self?.source.image(ref) }
-        // The fork seam's "Forked from …" link uses the shell's normal route.
-        list.onOpenChat = { [weak self] id in
-            guard let self, id != self.chatId else { return }
-            self.router?.openSession(id)
-        }
         // Hidden while following (the runway glide and tail spring travel).
         // An error card's "Log in": that provider's sign-in, started at once.
         list.onAction = { [weak self] action in
@@ -105,6 +100,17 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         list.onSubagent = { [weak self] doc, title, running in
             guard let self else { return }
             self.presentCompanion(SubagentViewController(app: self.app, parentId: self.chatId, docId: doc, title: title, running: running))
+        }
+        list.onOpenChat = { [weak self] id in
+            guard let self, id != self.chatId else { return }
+            // On the phone the sender's chat pushes over this one, so Back
+            // returns here; beside the iPad sidebar it takes the detail.
+            if self.mainShell != nil, let nav = self.navigationController {
+                guard let session = SessionViewController(app: self.app, chatId: id) else { return }
+                nav.pushViewController(session, animated: true)
+            } else {
+                self.router?.openSession(id)
+            }
         }
         list.onDistanceFromBottom = { [weak self] d in
             guard let self else { return }
