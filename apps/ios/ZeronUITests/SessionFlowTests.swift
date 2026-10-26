@@ -31,6 +31,25 @@ final class SessionFlowTests: XCTestCase {
         add(shot)
     }
 
+    private func openCompanions(_ app: XCUIApplication) -> XCUIElement {
+        let button = app.buttons["session-companions"]
+        XCTAssertTrue(button.waitForExistence(timeout: 10))
+        button.tap()
+        let panel = app.collectionViews["companions"]
+        XCTAssertTrue(panel.waitForExistence(timeout: 5))
+        return panel
+    }
+
+    private func reveal(_ row: XCUIElement, in panel: XCUIElement) {
+        for _ in 0..<6 where !row.isHittable { panel.swipeUp() }
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.isHittable)
+    }
+
+    private func sideChatRow(_ title: String, in panel: XCUIElement) -> XCUIElement {
+        panel.cells.matching(NSPredicate(format: "identifier == 'companion-side-chat' AND label BEGINSWITH %@", title)).firstMatch
+    }
+
     private func openImport(_ app: XCUIApplication) {
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
         app.navigationBars.buttons.element(boundBy: 0).tap()
@@ -336,28 +355,24 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "link-opened")
     }
 
-    /// The branch button lists a chat's side chats; opening one shows the
-    /// fork seam, and tapping the seam returns to the source chat.
-    func testSideChatsSheetAndForkSeam() {
+    /// Companions opens side chats; their fork seam still opens the source
+    /// through the shell's normal session route.
+    func testCompanionsSideChatAndForkSeam() {
         let app = launch(["-route", "chat:chat-veil"])
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
-        let branch = app.buttons["side-chats"]
-        XCTAssertTrue(branch.waitForExistence(timeout: 10), "branch button appears for a chat with side chats")
-        XCTAssertEqual(branch.value as? String, "2")
-        branch.tap()
-        XCTAssertTrue(app.navigationBars["Side chats"].waitForExistence(timeout: 5))
-        let row = app.cells["session-chat-side"]
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
-        snapshot(app, "side-chats-sheet")
+        XCTAssertFalse(app.buttons["side-chats"].exists, "the legacy branch entry is gone")
+        let panel = openCompanions(app)
+        let row = sideChatRow("Side chat: veil timing", in: panel)
+        reveal(row, in: panel)
+        snapshot(app, "companions-side-chats")
         row.tap()
-        // The side chat's transcript opens with the tappable fork seam.
         let seam = app.staticTexts["Forked from Streaming veil on transcript rows"]
         XCTAssertTrue(seam.waitForExistence(timeout: 10))
         snapshot(app, "fork-seam")
         let link = app.descendants(matching: .any).matching(NSPredicate(format: "identifier == 'transcript-link' AND value CONTAINS 'chat-veil'")).firstMatch
         XCTAssertTrue(link.waitForExistence(timeout: 5), "fork seam link exposed")
         link.tap()
-        XCTAssertTrue(seam.waitForNonExistence(timeout: 5), "the seam jumped back to the source chat")
+        XCTAssertTrue(seam.waitForNonExistence(timeout: 5), "the seam opened the source chat")
         snapshot(app, "back-at-source")
     }
 
@@ -386,123 +401,77 @@ final class SessionFlowTests: XCTestCase {
         snapshot(app, "search-side-chats")
     }
 
-    /// The session menu's "New Side Chat" mints an empty child, opens it
-    /// ready for its first message, and keeps the parent one back-press away.
-    func testNewSideChatFromMenu() {
+    /// A new side chat uses the upstream companion navigation. Leaving it
+    /// with an unsent draft keeps it available in Companions.
+    func testNewSideChatKeepsDraftThroughCompanions() {
         let app = launch(["-route", "chat:chat-deploy"])
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
         app.buttons["session-menu"].tap()
         snapshot(app, "session-menu")
         app.buttons["New Side Chat"].tap()
-        XCTAssertTrue(app.textViews["composer-input"].waitForExistence(timeout: 10))
-        // An empty but hydrated session reveals right away (no 8s loader).
-        XCTAssertTrue(app.descendants(matching: .any)["session-loading"].waitForNonExistence(timeout: 3))
-        snapshot(app, "new-side-chat")
-        XCTAssertTrue(app.buttons["Side chat of Wrangler deploy hygiene"].waitForExistence(timeout: 5), "the child names its parent")
-        // The detail title reads like the sheet and search rows.
-        XCTAssertTrue(app.staticTexts["New side chat"].waitForExistence(timeout: 5), "detail title matches the sheet")
-        // One level only: the child offers no further side chats.
-        XCTAssertFalse(app.buttons["side-chats"].exists)
-        app.buttons["session-menu"].tap()
-        XCTAssertFalse(app.buttons["Pin"].exists, "children are not pinnable")
-        // The disabled action carries its explanation as a subtitle, so the
-        // label reads "Fork to Side Chat, Needs a completed reply".
-        let fork = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Fork to Side Chat'")).firstMatch
-        XCTAssertTrue(fork.exists)
-        XCTAssertFalse(fork.isEnabled, "no completed reply to fork")
-        // Dismiss the menu on the transcript, then back returns to the
-        // parent, not the Sessions root.
-        app.scrollViews["transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.8)).tap()
-        app.navigationBars.buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(app.staticTexts["Wrangler deploy hygiene"].waitForExistence(timeout: 5), "back at the parent")
-    }
-
-    /// With the sheet open on a session whose first reply is still streaming,
-    /// the fork action flips from disabled to enabled when the reply lands,
-    /// without the sheet being reopened.
-    func testSheetForkEnablesWhenFirstReplyLands() {
-        // A long, realistically-paced reply keeps the source streaming while
-        // the sheet opens, so the disabled start is actually observed.
-        // `-no-projects` lands the new session on the first online host (the
-        // standard fixture defaults it to the offline Mac Studio).
-        let app = launch(["-no-projects", "-longreply"], fast: false)
-        let accessory = app.buttons["new-session"]
-        XCTAssertTrue(accessory.waitForExistence(timeout: 10))
-        accessory.tap()
         let input = app.textViews["composer-input"]
         XCTAssertTrue(input.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.descendants(matching: .any)["session-loading"].waitForNonExistence(timeout: 3))
         input.tap()
-        input.typeText("Explain side chats briefly")
-        app.buttons["composer-send"].tap()
-        XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.buttons["Stop response"].waitForExistence(timeout: 5), "the first reply is streaming")
-        // A child while the parent streams: the source has no completed
-        // response yet, so the sheet's fork action starts disabled.
-        app.buttons["session-menu"].tap()
-        XCTAssertTrue(app.buttons["New Side Chat"].waitForExistence(timeout: 5))
-        app.buttons["New Side Chat"].tap()
-        XCTAssertTrue(app.textViews["composer-input"].waitForExistence(timeout: 10))
-        // Back to the parent through the child's own "Side chat of …" link:
-        // the back chevron on iPhone, the title link on the iPad column.
-        let back = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Side chat of '")).firstMatch
-        XCTAssertTrue(back.waitForExistence(timeout: 5), "the child links back to its parent")
-        back.tap()
-        let branch = app.buttons["side-chats"]
-        XCTAssertTrue(branch.waitForExistence(timeout: 10))
-        branch.tap()
-        XCTAssertTrue(app.navigationBars["Side chats"].waitForExistence(timeout: 5))
-        let fork = app.buttons["side-chats-fork"]
-        XCTAssertTrue(fork.waitForExistence(timeout: 5))
-        XCTAssertFalse(fork.isEnabled, "a streaming source has no completed reply to fork")
-        // The reply lands while the sheet stays open: the action must
-        // re-evaluate against the source's now-complete response.
-        expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: fork)
-        waitForExpectations(timeout: 120)
-        XCTAssertTrue(fork.isEnabled, "a completed reply unlocks the fork action")
-        snapshot(app, "sheet-fork-enabled")
+        clearComposer(input)
+        let draft = "Keep this side-chat draft when I go back"
+        input.typeText(draft)
+        snapshot(app, "new-side-chat-draft")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let panel = openCompanions(app)
+        let row = sideChatRow("New side chat", in: panel)
+        reveal(row, in: panel)
+        row.tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        XCTAssertEqual(input.value as? String, draft, "the unsent child and its draft survive leaving the page")
+        snapshot(app, "side-chat-draft-restored")
     }
 
-    /// Archiving a side chat from its sheet drops the row and the parent's
-    /// count live (children never enter the page lists).
-    func testArchivingSideChatUpdatesParent() {
+    /// The upstream panel still opens a real subagent transcript, read-only,
+    /// with its status visible.
+    func testCompanionsOpenSubagent() {
         let app = launch(["-route", "chat:chat-veil"])
-        let branch = app.buttons["side-chats"]
-        XCTAssertTrue(branch.waitForExistence(timeout: 10))
-        XCTAssertEqual(branch.value as? String, "2")
-        branch.tap()
-        XCTAssertTrue(app.navigationBars["Side chats"].waitForExistence(timeout: 5))
-        let row = app.cells["session-chat-side"]
-        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        let panel = openCompanions(app)
+        let agent = panel.cells.matching(NSPredicate(format: "identifier == 'companion-agent' AND label BEGINSWITH 'Audit grapheme splits in veil.rs'")).firstMatch
+        reveal(agent, in: panel)
+        agent.tap()
+        XCTAssertTrue(app.scrollViews["subagent-transcript"].waitForExistence(timeout: 10))
+        let reply = app.staticTexts.matching(NSPredicate(format: "identifier == 'row-markdown' AND label CONTAINS 'No byte-offset splits remain.'")).firstMatch
+        XCTAssertTrue(reply.waitForExistence(timeout: 10), "the subagent's own transcript arrives")
+        XCTAssertTrue(app.descendants(matching: .any)["subagent-status"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textViews["composer-input"].exists, "subagents have a read-only transcript")
+        snapshot(app, "companion-subagent")
+    }
+
+    /// Archiving a side chat updates Companions while preserving its sibling.
+    func testArchivingSideChatUpdatesCompanions() {
+        let app = launch(["-route", "chat:chat-veil"])
+        let panel = openCompanions(app)
+        let row = sideChatRow("Side chat: veil timing", in: panel)
+        reveal(row, in: panel)
         row.swipeLeft()
         app.buttons["Archive"].tap()
-        // The sheet and the branch button both see the registry change.
-        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves the sheet")
-        let remaining = app.cells["session-chat-side-easing"]
-        XCTAssertTrue(remaining.exists, "archiving one child preserves its sibling")
-        app.buttons["side-chats-close"].tap()
-        XCTAssertTrue(branch.waitForExistence(timeout: 5))
-        XCTAssertEqual(branch.value as? String, "1", "the parent's count drops after archiving one child")
-        branch.tap()
-        XCTAssertTrue(remaining.waitForExistence(timeout: 5))
+        XCTAssertTrue(row.waitForNonExistence(timeout: 5), "archived child leaves Companions")
+        let remaining = sideChatRow("Spring vs. power curve for the veil", in: panel)
+        reveal(remaining, in: panel)
         remaining.swipeLeft()
         app.buttons["Archive"].tap()
         XCTAssertTrue(remaining.waitForNonExistence(timeout: 5))
-        app.buttons["side-chats-close"].tap()
-        XCTAssertFalse(branch.exists, "archiving the final child clears the parent's button")
-        snapshot(app, "side-chat-archived")
+        XCTAssertTrue(app.staticTexts["Ask something on the side without derailing the main thread."].waitForExistence(timeout: 5))
+        snapshot(app, "companions-side-chats-archived")
     }
 
-    /// The session menu's fork action copies the chat through its latest
-    /// completed response; the fork opens with the seam naming the source.
-    func testForkToSideChatFromMenu() {
+    /// The upstream menu's fork action opens a companion through the latest
+    /// completed reply, retaining the seam naming the source.
+    func testForkIntoSideChatFromMenu() {
         let app = launch(["-route", "chat:chat-deploy"])
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
         app.buttons["session-menu"].tap()
         snapshot(app, "session-menu")
-        app.buttons["Fork to Side Chat"].tap()
+        app.buttons["Fork Into Side Chat"].tap()
         let seam = app.staticTexts["Forked from Wrangler deploy hygiene"]
         XCTAssertTrue(seam.waitForExistence(timeout: 15), "the fork opens with its seam")
-        XCTAssertTrue(app.buttons["Side chat of Wrangler deploy hygiene"].waitForExistence(timeout: 5), "the fork names its source")
+        XCTAssertTrue(app.textViews["composer-input"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.descendants(matching: .any)["session-loading"].waitForNonExistence(timeout: 5))
         snapshot(app, "forked-side-chat")
     }
