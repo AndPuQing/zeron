@@ -49,7 +49,6 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -134,22 +133,16 @@ fun ModelPickerSheet(
     val view = LocalView.current
     val start = tabs.indexOfFirst { it.harness == harness }.coerceAtLeast(0)
     val pager = rememberPagerState(initialPage = start) { tabs.size }
-    val rows = remember { mutableStateMapOf<String, List<ModelPickerRow>>() }
+    val catalog = remember(scope) { ModelPickerCatalog(scope) }
+    val rows = catalog.rows
     var current by remember { mutableStateOf(harness to model) }
     var picked by remember { mutableStateOf(false) }
     var pickError by remember { mutableStateOf<String?>(null) }
 
     // The current provider first, then the rest, so a swipe lands on a loaded
     // list; a provider that joins later (the host's list arrived) loads then.
-    val started = remember { HashSet<String>() }
     LaunchedEffect(tabs.map { it.harness }) {
-        for (tab in tabs.sortedBy { it.harness != harness }) {
-            if (!started.add(tab.harness)) continue
-            launch {
-                val seen = HashSet<String>()
-                rows[tab.harness] = (within(15_000) { tab.load() } ?: emptyList()).filter { seen.add(it.id) }
-            }
-        }
+        catalog.load(tabs.sortedBy { it.harness != harness })
     }
     // Changing provider ticks, as the thumb crosses.
     LaunchedEffect(pager) {
