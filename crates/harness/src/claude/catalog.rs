@@ -115,17 +115,6 @@ fn one_m_base(id: &str) -> Option<&str> {
     id.strip_suffix("[1m]").filter(|base| !base.is_empty())
 }
 
-/// Give a row the 200K/1M select unless it already carries one.
-fn context_window_select(model: &mut Model, default: &str) {
-    if !model
-        .options
-        .iter()
-        .any(|option| option.id == "contextWindow")
-    {
-        model.options.push(context_window_with(default));
-    }
-}
-
 /// Settings state the user's chosen window, so a `[1m]` mention outranks the
 /// 200K default a previously appended bare alias may have installed.
 fn set_context_window(model: &mut Model, default: &str) {
@@ -379,7 +368,14 @@ pub(super) fn with_discovered_models(
         let Some(raw) = text("resolvedModel").or_else(|| text("value")) else {
             continue;
         };
-        let (raw, one_m) = match one_m_base(raw) {
+        // Curated models keep their own `<id>[1m]` row: the picker folds long
+        // context variants into the curated base client-side. Custom models are
+        // folded here instead, because settings may name the same model both
+        // with and without the suffix and nothing else would merge the rows.
+        let curated_variant = static_models()
+            .iter()
+            .any(|model| one_m_base(raw).is_some_and(|base| base == model.id));
+        let (raw, one_m) = match one_m_base(raw).filter(|_| !curated_variant) {
             Some(base) => (base, true),
             None => (raw, false),
         };
@@ -397,17 +393,11 @@ pub(super) fn with_discovered_models(
             default = Some(id.to_owned());
         }
         if let Some(existing) = models.iter_mut().find(|model| model.id == id) {
-            // `gateway/model[1m]` is the same model as `gateway/model`, just
-            // with the long window. Transfer the window instead of appending
-            // a duplicate row the picker would drop.
+            // `gateway/model[1m]` is the same custom model as `gateway/model`,
+            // just with the long window. Transfer the window instead of
+            // appending a duplicate row the picker would drop.
             if one_m {
-                if static_models().iter().any(|model| model.id == id) {
-                    // Curated rows keep their chosen default; just make sure
-                    // the long window is selectable.
-                    context_window_select(existing, "1m");
-                } else {
-                    set_context_window(existing, "1m");
-                }
+                set_context_window(existing, "1m");
             }
             continue;
         }
@@ -451,12 +441,21 @@ pub(super) fn with_discovered_models(
             "Claude returned an empty model catalog".into(),
         ));
     }
-    if let Some(default) = default
-        && let Some(index) = models.iter().position(|m| m.id == default)
-    {
-        // The CLI's default family leads the picker.
-        let model = models.remove(index);
-        models.insert(0, model);
+    if let Some(default) = default {
+        // Curated long-context variants keep their own row here and fold in the
+        // picker, so put the base immediately behind the concrete default: the
+        // fold then keeps the CLI's default family first without touching
+        // curated rows.
+        if let Some(base) = one_m_base(&default)
+            && let Some(index) = models.iter().position(|m| m.id == base)
+        {
+            let model = models.remove(index);
+            models.insert(0, model);
+        }
+        if let Some(index) = models.iter().position(|m| m.id == default) {
+            let model = models.remove(index);
+            models.insert(0, model);
+        }
     }
     Ok(models)
 }
