@@ -71,6 +71,7 @@ pub mod running_pill;
 pub mod session_import;
 pub mod settings;
 pub mod shell;
+pub mod smooth_scroll;
 pub mod sound;
 pub mod state;
 pub(crate) mod surface_chrome;
