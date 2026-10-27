@@ -87,6 +87,10 @@ fn toggle(id: &str, label: &str) -> ModelOption {
 /// 1M window is selected via a model-id suffix (`<model>[1m]`), exactly how the
 /// CLI itself does it.
 pub(crate) fn context_window() -> ModelOption {
+    context_window_with("200k")
+}
+
+fn context_window_with(default: &str) -> ModelOption {
     ModelOption {
         id: "contextWindow".into(),
         label: "Context Window".into(),
@@ -100,7 +104,31 @@ pub(crate) fn context_window() -> ModelOption {
                 label: "1M".into(),
             },
         ],
-        default_choice: "200k".into(),
+        default_choice: default.into(),
+    }
+}
+
+/// Claude selects the 1M window through a model-id suffix (`sonnet[1m]`);
+/// the bare id always means the default 200K. Settings and discovery spell a
+/// configured long-context model this way, so fold it into the row's option.
+fn one_m_base(id: &str) -> Option<&str> {
+    id.strip_suffix("[1m]").filter(|base| !base.is_empty())
+}
+
+/// Settings state the user's chosen window, so a `[1m]` mention outranks the
+/// 200K default a previously appended bare alias may have installed.
+fn set_context_window(model: &mut Model, default: &str) {
+    match model
+        .options
+        .iter_mut()
+        .find(|option| option.id == "contextWindow")
+    {
+        Some(option) => {
+            if option.choices.iter().any(|choice| choice.id == default) {
+                option.default_choice = default.into();
+            }
+        }
+        None => model.options.push(context_window_with(default)),
     }
 }
 
@@ -175,21 +203,41 @@ fn models_with_settings(path: &std::path::Path) -> Vec<Model> {
         .into_iter()
         .map(|key| settings.get("env").and_then(|env| env.get(key))),
     );
+    // One row per concrete model: `gateway/model[1m]` and `gateway/model` are
+    // the same model with different windows. Keep the strongest window any
+    // alias names (the CLI only serves 1M through the suffix), and remember
+    // whether the user asked for it so the row's default can say so.
+    let mut configured: Vec<(String, bool)> = Vec::new();
     for id in ids
         .flatten()
         .filter_map(|v| v.as_str())
         .map(str::trim)
         .filter(|id| !id.is_empty())
     {
-        if !models.iter().any(|m| m.id == id) {
-            models.push(Model {
-                id: id.into(),
-                label: id.into(),
-                description: None,
-                reasoning_levels: FULL_LADDER.to_vec(),
-                options: vec![],
-            });
+        let (base, one_m) = match one_m_base(id) {
+            Some(base) => (base, true),
+            None => (id, false),
+        };
+        match configured.iter_mut().find(|(known, _)| known == base) {
+            Some((_, known_one_m)) => *known_one_m |= one_m,
+            None => configured.push((base.to_owned(), one_m)),
         }
+    }
+    for (id, one_m) in configured {
+        if let Some(existing) = models.iter_mut().find(|model| model.id == id) {
+            if one_m {
+                set_context_window(existing, "1m");
+            }
+            continue;
+        }
+        let default = if one_m { "1m" } else { "200k" };
+        models.push(Model {
+            id: id.clone(),
+            label: id,
+            description: None,
+            reasoning_levels: FULL_LADDER.to_vec(),
+            options: vec![context_window_with(default)],
+        });
     }
     models
 }
@@ -215,9 +263,83 @@ fn settings_models_keep_manifest_and_full_ladder() {
     for model in &models[static_models().len()..] {
         assert_eq!(model.label, model.id);
         assert_eq!(model.reasoning_levels, FULL_LADDER);
+        // Custom models get the same 200K/1M select as the curated ones; the
+        // bare settings ids name the default 200K window.
+        let window = model
+            .options
+            .iter()
+            .find(|option| option.id == "contextWindow")
+            .expect("custom models offer a context window");
+        assert_eq!(window.default_choice, "200k");
     }
     std::fs::write(&path, "invalid").unwrap();
     assert_eq!(models_with_settings(&path), static_models());
+}
+
+#[cfg(test)]
+#[test]
+fn settings_fold_1m_suffix_into_one_row() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        serde_json::json!({"model":"gateway/model[1m]", "env": {
+            "ANTHROPIC_MODEL":"gateway/model[1m]",
+            "ANTHROPIC_SMALL_FAST_MODEL":"fast",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL":"gateway/model[1m]",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL":"gateway/model[1m]",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL":"gateway/model"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let models = models_with_settings(&path);
+    // The bare haiku alias must not add a second row or downgrade the window.
+    assert!(!models.iter().any(|model| model.id.contains("[1m]")));
+    let model = models
+        .iter()
+        .find(|model| model.id == "gateway/model")
+        .unwrap();
+    let window = model
+        .options
+        .iter()
+        .find(|option| option.id == "contextWindow")
+        .unwrap();
+    assert_eq!(window.default_choice, "1m");
+}
+
+#[cfg(test)]
+#[test]
+fn discovered_1m_variants_fold_into_their_base_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(
+        &path,
+        serde_json::json!({"model":"gateway/model[1m]", "env": {
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL":"gateway/model"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    let response = serde_json::json!({"response": {"models": [
+        {"value": "default", "resolvedModel": "gateway/model[1m]"},
+        {"value": "opus", "resolvedModel": "gateway/model[1m]"},
+        {"value": "haiku", "resolvedModel": "gateway/model"},
+        {"value": "gateway/model[1m]", "resolvedModel": "gateway/model[1m]"},
+        {"value": "nano", "resolvedModel": "nano[1m]"},
+    ]}});
+    let models = with_discovered_models(models_with_settings(&path), &response).unwrap();
+    assert!(!models.iter().any(|model| model.id.contains("[1m]")));
+    let model = |id: &str| models.iter().find(|model| model.id == id).unwrap();
+    for id in ["gateway/model", "nano"] {
+        let window = model(id)
+            .options
+            .iter()
+            .find(|option| option.id == "contextWindow")
+            .unwrap();
+        assert_eq!(window.default_choice, "1m");
+    }
+    assert_eq!(models[0].id, "gateway/model");
 }
 
 /// Overlay only new concrete model IDs; curated metadata remains authoritative.
@@ -243,26 +365,40 @@ pub(super) fn with_discovered_models(
                 .map(str::trim)
                 .filter(|v| !v.is_empty())
         };
-        let Some(id) = text("resolvedModel").or_else(|| text("value")) else {
+        let Some(raw) = text("resolvedModel").or_else(|| text("value")) else {
             continue;
         };
+        // Curated models keep their own `<id>[1m]` row: the picker folds long
+        // context variants into the curated base client-side. Custom models are
+        // folded here instead, because settings may name the same model both
+        // with and without the suffix and nothing else would merge the rows.
+        let curated_variant = static_models()
+            .iter()
+            .any(|model| one_m_base(raw).is_some_and(|base| base == model.id));
+        let (raw, one_m) = match one_m_base(raw).filter(|_| !curated_variant) {
+            Some(base) => (base, true),
+            None => (raw, false),
+        };
         // Bare aliases cannot become persisted selections. Prefer resolvedModel.
-        if matches!(
-            id.strip_suffix("[1m]").unwrap_or(id),
-            "default" | "opus" | "sonnet" | "haiku" | "fable"
-        ) {
+        if matches!(raw, "default" | "opus" | "sonnet" | "haiku" | "fable") {
             continue;
         }
         valid = true;
         // The CLI lists some models by dated snapshot ("claude-haiku-4-5-20251001");
         // fold those into the curated undated row instead of duplicating it.
-        let id = snapshot_base(id)
+        let id = snapshot_base(raw)
             .filter(|base| models.iter().any(|model| model.id == *base))
-            .unwrap_or(id);
+            .unwrap_or(raw);
         if text("value") == Some("default") {
             default = Some(id.to_owned());
         }
-        if models.iter().any(|model| model.id == id) {
+        if let Some(existing) = models.iter_mut().find(|model| model.id == id) {
+            // `gateway/model[1m]` is the same custom model as `gateway/model`,
+            // just with the long window. Transfer the window instead of
+            // appending a duplicate row the picker would drop.
+            if one_m {
+                set_context_window(existing, "1m");
+            }
             continue;
         }
         let mut ladder = Vec::new();
@@ -293,7 +429,11 @@ pub(super) fn with_discovered_models(
             label: text("displayName").unwrap_or(id).into(),
             description: text("description").map(str::to_owned),
             reasoning_levels: ladder,
-            options: vec![],
+            options: if one_m {
+                vec![context_window_with("1m")]
+            } else {
+                vec![]
+            },
         });
     }
     if !valid {
@@ -302,10 +442,11 @@ pub(super) fn with_discovered_models(
         ));
     }
     if let Some(default) = default {
-        // The picker folds long-context duplicates into their curated base.
-        // Put that base immediately behind the concrete default so folding
-        // keeps the CLI's default family first without changing curated rows.
-        if let Some(base) = default.strip_suffix("[1m]")
+        // Curated long-context variants keep their own row here and fold in the
+        // picker, so put the base immediately behind the concrete default: the
+        // fold then keeps the CLI's default family first without touching
+        // curated rows.
+        if let Some(base) = one_m_base(&default)
             && let Some(index) = models.iter().position(|m| m.id == base)
         {
             let model = models.remove(index);

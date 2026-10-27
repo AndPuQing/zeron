@@ -168,7 +168,8 @@ fn mcp_config_arg(mcp: &zeron_proto::McpServer) -> String {
 }
 
 /// The `--model` value: the 1M context window is selected via a model-id
-/// suffix (`sonnet[1m]`), exactly how the CLI itself does it.
+/// suffix (`sonnet[1m]`), exactly how the CLI itself does it. Older chats may
+/// have persisted that suffixed id before the catalog folded it into a row.
 fn model_arg(request: &RunRequest) -> Option<String> {
     let model = request.model.as_ref()?;
     let one_m = request
@@ -176,7 +177,7 @@ fn model_arg(request: &RunRequest) -> Option<String> {
         .get("contextWindow")
         .and_then(Value::as_str)
         == Some("1m");
-    Some(if one_m {
+    Some(if one_m && !model.ends_with("[1m]") {
         format!("{model}[1m]")
     } else {
         model.clone()
@@ -2116,6 +2117,37 @@ mod tests {
             .find(|(key, _)| *key == "CLAUDE_CODE_FORWARD_SUBAGENT_TEXT")
             .and_then(|(_, value)| value.map(|v| v.to_os_string()));
         assert_eq!(value.as_deref(), Some(std::ffi::OsStr::new("1")));
+    }
+
+    #[test]
+    fn a_persisted_1m_model_id_is_not_suffixed_twice() {
+        let mut request = RunRequest {
+            require_native_resume: false,
+            mcp: None,
+            prompt: "hi".into(),
+            harness: None,
+            model: Some("gateway/model[1m]".into()),
+            reasoning: None,
+            model_options: serde_json::Map::new(),
+            cwd: String::new(),
+            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            auto_approve: false,
+            attachments: Vec::new(),
+            worktree: None,
+            resume: None,
+            env: Default::default(),
+        };
+        request
+            .model_options
+            .insert("contextWindow".into(), json!("1m"));
+        assert_eq!(model_arg(&request).as_deref(), Some("gateway/model[1m]"));
+        // The folded row composes the suffix exactly once.
+        request.model = Some("gateway/model".into());
+        assert_eq!(model_arg(&request).as_deref(), Some("gateway/model[1m]"));
+        request
+            .model_options
+            .insert("contextWindow".into(), json!("200k"));
+        assert_eq!(model_arg(&request).as_deref(), Some("gateway/model"));
     }
 }
 
