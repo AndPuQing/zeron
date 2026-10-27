@@ -266,10 +266,12 @@ jobs:
   ios-tests:
     needs: [changes, ios-core, macos-frame-source]
     if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-26-intel
-    # A cold Intel simulator core build takes about 14 minutes before Xcode
-    # builds and runs the complete unit/UI suite. Keep room for both stages.
-    timeout-minutes: 45
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    # Use the same stable Apple Silicon image as the desktop checks. Leave
+    # room for a cold Rust core build, Xcode build, and the complete UI suite.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Select an available iPhone simulator
@@ -338,7 +340,9 @@ jobs:
             -only-testing:ZeronUITests/AgentSenderTests/testSentMessageOpensTheRecipient \
             CODE_SIGNING_ALLOWED=NO test
       - name: Export iOS screenshots
-        if: always()
+        # A cancelled test can leave an incomplete result bundle. Keep the
+        # raw results upload below, without trying to export its attachments.
+        if: always() && !cancelled()
         run: |
           if [[ -d "$RUNNER_TEMP/ios-tests.xcresult" ]]; then
             xcrun xcresulttool export attachments --path "$RUNNER_TEMP/ios-tests.xcresult" \
