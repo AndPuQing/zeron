@@ -6,6 +6,7 @@
 pub mod agent;
 pub mod agent_environment;
 pub mod agent_messages;
+pub mod annotation;
 pub mod attachment_mentions;
 pub mod chat_mentions;
 pub mod change_request_assessment;
