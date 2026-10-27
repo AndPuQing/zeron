@@ -27,6 +27,7 @@ pub mod environment;
 pub mod files;
 pub mod harnesses;
 pub mod notifications;
+pub mod search;
 pub mod shortcuts;
 pub mod thread_naming;
 pub mod wallpaper;

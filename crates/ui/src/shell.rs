@@ -91,6 +91,7 @@ mod session_hover_card;
 mod session_import;
 mod session_info;
 mod session_lanes;
+mod settings_search;
 mod side_chats;
 mod sidebar_pins;
 mod sidebar_sections;
@@ -691,6 +692,25 @@ impl SettingsSection {
             SettingsSection::General => "General",
             SettingsSection::Appshots => "Appshots",
             SettingsSection::Archived => "Archived sessions",
+        }
+    }
+
+    /// The section's glyph, in the nav and on its settings-search hits.
+    fn icon(self) -> &'static str {
+        match self {
+            SettingsSection::Devices => icons::MONITOR,
+            SettingsSection::Cloud => icons::CLOUD,
+            SettingsSection::Billing => icons::WALLET,
+            SettingsSection::Harnesses => icons::WIDGET,
+            SettingsSection::Agents => icons::KEY_MINIMALISTIC,
+            SettingsSection::Appearance => icons::TUNING,
+            SettingsSection::Files => icons::FOLDER,
+            SettingsSection::Notifications => icons::BELL,
+            SettingsSection::Voice => icons::MICROPHONE,
+            SettingsSection::Shortcuts => icons::KEYBOARD,
+            SettingsSection::General => icons::SETTINGS,
+            SettingsSection::Appshots => icons::MONITOR,
+            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
         }
     }
 }
@@ -2122,6 +2142,8 @@ pub struct Shell {
     settings_focus_pending: bool,
     settings_restore_pending: bool,
     settings_return_route: Route,
+    /// The field atop the Settings sidebar, made on its first render.
+    settings_search: Option<settings_search::SettingsSearch>,
     /// Route history behind the titlebar back/forward buttons (§ nav history).
     nav: NavHistory,
     pull_requests_page: Option<Entity<PullRequestsPage>>,
@@ -2682,6 +2704,7 @@ impl Shell {
             settings_focus_pending: matches!(route, Route::Settings(_)),
             settings_restore_pending: false,
             settings_return_route: Route::Chat,
+            settings_search: None,
             nav,
             pull_requests_page: None,
             pull_request_pane: Default::default(),
@@ -5168,6 +5191,15 @@ impl Shell {
 
     fn set_route(&mut self, route: Route, cx: &mut Context<Self>) {
         self.command_palette = None;
+        // A settings-search landing belongs to the page it was asked on, and
+        // a query to the visit: however Settings is left, the next visit
+        // starts from the sections.
+        if route != self.route {
+            settings::search::clear_reveal();
+        }
+        if matches!(self.route, Route::Settings(_)) && !matches!(route, Route::Settings(_)) {
+            self.reset_settings_search(cx);
+        }
         let was_pull_requests = matches!(self.route, Route::PullRequests);
         let will_show_pull_requests = matches!(route, Route::PullRequests);
         if was_pull_requests && !will_show_pull_requests {
@@ -5609,6 +5641,36 @@ impl Shell {
         }
     }
 
+    /// Whether a dialog or menu that Escape would close is open over Settings:
+    /// [`Self::dismiss_settings_escape_surface`] without the dismissing.
+    fn settings_escape_surface_open(&self, cx: &App) -> bool {
+        if self.sync_flow.has_visible_overlay() || self.user_menu.is_open() {
+            return true;
+        }
+        let Route::Settings(section) = self.route else {
+            return false;
+        };
+        match section.canonical() {
+            SettingsSection::Devices => self
+                .devices_page
+                .as_ref()
+                .is_some_and(|page| page.read(cx).has_escape_surface()),
+            SettingsSection::Harnesses => self
+                .harnesses_page
+                .as_ref()
+                .is_some_and(|page| page.read(cx).has_escape_surface(cx)),
+            SettingsSection::Appearance => self
+                .appearance_page
+                .as_ref()
+                .is_some_and(|page| page.read(cx).has_escape_surface()),
+            SettingsSection::Archived => self
+                .archived_page
+                .as_ref()
+                .is_some_and(|page| page.read(cx).has_escape_surface()),
+            _ => false,
+        }
+    }
+
     /// Escape bubbling out of the settings page. Focused controls — open
     /// dropdowns, the shortcut recorder, a dialog's own input — consume it
     /// before it gets here. What remains open without holding focus closes
@@ -6005,13 +6067,17 @@ impl Shell {
                     ));
                     self.shortcuts_page = Some(page);
                 }
+                let keep_focus = self.settings_search_focused(window, cx);
                 match &self.shortcuts_page {
                     Some(page) => {
                         page.update(cx, |page, _| {
                             page.show_section(
                                 section == SettingsSection::Appshots,
                                 section == SettingsSection::General,
-                            )
+                            );
+                            if keep_focus {
+                                page.keep_focus();
+                            }
                         });
                         page.clone().into_any_element()
                     }
@@ -8425,7 +8491,12 @@ impl Shell {
         let sidebar_width = self.settings.sidebar_width;
         // Dropdowns contain themselves to the page pane beside this column.
         settings::widgets::set_sidebar_width(sidebar_width, cx);
-        let nav = self.render_settings_nav(section, &theme, window, cx);
+        let search_field = self.render_settings_search_field(&theme, window, cx);
+        let nav = if self.settings_searching(cx) {
+            self.render_settings_search_results(&theme, cx)
+        } else {
+            self.render_settings_nav(section, &theme, window, cx)
+        };
         // The footer uses the chat sidebar's theme so the account and
         // settings buttons render identically in both places.
         let footer_theme = Theme::of(cx).clone();
@@ -8443,9 +8514,19 @@ impl Shell {
             .flex_row()
             .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 let key = &event.keystroke.key;
+                let modifiers = event.keystroke.modifiers;
                 if key == "escape" {
                     if !this.dismiss_settings_escape_surface(cx) {
                         this.close_settings(cx);
+                    }
+                    cx.stop_propagation();
+                } else if key == "f"
+                    && modifiers.secondary()
+                    && modifiers.number_of_modifiers() == 1
+                {
+                    // A dialog over the page keeps the keyboard.
+                    if !this.settings_escape_surface_open(cx) {
+                        this.focus_settings_search(window, cx);
                     }
                     cx.stop_propagation();
                 } else if key == "tab" {
@@ -8494,6 +8575,13 @@ impl Shell {
                             .child("Back"),
                         ),
                     )
+                    .child(
+                        div()
+                            .flex_none()
+                            .px(px(Theme::SPACE_SM))
+                            .pt(px(Theme::SPACE_SM))
+                            .child(search_field),
+                    )
                     .child(div().flex_1().min_h_0().child(nav))
                     .child(div().p(px(Theme::SPACE_SM)).flex_none().child(footer)),
             )
@@ -8529,21 +8617,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let cloud_offered = self.state.read(cx).cloud_offered();
-        let section_icon = |item: SettingsSection| match item {
-            SettingsSection::Devices => icons::MONITOR,
-            SettingsSection::Cloud => icons::CLOUD,
-            SettingsSection::Billing => icons::WALLET,
-            SettingsSection::Harnesses => icons::WIDGET,
-            SettingsSection::Agents => icons::KEY_MINIMALISTIC,
-            SettingsSection::Appearance => icons::TUNING,
-            SettingsSection::Files => icons::FOLDER,
-            SettingsSection::Notifications => icons::BELL,
-            SettingsSection::Voice => icons::MICROPHONE,
-            SettingsSection::Shortcuts => icons::KEYBOARD,
-            SettingsSection::General => icons::SETTINGS,
-            SettingsSection::Appshots => icons::MONITOR,
-            SettingsSection::Archived => icons::ARCHIVE_MINIMALISTIC,
-        };
         settings::widgets::scroll_faded(
             "settings-nav-scroll",
             div()
@@ -8635,11 +8708,7 @@ impl Shell {
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.open_settings(item, cx)
                                     }))
-                                    .child(
-                                        icon(section_icon(item))
-                                            .size(px(16.0))
-                                            .text_color(tab_text),
-                                    )
+                                    .child(icon(item.icon()).size(px(16.0)).text_color(tab_text))
                                     .child(SharedString::from(item.label()))
                                 }),
                         ),
