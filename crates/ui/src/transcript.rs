@@ -13367,6 +13367,7 @@ mod tests {
             crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
         });
         let chat = |id: &str| zeron_proto::Chat {
+            import_source: None,
             id: id.into(),
             device_id: "reply-host".into(),
             title: None,
