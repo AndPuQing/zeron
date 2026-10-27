@@ -77,7 +77,7 @@ final class RowView: UIView {
             let url = URL(string: l.url)
             // Captions and fork seams both open another chat in the app.
             if url?.scheme == "zeron-chat" {
-                e.accessibilityLabel = "Open sending chat"
+                e.accessibilityLabel = "Open chat"
             } else if url?.scheme == "zerun", url?.host == "chat" {
                 e.accessibilityLabel = "Open source chat"
             } else {
