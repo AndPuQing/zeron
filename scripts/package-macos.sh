@@ -22,7 +22,16 @@ DMG="$OUT_DIR/zerun-$VERSION-macos-$ARCH.dmg"
 APP_TARBALL="$OUT_DIR/zerun-$VERSION-macos-$ARCH-app.tar.gz"
 
 cd "$ROOT"
-cargo build --release --locked -p zeron
+if [[ "${ZERUN_MACOS_PREBUILT:-0}" == 1 ]]; then
+  # CI cross-compiles with the stable SDK, then runs/signs the binaries on an
+  # Apple Silicon host. Verify both inputs before the usual version/bundle checks.
+  for binary in zerun zerun-engine; do
+    test -x "$ROOT/target/release/$binary"
+    lipo "$ROOT/target/release/$binary" -verify_arch "$ARCH"
+  done
+else
+  cargo build --release --locked -p zeron
+fi
 
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

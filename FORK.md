@@ -41,7 +41,7 @@ conflicts.
 | Area | Change |
 | --- | --- |
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions |
-| Apple CI | desktop WebKit, iOS UI checks and macOS packages use stable Apple Silicon `macos-26`; frame-source and voice Mac checks use `xcode-27`, shared with TestFlight; the preview image exposed blank desktop pages and iOS 27 navigation-test failures |
+| Apple CI | stable `macos-26-intel` runs desktop/iOS UI checks and cross-compiles Apple Silicon binaries; `xcode-27` executes/signs/notarizes those binaries and runs frame-source, voice and TestFlight jobs; this avoids scarce stable ARM runners and keeps UI validation on the stable SDK/runtime |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |

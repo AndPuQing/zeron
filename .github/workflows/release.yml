@@ -93,10 +93,36 @@ jobs:
   #   AC_API_KEY_P8 / AC_API_KEY_ID / AC_API_ISSUER_ID — App Store Connect API
   #     key (raw .p8 contents), for notarytool. All three present → the package
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
+  macos-build:
+    if: inputs.publish_run_id == ''
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Rust toolchain and Apple Silicon target
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Build Apple Silicon binaries with the stable macOS SDK
+        run: |
+          cargo build --release --locked -p zeron --target aarch64-apple-darwin
+          mkdir -p target/apple-build-binaries
+          for binary in zerun zerun-engine; do
+            lipo "target/aarch64-apple-darwin/release/$binary" -verify_arch arm64
+            install -m 755 "target/aarch64-apple-darwin/release/$binary" target/apple-build-binaries/
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: apple-build-binaries
+          path: target/apple-build-binaries/*
+          if-no-files-found: error
+
   macos:
     if: inputs.publish_run_id == ''
-    runs-on: macos-26 # Stable Apple silicon image for desktop WebKit and packaging
+    needs: macos-build
+    runs-on: xcode-27 # Execute, sign and notarize the stable-SDK Apple Silicon binaries
     env:
+      ZERUN_MACOS_PREBUILT: '1'
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
       AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
@@ -104,9 +130,16 @@ jobs:
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: rust toolchain (rust-toolchain.toml)
-        run: rustup show active-toolchain || rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: apple-build-binaries
+          path: target/apple-build-binaries
+      - name: Prepare Apple Silicon executables
+        run: |
+          mkdir -p target/release
+          for binary in zerun zerun-engine; do
+            install -m 755 "target/apple-build-binaries/$binary" target/release/
+          done
       - name: import Developer ID certificate
         if: env.MACOS_CERT_P12 != ''
         run: |
@@ -222,6 +255,8 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/zerun-release-assets
+          # Intermediate Apple executables are inputs to packaging, not release assets.
+          pattern: '{linux-*,macos-*,windows-*,android-release}'
           merge-multiple: true
           run-id: ${{ env.SOURCE_RUN_ID }}
           github-token: ${{ github.token }}
