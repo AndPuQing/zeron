@@ -83,7 +83,9 @@ jobs:
   # Updater and preview tests, native UI regressions and the two native WebKit fixtures. Everything is
   # compiled once (one cargo invocation, so dependencies are built once) and then run.
   macos-native:
-    runs-on: macos-26-intel
+    runs-on: macos-15
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     # A cold cache (first run, eviction, toolchain bump) takes about 32 minutes; warm is about 10.
     # This run spent ~42 minutes on builds plus the selected tests before the
     # browser step, so 60 leaves room for its retries. The 7/5/5-minute step
@@ -244,7 +246,9 @@ jobs:
     needs: [changes, ios-core, macos-frame-source]
     if: needs.changes.outputs.ios == 'true'
     runs-on: macos-26-intel
-    timeout-minutes: 30
+    # A cold Intel simulator core build takes about 14 minutes before Xcode
+    # builds and runs the complete unit/UI suite. Keep room for both stages.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Select an available iPhone simulator
