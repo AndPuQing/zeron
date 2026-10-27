@@ -379,7 +379,7 @@ const CANVAS_TERMINAL_PREFIX: &str = "space-canvas:";
 /// `chat_image_root`), as configured: the jail matches a reply's path against
 /// it raw or canonical. Fails closed: no folder of its own (a legacy
 /// projectless chat runs in home), a relative or missing folder, and any
-/// folder that is `home` or above it, or holds one of `data` (Zeron's own
+/// folder that is `home` or above it, or holds one of `data` (Zerun's own
 /// dirs), are refused, comparing canonical forms. A scratch folder is
 /// resolved under `scratch_root`, never created: only a run creates it.
 fn chat_image_folder(
@@ -409,7 +409,7 @@ fn chat_image_folder(
             .filter_map(|dir| std::fs::canonicalize(dir).ok())
             .any(|dir| dir.starts_with(&canonical))
     {
-        return Err("the chat works in the home folder, above it, or around Zeron's data");
+        return Err("the chat works in the home folder, above it, or around Zerun's data");
     }
     Ok(folder)
 }
@@ -1338,7 +1338,7 @@ impl EngineRpc {
     /// The one folder a chat's reply images (`![alt](path)`) may come from:
     /// its working folder on this host. Refused, failing closed, when the chat
     /// runs elsewhere, has no folder of its own, or works in the home folder,
-    /// above it, or around Zeron's own data — so a reply can never show an
+    /// above it, or around Zerun's own data — so a reply can never show an
     /// image from all of home, or another chat's attachments.
     fn chat_image_root(&self, chat_id: &str) -> Result<std::path::PathBuf, RpcError> {
         let refused = |why: &str| RpcError::BadParams(why.into());
@@ -5587,7 +5587,7 @@ mod tests {
     fn chat_image_folders_fail_closed() {
         let home = tempfile::tempdir().unwrap();
         let project = home.path().join("code").join("app");
-        let data = home.path().join(".zeron");
+        let data = home.path().join(".zerun");
         let scratch_root = data.join("scratch");
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(scratch_root.join("2026-10-25-a1b2c3d4")).unwrap();
@@ -5603,7 +5603,7 @@ mod tests {
             Ok(project.clone())
         );
         assert_eq!(
-            folder(Some("~/.zeron/scratch/2026-10-25-a1b2c3d4")),
+            folder(Some("~/.zerun/scratch/2026-10-25-a1b2c3d4")),
             Ok(scratch_root.join("2026-10-25-a1b2c3d4"))
         );
         let text = |path: &std::path::Path| path.to_string_lossy().into_owned();
@@ -5621,16 +5621,16 @@ mod tests {
             (Some("relative/app"), "not an absolute path"),
             (Some(missing.as_str()), "doesn't exist"),
             (
-                Some("~/.zeron/scratch/2026-10-25-zzzz9999"),
+                Some("~/.zerun/scratch/2026-10-25-zzzz9999"),
                 "doesn't exist",
             ),
             (Some(home_text.as_str()), "home folder, above it"),
             (Some(above_home.as_str()), "home folder, above it"),
             (Some(root.as_str()), "home folder, above it"),
-            (Some(data_text.as_str()), "around Zeron's data"),
-            (Some(scratch_text.as_str()), "around Zeron's data"),
-            (Some("~/.zeron/scratch/."), "around Zeron's data"),
-            (Some("~/.zeron/scratch/.."), "around Zeron's data"),
+            (Some(data_text.as_str()), "around Zerun's data"),
+            (Some(scratch_text.as_str()), "around Zerun's data"),
+            (Some("~/.zerun/scratch/."), "around Zerun's data"),
+            (Some("~/.zerun/scratch/.."), "around Zerun's data"),
         ] {
             let error = folder(cwd).expect_err(&format!("{cwd:?}"));
             assert!(error.contains(why), "{cwd:?}: {error}");

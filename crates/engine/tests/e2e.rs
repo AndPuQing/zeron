@@ -3829,7 +3829,7 @@ async fn publish_image_lands_in_the_live_turn() {
 
 /// An image a reply names in Markdown reads only from inside that one chat's
 /// working folder, and never through a folder that would open too much:
-/// home or above, Zeron's own data, a chat another device runs.
+/// home or above, Zerun's own data, a chat another device runs.
 #[tokio::test]
 async fn chat_images_come_only_from_their_chats_own_folder() {
     use base64::Engine as _;
@@ -3869,7 +3869,7 @@ async fn chat_images_come_only_from_their_chats_own_folder() {
         (
             "scratch",
             here.as_str(),
-            Some("~/.zeron/scratch/2026-10-25-a1b2c3d4".into()),
+            Some("~/.zerun/scratch/2026-10-25-a1b2c3d4".into()),
         ),
     ] {
         core.workspace
@@ -3904,7 +3904,7 @@ async fn chat_images_come_only_from_their_chats_own_folder() {
         ("ours", after.as_path(), "outside the chat's folder"),
         ("theirs", before.as_path(), "outside the chat's folder"),
         ("root", before.as_path(), "home folder, above it"),
-        ("data", before.as_path(), "around Zeron's data"),
+        ("data", before.as_path(), "around Zerun's data"),
         ("remote", before.as_path(), "another device"),
         ("missing", before.as_path(), "chat not found"),
     ] {

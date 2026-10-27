@@ -272,7 +272,7 @@ const SHOW_IMAGE: &str = "show_image";
 const SHOW_IMAGE_DESCRIPTION: &str = "\
 Show an image file (a screenshot, a rendered chart or diagram, a photo) inline in this chat, above \
 your final text reply; call it before writing that reply, once per image, in the order they should \
-appear. PNG, JPEG, WebP, or GIF, at most 10 MB and 4096 pixels on a side. Zeron copies the file \
+appear. PNG, JPEG, WebP, or GIF, at most 10 MB and 4096 pixels on a side. Zerun copies the file \
 into the chat, so it stays visible after the file changes or is deleted. The reader \
 already sees the image, so the reply should not announce or describe it: add only what the image \
 doesn't show.";
@@ -1359,7 +1359,7 @@ impl Tools {
             .origin()
             .chat_id
             .clone()
-            .context("show_image only works from an agent Zeron launched in a chat")?;
+            .context("show_image only works from an agent Zerun launched in a chat")?;
         let bytes = read_image(&args.path).await?;
         let name = std::path::Path::new(&args.path)
             .file_name()

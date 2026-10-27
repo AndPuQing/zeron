@@ -785,7 +785,7 @@ pub enum AgentEvent {
     },
     /// A raster image in the reply: one a harness generated (the engine
     /// materializes this path before publication) or one an agent showed with
-    /// Zeron's `show_image` MCP tool (already stored in uploads).
+    /// Zerun's `show_image` MCP tool (already stored in uploads).
     #[serde(rename_all = "camelCase")]
     GeneratedImage {
         id: String,
