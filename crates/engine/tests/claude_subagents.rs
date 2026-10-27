@@ -19,6 +19,7 @@ const CHIP: &str = "forked-command-fanout-a4d8fe55a62c09757";
 /// a typed fork's transcript is looked for there.
 fn request(dir: &Path, scenario: &str) -> RunRequest {
     RunRequest {
+        require_native_resume: false,
         mcp: None,
         prompt: scenario.into(),
         harness: None,
@@ -40,10 +41,18 @@ fn request(dir: &Path, scenario: &str) -> RunRequest {
 }
 
 fn assemble(dir: &Path) -> (EngineCore, EngineProfile) {
+    assemble_with_saved_home(dir, false)
+}
+
+fn assemble_with_saved_home(dir: &Path, saved_home: bool) -> (EngineCore, EngineProfile) {
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../harness/tests/fixtures/fake-claude.sh");
     let registry = Arc::new(HarnessRegistry::new());
-    registry.register(Arc::new(ClaudeHarness::new().with_executable(fixture)));
+    let mut harness = ClaudeHarness::new().with_executable(fixture);
+    if saved_home {
+        harness = harness.with_saved_session_home(dir.join("claude"));
+    }
+    registry.register(Arc::new(harness));
     let profile = EngineProfile::development(dir, "test-org", "test-user");
     let core =
         EngineCore::assemble_with_profile(profile.clone(), registry, HarnessId::ClaudeCode, None)
@@ -275,14 +284,27 @@ async fn a_typed_fork_sent_to_a_parked_session_keeps_its_chip() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_typed_forks_tab_fills_from_its_transcript_on_disk_while_the_cli_holds_it() {
+    check_typed_fork_disk_streaming(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_typed_forks_live_transcript_uses_the_bound_provider_home() {
+    check_typed_fork_disk_streaming(true).await;
+}
+
+async fn check_typed_fork_disk_streaming(saved_home: bool) {
     const SLOW_CHIP: &str = "forked-command-f-slow-steps-ae74593bb0c051579";
     let dir = tempfile::tempdir().unwrap();
-    let (core, _profile) = assemble(dir.path());
+    let (core, _profile) = assemble_with_saved_home(dir.path(), saved_home);
+    let mut req = request(dir.path(), "scenario:typed-fork-on-disk");
+    if saved_home {
+        req.env.remove("CLAUDE_CONFIG_DIR");
+    }
     core.sessions
         .dispatch(
             CHAT,
             HarnessId::ClaudeCode,
-            request(dir.path(), "scenario:typed-fork-on-disk"),
+            req,
             Some("user-prompt".into()),
         )
         .await

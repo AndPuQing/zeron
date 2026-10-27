@@ -2,7 +2,7 @@
 //! source. Peer clients use the same completed-response boundary and seam
 //! semantics as the host's `ForkSideChat` RPC.
 
-use crate::parts::{MessagePart, MessageStatus};
+use crate::parts::{MessagePart, MessageStatus, SubagentStatus};
 use crate::schema::{MessageRole, SessionMessageEntry};
 
 /// The entry a fork's copied history ends at: the source's latest completed
@@ -24,9 +24,9 @@ pub fn has_fork_boundary<'a>(entries: impl IntoIterator<Item = &'a SessionMessag
 }
 
 /// Everything a fork inherits from `source`: the history through
-/// [`fork_boundary`], with historical `Input` questions resolved (the source
-/// runtime owns them), ending in the `Fork` seam entry. `None` when the
-/// source has no completed response to fork through.
+/// [`fork_boundary`], with historical questions closed and running subagent
+/// chips settled (the source runtime owns them), ending in the `Fork` seam
+/// entry. `None` when the source has no completed response to fork through.
 ///
 /// `target_chat_id` names the seam entry (`fork:<target>`), so re-running
 /// cannot duplicate it; `source_title` is frozen into the seam so a later
@@ -43,8 +43,19 @@ pub fn fork_entries(
     let mut entries: Vec<SessionMessageEntry> = source[..=boundary].to_vec();
     for entry in &mut entries {
         for part in &mut entry.parts {
-            if let MessagePart::Input { resolved, .. } = part {
-                *resolved = true;
+            match part {
+                MessagePart::Input { resolved, answers, .. } => {
+                    if !*resolved {
+                        *answers = Some(Vec::new());
+                    }
+                    *resolved = true;
+                }
+                MessagePart::Tool { subagent_status, .. }
+                    if *subagent_status == Some(SubagentStatus::Running) =>
+                {
+                    *subagent_status = Some(SubagentStatus::Failed);
+                }
+                _ => {}
             }
         }
     }
@@ -127,6 +138,7 @@ mod tests {
                     request_id: "r1".into(),
                     questions: Vec::new(),
                     resolved: false,
+                    answers: None,
                 }],
             ),
             entry("a2", MessageRole::Assistant, vec![text("t4")]),
@@ -138,7 +150,7 @@ mod tests {
         // The source runtime owns historical questions: the copy resolves them.
         assert!(matches!(
             &forked[2].parts[0],
-            MessagePart::Input { resolved: true, .. }
+            MessagePart::Input { resolved: true, answers: Some(answers), .. } if answers.is_empty()
         ));
         // The seam closes the copy and names the source.
         assert_eq!(forked[4].id, "fork:child");
@@ -150,6 +162,39 @@ mod tests {
             MessagePart::Fork { id, source_chat_id, source_title }
                 if id == "fork:child" && source_chat_id == "parent" && source_title == "Parent title"
         ));
+        assert!(matches!(&source[2].parts[0], MessagePart::Input { resolved: false, answers: None, .. }));
+    }
+
+    #[test]
+    fn peer_forks_settle_running_subagents_and_keep_recorded_answers() {
+        let chip = |id: &str, status| MessagePart::Tool {
+            id: id.into(),
+            call: zeron_proto::ToolCall::Unknown { name: "Agent: scout".into(), input: None },
+            is_error: false,
+            resolved: true,
+            output: None,
+            diff: None,
+            output_ref: None,
+            output_bytes: None,
+            diff_ref: None,
+            diff_stats: None,
+            subagent_ref: Some(format!("parent--sub--{id}")),
+            subagent_status: Some(status),
+            subagent_tail: None,
+        };
+        let source = vec![entry("a1", MessageRole::Assistant, vec![
+            chip("running", SubagentStatus::Running),
+            chip("done", SubagentStatus::Done),
+            MessagePart::Input {
+                id: "q1".into(), request_id: "q1".into(), questions: Vec::new(), resolved: true,
+                answers: Some(vec![zeron_proto::UserInputAnswer { question_id: "q1".into(), labels: vec!["Keep".into()] }]),
+            },
+        ])];
+        let original = source.clone();
+        let fork = fork_entries(&source, "child", "parent", "Parent", "phone", 42).unwrap();
+        assert!(matches!(&fork[0].parts[0], MessagePart::Tool { subagent_status: Some(SubagentStatus::Failed), subagent_ref: Some(id), .. } if id == "parent--sub--running"));
+        assert_eq!(fork[0].parts[1..], source[0].parts[1..]);
+        assert_eq!(source, original);
     }
 
     #[test]

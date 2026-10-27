@@ -1254,7 +1254,7 @@ async fn run_session(session: Session) {
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut torn_down: Vec<crate::process::Tracked> = Vec::new();
     // The typed fork whose transcript is read off disk (see [`fork_tail`]).
-    let claude_root = config_root(&launched.env);
+    let claude_root = saved_home.clone().unwrap_or_else(|| config_root(&launched.env));
     let mut tail: Option<ForkTail> = None;
 
     'main: loop {
@@ -2103,7 +2103,13 @@ mod tests {
             resume: None,
             env: Default::default(),
         };
-        let mut cmd = ClaudeHarness::build_command(std::path::Path::new("claude"), &request, false);
+        let mut cmd = ClaudeHarness::build_command(
+            std::path::Path::new("claude"),
+            &request,
+            false,
+            None,
+            &Default::default(),
+        );
         let value = cmd
             .as_std_mut()
             .get_envs()

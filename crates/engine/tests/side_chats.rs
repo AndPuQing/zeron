@@ -1067,6 +1067,7 @@ async fn a_side_chat_keeps_its_subagent_tools_when_native_subagents_are_off() {
                 RunRequest {
                     mcp: None,
                     prompt: "scenario:native-subagents".into(),
+                    require_native_resume: false,
                     harness: Some(HarnessId::ClaudeCode),
                     model: None,
                     reasoning: None,
