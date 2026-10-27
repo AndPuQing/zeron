@@ -95,7 +95,7 @@ jobs:
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
   macos:
     if: inputs.publish_run_id == ''
-    runs-on: xcode-27 # Apple silicon; same image as TestFlight
+    runs-on: macos-26 # Stable Apple silicon image for desktop WebKit and packaging
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}

@@ -83,7 +83,7 @@ jobs:
   # Updater and preview tests, native UI regressions and the two native WebKit fixtures. Everything is
   # compiled once (one cargo invocation, so dependencies are built once) and then run.
   macos-native:
-    runs-on: xcode-27
+    runs-on: macos-26
     # A cold cache (first run, eviction, toolchain bump) takes about 32 minutes; warm is about 10.
     # This run spent ~42 minutes on builds plus the selected tests before the
     # browser step, so 60 leaves room for its retries. The 7/5/5-minute step
