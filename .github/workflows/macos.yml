@@ -83,7 +83,7 @@ jobs:
   # Updater and preview tests, native UI regressions and the two native WebKit fixtures. Everything is
   # compiled once (one cargo invocation, so dependencies are built once) and then run.
   macos-native:
-    runs-on: macos-latest
+    runs-on: xcode-27
     # A cold cache (first run, eviction, toolchain bump) takes about 32 minutes; warm is about 10.
     # This run spent ~42 minutes on builds plus the selected tests before the
     # browser step, so 60 leaves room for its retries. The 7/5/5-minute step
@@ -175,7 +175,7 @@ jobs:
 
   # gpui_macos lives in the pinned GPUI checkout, a separate workspace with its own cache.
   macos-frame-source:
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -243,7 +243,7 @@ jobs:
   ios-tests:
     needs: [changes, ios-core, macos-frame-source]
     if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-latest
+    runs-on: xcode-27
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

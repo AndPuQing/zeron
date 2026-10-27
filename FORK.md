@@ -41,6 +41,7 @@ conflicts.
 | Area | Change |
 | --- | --- |
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions |
+| Apple CI | macOS/iOS checks, voice Mac checks and macOS release builds use the existing Apple Silicon `xcode-27` runner, shared with TestFlight |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
