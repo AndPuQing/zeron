@@ -76,6 +76,20 @@ class ProviderParityFlowTest {
         } finally { core.setSessionConfig("chat-deploy", original) }
     }
 
+    @Test fun chatCanChangeModelWithoutSwitchingAgent() {
+        launch("chat:chat-deploy")
+        val original = core.sessionConfig("chat-deploy")!!
+        try {
+            val host = core.openSession("chat-deploy").composer().host.deviceId
+            val picked = runBlocking { core.listModels(host, original.harness) }.first { it.id != original.model }
+            requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).click()
+            expandedModelChip(model.row("chat-deploy")!!.modelLabel!!).click()
+            text(picked.label).click()
+            await { core.sessionConfig("chat-deploy")?.model == picked.id }
+            assertEquals(original.copy(model = picked.id), core.sessionConfig("chat-deploy"))
+        } finally { core.setSessionConfig("chat-deploy", original) }
+    }
+
     @Test fun deleteRequiresConfirmationAndCancelKeepsTheChat() {
         launch("chat:chat-deploy")
         requireNotNull(device.wait(Until.findObject(By.desc("More")), 5_000)).click()
