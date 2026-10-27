@@ -41,7 +41,7 @@ conflicts.
 | Area | Change |
 | --- | --- |
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions |
-| Apple CI | desktop checks use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs iOS UI checks and cross-compiles Apple Silicon packages; `xcode-27` executes/signs/notarizes those packages and runs frame-source, voice and TestFlight jobs; desktop Intel checks cannot use the current ONNX dependency's ARM-only Mac binaries |
+| Apple CI | native desktop checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU and iOS UI checks with a host-matched simulator target; frame-source, voice and TestFlight use `xcode-27`; this avoids the constrained macOS 26 ARM pool without using Intel-only test dependencies |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |

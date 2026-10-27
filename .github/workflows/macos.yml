@@ -133,10 +133,13 @@ jobs:
           # zeron-text's coretext tests are macOS-only (#![cfg(target_os = "macos")]); its other
           # tests run on Linux in ios-core. The attachment filters cover file staging, chips and
           # external Finder drops, whose paths and file metadata are platform-specific.
+          # macOS 15 has older ICU break rules. Its other CoreText checks still
+          # run here; the complete suite, including the Unicode 17 differential
+          # check, also runs on stable macOS 26 in coretext-fidelity below.
           cargo nextest run --no-fail-fast --locked \
             -p zeron-update -p zeron-preview -p zeron-ui -p zeron-text \
             --features zeron-ui/browser-fixture --lib --tests \
-            -E 'package(zeron-update) | package(zeron-preview) | binary_id(zeron-text::coretext) | (binary_id(zeron-ui) & (test(native_diff_font_geometry) | test(/notify::tests::/) | test(/^attachments::tests::/) | test(/composer::attachment_chip_tests::/) | test(/shell::chat_dropzone_tests::/) | test(=queue::tests::queue_rows_label_attachment_chips_and_file_only_sends) | test(=transcript::tests::user_bubbles_project_attachment_chips_in_place_of_the_strip) | test(=transcript::tests::sent_chips_show_upload_progress_until_their_bytes_land)))'
+            -E 'package(zeron-update) | package(zeron-preview) | (binary_id(zeron-text::coretext) & !test(=break_opportunities_match_cf_tokenizer)) | (binary_id(zeron-ui) & (test(native_diff_font_geometry) | test(/notify::tests::/) | test(/^attachments::tests::/) | test(/composer::attachment_chip_tests::/) | test(/shell::chat_dropzone_tests::/) | test(=queue::tests::queue_rows_label_attachment_chips_and_file_only_sends) | test(=transcript::tests::user_bubbles_project_attachment_chips_in_place_of_the_strip) | test(=transcript::tests::sent_chips_show_upload_progress_until_their_bytes_land)))'
       - name: Native browser regression and screenshots
         timeout-minutes: 7
         env:
@@ -174,6 +177,24 @@ jobs:
           name: preview-macos-captures
           path: ${{ runner.temp }}/preview-captures*
           if-no-files-found: ignore
+
+  # This crate has no ONNX dependency, so stable Intel macOS can check the
+  # complete CoreText suite against the newer system ICU without scarce ARM runners.
+  coretext-fidelity:
+    runs-on: macos-26-intel
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Rust toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+          cache-on-failure: true
+      - name: CoreText line layout and Unicode break fidelity
+        run: cargo test --locked -p zeron-text --test coretext
 
   # gpui_macos lives in the pinned GPUI checkout, a separate workspace with its own cache.
   macos-frame-source:
