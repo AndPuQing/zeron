@@ -1629,21 +1629,25 @@ mod tests {
     struct DeferredActions {
         rpc: Arc<ScriptedRpc>,
         calls: Arc<Mutex<Vec<String>>>,
+        replies: Arc<Mutex<Vec<String>>>,
         release: Arc<tokio::sync::Notify>,
     }
 
     impl DeferredActions {
         fn new() -> Self {
             let calls = Arc::new(Mutex::new(Vec::new()));
+            let replies = Arc::new(Mutex::new(Vec::new()));
             let release = Arc::new(tokio::sync::Notify::new());
             let rpc = ScriptedRpc::new({
                 let calls = calls.clone();
+                let replies = replies.clone();
                 let release = release.clone();
                 move |method, params| {
                     calls.lock().unwrap().push(method.clone());
+                    let replies = replies.clone();
                     let release = release.clone();
                     async move {
-                        match method.as_str() {
+                        let reply = match method.as_str() {
                             methods::LIST_HARNESSES | methods::SET_HARNESS_ENABLED => {
                                 let enabled = method == methods::LIST_HARNESSES;
                                 if !enabled {
@@ -1670,6 +1674,9 @@ mod tests {
                                     .chain(futures::stream::pending())
                                     .boxed(),
                             )),
+                            methods::GET_NATIVE_SUBAGENTS => RpcReply::value(
+                                &zeron_engine::registry::NativeSubagentSettings::default(),
+                            ),
                             methods::CHECK_HARNESS_UPDATES => {
                                 release.notified().await;
                                 Ok(RpcReply::Value(serde_json::json!([{
@@ -1684,15 +1691,37 @@ mod tests {
                                 Ok(RpcReply::Value(serde_json::Value::Null))
                             }
                             _ => panic!("unexpected method: {method}"),
-                        }
+                        };
+                        replies.lock().unwrap().push(method);
+                        reply
                     }
                 }
             });
             Self {
                 rpc,
                 calls,
+                replies,
                 release,
             }
+        }
+
+        // Background settings fetches must not satisfy waits for user actions.
+        fn called(&self, method: &str) -> usize {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call.as_str() == method)
+                .count()
+        }
+
+        fn replied(&self, method: &str) -> usize {
+            self.replies
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|call| call.as_str() == method)
+                .count()
         }
 
         fn page(&self, cx: &mut TestAppContext) -> Entity<HarnessesPage> {
@@ -1721,6 +1750,7 @@ mod tests {
             page.read_with(cx, |page, _| {
                 matches!(page.harnesses, Loadable::Ready(_))
                     && matches!(page.updates, Loadable::Ready(_))
+                    && matches!(page.native_subagents, Loadable::Ready(_))
             })
         });
         page.update(cx, |page, cx| {
@@ -1729,9 +1759,10 @@ mod tests {
             assert_eq!(page.pending_toggle, Some((HarnessId::Codex, false)));
             assert!(page.checking_updates);
         });
-        actions
-            .rpc
-            .settle(cx, &runtime, |_| actions.calls.lock().unwrap().len() == 4);
+        actions.rpc.settle(cx, &runtime, |_| {
+            actions.called(methods::SET_HARNESS_ENABLED) == 1
+                && actions.called(methods::CHECK_HARNESS_UPDATES) == 1
+        });
         page.update(cx, |page, cx| {
             page.set_target_device(Some("remote-device".into()), cx);
             assert!(page.pending_toggle.is_none());
@@ -1745,9 +1776,10 @@ mod tests {
             })
         });
         actions.release.notify_waiters();
-        actions
-            .rpc
-            .settle(cx, &runtime, |_| actions.rpc.completed() == 5);
+        actions.rpc.settle(cx, &runtime, |_| {
+            actions.replied(methods::SET_HARNESS_ENABLED) == 1
+                && actions.replied(methods::CHECK_HARNESS_UPDATES) == 1
+        });
         page.read_with(cx, |page, _| {
             let rows = page.harnesses.ready().unwrap();
             assert_eq!(rows[0].name, "Remote Codex");
@@ -1770,6 +1802,7 @@ mod tests {
             page.read_with(cx, |page, _| {
                 matches!(page.harnesses, Loadable::Ready(_))
                     && matches!(page.updates, Loadable::Ready(_))
+                    && matches!(page.native_subagents, Loadable::Ready(_))
             })
         });
         for (index, method) in [
@@ -1785,7 +1818,7 @@ mod tests {
                 assert!(page.checking_updates);
             });
             actions.rpc.settle(cx, &runtime, |_| {
-                actions.calls.lock().unwrap().len() == 3 + index * 2
+                actions.called(methods::CHECK_HARNESS_UPDATES) == index + 1
             });
             page.update(cx, |page, cx| {
                 match method {
@@ -1801,11 +1834,11 @@ mod tests {
             });
             actions
                 .rpc
-                .settle(cx, &runtime, |_| actions.rpc.completed() == 3 + index * 2);
+                .settle(cx, &runtime, |_| actions.replied(method) == 1);
             actions.release.notify_waiters();
-            actions
-                .rpc
-                .settle(cx, &runtime, |_| actions.rpc.completed() == 4 + index * 2);
+            actions.rpc.settle(cx, &runtime, |_| {
+                actions.replied(methods::CHECK_HARNESS_UPDATES) == index + 1
+            });
             page.read_with(cx, |page, _| {
                 assert!(!page.checking_updates);
                 assert!(page.error.is_none());
