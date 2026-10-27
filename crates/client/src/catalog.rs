@@ -502,6 +502,13 @@ fn curated_label(id: &str, catalog: &[ModelInfo]) -> Option<String> {
 pub fn normalize_models(harness: &str, models: Vec<ModelInfo>) -> Vec<ModelInfo> {
     let catalog = curated_catalog(harness);
     let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+    // Bases that also ship a `[1m]` variant: when the bare row survives, it
+    // must carry the long window the variant named. Older engines serve that
+    // shape for custom models too, where the base row has no select at all.
+    let one_m_bases: Vec<String> = models
+        .iter()
+        .filter_map(|row| stripped_1m(&row.id).map(str::to_owned))
+        .collect();
     let has_real = ids.iter().any(|id| !id.eq_ignore_ascii_case("default"));
     models
         .into_iter()
@@ -520,9 +527,10 @@ pub fn normalize_models(harness: &str, models: Vec<ModelInfo>) -> Vec<ModelInfo>
                 {
                     row.label = row.label[..start].trim().to_owned();
                 }
-                if !row.options.iter().any(|o| o.id == "contextWindow") {
-                    row.options.push(context_window("1m"));
-                }
+            }
+            if one_m_bases.contains(&row.id) && !row.options.iter().any(|o| o.id == "contextWindow")
+            {
+                row.options.push(context_window("1m"));
             }
             if let Some(label) = curated_label(&row.id, &catalog) {
                 row.label = label;
@@ -721,6 +729,25 @@ mod tests {
         assert_eq!(out[0].id, "claude-opus-5");
         assert_eq!(out[0].label, "Opus 5");
         assert!(out[0].options.iter().any(|o| o.id == "contextWindow"));
+    }
+
+    #[test]
+    fn normalize_keeps_the_folded_window_on_a_listed_base_row() {
+        // Older engines list both a custom bare row (with no options) and its
+        // `[1m]` twin. Dropping the twin must not drop the window it named.
+        let live = vec![
+            model("gateway/model", "gateway/model", "x", &[], vec![]),
+            model("gateway/model[1m]", "gateway/model[1m]", "x", &[], vec![]),
+        ];
+        let out = normalize_models("claude-code", live);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "gateway/model");
+        let window = out[0]
+            .options
+            .iter()
+            .find(|o| o.id == "contextWindow")
+            .unwrap();
+        assert_eq!(window.default_choice, "1m");
     }
 
     #[test]

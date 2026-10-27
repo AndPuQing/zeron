@@ -6513,11 +6513,12 @@ fn empty_list_note(theme: &Theme, copy: &str) -> AnyElement {
 /// fold (`models_from_session`) for catalogs served by OLDER engines (the
 /// space's device may run any version): the `default` alias row drops when a
 /// real row exists, an orphan `<model>[1m]` variant presents as its base id
-/// with the Context Window trait pinned to 1M, and Claude rows adopt the
-/// curated catalog's labels so the version number always shows ("Opus 5.5",
-/// not the wire's terse "Opus" alias — user request). Idempotent over
-/// already-clean lists. The send path recomposes the advertised id from the
-/// base + trait (`pick_model_value`), so a folded pick still runs.
+/// with the Context Window trait pinned to 1M (a listed base adopts the same
+/// trait instead of losing the window with the dropped variant), and Claude
+/// rows adopt the curated catalog's labels so the version number always shows
+/// ("Opus 5.5", not the wire's terse "Opus" alias — user request). Idempotent
+/// over already-clean lists. The send path recomposes the advertised id from
+/// the base + trait (`pick_model_value`), so a folded pick still runs.
 pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Vec<Model> {
     fn strip_1m(id: &str) -> Option<&str> {
         id.strip_suffix("[1m]").or_else(|| id.strip_suffix("-1m"))
@@ -6546,6 +6547,13 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
             .map(|m| m.label.clone())
     };
     let ids: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+    // Bases that also ship a `[1m]` variant: when the bare row survives, it
+    // must carry the long window the variant named (custom rows from older
+    // engines have no select at all).
+    let one_m_bases: Vec<String> = models
+        .iter()
+        .filter_map(|model| strip_1m(&model.id).map(str::to_owned))
+        .collect();
     let has_real = ids.iter().any(|id| !id.eq_ignore_ascii_case("default"));
     models
         .into_iter()
@@ -6555,8 +6563,8 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
             }
             if let Some(base) = strip_1m(&model.id.clone()) {
                 if ids.iter().any(|other| other == base) {
-                    // The bare base is listed too — the engine already gave
-                    // it the Context Window trait; the variant row is noise.
+                    // The bare base is listed too — the variant row is noise;
+                    // the select lands on the base below.
                     return None;
                 }
                 model.id = base.to_string();
@@ -6569,23 +6577,25 @@ pub(crate) fn normalize_model_rows(harness: HarnessId, models: Vec<Model>) -> Ve
                         model.label.pop();
                     }
                 }
-                if !model.options.iter().any(|o| o.id == "contextWindow") {
-                    model.options.push(zeron_proto::ModelOption {
-                        id: "contextWindow".into(),
-                        label: "Context Window".into(),
-                        choices: vec![
-                            zeron_proto::ModelOptionChoice {
-                                id: "200k".into(),
-                                label: "200K".into(),
-                            },
-                            zeron_proto::ModelOptionChoice {
-                                id: "1m".into(),
-                                label: "1M".into(),
-                            },
-                        ],
-                        default_choice: "1m".into(),
-                    });
-                }
+            }
+            if one_m_bases.iter().any(|base| *base == model.id)
+                && !model.options.iter().any(|o| o.id == "contextWindow")
+            {
+                model.options.push(zeron_proto::ModelOption {
+                    id: "contextWindow".into(),
+                    label: "Context Window".into(),
+                    choices: vec![
+                        zeron_proto::ModelOptionChoice {
+                            id: "200k".into(),
+                            label: "200K".into(),
+                        },
+                        zeron_proto::ModelOptionChoice {
+                            id: "1m".into(),
+                            label: "1M".into(),
+                        },
+                    ],
+                    default_choice: "1m".into(),
+                });
             }
             if let Some(label) = curated_label(&model.id) {
                 model.label = label;
@@ -10498,8 +10508,8 @@ mod tests {
         assert_eq!(only_default.len(), 1);
 
         // A base-plus-variant pair (already folded by a NEWER engine — the
-        // variant never reaches us; belt-and-braces if it does): variant
-        // drops, base is untouched.
+        // variant never reaches us; belt-and-braces if it does): the variant
+        // drops but its 1M window moves onto the base.
         let paired = normalize_model_rows(
             HarnessId::Codex,
             vec![
@@ -10509,6 +10519,12 @@ mod tests {
         );
         assert_eq!(paired.len(), 1);
         assert_eq!(paired[0].id, "titan-5");
+        assert!(
+            paired[0]
+                .options
+                .iter()
+                .any(|o| o.id == "contextWindow" && o.default_choice == "1m")
+        );
 
         // Idempotent over a clean list.
         let clean = vec![bare_model("titan-5", "Titan 5")];
