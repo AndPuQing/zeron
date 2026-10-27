@@ -668,6 +668,12 @@ impl Tools {
         }
     }
 
+    /// Whether the host launched this server's agent without its own
+    /// subagent tools, so `initialize` says to delegate through chats.
+    pub fn side_chats_only(&self) -> bool {
+        self.zeron.origin().side_chats_only
+    }
+
     pub fn list(&self) -> Vec<ToolDef> {
         let in_chat = self.zeron.origin().chat_id.is_some();
         catalog()
@@ -1798,6 +1804,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-alpha-1".into()),
                 device_id: Some("dev-local".into()),
+                ..Default::default()
             },
         );
         assert!(inside.has("show_visual"));
@@ -1855,6 +1862,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-beta-2".into()),
                 device_id: Some("dev-local".into()),
+                ..Default::default()
             },
         );
         let err = tools
@@ -1909,6 +1917,7 @@ mod tests {
             Origin {
                 chat_id: Some(second.into()),
                 device_id: None,
+                ..Default::default()
             },
         );
         let error = orchestrator
@@ -1946,6 +1955,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-alpha-1".into()),
                 device_id: None,
+                ..Default::default()
             },
         );
         worker
@@ -2041,6 +2051,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-beta-2".into()),
                 device_id: None,
+                ..Default::default()
             },
         );
         let created = tools
@@ -2181,6 +2192,7 @@ mod tests {
         Origin {
             chat_id: Some(chat.into()),
             device_id: None,
+            ..Default::default()
         }
     }
 
@@ -2411,6 +2423,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-alpha-1".into()),
                 device_id: None,
+                ..Default::default()
             },
         );
         for (args, kind, parent) in [
@@ -2605,6 +2618,7 @@ mod tests {
             Origin {
                 chat_id: Some("chat-alpha-1".into()),
                 device_id: None,
+                ..Default::default()
             },
         );
         let result = tools
@@ -2923,6 +2937,24 @@ mod tests {
     #[tokio::test]
     async fn initialize_and_list_over_jsonrpc() {
         let world = Arc::new(World::default());
+        // A server whose agent launched without its own subagent tools
+        // tells it to delegate through chats; any other doesn't.
+        let rule = "with `create_chats` (or `create_chat`).";
+        for side_chats_only in [true, false] {
+            let origin = Origin {
+                side_chats_only,
+                ..Default::default()
+            };
+            let init = crate::jsonrpc::handle_request(
+                &tools(world.clone(), origin),
+                json!(1),
+                "initialize",
+                json!({}),
+            )
+            .await;
+            let instructions = init["result"]["instructions"].as_str().unwrap();
+            assert_eq!(instructions.ends_with(rule), side_chats_only);
+        }
         let tools = tools(world, Origin::default());
         let init = crate::jsonrpc::handle_request(
             &tools,

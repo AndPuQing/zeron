@@ -2063,6 +2063,8 @@ fn forwardable(method: &str) -> bool {
             | methods::SET_TITLE_SETTINGS
             | methods::GET_COMMIT_CREDIT
             | methods::SET_COMMIT_CREDIT
+            | methods::GET_NATIVE_SUBAGENTS
+            | methods::SET_NATIVE_SUBAGENTS
             | methods::SET_HARNESS_ENABLED
             | methods::GET_HARNESS_ENVIRONMENT
             | methods::PATCH_HARNESS_ENVIRONMENT
@@ -2640,6 +2642,16 @@ impl RpcService for EngineRpc {
                     .set_title_settings(p)
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&self.registry.title_settings())
+            }
+            methods::GET_NATIVE_SUBAGENTS => {
+                RpcReply::value(&self.registry.native_subagent_settings())
+            }
+            methods::SET_NATIVE_SUBAGENTS => {
+                let p: SetHarnessEnabledParams = parse_params(params)?;
+                self.registry
+                    .set_native_subagents(p.harness, p.enabled)
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&self.registry.native_subagent_settings())
             }
             methods::SET_HARNESS_ENABLED => {
                 let p: SetHarnessEnabledParams = parse_params(params)?;
