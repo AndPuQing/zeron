@@ -1699,6 +1699,8 @@ mod tests {
                                     release.notified().await;
                                 }
                                 RpcReply::value(&vec![HarnessDescriptor {
+                                    access_modes: Vec::new(),
+                                    supports_plan: false,
                                     id: HarnessId::Codex,
                                     name: if params["targetDeviceId"] == "remote-device" {
                                         "Remote Codex"
@@ -1908,6 +1910,8 @@ mod tests {
             .update(cx, |page, _, cx| {
                 page.harnesses =
                     super::Loadable::Ready(vec![zeron_engine::registry::HarnessDescriptor {
+                        access_modes: Vec::new(),
+                        supports_plan: false,
                         id: zeron_proto::HarnessId::Codex,
                         name: "Codex".into(),
                         installed: true,
