@@ -129,3 +129,21 @@ snapshot 1 passed, engine routing 1 passed. To fit local disk space, the UI and
 engine test reruns disabled debug symbols for the respective package only.
 The previous Dev app build predates this rebase and was removed to free build
 space; no rebased application bundle was built or installed.
+
+## Review follow-up: catalog pruning
+
+Review found another way to lose explicit Standard: the generic offered-option
+filter dropped it when a refreshed/partial catalog no longer advertised speed
+choices. Draft requests immediately reverted to inheritance; saved chats lost
+the setting when another picker choice rewrote their configuration.
+
+`offered_run_options()` now preserves only Codex's explicit `serviceTier: default`
+through filtering, since it resets a native thread setting independent of model
+capabilities. Unsupported Fast and unrelated providers still use normal pruning.
+The regression clears catalog options after Fast → Standard, then changes a
+saved chat's reasoning selection. It failed before this follow-up (missing tier)
+and passes afterward for both drafts and saved chats. All three Fast UI tests,
+both existing remembered-option tests, and all 29 native HTTP-tier assertions
+passed again. The UI still cannot infer the actual native tier of an untouched
+legacy `{}` configuration; the documented explicit on/off recovery remains
+necessary for those historical chats.

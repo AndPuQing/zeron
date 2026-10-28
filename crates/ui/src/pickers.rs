@@ -318,6 +318,23 @@ pub fn offered_options(
     selections
 }
 
+/// Standard clears a Codex thread setting, even when a partial catalog or a
+/// different model offers no speed choices. Never turn explicit off back into
+/// inheritance while pruning model-specific options.
+fn offered_run_options(
+    harness: HarnessId,
+    model: &Model,
+    selections: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    let standard = harness == HarnessId::Codex
+        && selections.get("serviceTier").and_then(|v| v.as_str()) == Some("default");
+    let mut options = offered_options(model, selections);
+    if standard {
+        options.insert("serviceTier".into(), "default".into());
+    }
+    options
+}
+
 // ---------------------------------------------------------------------------
 // Pure: folder-browser navigation (used by the shell's add-space flow)
 // ---------------------------------------------------------------------------
@@ -1681,7 +1698,8 @@ impl Pickers {
             return Default::default();
         };
         match self.selected_model(cx) {
-            Some(model) => offered_options(
+            Some(model) => offered_run_options(
+                harness,
                 model,
                 self.defaults
                     .model_options_for(harness, &model.id)
@@ -2767,8 +2785,11 @@ impl Pickers {
                 .as_deref()
                 .and_then(|id| models.iter().find(|m| m.id == id))
             {
-                config.model_options =
-                    offered_options(model, std::mem::take(&mut config.model_options));
+                config.model_options = offered_run_options(
+                    config.harness,
+                    model,
+                    std::mem::take(&mut config.model_options),
+                );
             }
         }
         self.state.update(cx, |state, cx| {
@@ -5940,7 +5961,8 @@ impl Pickers {
             row.model.reasoning_levels.clone()
         };
         let reasoning = clamp_reasoning(self.effective_reasoning(cx), &levels);
-        let selections = offered_options(
+        let selections = offered_run_options(
+            row.harness,
             &row.model,
             self.defaults
                 .model_options_for(row.harness, &row.model.id)
@@ -10265,6 +10287,16 @@ mod tests {
                 assert_eq!(pickers.run_model_options(cx)["serviceTier"], "default");
                 assert_eq!(pickers.resolved(cx).model.as_deref(), Some("gpt-6-astra"));
                 assert_eq!(pickers.resolved(cx).reasoning, Some(ReasoningLevel::High));
+                // A partial/refreshed catalog may omit speed choices. Standard
+                // is a native reset, not an unsupported model-specific option.
+                if let Some(Loadable::Ready(models)) = pickers.models.get_mut(&HarnessId::Codex) {
+                    models[0].options.clear();
+                }
+                assert_eq!(pickers.run_model_options(cx).get("serviceTier"), Some(&serde_json::json!("default")));
+                if existing {
+                    pickers.pick_reasoning(ReasoningLevel::High, cx);
+                    assert_eq!(pickers.resolved(cx).model_options.get("serviceTier"), Some(&serde_json::json!("default")));
+                }
                 // Serialization and catalog loss must preserve the explicit choice.
                 if existing {
                     let row = state.read(cx).selected_chat_row().unwrap();
