@@ -200,6 +200,8 @@ fn imported(events: &[ExternalSessionImportEvent]) -> String {
 }
 fn request(cwd: &str) -> RunRequest {
     RunRequest {
+        access: Default::default(),
+        plan: false,
         prompt: "continue".into(),
         cwd: cwd.into(),
         harness: None,

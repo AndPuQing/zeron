@@ -19,6 +19,8 @@ fn harness() -> AcpHarness {
 }
 fn request(cwd: &std::path::Path, prompt: &str) -> RunRequest {
     RunRequest {
+        access: Default::default(),
+        plan: false,
         prompt: prompt.into(),
         harness: Some(HarnessId::Copilot),
         model: Some("gpt-4.1".into()),

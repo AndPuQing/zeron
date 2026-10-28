@@ -47,6 +47,8 @@ async fn observe(harness: AcpHarness, value: &str) {
         request_input: Box::new(|_| tokio::sync::oneshot::channel().1),
     };
     let req = RunRequest {
+        access: Default::default(),
+        plan: false,
         prompt: "observe".into(),
         harness: None,
         model: None,
@@ -133,6 +135,8 @@ async fn native_runs_and_model_probes_receive_their_provider_binding() {
             request_input: Box::new(|_| tokio::sync::oneshot::channel().1),
         };
         let request = RunRequest {
+            access: Default::default(),
+            plan: false,
             prompt: prompt.into(),
             cwd: root.display().to_string(),
             harness: None,

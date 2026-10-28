@@ -639,6 +639,8 @@ impl ExternalSessionImporter {
             checkout_id: None,
             source_context: None,
             config: Some(ChatConfig {
+                access: Default::default(),
+                plan: false,
                 harness: source.harness,
                 model: copy.model.clone().or_else(|| source.model.clone()),
                 reasoning: None,

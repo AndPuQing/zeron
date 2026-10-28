@@ -432,6 +432,8 @@ impl SessionsEngine {
             return Ok(());
         };
         let mut request = RunRequest {
+            access: Default::default(),
+            plan: false,
             prompt: String::new(),
             cwd: chat.cwd.clone().unwrap_or_default(),
             harness: Some(source.harness),
@@ -2005,6 +2007,8 @@ impl SessionsEngine {
                     cwd,
                     sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
                     auto_approve: false,
+                    access: Default::default(),
+                    plan: false,
                     attachments: Vec::new(),
                     resume: None,
                     worktree: None,
@@ -5565,6 +5569,8 @@ mod tests {
             cwd: "/tmp".into(),
             sandbox: SandboxLevel::WorkspaceWrite,
             auto_approve: true,
+            access: Default::default(),
+            plan: false,
             resume: None,
             attachments: Vec::new(),
             worktree: None,
@@ -6432,6 +6438,8 @@ mod agent_environment_tests {
         let (starts, mut started) = mpsc::unbounded_channel();
         registry.register_configured(
             crate::registry::HarnessDescriptor {
+                access_modes: vec![zeron_proto::AccessMode::FullAccess],
+                supports_plan: false,
                 id: HarnessId::Codex,
                 name: "Bound fixture".into(),
                 installed: true,

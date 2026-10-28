@@ -682,6 +682,8 @@ async fn claude_strict_resume_rejects_missing_copies_and_a_different_native_id()
         )
     };
     let mut request = RunRequest {
+        access: Default::default(),
+        plan: false,
         prompt: "scenario:happy".into(),
         cwd,
         harness: None,
@@ -921,6 +923,8 @@ mod codex {
                 interrupt: CancellationToken::new(),
             };
             let request = RunRequest {
+                access: Default::default(),
+                plan: false,
                 prompt: "continue".into(),
                 cwd: root.path().to_string_lossy().into_owned(),
                 harness: None,

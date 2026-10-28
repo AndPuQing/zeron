@@ -965,6 +965,8 @@ mod tests {
 
     fn request(resume: Option<&str>, require_native_resume: bool) -> RunRequest {
         RunRequest {
+            access: Default::default(),
+            plan: false,
             prompt: "p".into(),
             harness: None,
             model: None,
@@ -1034,6 +1036,8 @@ mod tests {
     #[test]
     fn thinking_selection_reads_the_omp_option() {
         let mut request = RunRequest {
+            access: Default::default(),
+            plan: false,
             prompt: "p".into(),
             harness: None,
             model: None,
