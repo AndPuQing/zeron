@@ -35,7 +35,7 @@
             android:exported="false"
             android:foregroundServiceType="microphone|mediaPlayback" />
         <provider
-            android:name="androidx.core.content.FileProvider"
+            android:name="sh.zeron.android.update.UpdateFileProvider"
             android:authorities="${applicationId}.updates"
             android:exported="false"
             android:grantUriPermissions="true">
