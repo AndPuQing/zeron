@@ -5782,6 +5782,35 @@ mod tests {
     }
 
     #[test]
+    fn codex_fast_to_standard_routes_an_explicit_in_place_configuration() {
+        let mut fast = request();
+        fast.model_options
+            .insert("serviceTier".into(), serde_json::json!("fast"));
+        let config = RuntimeConfig::new(
+            HarnessId::Codex,
+            &fast,
+            Arc::new(zeron_harness::CodexHarness::new()),
+        );
+        let mut standard = fast.clone();
+        standard
+            .model_options
+            .insert("serviceTier".into(), serde_json::json!("default"));
+        assert_eq!(config.route(HarnessId::Codex, &standard), Some(true));
+        let standard_config = RuntimeConfig::new(
+            HarnessId::Codex,
+            &standard,
+            Arc::new(zeron_harness::CodexHarness::new()),
+        );
+        assert_eq!(
+            standard_config.route(HarnessId::Codex, &standard),
+            Some(false)
+        );
+        let mut inherited = standard.clone();
+        inherited.model_options.clear();
+        assert_eq!(standard_config.route(HarnessId::Codex, &inherited), None);
+    }
+
+    #[test]
     fn claude_routing_compares_what_the_cli_launches_with() {
         let claude = || -> Arc<dyn Harness> { Arc::new(zeron_harness::ClaudeHarness::new()) };
         let mut initial = request();

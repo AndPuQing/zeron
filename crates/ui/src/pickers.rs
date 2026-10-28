@@ -1666,7 +1666,7 @@ impl Pickers {
             })
     }
 
-    /// The explicit (non-default) option picks: the chat's persisted
+    /// The explicit option picks (including Codex's explicit Standard): the chat's persisted
     /// selections for existing chats, the remembered picks for the model the
     /// new-chat canvas resolves to (same id [`Self::resolved`] sends).
     fn explicit_options(&self, cx: &App) -> serde_json::Map<String, serde_json::Value> {
@@ -1755,15 +1755,24 @@ impl Pickers {
     }
 
     /// The Run payload's options: [`Self::explicit_options`] with the offered
-    /// defaults materialized (see [`materialized_options`]). The catalog is
+    /// defaults materialized (see [`materialized_options`]), except Codex's
+    /// unspecified service tier, which inherits native settings. The catalog is
     /// the only place the displayed configuration is known; without it the
     /// explicit picks pass through unchanged.
     pub fn run_model_options(&self, cx: &App) -> serde_json::Map<String, serde_json::Value> {
         let explicit = self.explicit_options(cx);
-        match self.selected_model(cx) {
+        let inherit_codex_tier = self.effective_harness(cx) == Some(HarnessId::Codex)
+            && !explicit.contains_key("serviceTier");
+        let mut options = match self.selected_model(cx) {
             Some(model) => materialized_options(model, explicit),
             None => explicit,
+        };
+        // Historical empty maps also mean "never selected". Do not turn a
+        // catalog display default into an explicit override of native settings.
+        if inherit_codex_tier {
+            options.remove("serviceTier");
         }
+        options
     }
 
     /// The effective harness's descriptor, once its catalog is loaded.
@@ -2672,6 +2681,12 @@ impl Pickers {
         default: bool,
         cx: &mut Context<Self>,
     ) {
+        // Codex distinguishes inheritance (missing) from explicitly selecting
+        // Standard (`default`). Persist either toggle choice even when it
+        // matches the catalog default, for drafts and existing chats alike.
+        let default = default
+            && !(self.effective_harness(cx) == Some(HarnessId::Codex)
+                && option_id == "serviceTier");
         if self.state.read(cx).selected_chat.is_some() {
             self.update_chat_config(cx, move |config| {
                 if default {
@@ -10187,6 +10202,81 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn codex_fast_off_is_explicit_for_drafts_and_saved_chats(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        for existing in [false, true] {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                if existing {
+                    state.chats.push(serde_json::from_value(serde_json::json!({
+                        "id":"tier-chat", "deviceId":"device", "archived":false, "createdAt":"2026-10-28T00:00:00Z",
+                        "config":{"harness":"codex", "model":"gpt-6-astra", "reasoning":"high", "sandbox":"workspace-write", "modelOptions":{}}
+                    })).unwrap());
+                    state.selected_chat = Some("tier-chat".into());
+                }
+                state
+            });
+            let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+            pickers.update(cx, |pickers, cx| {
+                pickers.defaults = ComposerDefaults::default();
+                pickers.defaults.harness = Some(HarnessId::Codex);
+                pickers.harnesses = Loadable::Ready(vec![descriptor(HarnessId::Codex, "Codex")]);
+                let mut model = bare_model("gpt-6-astra", "GPT-6-Astra");
+                model.reasoning_levels = vec![ReasoningLevel::High];
+                model.options = vec![ModelOption {
+                    id: "serviceTier".into(),
+                    label: "Service Tier".into(),
+                    default_choice: "default".into(),
+                    choices: ["default", "fast"]
+                        .map(|id| ModelOptionChoice {
+                            id: id.into(),
+                            label: id.into(),
+                        })
+                        .into(),
+                }];
+                pickers
+                    .models
+                    .insert(HarnessId::Codex, Loadable::Ready(vec![model]));
+                if !existing {
+                    pickers.pick_model("gpt-6-astra".into(), cx);
+                }
+                // Legacy {} is ambiguous: keep inheritance, even with a catalog.
+                assert!(!pickers.run_model_options(cx).contains_key("serviceTier"));
+                for expected in ["fast", "default"] {
+                    let (id, next, default, _) = pickers.compact_fast_choice(cx).unwrap();
+                    assert_eq!(next, expected);
+                    pickers.pick_option(id, next, default, cx);
+                    assert_eq!(pickers.resolved(cx).model_options["serviceTier"], expected);
+                    assert_eq!(pickers.run_model_options(cx)["serviceTier"], expected);
+                }
+                assert!(!pickers.compact_fast_choice(cx).unwrap().3);
+                // An explicit off wins even if a future catalog defaults to Fast.
+                if let Some(Loadable::Ready(models)) = pickers.models.get_mut(&HarnessId::Codex) {
+                    models[0].options[0].default_choice = "fast".into();
+                }
+                assert!(!pickers.compact_fast_choice(cx).unwrap().3);
+                assert_eq!(pickers.run_model_options(cx)["serviceTier"], "default");
+                assert_eq!(pickers.resolved(cx).model.as_deref(), Some("gpt-6-astra"));
+                assert_eq!(pickers.resolved(cx).reasoning, Some(ReasoningLevel::High));
+                // Serialization and catalog loss must preserve the explicit choice.
+                if existing {
+                    let row = state.read(cx).selected_chat_row().unwrap();
+                    let encoded = serde_json::to_vec(row.config.as_ref().unwrap()).unwrap();
+                    let config: ChatConfig = serde_json::from_slice(&encoded).unwrap();
+                    assert_eq!(config.model_options["serviceTier"], "default");
+                }
+                pickers.config = DraftConfig::default();
+                pickers.models.insert(HarnessId::Codex, Loadable::Idle);
+                assert_eq!(pickers.run_model_options(cx)["serviceTier"], "default");
+            });
+        }
     }
 
     #[gpui::test]
