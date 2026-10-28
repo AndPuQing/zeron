@@ -988,7 +988,7 @@ impl Server {
                 Some(protocol) => {
                     // Set after the run env, merging into its inline config
                     // (the user's layer for this run) rather than replacing it.
-                    let mut inline = match cmd.as_std().get_envs()
+                    let mut inline = match cmd.as_std_mut().get_envs()
                         .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT")
                     {
                         Some((_, value)) => value.map(|value| value.to_string_lossy().into_owned()),
