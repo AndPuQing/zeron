@@ -187,7 +187,11 @@ download progress. It rejects missing checksums, incomplete downloads, a SHA256
 mismatch, a different application ID, a version different from the manifest,
 downgrades, and signing certificates different from the pinned production
 identity. Only a verified APK is made available to Android's installer through
-a narrowly scoped FileProvider. Failed downloads can be retried.
+a narrowly scoped FileProvider. The update provider has its own component class,
+separate from image sharing: Android reuses providers by component name even
+when their authorities differ. Before opening the installer, the app checks
+that its update URI is readable and grants read access through both the intent
+and ClipData. Failed downloads can be retried.
 
 **Install** opens Android's per-app installation permission screen if needed.
 Allow Zerun to install apps, then return to the app; the system installer asks

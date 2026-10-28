@@ -9,7 +9,6 @@ import android.net.Uri
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
-import androidx.core.content.FileProvider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -152,10 +151,11 @@ class AndroidUpdater(private val app: Application) {
         installJob = scope.launch {
             try {
                 // Recheck after process recreation or a round trip through Settings.
-                withContext(Dispatchers.IO) { verifyApk(apk(release), release) }
-                val uri = FileProvider.getUriForFile(app, "${app.packageName}.updates", apk(release))
-                val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                val intent = withContext(Dispatchers.IO) {
+                    val file = apk(release)
+                    verifyApk(file, release)
+                    updateInstallIntent(app, file)
+                }
                 prefs.edit().remove("pendingInstall").apply()
                 activity.startActivity(intent)
             } catch (e: Exception) {
