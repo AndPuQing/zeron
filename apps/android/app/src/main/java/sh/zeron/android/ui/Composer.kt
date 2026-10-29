@@ -232,7 +232,7 @@ fun Composer(
         }
     }
 
-    var modelRequest by remember { mutableStateOf(0) }
+    var modelPickerOpen by remember(c.chatId, c.host.deviceId) { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     draft.localActions = MobileCommandActions(row?.harness ?: "", scope, context = {
@@ -240,7 +240,7 @@ fun Composer(
             handle.latestAssistantReply() != null, sideChatBusy, editingId != null)
     }, execute = { action ->
         when (action) {
-            MobileComposerAction.MODEL -> modelRequest++
+            MobileComposerAction.MODEL -> modelPickerOpen = true
             MobileComposerAction.RENAME -> renaming = true
             MobileComposerAction.ARCHIVE -> { client.archiveSession(c.chatId); onArchived() }
             MobileComposerAction.COPY -> clipboard.setText(androidx.compose.ui.text.AnnotatedString(
@@ -266,7 +266,7 @@ fun Composer(
             saveDraft()
         }
     }
-    LaunchedEffect(openModelPicker) { if (openModelPicker) { kotlinx.coroutines.delay(600); modelRequest++ } }
+    LaunchedEffect(openModelPicker) { if (openModelPicker) { kotlinx.coroutines.delay(600); modelPickerOpen = true } }
 
     // The composer survives navigation; a queued edit must not become its next draft.
     DisposableEffect(c.chatId, draft) {
@@ -277,6 +277,11 @@ fun Composer(
         }
     }
 
+    // The sheet takes focus away from the empty composer, hiding its toolbar.
+    // Keep both the sheet and its state outside that AnimatedVisibility subtree.
+    if (modelPickerOpen) key(c.chatId, c.host.deviceId) {
+        SessionModelPicker(client, c, row, onDismiss = { modelPickerOpen = false })
+    }
     Column(Modifier.padding(horizontal = 12.dp).padding(bottom = 8.dp)) {
         if (c.queue.isNotEmpty()) QueuePanel(c.queue, handle, editingId, onEdit = ::beginEdit)
         CommandSuggestions(draft, c.chatId, row?.harness, c.host.deviceId) { client.composerCatalog(c.chatId) }
@@ -306,7 +311,7 @@ fun Composer(
             focusRequester = focus,
         ) {
             if (running && editingId == null) DeliveryChip(delivery, canSteer) { delivery = it }
-            SessionChips(client, c, row, modelRequest)
+            SessionChips(client, c, row, onOpenModel = { modelPickerOpen = true })
         }
     }
 }
@@ -347,7 +352,7 @@ private fun DeliveryChip(current: Delivery, canSteer: Boolean, onChange: (Delive
 }
 
 @Composable
-private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?, modelRequest: Int) {
+private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?, onOpenModel: () -> Unit) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val harness = row?.harness ?: "claude-code"
@@ -362,8 +367,6 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
         }
     }
 
-    LaunchedEffect(modelRequest) { if (modelRequest > 0) open("model") }
-
     fun setConfig(change: (ChatConfig) -> ChatConfig) {
         val current = client.sessionConfig(c.chatId) ?: ChatConfig("full-access", false, harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
         runCatching { client.setSessionConfig(c.chatId, change(current)) }
@@ -374,13 +377,12 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     val fallback = remember(harness) { fallbackModels(harness).firstOrNull() }
     val modelLabel = row?.modelLabel ?: fallback?.label ?: row?.harnessLabel
     if (modelLabel != null) {
-        ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = { menu = "model" })
+        ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = onOpenModel)
     }
     val execution = client.sessionConfig(c.chatId)
     ExecutionChips(client, harness, c.host.deviceId, execution?.accessMode ?: "full-access", execution?.plan ?: false) { access, plan ->
         setConfig { it.copy(accessMode = access ?: it.accessMode, plan = plan ?: it.plan) }
     }
-    if (menu == "model") key(c.chatId, c.host.deviceId) { SessionModelPicker(client, c, row, onDismiss = { menu = null }) }
     configError?.let { message ->
         AppAlert("Couldn't update this chat", onDismiss = { configError = null }, actions = listOf(AlertAction("OK") { configError = null })) { Text(message) }
     }

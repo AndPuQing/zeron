@@ -49,6 +49,7 @@ struct CachedTranscript {
     prepared: Option<Arc<crate::transcript::PreparedTranscript>>,
     chat_id: String,
     entries: Vec<SessionMessageEntry>,
+    prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
     context_usage: Option<zeron_proto::ContextUsage>,
     bytes: usize,
 }
@@ -1002,6 +1003,7 @@ pub struct AppState {
     /// agent was busy, in the order it will be sent. Device-agnostic: the
     /// chat's doc holds them (every device sees the same queue).
     pub queue: Vec<zeron_doc::QueuedMessage>,
+    pub prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
     pub context_usage: Option<zeron_proto::ContextUsage>,
     /// The selected chat has a transcript from a `WatchDocMessages` reset
     /// (including a retained reset from an earlier visit). An
@@ -1180,6 +1182,7 @@ impl AppState {
             selected_chat: None,
             transcript: Vec::new(),
             queue: Vec::new(),
+            prompt_suggestion: None,
             context_usage: None,
             transcript_replayed: false,
             transcript_baselines: HashMap::new(),
@@ -1436,6 +1439,7 @@ impl AppState {
             self.restore_canvas_target();
             self.transcript.clear();
             self.context_usage = None;
+            self.prompt_suggestion = None;
             self.transcript_revision = self.transcript_revision.wrapping_add(1);
             self.transcript_replayed = false;
             self.transcript_task = None;
@@ -2017,6 +2021,10 @@ impl AppState {
         if let (Some(doc_id), Some(baseline)) = (&self.selected_chat, update.replay_baseline) {
             self.transcript_baselines
                 .insert(doc_id.clone(), Arc::new(baseline));
+        }
+        if self.prompt_suggestion != update.prompt_suggestion {
+            self.prompt_suggestion = update.prompt_suggestion;
+            cx.notify();
         }
         if self.context_usage != update.context_usage {
             self.context_usage = update.context_usage;
@@ -3537,6 +3545,7 @@ impl AppState {
         self.transcript_cache.clear();
         self.prepared_transcripts.clear();
         self.context_usage = None;
+        self.prompt_suggestion = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         self.echoes.clear();
@@ -4234,6 +4243,7 @@ impl AppState {
                     prepared,
                     chat_id: previous.clone(),
                     entries,
+                    prompt_suggestion: self.prompt_suggestion.clone(),
                     context_usage: self.context_usage,
                     bytes,
                 });
@@ -4261,6 +4271,7 @@ impl AppState {
         self.auto_selected = true;
         self.transcript.clear();
         self.context_usage = None;
+        self.prompt_suggestion = None;
         self.transcript_revision = self.transcript_revision.wrapping_add(1);
         self.transcript_replayed = false;
         if let Some(cached) = cached {
@@ -4279,6 +4290,7 @@ impl AppState {
             }
             self.transcript = cached.entries;
             self.context_usage = cached.context_usage;
+            self.prompt_suggestion = cached.prompt_suggestion;
             self.transcript_replayed = true;
         }
         self.transcript_task = None;
@@ -5631,6 +5643,7 @@ mod tests {
         state.update(cx, |state, cx| {
             let update = |id: &str| zeron_doc::TranscriptUpdate {
                 frame: TranscriptFrame::reset(&[user_entry(id)]),
+                prompt_suggestion: None,
                 context_usage: None,
                 replay_baseline: None,
             };

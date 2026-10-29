@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 #[derive(Debug)]
 pub(crate) enum Frame {
     System(SystemFrame),
+    PromptSuggestion(PromptSuggestionFrame),
     StreamEvent(StreamEventFrame),
     Assistant(MessageFrame),
     User(MessageFrame),
@@ -23,6 +24,16 @@ pub(crate) enum Frame {
     CommandLifecycle(CommandLifecycleFrame),
     /// control_cancel_request / anything unknown.
     Other,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct PromptSuggestionFrame {
+    #[serde(default)]
+    pub suggestion: String,
+    #[serde(default)]
+    pub uuid: String,
+    #[serde(default)]
+    pub session_id: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -423,6 +434,7 @@ fn parse_value(line: &str) -> Result<Value, serde_json::Error> {
 fn typed_frame(value: Value) -> Result<Frame, serde_json::Error> {
     let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
     let frame = match kind {
+        "prompt_suggestion" => Frame::PromptSuggestion(serde_json::from_value(value)?),
         "system" => Frame::System(serde_json::from_value(value)?),
         "stream_event" => Frame::StreamEvent(serde_json::from_value(value)?),
         "assistant" => Frame::Assistant(serde_json::from_value(value)?),

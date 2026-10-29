@@ -23,6 +23,8 @@ pub struct TranscriptUpdate {
     #[serde(flatten)]
     pub frame: TranscriptFrame,
     #[serde(default)]
+    pub prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
+    #[serde(default)]
     pub context_usage: Option<zeron_proto::ContextUsage>,
     /// Historical content included in this update, independent of reset/delta
     /// encoding. Omitted on ordinary live updates and by older engines.
@@ -513,6 +515,7 @@ mod context_update_tests {
         let value = serde_json::to_value(TranscriptUpdate {
             frame: TranscriptFrame::reset(&[]),
             replay_baseline: Some(TranscriptBaseline::default()),
+            prompt_suggestion: None,
             context_usage: Some(zeron_proto::ContextUsage {
                 tokens: Some(0),
                 window: Some(200000),

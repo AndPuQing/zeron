@@ -7,6 +7,8 @@
 # mirror live captures from CLI 2.1.228. Driven by
 # crates/harness/tests/claude.rs.
 
+if [ "$1" = "--version" ]; then printf '2.1.308 (Claude Code)\n'; exit 0; fi
+
 read -r first || exit 1
 # A run opens with an `initialize` control request (the SDK handshake); the
 # real CLI answers it before the first user line. (Command discovery sends
@@ -27,6 +29,30 @@ emit() { printf '%s\n' "$1"; }
 uuid_of() { printf '%s\n' "$1" | sed 's/.*"uuid":"\([^"]*\)".*/\1/'; }
 
 case "$first" in
+
+*scenario:prompt-suggestion*)
+  enabled=false
+  for arg in "$@"; do [ "$arg" = "--prompt-suggestions" ] && enabled=true; done
+  [ "$enabled" = true ] || exit 5
+  emit '{"type":"system","subtype":"init","session_id":"sess-suggestion"}'
+  emit "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$(uuid_of "$first")\",\"state\":\"started\"}"
+  emit '{"type":"prompt_suggestion","uuid":"early","session_id":"sess-suggestion","suggestion":"Must not appear before completion"}'
+  emit '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Finished the requested work."}}}'
+  emit '{"type":"result","subtype":"success","result":"Finished","session_id":"sess-suggestion"}'
+  case "$first" in
+    *scenario:prompt-suggestion-stale*)
+      read -r next || exit 1
+      emit "{\"type\":\"command_lifecycle\",\"command_uuid\":\"$(uuid_of "$next")\",\"state\":\"started\"}"
+      emit '{"type":"prompt_suggestion","uuid":"stale","session_id":"sess-suggestion","suggestion":"Old suggestion"}'
+      emit '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Follow-up complete."}}}'
+      emit '{"type":"result","subtype":"success","result":"Follow-up","session_id":"sess-suggestion"}'
+      ;;
+  esac
+  emit '{"type":"prompt_suggestion","uuid":"wrong-session","session_id":"another-session","suggestion":"Wrong chat"}'
+  emit '{"type":"prompt_suggestion","uuid":"empty","session_id":"sess-suggestion","suggestion":"  "}'
+  emit '{"type":"prompt_suggestion","uuid":"valid","session_id":"sess-suggestion","suggestion":"Run the relevant tests"}'
+  emit '{"type":"prompt_suggestion","uuid":"duplicate","session_id":"sess-suggestion","suggestion":"Must not appear twice"}'
+  ;;
 
 *scenario:command-echo*)
   content=$(printf '%s\n' "$first" | sed 's/.*"content":"\([^"]*\)".*/\1/')

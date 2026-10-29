@@ -74,6 +74,15 @@ drops an inherited `META_API_KEY` and sets `MUSE_NO_AUTO_UPDATE=1`.
 `tests/muse.rs` replays sessions recorded from a real Muse Code 1.4.x host
 (`tests/fixtures/muse/*.ndjson`, through `fake-muse.py`).
 
+## Native prompt suggestions
+
+Claude Code 2.1.308+ can supply native next-prompt suggestions to the desktop
+composer through `--prompt-suggestions`. Suggestions are optional post-result
+metadata; they never start a new task or replace a draft. See
+[native prompt suggestions](../../docs/native-prompt-suggestions.md) for adoption,
+provider limits, and verification. Other harnesses have no generated fallback;
+Codex 0.165.0's advertised prediction request is not implemented by its server.
+
 ## Verification
 
 The `installer-fixture` feature exposes an explicit command injection seam for

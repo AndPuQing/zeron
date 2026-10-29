@@ -4774,6 +4774,7 @@ impl Shell {
                     let update = zeron_doc::TranscriptUpdate {
                         replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&entries)),
                         frame: zeron_doc::TranscriptFrame::Reset { reset: entries },
+                        prompt_suggestion: None,
                         context_usage: None,
                     };
                     let prepared = crate::transcript::TranscriptPreparation::default()

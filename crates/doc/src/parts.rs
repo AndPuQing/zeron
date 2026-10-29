@@ -602,6 +602,7 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
         | AgentEvent::Usage { .. }
         | AgentEvent::PlanUsage { .. }
         | AgentEvent::ContextUsage { .. }
+        | AgentEvent::PromptSuggestion { .. }
         | AgentEvent::AvailableCommands { .. }
         | AgentEvent::UserMessage { .. } => {}
     }

@@ -12209,6 +12209,7 @@ mod tests {
                             zeron_doc::TranscriptUpdate {
                                 frame,
                                 replay_baseline,
+                                prompt_suggestion: None,
                                 context_usage: None,
                             },
                             cx,
@@ -12321,6 +12322,7 @@ mod tests {
         let first = worker
             .prepare(&zeron_doc::TranscriptUpdate {
                 frame: zeron_doc::TranscriptFrame::reset(&original),
+                prompt_suggestion: None,
                 context_usage: None,
                 replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&original)),
             })
@@ -12333,6 +12335,7 @@ mod tests {
         let next = worker
             .prepare(&zeron_doc::TranscriptUpdate {
                 frame: zeron_doc::diff_transcript(&original, &changed),
+                prompt_suggestion: None,
                 context_usage: None,
                 replay_baseline: None,
             })
@@ -12357,6 +12360,7 @@ mod tests {
             let update = zeron_doc::TranscriptUpdate {
                 replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&entries)),
                 frame: zeron_doc::TranscriptFrame::Reset { reset: entries },
+                prompt_suggestion: None,
                 context_usage: None,
             };
             let start = Instant::now();
@@ -12443,6 +12447,7 @@ mod tests {
                                 replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
                                     entries,
                                 )),
+                                prompt_suggestion: None,
                                 context_usage: None,
                             },
                             pending,
@@ -12497,6 +12502,7 @@ mod tests {
                         zeron_doc::TranscriptUpdate {
                             frame: zeron_doc::diff_transcript(&full, &live),
                             replay_baseline: None,
+                            prompt_suggestion: None,
                             context_usage: None,
                         },
                         cx,
@@ -12536,6 +12542,7 @@ mod tests {
                     .receive_transcript_update(
                         zeron_doc::TranscriptUpdate {
                             frame,
+                            prompt_suggestion: None,
                             context_usage: None,
                             replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&history)),
                         },
@@ -12547,6 +12554,7 @@ mod tests {
                     .receive_transcript_update(
                         zeron_doc::TranscriptUpdate {
                             frame: zeron_doc::diff_transcript(&history, &live),
+                            prompt_suggestion: None,
                             context_usage: None,
                             replay_baseline: None,
                         },
@@ -12583,6 +12591,7 @@ mod tests {
                             zeron_doc::TranscriptUpdate {
                                 frame,
                                 replay_baseline: baseline,
+                                prompt_suggestion: None,
                                 context_usage: None,
                             },
                             cx,
@@ -12639,6 +12648,7 @@ mod tests {
                     .receive_transcript_update(
                         zeron_doc::TranscriptUpdate {
                             frame: zeron_doc::TranscriptFrame::reset(&[]),
+                            prompt_suggestion: None,
                             context_usage: None,
                             replay_baseline: Some(Default::default()),
                         },
@@ -12657,6 +12667,7 @@ mod tests {
                     .receive_transcript_update(
                         zeron_doc::TranscriptUpdate {
                             frame: zeron_doc::diff_transcript(&[], &live),
+                            prompt_suggestion: None,
                             context_usage: None,
                             replay_baseline: None,
                         },
@@ -12691,6 +12702,7 @@ mod tests {
                     .receive_transcript_update(
                         zeron_doc::TranscriptUpdate {
                             frame,
+                            prompt_suggestion: None,
                             context_usage: None,
                             replay_baseline: None,
                         },
@@ -15496,6 +15508,7 @@ mod tests {
                             .receive_transcript_update(
                                 zeron_doc::TranscriptUpdate {
                                     frame: zeron_doc::TranscriptFrame::reset(&history),
+                                    prompt_suggestion: None,
                                     context_usage: None,
                                     replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
                                         &history,
@@ -15524,6 +15537,7 @@ mod tests {
                             .receive_transcript_update(
                                 zeron_doc::TranscriptUpdate {
                                     frame: zeron_doc::diff_transcript(&history, &next),
+                                    prompt_suggestion: None,
                                     context_usage: None,
                                     // The RPC must retain its opening cutoff when
                                     // publishing subsequent changed-part history.
@@ -15579,6 +15593,7 @@ mod tests {
                             .receive_transcript_update(
                                 zeron_doc::TranscriptUpdate {
                                     frame: zeron_doc::TranscriptFrame::reset(&history),
+                                    prompt_suggestion: None,
                                     context_usage: None,
                                     replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
                                         &history,
@@ -15591,6 +15606,7 @@ mod tests {
                             .receive_transcript_update(
                                 zeron_doc::TranscriptUpdate {
                                     frame: zeron_doc::diff_transcript(&history, &live),
+                                    prompt_suggestion: None,
                                     context_usage: None,
                                     replay_baseline: None,
                                 },
@@ -15641,6 +15657,7 @@ mod tests {
                             .receive_transcript_update(
                                 zeron_doc::TranscriptUpdate {
                                     frame: zeron_doc::diff_transcript(&live, &next),
+                                    prompt_suggestion: None,
                                     context_usage: None,
                                     replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(
                                         &next_history,
@@ -15748,6 +15765,7 @@ mod tests {
                                 .receive_transcript_update(
                                     zeron_doc::TranscriptUpdate {
                                         frame,
+                                        prompt_suggestion: None,
                                         context_usage: None,
                                         replay_baseline: Some(
                                             zeron_doc::TranscriptBaseline::capture(&updated),

@@ -2477,3 +2477,88 @@ async fn live_unrestorable_session_relaunches_fresh() {
     )));
     assert_eq!(done(&events).0, DoneStatus::Errored);
 }
+
+#[tokio::test]
+async fn prompt_suggestion_is_optional_post_result_metadata() {
+    let (controls, _steer, _token) = controls("A");
+    let events = run_to_end(&harness(), request("scenario:prompt-suggestion"), controls).await;
+    let suggestions: Vec<_> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            if let AgentEvent::PromptSuggestion { id, text } = e {
+                Some((i, id.as_str(), text.as_str()))
+            } else {
+                None
+            }
+        })
+        .collect();
+    assert_eq!(suggestions.len(), 1, "{events:?}");
+    assert_eq!(suggestions[0].1, "valid");
+    assert_eq!(suggestions[0].2, "Run the relevant tests");
+    let done = events
+        .iter()
+        .position(|e| {
+            matches!(
+                e,
+                AgentEvent::Done {
+                    status: DoneStatus::Completed,
+                    ..
+                }
+            )
+        })
+        .unwrap();
+    assert!(done < suggestions[0].0);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Done { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn prompt_suggestion_does_not_leak_into_plan_mode() {
+    let (controls, _steer, _token) = controls("A");
+    let mut req = request("scenario:prompt-suggestion");
+    req.plan = true;
+    let events = run_to_end(&harness(), req, controls).await;
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::PromptSuggestion { .. }))
+    );
+}
+
+#[tokio::test]
+async fn prompt_suggestion_from_previous_turn_is_dropped_during_followup() {
+    let (controls, steer, _token) = controls("A");
+    let mut stream = harness()
+        .run(request("scenario:prompt-suggestion-stale"), controls)
+        .await
+        .unwrap();
+    let events = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut events = Vec::new();
+        let mut sent = false;
+        while let Some(event) = stream.next().await {
+            let event = event.unwrap();
+            if !sent && matches!(event, AgentEvent::Done { .. }) {
+                sent = true;
+                steer.send(SteerMessage::text("Follow up")).await.unwrap();
+            }
+            events.push(event);
+        }
+        events
+    })
+    .await
+    .unwrap();
+    let ids: Vec<_> = events
+        .iter()
+        .filter_map(|e| match e {
+            AgentEvent::PromptSuggestion { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids, ["valid"], "{events:?}");
+}

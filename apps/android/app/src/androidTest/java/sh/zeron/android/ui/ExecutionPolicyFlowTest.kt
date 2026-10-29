@@ -7,6 +7,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
+import org.junit.After
 import org.junit.Test
 import java.io.File
 import sh.zeron.android.ZeronApplication
@@ -21,19 +22,16 @@ class ExecutionPolicyFlowTest {
     @Test fun executionControlsPersistAndRender() {
         context.startActivity(context.packageManager.getLaunchIntentForPackage(context.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-            .putExtra("demo", true).putExtra("fast", true).putExtra("route", "chat:chat-deploy"))
-        val editor = requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15_000))
-        editor.click()
-        // Wait for the composer to finish expanding above the keyboard.
-        val label = model.row("chat-deploy")!!.modelLabel!!
-        var lastBounds: android.graphics.Rect? = null
-        var stableSince = SystemClock.uptimeMillis()
-        await {
-            val bounds = device.findObject(By.text(label))?.visibleBounds ?: return@await false
-            if (lastBounds != bounds) { lastBounds = bounds; stableSince = SystemClock.uptimeMillis() }
-            SystemClock.uptimeMillis() - stableSince > 500
+            .putExtra("demo", true).putExtra("fast", true).putExtra("route", "chat:chat-deploy")
+            .putExtra("companion", "model-picker"))
+        // Use the existing companion entry point to open the real settings sheet.
+        // A coordinate click during IME/composer movement can miss the model chip;
+        // the toolbar's duplicate permission label then lets the test run on the
+        // wrong surface, where Plan is horizontally off-screen on small devices.
+        requireNotNull(device.wait(Until.findObject(By.desc("Close")), 15_000)) {
+            "Model settings sheet did not open"
         }
-        text(label).click()
+        text("Model")
         text("Full access")
         capture("execution-settings")
         text("Full access").click()
@@ -54,6 +52,32 @@ class ExecutionPolicyFlowTest {
         await { !device.hasObject(By.desc("Close")) }
         assertTrue(core.sessionConfig("chat-deploy")!!.plan)
         assertEquals("supervised", core.sessionConfig("chat-deploy")!!.accessMode)
+
+        // Also cover the ordinary toolbar entry point. Opening the sheet takes
+        // focus away from this empty editor; that must not dispose the sheet.
+        requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).click()
+        val label = model.row("chat-deploy")!!.modelLabel!!
+        var lastBounds: android.graphics.Rect? = null
+        var stableSince = SystemClock.uptimeMillis()
+        await {
+            val bounds = device.findObject(By.text(label))?.visibleBounds ?: return@await false
+            if (lastBounds != bounds) { lastBounds = bounds; stableSince = SystemClock.uptimeMillis() }
+            SystemClock.uptimeMillis() - stableSince > 500
+        }
+        text(label).click()
+        requireNotNull(device.wait(Until.findObject(By.desc("Close")), 5_000)) {
+            "Model settings sheet must survive the editor losing focus"
+        }
+        text("Model")
+        text("Supervised")
+        text("Plan on")
+        capture("execution-reopened")
+    }
+
+    @After fun recordFinalUi() {
+        val folder = File(context.cacheDir, "execution-screenshots").apply { mkdirs() }
+        device.takeScreenshot(File(folder, "execution-final.png"))
+        device.dumpWindowHierarchy(File(folder, "execution-final.xml"))
     }
 
     private fun text(value: String) = requireNotNull(device.wait(Until.findObject(By.text(value)), 10_000)) { "Missing text: $value" }

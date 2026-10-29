@@ -1427,7 +1427,8 @@ impl Normalizer {
             }
 
             // Control frames are handled by the run loop, not normalized.
-            Frame::ControlRequest(_)
+            Frame::PromptSuggestion(_)
+            | Frame::ControlRequest(_)
             | Frame::ControlResponse(_)
             | Frame::CommandLifecycle(_)
             | Frame::Other => Vec::new(),
