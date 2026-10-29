@@ -14221,6 +14221,10 @@ impl Render for Shell {
                 this.open_session_import(window, cx);
             }))
             .on_action(cx.listener(|this, _: &FindInThread, window, cx| {
+                if matches!(this.route, Route::Settings(_)) {
+                    if !this.settings_escape_surface_open(cx) { this.focus_settings_search(window, cx); }
+                    return;
+                }
                 if matches!(this.route, Route::Chat) && !this.overlay_owns_keyboard(cx) {
                     this.transcript
                         .update(cx, |transcript, cx| transcript.open_find(window, cx));

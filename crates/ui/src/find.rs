@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn matches_keep_char_boundaries() {
-        assert_eq!(char_range("naïve MAIN", "main"), Some((9, 13)));
+        assert_eq!(char_range("naïve MAIN", "main"), Some((7, 11)));
         assert!(char_range("nothing", "main").is_none());
         assert_eq!(match_ranges("main and MAIN", "main").len(), 2);
     }

@@ -159,7 +159,7 @@ impl Shell {
         // A shortcut of the user's on ⌘F takes it before Settings can.
         let mod_f_free = !ShortcutId::ALL
             .into_iter()
-            .any(|id| id.available() && self.settings.keymap.get(id) == "mod-f");
+            .any(|id| !matches!(id, ShortcutId::FindInThread) && id.available() && self.settings.keymap.get(id) == "mod-f");
         let idle = empty && !focus.is_focused(window) && mod_f_free;
         crate::surface_chrome::input()
             .id("settings-search")

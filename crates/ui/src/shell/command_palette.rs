@@ -2226,10 +2226,11 @@ mod tests {
                 methods::WARM_WORKSPACE_SEARCH => {
                     engine.reply(&request, serde_json::json!({ "state": warm }))
                 }
+                methods::SEARCH_TRANSCRIPTS => engine.reply(&request, serde_json::json!({"hits":[], "indexing":false})),
                 methods::SEARCH_WORKSPACE_FILES => engine.reply(&request, serde_json::json!([])),
                 _ => engine.reply(&request, content_answer(Vec::new(), false)),
             }
-            if method != methods::SEARCH_WORKSPACE_CONTENT {
+            if method != methods::SEARCH_WORKSPACE_CONTENT && method != methods::SEARCH_TRANSCRIPTS {
                 methods_seen.push(method);
             }
         }
@@ -2956,7 +2957,9 @@ mod tests {
         cx.simulate_keystrokes(window.into(), &platform_combo("mod-2"));
         assert_eq!(palette_tab(window, cx), Some(Tab::Threads));
         assert_eq!(selected_chat(window, cx).as_deref(), Some("first"));
-        cx.simulate_keystrokes(window.into(), &platform_combo("mod-4"));
+        cx.simulate_keystrokes(window.into(), &platform_combo("mod-3"));
+        assert_eq!(palette_tab(window, cx), Some(Tab::Messages));
+        cx.simulate_keystrokes(window.into(), &platform_combo("mod-5"));
         assert_eq!(palette_tab(window, cx), Some(Tab::Files));
         cx.simulate_keystrokes(window.into(), &platform_combo("mod-1"));
         assert_eq!(palette_tab(window, cx), Some(Tab::All));
@@ -2992,7 +2995,7 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
 
-        for expected in [Tab::Threads, Tab::Commands, Tab::Files, Tab::All] {
+        for expected in [Tab::Threads, Tab::Messages, Tab::Commands, Tab::Files, Tab::All] {
             cx.simulate_keystrokes(window.into(), "tab");
             assert_eq!(palette_tab(window, cx), Some(expected));
         }
