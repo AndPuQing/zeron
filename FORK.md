@@ -43,7 +43,7 @@ conflicts.
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions |
 | Apple CI | native desktop checks, iOS UI checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU; frame-source, voice and TestFlight use `xcode-27`; this avoids the constrained macOS 26 ARM pool without using Intel-only test dependencies |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
-| Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22` |
+| Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22`; WorkOS user directory migration `v6` without upstream Cloud migration `v5` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |

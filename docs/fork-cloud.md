@@ -1,8 +1,22 @@
 # Cloud source in this fork
 
-This fork carries the upstream Cloud control plane *in source only*. A deploy
-of `edge/wrangler.jsonc` creates nothing new: no Cloud Durable Objects, no
-Workflows, no credential vault service binding and no billing cron.
+This fork carries the upstream Cloud control plane *in source only*.
+`edge/wrangler.jsonc` binds no Cloud Durable Objects, Workflows, credential
+vault service or billing cron. Its WorkOS user directory is separate from Cloud.
+
+## WorkOS user directory
+
+The edge binds `USER_DIRECTORY` to `UserDirectory` with migration `v6`; upstream
+`v5` adds Cloud classes and is deliberately absent here. This directory records
+WorkOS profiles and join dates independently of sandbox hosting or billing.
+
+To receive user events, configure `https://edge.550w.host/workos/webhook` in this
+fork's WorkOS environment for `user.created`, `user.updated` and `user.deleted`,
+then set the endpoint's signing secret as `WORKOS_WEBHOOK_SECRET` on
+`zerun-edge`. Without that secret, webhook delivery answers 503 for retries.
+`GET /admin/users` (JSON or `?format=csv`) requires the operator's `ADMIN_TOKEN`;
+without it, the endpoint answers 404. A deploy does not create the WorkOS webhook
+subscription or backfill existing users.
 
 ## What that means at runtime
 
