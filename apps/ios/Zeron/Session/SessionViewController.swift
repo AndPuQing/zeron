@@ -711,6 +711,9 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
     private func applyFrame() {
         let frame = engine.frame()
         list.apply(frame)
+        if let target = app.messageSearchTarget, target.chat == chatId, list.scrollToMessage(target.message) {
+            app.messageSearchTarget = nil
+        }
         // A hydrated session with no rows has nothing to lay out: reveal it
         // instead of holding the loader until the 8s unreachable fallback.
         if !reportedOpen, frame.rowCount() > 0 || source.hydrated {

@@ -125,6 +125,11 @@ fun SessionScreen(
         return
     }
     val transcript = remember(chatId) { TranscriptState() }
+    LaunchedEffect(transcript.frame, model.messageSearchTarget) {
+        model.messageSearchTarget?.takeIf { it.first == chatId }?.let { target ->
+            if (transcript.jumpToMessage(target.second)) model.messageSearchTarget = null
+        }
+    }
     val density = LocalDensity.current.density
     DisposableEffect(chatId) {
         transcript.engine.attach(core, chatId)

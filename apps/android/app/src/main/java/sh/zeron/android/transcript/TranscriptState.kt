@@ -128,6 +128,15 @@ class TranscriptState {
         }
     }
 
+    fun jumpToMessage(id: String): Boolean {
+        val row = frame?.messagePlacement(id) ?: return false
+        ownTurn = null
+        queuedTurn = null
+        following = false
+        offset = row.y.coerceIn(0f, maxOffset)
+        return true
+    }
+
     fun apply(new: LayoutFrame) {
         val old = frame
         val first = old == null || old.rowCount() == 0u

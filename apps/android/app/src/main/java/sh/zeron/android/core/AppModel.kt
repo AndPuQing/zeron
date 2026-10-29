@@ -91,6 +91,7 @@ data class LaunchOptions(
  * arrive on Rust threads and hop to the main thread here.
  */
 class AppModel(private val app: Application) {
+    var messageSearchTarget by mutableStateOf<Pair<String, String>?>(null)
     val updates = sh.zeron.android.update.AndroidUpdater(app)
     private val scope = MainScope()
     private val main = Handler(Looper.getMainLooper())

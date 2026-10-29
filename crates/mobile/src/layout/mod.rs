@@ -205,7 +205,18 @@ impl LayoutFrame {
     }
 
     pub fn placement(&self, index: u32) -> Option<RowPlacement> {
-        self.rows.get(index as usize).map(|r| self.placement_of(index as usize, r))
+        self.rows
+            .get(index as usize)
+            .map(|r| self.placement_of(index as usize, r))
+    }
+
+    /// Locate a stable message id after its transcript has been replayed.
+    pub fn message_placement(&self, message_id: String) -> Option<RowPlacement> {
+        self.rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| r.core.entry_id.as_ref() == message_id)
+            .map(|(i, r)| self.placement_of(i, r))
     }
 
     pub fn index_of(&self, key: u64) -> Option<u32> {

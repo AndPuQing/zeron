@@ -683,6 +683,26 @@ pub enum WorkspaceEntryKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchTranscriptsRequest {
+    pub query: String,
+    pub limit: u16,
+}
+
+/// One chat whose user or assistant text matched. Results arrive best match first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptSearchHit {
+    #[serde(default)]
+    pub message_id: String,
+    pub chat_id: String,
+    pub snippet: String,
+    /// The matched message is the user's (else the agent's).
+    #[serde(default)]
+    pub from_user: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SearchWorkspaceFilesRequest {
     #[serde(flatten)]
     pub target: WorkspaceTarget,

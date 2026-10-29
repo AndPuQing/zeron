@@ -6,6 +6,7 @@ import UIKit
 /// into view models, and fans change notifications out to screens. All
 /// members are main-thread; core events hop here through `ListenerBridge`.
 final class AppModel {
+    var messageSearchTarget: (chat: String, message: String)?
     struct FrontPage: Equatable {
         var folders: [FolderRowVM] = []
         var sessions: [SessionRowVM] = []
