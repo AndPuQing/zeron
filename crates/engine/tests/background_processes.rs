@@ -10,6 +10,11 @@ use zeron_rpc::methods;
 struct Fixture(Arc<Mutex<Option<TurnControl>>>);
 #[async_trait]
 impl Harness for Fixture {
+    fn display_name(&self) -> &str { "Background fixture" }
+    fn supports_steering(&self) -> bool { false }
+    fn steering_mode(&self) -> zeron_proto::SteeringMode { zeron_proto::SteeringMode::TurnBoundary }
+    fn reasoning_levels(&self) -> &[zeron_proto::ReasoningLevel] { &[] }
+
     fn id(&self) -> HarnessId { HarnessId::Mock }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> { Ok(vec![]) }
     async fn run(&self, _: RunRequest, controls: RunControls) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
