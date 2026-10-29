@@ -2442,12 +2442,16 @@ fn doc_messages_stream(
                 // No-op commits (a second watcher attaching, command-only
                 // changes) produce empty deltas — skip the frame entirely.
                 let usage = doc.context_usage();
-                if frame.is_empty_delta() && usage == previous_usage && replay_baseline.is_none() {
+                let suggestion = doc.prompt_suggestion();
+                let metadata = Some((usage, suggestion.clone()));
+                if frame.is_empty_delta() && metadata == previous_usage && replay_baseline.is_none()
+                {
                     continue;
                 }
-                previous_usage = usage;
+                previous_usage = metadata;
                 let value = serde_json::to_value(zeron_doc::TranscriptUpdate {
                     frame,
+                    prompt_suggestion: suggestion.clone(),
                     context_usage: usage,
                     replay_baseline,
                 })
@@ -2470,6 +2474,7 @@ async fn opening_doc_messages_stream(
         let entries = handle.doc().read_opening_tail(128)?;
         let mut preview = serde_json::to_value(zeron_doc::TranscriptUpdate {
             frame: zeron_doc::TranscriptFrame::reset(&entries),
+            prompt_suggestion: handle.doc().prompt_suggestion(),
             context_usage: handle.doc().context_usage(),
             replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&entries)),
         })
@@ -6338,6 +6343,38 @@ mod context_usage_tests {
             "live plus recovered".len()
         );
         host.shutdown_workers().await;
+    }
+
+    #[tokio::test]
+    async fn prompt_suggestion_only_commits_reach_watch_reconnect_and_clear() {
+        let doc = Arc::new(zeron_doc::SessionDoc::init("suggestion-chat").unwrap());
+        let (tx, rx) = watch::channel(crate::doc_host::TranscriptSnapshot::default());
+        let mut stream = doc_messages_stream(rx, doc.clone());
+        assert!(stream.next().await.unwrap()["promptSuggestion"].is_null());
+        let suggestion = zeron_proto::PromptSuggestion {
+            id: "p1".into(),
+            text: "Run tests".into(),
+            after_entry_id: "a1".into(),
+        };
+        doc.set_prompt_suggestion(Some(&suggestion)).unwrap();
+        tx.send_replace(crate::doc_host::TranscriptSnapshot::default());
+        let next = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(next["promptSuggestion"]["text"], "Run tests");
+        let mut reconnect = doc_messages_stream(tx.subscribe(), doc.clone());
+        assert_eq!(
+            reconnect.next().await.unwrap()["promptSuggestion"],
+            next["promptSuggestion"]
+        );
+        doc.set_prompt_suggestion(None).unwrap();
+        tx.send_replace(crate::doc_host::TranscriptSnapshot::default());
+        let cleared = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(cleared["promptSuggestion"].is_null());
     }
 
     #[tokio::test]

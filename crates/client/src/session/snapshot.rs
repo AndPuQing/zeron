@@ -103,6 +103,7 @@ pub struct SessionSnapshot {
     /// This device's unadopted sends, oldest first. Their echo entries are
     /// `entries[transcript_len..]` (same order, same ids).
     pub pending: Vec<PendingSend>,
+    pub prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
     pub context_usage: Option<ContextUsage>,
     /// Content is present (local snapshot loaded or first sync landed). False
     /// = show a loader, not an empty chat.
@@ -301,5 +302,6 @@ pub struct ComposerState {
     pub queue_error: Option<String>,
     /// The last message this device submitted (scroll-to-own-send target).
     pub last_submitted_message_id: Option<String>,
+    pub prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
     pub context_usage: Option<ContextUsage>,
 }

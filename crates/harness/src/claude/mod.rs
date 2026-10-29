@@ -486,6 +486,14 @@ impl ClaudeHarness {
         environment.apply(&mut cmd);
         crate::apply_run_env(&mut cmd, &request.env);
         cmd.args(Self::launch_args(request));
+        // Verified in 2.1.308. Unknown/older binaries keep working without the flag.
+        // Do not override the CLI's own setting/env or enable auxiliary title runs.
+        if !title_only
+            && crate::executable::binary_version(exe)
+                .is_some_and(|v| v >= semver::Version::new(2, 1, 308))
+        {
+            cmd.arg("--prompt-suggestions");
+        }
         if let Some(resume) = &request.resume {
             cmd.arg(format!("--resume={resume}"));
         }
@@ -1321,6 +1329,8 @@ async fn run_session(session: Session) {
     // A message of ours (or a background wake) began a turn that has not
     // reported its end: the CLI dying now leaves it to us to end it.
     let mut turn_open = true;
+    let mut suggestion_allowed = false;
+    let mut seen_suggestions = std::collections::HashSet::new();
     // A resumed session the CLI turns out to have no conversation for is
     // relaunched fresh, once (see [`no_conversation`]).
     let mut restore_fallback = launched.resume.is_some() && !launched.require_native_resume;
@@ -1466,6 +1476,33 @@ async fn run_session(session: Session) {
                         restore_fallback = false;
                         relaunch = true;
                         continue;
+                    }
+                    // Native suggestions arrive after result. They are metadata, not
+                    // assistant output or a turn-completion barrier.
+                    if let Frame::PromptSuggestion(suggestion) = &frame {
+                        if suggestion.uuid.len() > 256 || !seen_suggestions.insert(suggestion.uuid.clone()) {
+                            continue;
+                        }
+                        if seen_suggestions.len() > 256 {
+                            seen_suggestions.clear();
+                            seen_suggestions.insert(suggestion.uuid.clone());
+                        }
+                        if suggestion_allowed && !turn_open && !title_only
+                            && (!commands.reported || !commands.waiting()) && pending_steers.is_empty()
+                            && !interrupted && !config.plan
+                            && norm.session_id.as_deref() == Some(suggestion.session_id.as_str())
+                            && !suggestion.uuid.is_empty()
+                            && let Some(text) = zeron_proto::valid_prompt_suggestion(&suggestion.suggestion)
+                        {
+                            suggestion_allowed = false;
+                            if event_tx.send(Ok(AgentEvent::PromptSuggestion {
+                                id: suggestion.uuid.clone(), text,
+                            })).await.is_err() { break 'main; }
+                        }
+                        continue;
+                    }
+                    if matches!(&frame, Frame::Assistant(_) | Frame::User(_) | Frame::StreamEvent(_)) {
+                        suggestion_allowed = false;
                     }
                     if let Frame::ControlResponse(response) = &frame {
                         let response = &response.response;
@@ -1639,6 +1676,9 @@ async fn run_session(session: Session) {
                             }
                             stop_settle_at = None;
                         }
+                        if let AgentEvent::Done { status, .. } = &ev {
+                            suggestion_allowed = *status == DoneStatus::Completed;
+                        }
                         if event_tx.send(Ok(ev)).await.is_err() {
                             break 'main; // consumer gone — reap below
                         }
@@ -1683,6 +1723,7 @@ async fn run_session(session: Session) {
 
             steer = steering.recv(), if steering_open && !interrupted => match steer {
                 Some(msg) => {
+                    suggestion_allowed = false;
                     // A message of ours now owns whatever result comes next.
                     active_since_stop = true;
                     // A changed configuration applies before the prompt, on
@@ -2376,6 +2417,25 @@ mod access_tests {
             }
         }
         out
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn prompt_suggestion_flag_requires_verified_cli_and_excludes_titles() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        for (version, supported) in [("2.1.307", false), ("2.1.308", true), ("unknown", false)] {
+            let executable = dir.path().join(format!("claude-{version}"));
+            std::fs::write(&executable, format!("#!/bin/sh\nprintf '%s\\n' '{version}'\n")).unwrap();
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+            for title in [false, true] {
+                let mut command = ClaudeHarness::build_command(
+                    &executable, &request(AccessMode::Supervised, false, false), title, None, &Default::default(),
+                );
+                let enabled = command.as_std_mut().get_args().any(|arg| arg == "--prompt-suggestions");
+                assert_eq!(enabled, supported && !title, "{version}, title={title}");
+            }
+        }
     }
 
     #[test]

@@ -823,12 +823,38 @@ pub enum CompactionStatus {
     Cancelled,
 }
 
+/// A native next-user-message prediction, separate from conversation content.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptSuggestion {
+    pub id: String,
+    pub text: String,
+    /// The host transcript entry this suggestion follows. Never the vendor UUID.
+    pub after_entry_id: String,
+}
+
+/// Bound untrusted provider output before syncing or displaying it.
+pub fn valid_prompt_suggestion(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()
+        && text.len() <= 4096
+        && !text
+            .chars()
+            .any(|c| c.is_control() && c != '\n' && c != '\t'))
+    .then(|| text.to_owned())
+}
+
 /// The normalized streaming event every harness emits.
 ///
 /// Mirrors zeron's `AgentEvent` tagged enum.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentEvent {
+    /// Native prediction metadata, often delivered after Done. Never a new turn.
+    PromptSuggestion {
+        id: String,
+        text: String,
+    },
     #[serde(rename_all = "camelCase")]
     SessionStarted {
         harness: HarnessId,

@@ -2125,6 +2125,8 @@ pub struct ComposerInput {
     /// wrapper — it recomputes and re-sets this on every render pass, so the
     /// input never has to know what the completion means.
     ghost: Option<SharedString>,
+    prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
+    dismissed_suggestions: HashSet<String>,
     /// File mentions are a composer feature, not a behavior of generic inputs
     /// (picker searches and rename fields also use this type).
     mentions_enabled: bool,
@@ -2241,6 +2243,8 @@ impl ComposerInput {
             syntax_spans: Vec::new(),
             syntax_task: None,
             ghost: None,
+            prompt_suggestion: None,
+            dismissed_suggestions: HashSet::new(),
             mentions_enabled: false,
             masked: false,
             layout_epoch: 0,
@@ -2701,6 +2705,70 @@ impl ComposerInput {
         cx.notify();
     }
 
+    fn set_prompt_suggestion(
+        &mut self,
+        suggestion: Option<zeron_proto::PromptSuggestion>,
+        cx: &mut Context<Self>,
+    ) {
+        let suggestion = suggestion.filter(|s| !self.dismissed_suggestions.contains(&s.id));
+        let suggestion = if !self.content.is_empty()
+            || self.marked_range.is_some()
+            || self.dictation.phase.active()
+        {
+            if let Some(s) = suggestion {
+                if self.dismissed_suggestions.len() >= 256 {
+                    self.dismissed_suggestions.clear();
+                }
+                self.dismissed_suggestions.insert(s.id);
+            }
+            None
+        } else {
+            suggestion
+        };
+        if self.prompt_suggestion == suggestion {
+            return;
+        }
+        self.prompt_suggestion = suggestion;
+        self.needs_measure = true;
+        cx.notify();
+    }
+
+    fn dismiss_prompt_suggestion(&mut self, cx: &mut Context<Self>) {
+        if let Some(suggestion) = self.prompt_suggestion.take() {
+            // Bound per-input dismissal history while keeping ordinary navigation stable.
+            if self.dismissed_suggestions.len() >= 256 {
+                self.dismissed_suggestions.clear();
+            }
+            self.dismissed_suggestions.insert(suggestion.id);
+            self.needs_measure = true;
+            cx.notify();
+        }
+    }
+
+    fn accept_prompt_suggestion(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.content.is_empty()
+            || self.read_only
+            || self.marked_range.is_some()
+            || self.mention_open
+            || self.dictation.phase.active()
+        {
+            return false;
+        }
+        let Some(text) = self.prompt_suggestion.as_ref().map(|s| s.text.clone()) else {
+            return false;
+        };
+        self.dismiss_prompt_suggestion(cx);
+        self.replace_text_in_range(None, &text, window, cx);
+        true
+    }
+
+    fn empty_placeholder(&self) -> SharedString {
+        self.prompt_suggestion
+            .as_ref()
+            .map(|s| format!("{}  · Tab to use", s.text).into())
+            .unwrap_or_else(|| self.placeholder.clone())
+    }
+
     pub fn has_newline(&self) -> bool {
         self.content.contains('\n')
     }
@@ -2724,6 +2792,7 @@ impl ComposerInput {
     }
 
     pub fn set_text(&mut self, text: impl Into<String>, cx: &mut Context<Self>) {
+        self.dismiss_prompt_suggestion(cx);
         self.cancel_dictation();
         self.invalidate_mention_tooltip();
         self.edit_revision = self.edit_revision.wrapping_add(1);
@@ -3212,6 +3281,7 @@ impl ComposerInput {
     }
 
     fn restore(&mut self, snapshot: EditSnapshot, cx: &mut Context<Self>) {
+        self.dismiss_prompt_suggestion(cx);
         self.cancel_dictation();
         self.invalidate_mention_tooltip();
         self.edit_revision = self.edit_revision.wrapping_add(1);
@@ -3427,7 +3497,10 @@ impl ComposerInput {
         }
     }
 
-    fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+    fn right(&mut self, _: &Right, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_prompt_suggestion(window, cx) {
+            return;
+        }
         if self.selected_range.is_empty() {
             let next = self.next_boundary(self.selected_range.end);
             self.move_to(next, cx);
@@ -3830,6 +3903,9 @@ impl ComposerInput {
     }
 
     fn mention_tab(&mut self, _: &MentionTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.accept_prompt_suggestion(window, cx) {
+            return;
+        }
         if self.mention_has_selection {
             cx.emit(ComposerInputEvent::MentionAccept);
         } else if !self.indent_list(false, window, cx) {
@@ -3918,6 +3994,11 @@ impl ComposerInput {
             self.cancel_dictation();
             cx.emit(DictationInputEvent::Changed);
             cx.notify();
+            cx.stop_propagation();
+            return;
+        }
+        if event.keystroke.key == "escape" && self.prompt_suggestion.is_some() {
+            self.dismiss_prompt_suggestion(cx);
             cx.stop_propagation();
             return;
         }
@@ -4448,7 +4529,7 @@ impl ComposerInput {
         // frame (or longer when no subsequent layout is requested).
         self.refresh_projection();
         let (display, is_placeholder) = if self.content.is_empty() {
-            (self.placeholder.clone(), true)
+            (self.empty_placeholder(), true)
         } else {
             (SharedString::from(self.projection.display.clone()), false)
         };
@@ -4736,7 +4817,11 @@ impl ComposerInput {
         self.last_lines = lines;
         self.line_starts = line_starts;
         self.content_height = content_height.max(self.configured_line_height);
-        self.max_line_width = if is_placeholder { 0.0 } else { max_line_width };
+        self.max_line_width = if is_placeholder && self.prompt_suggestion.is_none() {
+            0.0
+        } else {
+            max_line_width
+        };
         self.last_width = f32::from(width);
         self.needs_measure = false;
         self.layout_epoch += 1;
@@ -4868,6 +4953,7 @@ impl EntityInputHandler for ComposerInput {
         if self.read_only {
             return;
         }
+        self.dismiss_prompt_suggestion(cx);
         self.cancel_dictation();
         let single_line_text;
         let new_text = if self.single_line {
@@ -4917,6 +5003,7 @@ impl EntityInputHandler for ComposerInput {
         if self.read_only {
             return;
         }
+        self.dismiss_prompt_suggestion(cx);
         self.cancel_dictation();
         let single_line_text;
         let new_text = if self.single_line {
@@ -5578,7 +5665,7 @@ impl Render for ComposerInput {
             .id(("composer-input", cx.entity_id()))
             .role(self.accessibility_role)
             .aria_label(self.placeholder.clone())
-            .aria_placeholder(self.placeholder.clone())
+            .aria_placeholder(self.empty_placeholder())
             .key_context(self.key_context)
             .track_focus(&self.focus_handle)
             .cursor(CursorStyle::IBeam)
@@ -8882,6 +8969,8 @@ impl Composer {
 
         // Draft swap on chat navigation — the input entity itself survives.
         if key != self.current_key {
+            self.input
+                .update(cx, |input, cx| input.set_prompt_suggestion(None, cx));
             if !key.is_empty() && !self.current_key.is_empty() {
                 // Switching between established chats still snaps to the new
                 // draft; a tail from a hero transition belongs to its old chat.
@@ -11303,6 +11392,38 @@ impl Render for Composer {
             self.reset_slash(None, cx);
         }
         let mode = self.button_mode(cx);
+        let suggestion = {
+            let state = self.state.read(cx);
+            state
+                .prompt_suggestion
+                .as_ref()
+                .filter(|suggestion| {
+                    !wizard_active
+                        && !self.sending
+                        && self.editing_queued.is_none()
+                        && state.queue.is_empty()
+                        && self
+                            .attachments
+                            .get(&self.current_key)
+                            .is_none_or(Vec::is_empty)
+                        && self.staged_appshots().is_empty()
+                        && self.staged_comments(cx).is_empty()
+                        && self.mention.token.is_none()
+                        && self.slash.token.is_none()
+                        && state.selected_chat.as_ref().is_some_and(|chat| {
+                            state
+                                .session_for(chat)
+                                .is_some_and(|s| s.status == zeron_proto::SessionStatus::Idle)
+                        })
+                        && state
+                            .transcript
+                            .last()
+                            .is_some_and(|entry| entry.id == suggestion.after_entry_id)
+                })
+                .cloned()
+        };
+        self.input
+            .update(cx, |input, cx| input.set_prompt_suggestion(suggestion, cx));
         // Shape the current draft before sizing the pill. Waiting for the child
         // layout leaves the parent using the previous edit's height.
         self.input.update(cx, |input, cx| {
@@ -12310,6 +12431,93 @@ mod tests {
         cx.update_window(window.into(), |_, window, cx| window.draw(cx).clear())
             .unwrap();
         (dir, window)
+    }
+
+    #[gpui::test]
+    fn prompt_suggestion_is_preview_until_tab_and_remains_an_editable_undoable_draft(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        with_composer_input(cx, |input, window, cx| {
+            let suggestion = zeron_proto::PromptSuggestion {
+                id: "p1".into(),
+                text: "Run the tests".into(),
+                after_entry_id: "a1".into(),
+            };
+            input.set_prompt_suggestion(Some(suggestion.clone()), cx);
+            assert_eq!(input.text(), "");
+            assert!(input.empty_placeholder().contains("Run the tests"));
+            input.mention_tab(&MentionTab, window, cx);
+            assert_eq!(input.text(), "Run the tests");
+            assert!(input.prompt_suggestion.is_none());
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), "");
+            input.set_prompt_suggestion(Some(suggestion), cx);
+            assert!(
+                input.prompt_suggestion.is_none(),
+                "accepted/undone suggestions stay dismissed"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn prompt_suggestion_never_overwrites_typing_paste_or_ime(cx: &mut gpui::TestAppContext) {
+        with_composer_input(cx, |input, window, cx| {
+            for (i, mode) in ["typing", "ime", "existing"].iter().enumerate() {
+                input.set_text("", cx);
+                let suggestion = zeron_proto::PromptSuggestion {
+                    id: format!("p{i}"),
+                    text: "Suggested prompt".into(),
+                    after_entry_id: "a1".into(),
+                };
+                if *mode == "existing" {
+                    input.set_text("My draft", cx);
+                }
+                input.set_prompt_suggestion(Some(suggestion.clone()), cx);
+                match *mode {
+                    "typing" => input.replace_text_in_range(None, "My draft", window, cx),
+                    "ime" => {
+                        input.replace_and_mark_text_in_range(None, "我的", Some(2..2), window, cx)
+                    }
+                    _ => {}
+                }
+                assert!(input.prompt_suggestion.is_none());
+                assert!(!input.accept_prompt_suggestion(window, cx));
+                assert!(!input.text().contains("Suggested"));
+                input.unmark_text(window, cx);
+                input.set_text("", cx);
+                input.set_prompt_suggestion(Some(suggestion), cx);
+                assert!(input.prompt_suggestion.is_none());
+            }
+        });
+    }
+
+    #[gpui::test]
+    fn prompt_suggestion_enter_does_not_accept_or_send(cx: &mut gpui::TestAppContext) {
+        let (_dir, window) = composer_focus_window(cx);
+        window.update(cx, |composer, _, cx| {
+            composer.input.update(cx, |input, cx| {
+                input.set_prompt_suggestion(Some(zeron_proto::PromptSuggestion {
+                    id: "enter".into(), text: "Do not send yet".into(), after_entry_id: "a1".into(),
+                }), cx);
+            });
+            composer.on_submit(cx);
+            assert_eq!(composer.input.read(cx).text(), "");
+            assert!(composer.input.read(cx).prompt_suggestion.is_some());
+            assert!(!composer.sending);
+            assert!(composer.send_task.is_none());
+            assert!(composer.failure.is_none());
+        }).unwrap();
+    }
+
+    #[gpui::test]
+    fn prompt_suggestion_wraps_without_becoming_draft_text(cx: &mut gpui::TestAppContext) {
+        with_composer_input(cx, |input, window, cx| {
+            input.set_prompt_suggestion(Some(zeron_proto::PromptSuggestion { id: "long".into(), text: "Review the changes and run the relevant tests before considering the next task".into(), after_entry_id: "a1".into() }), cx);
+            input.layout_text(px(180.), &window.text_style(), window, cx);
+            assert!(input.content_height > input.configured_line_height);
+            assert_eq!(input.text(), "");
+            assert!(input.display_is_placeholder);
+        });
     }
 
     fn with_composer_input(

@@ -163,6 +163,7 @@ struct CoreState {
     tracker: Tracker,
     queue: Vec<QueuedMessage>,
     commands: Vec<SessionCommandEntry>,
+    prompt_suggestion: Option<zeron_proto::PromptSuggestion>,
     context_usage: Option<ContextUsage>,
     /// Stable echo entries by message id.
     echoes: HashMap<String, Arc<Entry>>,
@@ -244,6 +245,7 @@ impl SessionCore {
                 tracker: Tracker::new(),
                 queue: Vec::new(),
                 commands: Vec::new(),
+                prompt_suggestion: None,
                 context_usage: None,
                 echoes: HashMap::new(),
                 setup_placeholder: None,
@@ -470,6 +472,7 @@ impl SessionCore {
             }
             if dirty.meta {
                 st.context_usage = self.doc.context_usage();
+                st.prompt_suggestion = self.doc.prompt_suggestion();
             }
             let echoes_changed = derive_pending(&mut st, &client.config.device_id, degraded, now);
             send_after = oldest_state(&st.pending);
@@ -567,6 +570,7 @@ impl SessionCore {
             open_input: open_input(st.tracker.entries()),
             queue_error: st.queue_error.clone(),
             last_submitted_message_id: st.last_submitted.clone(),
+            prompt_suggestion: st.prompt_suggestion.clone(),
             context_usage: st.context_usage,
         };
         let config = client
@@ -681,6 +685,7 @@ fn empty_composer(chat_id: &str) -> ComposerState {
         open_input: None,
         queue_error: None,
         last_submitted_message_id: None,
+        prompt_suggestion: None,
         context_usage: None,
     }
 }
@@ -984,6 +989,7 @@ fn build_snapshot(
         working: live.working,
         working_since_ms: live.working_since_ms,
         pending: st.pending.clone(),
+        prompt_suggestion: st.prompt_suggestion.clone(),
         context_usage: st.context_usage,
         hydrated: st.hydrated,
         delta: SnapshotDelta::default(),
@@ -1643,6 +1649,7 @@ mod setup_placeholder_tests {
             tracker: Tracker::new(),
             queue: Vec::new(),
             commands: Vec::new(),
+            prompt_suggestion: None,
             context_usage: None,
             echoes: HashMap::new(),
             setup_placeholder: None,

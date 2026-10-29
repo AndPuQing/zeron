@@ -4770,6 +4770,50 @@ async fn drive_run(
             }
             continue;
         }
+        if let AgentEvent::PromptSuggestion { id, text } = &event {
+            let current_runtime = lock(&inner.runs).get(&chat_id).is_some_and(|run| {
+                run.run_id == run_id && !run.retiring.load(std::sync::atomic::Ordering::Acquire)
+            });
+            if current_runtime && !interrupted && idle_since.is_some()
+                && !inner.has_pending_steers(&chat_id, &run_id) {
+                let completed = lock(&inner.statuses).get(&chat_id).and_then(|s| {
+                    (s.status == SessionStatus::Idle
+                        && s.last_turn_outcome
+                            .as_ref()
+                            .is_some_and(|o| o.status == DoneStatus::Completed))
+                    .then(|| s.last_completed_turn.clone())
+                    .flatten()
+                });
+                // A queued/new user entry can already exist before its status update.
+                // Bind to the latest raw entry, then use its joined display identity.
+                let after_entry_id = completed.and_then(|completed| {
+                    doc_ref
+                        .read_opening_tail(1)
+                        .ok()?
+                        .last()
+                        .filter(|entry| entry.id == completed)
+                        .map(|entry| {
+                            entry
+                                .continuation_of
+                                .clone()
+                                .unwrap_or_else(|| entry.id.clone())
+                        })
+                });
+                if let Some(after_entry_id) = after_entry_id
+                    && let Some(text) = zeron_proto::valid_prompt_suggestion(text)
+                {
+                    let suggestion = zeron_proto::PromptSuggestion {
+                        id: format!("{run_id}:{id}"),
+                        text,
+                        after_entry_id,
+                    };
+                    if let Err(error) = doc_ref.set_prompt_suggestion(Some(&suggestion)) {
+                        tracing::warn!(%chat_id, %error, "prompt suggestion write failed");
+                    }
+                }
+            }
+            continue;
+        }
         // Capacity/occupancy can settle after Done; updating it must not reopen a turn.
         if let AgentEvent::ContextUsage { tokens, window } = &event {
             if let Err(err) = doc_ref.update_context_usage(*tokens, *window) {
@@ -4801,6 +4845,13 @@ async fn drive_run(
         // self-continued turn starts a whole new agent round trip (seconds
         // at minimum, minutes in the incident). Inside the gate everything
         // non-boundary stays inert, exactly as before.
+        if matches!(
+            event,
+            AgentEvent::Steered { .. } | AgentEvent::SessionStarted { .. }
+        ) || (idle_since.is_some() && matches!(event, AgentEvent::TextDelta { .. }))
+        {
+            let _ = doc_ref.set_prompt_suggestion(None);
+        }
         let turn_was_active = idle_since.is_none();
         const RESUME_GATE: std::time::Duration = std::time::Duration::from_secs(1);
         if idle_since.is_some() {
@@ -6047,6 +6098,68 @@ mod tests {
                 .expect("FeedHarness serves one run per test");
             Ok(futures::stream::poll_fn(move |cx| feed.poll_recv(cx).map(|e| e.map(Ok))).boxed())
         }
+    }
+
+    #[tokio::test]
+    async fn prompt_suggestion_after_done_syncs_without_reopening_or_appending_a_turn() {
+        let (feed, rx) = mpsc::unbounded_channel();
+        let registry = HarnessRegistry::new();
+        registry.register(Arc::new(FeedHarness {
+            feed: Mutex::new(Some(rx)),
+        }));
+        let dir = tempfile::tempdir().unwrap();
+        let core =
+            crate::EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Mock, None)
+                .unwrap();
+        let chat = "chat-prompt-suggestion";
+        core.sessions
+            .dispatch(chat, HarnessId::Mock, request(), None)
+            .await
+            .unwrap();
+        feed.send(AgentEvent::SessionStarted {
+            harness: HarnessId::Mock,
+            model: "mock".into(),
+            tools: vec![],
+            cwd: "/tmp".into(),
+            session_id: "native".into(),
+            assistant_message_id: "a1".into(),
+        })
+        .unwrap();
+        feed.send(AgentEvent::TextDelta {
+            text: "Done".into(),
+        })
+        .unwrap();
+        feed.send(AgentEvent::Done {
+            status: DoneStatus::Completed,
+            result: None,
+            error: None,
+            session_id: Some("native".into()),
+        })
+        .unwrap();
+        feed.send(AgentEvent::PromptSuggestion {
+            id: "p1".into(),
+            text: "Run tests".into(),
+        })
+        .unwrap();
+        let handle = core.doc_host.open(chat).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while handle.doc().prompt_suggestion().is_none() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let session = core.sessions.session_status(chat).unwrap();
+        assert_eq!(session.status, SessionStatus::Idle);
+        let suggestion = handle.doc().prompt_suggestion().unwrap();
+        assert_eq!(
+            session.last_completed_turn.as_deref(),
+            Some(suggestion.after_entry_id.as_str())
+        );
+        let entries = handle.doc().read_entries().unwrap();
+        assert!(!format!("{entries:?}").contains("Run tests"));
+        assert_eq!(entries.last().unwrap().id, suggestion.after_entry_id);
+        core.sessions.interrupt(chat).await.unwrap();
     }
 
     // A tagged subagent event that folds to NO parts used to leave its sink

@@ -429,6 +429,32 @@ impl SessionDoc {
         &self.doc
     }
 
+    pub fn prompt_suggestion(&self) -> Option<zeron_proto::PromptSuggestion> {
+        let loro::ValueOrContainer::Value(LoroValue::String(value)) =
+            self.doc.get_map("meta").get("promptSuggestion")?
+        else {
+            return None;
+        };
+        serde_json::from_str(&value).ok()
+    }
+
+    pub fn set_prompt_suggestion(
+        &self,
+        suggestion: Option<&zeron_proto::PromptSuggestion>,
+    ) -> Result<(), DocError> {
+        if self.prompt_suggestion().as_ref() == suggestion {
+            return Ok(());
+        }
+        let meta = self.doc.get_map("meta");
+        if let Some(suggestion) = suggestion {
+            meta.insert("promptSuggestion", serde_json::to_string(suggestion)?)?;
+        } else {
+            meta.delete("promptSuggestion")?;
+        }
+        self.doc.commit();
+        Ok(())
+    }
+
     /// A single atomic value prevents tokens and capacity from tearing on sync.
     pub fn context_usage(&self) -> Option<zeron_proto::ContextUsage> {
         let loro::ValueOrContainer::Value(LoroValue::String(value)) =
@@ -547,6 +573,9 @@ impl SessionDoc {
     /// Insert a complete message entry (user/system messages, command-side inserts).
     /// Streaming assistant entries go through [`SegmentWriter`].
     pub fn push_message(&self, entry: &SessionMessageEntry) -> Result<(), DocError> {
+        if entry.role == MessageRole::User {
+            self.doc.get_map("meta").delete("promptSuggestion")?;
+        }
         let messages = self.doc.get_list("messages");
         let map = messages.push_container(LoroMap::new())?;
         write_entry_scalar_fields(&map, entry)?;
@@ -2577,5 +2606,46 @@ mod context_usage_tests {
         assert_eq!(rebuilt.context_usage(), host.context_usage());
         rebuilt.clear_context_usage().unwrap();
         assert_eq!(rebuilt.context_usage(), None);
+    }
+}
+
+#[cfg(test)]
+mod prompt_suggestion_tests {
+    use super::*;
+
+    #[test]
+    fn prompt_suggestion_syncs_as_metadata_and_clears_on_a_user_message() {
+        let host = SessionDoc::init("suggestions").unwrap();
+        let suggestion = zeron_proto::PromptSuggestion {
+            id: "native-id".into(),
+            text: "Run tests".into(),
+            after_entry_id: "assistant".into(),
+        };
+        host.set_prompt_suggestion(Some(&suggestion)).unwrap();
+        assert!(host.read_entries().unwrap().is_empty());
+        let replica = SessionDoc::from_doc(LoroDoc::new());
+        replica
+            .doc()
+            .import(&host.export_snapshot().unwrap())
+            .unwrap();
+        assert_eq!(replica.prompt_suggestion(), Some(suggestion));
+        let version = host.doc().oplog_vv();
+        host.push_message(&SessionMessageEntry {
+            id: "next-user".into(),
+            role: MessageRole::User,
+            parts: vec![],
+            created_at: 1,
+            device_id: "host".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        })
+        .unwrap();
+        replica
+            .doc()
+            .import(&host.doc().export(ExportMode::updates(&version)).unwrap())
+            .unwrap();
+        assert_eq!(replica.prompt_suggestion(), None);
+        assert_eq!(replica.read_entries().unwrap().len(), 1);
     }
 }

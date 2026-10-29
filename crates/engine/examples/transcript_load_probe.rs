@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = Instant::now();
         let preview = zeron_doc::TranscriptUpdate {
             frame: zeron_doc::TranscriptFrame::reset(&tail),
+            prompt_suggestion: doc.prompt_suggestion(),
             context_usage: doc.context_usage(),
             replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&tail)),
         };
@@ -52,6 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let t = Instant::now();
         let update = zeron_doc::TranscriptUpdate {
             frame: zeron_doc::TranscriptFrame::reset(&entries),
+            prompt_suggestion: doc.prompt_suggestion(),
             context_usage: doc.context_usage(),
             replay_baseline: Some(zeron_doc::TranscriptBaseline::capture(&entries)),
         };
