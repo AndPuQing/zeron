@@ -1227,10 +1227,6 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     
     func search(query: String, limit: UInt32)  -> [SearchHit]
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
     func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query: String) async throws  -> [FileMatch]
     
     /**
@@ -1238,6 +1234,12 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * so mobile clients can find them across parents and group the results.
      */
     func searchIncludingChildren(query: String, limit: UInt32)  -> [SearchHit]
+    
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
+    func searchTranscripts(deviceId: String, query: String) async throws  -> [TranscriptSearchHit]
     
     /**
      * An already-open session.
@@ -2171,10 +2173,6 @@ open func search(query: String, limit: UInt32) -> [SearchHit]  {
 })
 }
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
 open func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query: String)async throws  -> [FileMatch]  {
     return
         try  await uniffiRustCallAsync(
@@ -2204,6 +2202,26 @@ open func searchIncludingChildren(query: String, limit: UInt32) -> [SearchHit]  
         FfiConverterUInt32.lower(limit),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
+open func searchTranscripts(deviceId: String, query: String)async throws  -> [TranscriptSearchHit]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_search_transcripts(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(deviceId),FfiConverterString.lower(query)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeTranscriptSearchHit.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -3334,6 +3352,11 @@ public protocol LayoutFrameProtocol: AnyObject, Sendable {
     func indexOf(key: UInt64)  -> UInt32?
     
     /**
+     * Locate a stable message id after its transcript has been replayed.
+     */
+    func messagePlacement(messageId: String)  -> RowPlacement?
+    
+    /**
      * Copyable text of the whole message owning `index` (context menus).
      */
     func messageText(index: UInt32)  -> String?
@@ -3462,6 +3485,19 @@ open func indexOf(key: UInt64) -> UInt32?  {
     uniffi_zeron_mobile_fn_method_layoutframe_index_of(
             self.uniffiCloneHandle(),
         FfiConverterUInt64.lower(key),uniffiCallStatus
+    )
+})
+}
+    
+    /**
+     * Locate a stable message id after its transcript has been replayed.
+     */
+open func messagePlacement(messageId: String) -> RowPlacement?  {
+    return try!  FfiConverterOptionTypeRowPlacement.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_layoutframe_message_placement(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(messageId),uniffiCallStatus
     )
 })
 }
@@ -14522,6 +14558,68 @@ public func FfiConverterTypeTextRun_lower(_ value: TextRun) -> RustBuffer {
 }
 
 
+public struct TranscriptSearchHit: Equatable, Hashable {
+    public var chatId: String
+    public var messageId: String
+    public var snippet: String
+    public var fromUser: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(chatId: String, messageId: String, snippet: String, fromUser: Bool) {
+        self.chatId = chatId
+        self.messageId = messageId
+        self.snippet = snippet
+        self.fromUser = fromUser
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TranscriptSearchHit: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTranscriptSearchHit: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TranscriptSearchHit {
+        return
+            try TranscriptSearchHit(
+                chatId: FfiConverterString.read(from: &buf), 
+                messageId: FfiConverterString.read(from: &buf), 
+                snippet: FfiConverterString.read(from: &buf), 
+                fromUser: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TranscriptSearchHit, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.chatId, into: &buf)
+        FfiConverterString.write(value.messageId, into: &buf)
+        FfiConverterString.write(value.snippet, into: &buf)
+        FfiConverterBool.write(value.fromUser, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptSearchHit_lift(_ buf: RustBuffer) throws -> TranscriptSearchHit {
+    return try FfiConverterTypeTranscriptSearchHit.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptSearchHit_lower(_ value: TranscriptSearchHit) -> RustBuffer {
+    return FfiConverterTypeTranscriptSearchHit.lower(value)
+}
+
+
 /**
  * Transcript-level facts the platform needs without the rows (loader vs
  * empty state, scroll-to-bottom affordances, the working pill).
@@ -22760,6 +22858,31 @@ fileprivate struct FfiConverterSequenceTypeTextRun: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeTranscriptSearchHit: FfiConverterRustBuffer {
+    typealias SwiftType = [TranscriptSearchHit]
+
+    public static func write(_ value: [TranscriptSearchHit], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTranscriptSearchHit.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TranscriptSearchHit] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TranscriptSearchHit]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTranscriptSearchHit.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeUsageWindowInfo: FfiConverterRustBuffer {
     typealias SwiftType = [UsageWindowInfo]
 
@@ -23812,10 +23935,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_search() != 33140) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_search_files() != 31096) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_files() != 56784) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_search_including_children() != 10816) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_transcripts() != 53169) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session() != 12772) {
@@ -24113,6 +24239,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_layoutframe_index_of() != 52386) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_layoutframe_message_placement() != 20874) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_layoutframe_message_text() != 60311) {
