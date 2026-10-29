@@ -1011,6 +1011,23 @@ impl EngineRpc {
         self.validate_execution_command(chat_id, Default::default(), None)
     }
 
+    fn validate_queued_execution(&self, chat_id: &str, id: &str) -> Result<(), RpcError> {
+        let handle = self
+            .doc_host
+            .open(chat_id)
+            .map_err(|e| RpcError::Failed(e.to_string()))?;
+        let queue = handle
+            .doc()
+            .read_queue()
+            .map_err(|e| RpcError::Failed(e.to_string()))?;
+        let policy = queue
+            .iter()
+            .find(|q| q.id == id)
+            .map(|q| q.execution)
+            .unwrap_or_default();
+        self.validate_execution_command(chat_id, policy, None)
+    }
+
     fn validate_execution_command(
         &self,
         chat_id: &str,
@@ -2938,6 +2955,47 @@ impl RpcService for EngineRpc {
             methods::RETRY_DELIVERY => {
                 let p: ChatParams = parse_params(params)?;
                 self.validate_chat_execution(&p.chat_id)?;
+                let handle = self
+                    .doc_host
+                    .open(&p.chat_id)
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                let entries = handle
+                    .doc()
+                    .read_entries()
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                for command in handle
+                    .doc()
+                    .read_commands()
+                    .map_err(|e| RpcError::Failed(e.to_string()))?
+                {
+                    if !matches!(
+                        command.status,
+                        zeron_doc::SessionCommandStatus::Pending
+                            | zeron_doc::SessionCommandStatus::Rejected
+                            | zeron_doc::SessionCommandStatus::Expired
+                    ) {
+                        continue;
+                    }
+                    let (policy, harness, message_id) = match &command.payload {
+                        SessionCommandPayload::Run {
+                            request,
+                            message_id,
+                        } => (
+                            request.execution_policy(),
+                            request.harness,
+                            Some(message_id),
+                        ),
+                        SessionCommandPayload::Steer {
+                            execution,
+                            message_id,
+                            ..
+                        } => (*execution, None, message_id.as_ref()),
+                        _ => continue,
+                    };
+                    if !message_id.is_some_and(|id| entries.iter().any(|entry| &entry.id == id)) {
+                        self.validate_execution_command(&p.chat_id, policy, harness)?;
+                    }
+                }
                 self.doc_host
                     .retry_delivery(&p.chat_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -3261,7 +3319,7 @@ impl RpcService for EngineRpc {
             }
             methods::SEND_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
-                self.validate_chat_execution(&p.chat_id)?;
+                self.validate_queued_execution(&p.chat_id, &p.id)?;
                 let sent = self
                     .doc_host
                     .send_queued_now(&p.chat_id, &p.id)
@@ -3271,7 +3329,7 @@ impl RpcService for EngineRpc {
             }
             methods::STEER_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
-                self.validate_chat_execution(&p.chat_id)?;
+                self.validate_queued_execution(&p.chat_id, &p.id)?;
                 let sent = self
                     .doc_host
                     .steer_queued_now(&p.chat_id, &p.id)
@@ -5027,6 +5085,60 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn execution_queue_snapshot_blocks_legacy_host_after_config_is_relaxed() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(temp.path()).unwrap(),
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
+        let rpc = core.rpc_service();
+        rpc.handle(methods::MUTATE, serde_json::json!({"op":"createChat", "chatId":"policy-queue", "deviceId":"legacy-host",
+            "config":{"harness":"codex", "sandbox":"workspace-write", "access":"full-access", "plan":false}
+        })).await.unwrap();
+        let id = core
+            .doc_host
+            .queue_message_with_execution(
+                "policy-queue",
+                "pending",
+                vec![],
+                true,
+                zeron_proto::ExecutionPolicy {
+                    access: zeron_proto::AccessMode::Supervised,
+                    plan: true,
+                },
+            )
+            .unwrap();
+        for method in [
+            methods::SEND_QUEUED_MESSAGE_NOW,
+            methods::STEER_QUEUED_MESSAGE_NOW,
+        ] {
+            let result = rpc
+                .handle(
+                    method,
+                    serde_json::json!({"chatId":"policy-queue", "id":id}),
+                )
+                .await;
+            assert!(
+                matches!(result, Err(RpcError::Failed(ref e)) if e.contains("Update the target host"))
+            );
+        }
+        assert_eq!(
+            core.doc_host
+                .open("policy-queue")
+                .unwrap()
+                .doc()
+                .read_queue()
+                .unwrap()
+                .len(),
+            1
+        );
+        core.sessions.shutdown().await;
+    }
 
     #[tokio::test]
     async fn execution_fields_survive_legacy_model_edits_and_explicit_reset() {
