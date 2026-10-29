@@ -282,6 +282,17 @@ mod tests {
     }
 
     #[test]
+    fn output_only_tasks_cannot_accept_a_stop() {
+        let work = BackgroundWork::default();
+        let mut row = task("read-only");
+        row.can_stop = false;
+        work.set(vec![row]);
+        work.append_output("read-only", "still useful");
+        assert!(work.output("read-only").is_some());
+        assert!(!work.request_stop("read-only"));
+    }
+
+    #[test]
     fn only_listed_processes_answer_and_stop() {
         let work = BackgroundWork::default();
         work.set(vec![task("a")]);

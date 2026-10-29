@@ -743,6 +743,19 @@ mod tests {
     }
 
     #[test]
+    fn unconfirmed_stop_becomes_retryable_without_removing_the_task() {
+        let mut state = BackgroundTrayState::default();
+        state.stopping.insert("a".into());
+        state.stop_started.insert(
+            "a".into(),
+            std::time::Instant::now() - Duration::from_secs(16),
+        );
+        state.observe(&[task("a", "watch", 0)]);
+        assert!(!state.is_stopping("a"));
+        assert!(state.failure.is_some());
+    }
+
+    #[test]
     fn the_headline_lists_each_command_once() {
         let tasks = [
             task("a", "pnpm dev", 60),

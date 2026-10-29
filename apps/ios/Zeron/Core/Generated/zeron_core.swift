@@ -1045,6 +1045,16 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func assignSection(chatId: String, sectionId: String?) throws 
     
+    func backgroundTaskOutput(chatId: String, taskId: String) async throws  -> BackgroundOutput?
+    
+    func backgroundTasks(chatId: String) async throws  -> [BackgroundProcess]
+    
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
+    func backgroundTasksSupported(chatId: String)  -> Bool
+    
     /**
      * Side chats / subagent chats of `parent_id`, recency order.
      */
@@ -1266,6 +1276,8 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * Stop all background work (sign-out). Snapshots stay readable.
      */
     func shutdown() 
+    
+    func stopBackgroundTask(chatId: String, taskId: String) async throws  -> Bool
     
     /**
      * `git checkout <ref>` in `repo_path` on the device.
@@ -1563,6 +1575,52 @@ open func assignSection(chatId: String, sectionId: String?)throws   {try rustCal
         FfiConverterOptionString.lower(sectionId),uniffiCallStatus
     )
 }
+}
+    
+open func backgroundTaskOutput(chatId: String, taskId: String)async throws  -> BackgroundOutput?  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_background_task_output(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(taskId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterOptionTypeBackgroundOutput.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+open func backgroundTasks(chatId: String)async throws  -> [BackgroundProcess]  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_background_tasks(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeBackgroundProcess.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
+open func backgroundTasksSupported(chatId: String) -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_background_tasks_supported(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(chatId),uniffiCallStatus
+    )
+})
 }
     
     /**
@@ -2301,6 +2359,22 @@ open func shutdown()  {try! rustCall() {
             self.uniffiCloneHandle(),uniffiCallStatus
     )
 }
+}
+    
+open func stopBackgroundTask(chatId: String, taskId: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_stop_background_task(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(taskId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_i8,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_i8,
+            freeFunc: ffi_zeron_mobile_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
 }
     
     /**
@@ -7810,6 +7884,126 @@ public func FfiConverterTypeAuthUser_lift(_ buf: RustBuffer) throws -> AuthUser 
 #endif
 public func FfiConverterTypeAuthUser_lower(_ value: AuthUser) -> RustBuffer {
     return FfiConverterTypeAuthUser.lower(value)
+}
+
+
+public struct BackgroundOutput: Equatable, Hashable {
+    public var text: String
+    public var truncated: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(text: String, truncated: Bool) {
+        self.text = text
+        self.truncated = truncated
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackgroundOutput: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackgroundOutput: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackgroundOutput {
+        return
+            try BackgroundOutput(
+                text: FfiConverterString.read(from: &buf), 
+                truncated: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackgroundOutput, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterBool.write(value.truncated, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackgroundOutput_lift(_ buf: RustBuffer) throws -> BackgroundOutput {
+    return try FfiConverterTypeBackgroundOutput.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackgroundOutput_lower(_ value: BackgroundOutput) -> RustBuffer {
+    return FfiConverterTypeBackgroundOutput.lower(value)
+}
+
+
+public struct BackgroundProcess: Equatable, Hashable {
+    public var canStop: Bool
+    public var id: String
+    public var command: String
+    public var description: String?
+    public var startedAtMs: Int64
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(canStop: Bool, id: String, command: String, description: String?, startedAtMs: Int64) {
+        self.canStop = canStop
+        self.id = id
+        self.command = command
+        self.description = description
+        self.startedAtMs = startedAtMs
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension BackgroundProcess: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeBackgroundProcess: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> BackgroundProcess {
+        return
+            try BackgroundProcess(
+                canStop: FfiConverterBool.read(from: &buf), 
+                id: FfiConverterString.read(from: &buf), 
+                command: FfiConverterString.read(from: &buf), 
+                description: FfiConverterOptionString.read(from: &buf), 
+                startedAtMs: FfiConverterInt64.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: BackgroundProcess, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.canStop, into: &buf)
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.command, into: &buf)
+        FfiConverterOptionString.write(value.description, into: &buf)
+        FfiConverterInt64.write(value.startedAtMs, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackgroundProcess_lift(_ buf: RustBuffer) throws -> BackgroundProcess {
+    return try FfiConverterTypeBackgroundProcess.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeBackgroundProcess_lower(_ value: BackgroundProcess) -> RustBuffer {
+    return FfiConverterTypeBackgroundProcess.lower(value)
 }
 
 
@@ -21261,6 +21455,30 @@ fileprivate struct FfiConverterOptionTypeAppshotLabel: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeBackgroundOutput: FfiConverterRustBuffer {
+    typealias SwiftType = BackgroundOutput?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeBackgroundOutput.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeBackgroundOutput.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeBillingPlanInfo: FfiConverterRustBuffer {
     typealias SwiftType = BillingPlanInfo?
 
@@ -21929,6 +22147,31 @@ fileprivate struct FfiConverterSequenceTypeAuthOrg: FfiConverterRustBuffer {
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeAuthOrg.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeBackgroundProcess: FfiConverterRustBuffer {
+    typealias SwiftType = [BackgroundProcess]
+
+    public static func write(_ value: [BackgroundProcess], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeBackgroundProcess.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [BackgroundProcess] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [BackgroundProcess]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeBackgroundProcess.read(from: &buf))
         }
         return seq
     }
@@ -23851,6 +24094,15 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_assign_section() != 63363) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_background_task_output() != 45191) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_background_tasks() != 38109) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_background_tasks_supported() != 28130) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_child_sessions() != 10159) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -24017,6 +24269,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_shutdown() != 4352) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_stop_background_task() != 13803) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_switch_ref() != 45706) {

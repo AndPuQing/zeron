@@ -6,7 +6,7 @@ sign was a transcript chip saying "running in background". The composer now
 carries a **Background** tray listing what the chat's agent still runs, for how
 long, with each process's latest output and its own Stop.
 
-Native UI captures will be attached to the PR after CI validation.
+Native mobile builds and UI checks run only in CI.
 
 ## Data
 
@@ -82,6 +82,7 @@ below it.
 - **Output**: clicking a row opens the tail of its output beneath it (up to 200
   lines, 8 visible, scrolling), following the end unless scrolled up. "Earlier
   output not shown" marks a cut; "No output yet" an empty one.
+- Stop is offered only when the driver has an addressable native control (`canStop`). A missing Codex process identifier remains output-only. An unconfirmed request becomes retryable after 15 seconds with a visible warning.
 - **Stopping**: the row dims and reads `Stopping…` until the next session row
   drops it. A failed request shows "Couldn't stop that process" under the list.
 - **State** (open flag, open row, stops in flight) is per chat, in memory for
