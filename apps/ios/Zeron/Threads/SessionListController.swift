@@ -732,13 +732,34 @@ final class SearchViewController: SessionListController, UISearchResultsUpdating
     }
 }
 
+/// Main-thread lifecycle shared with deterministic tests. Reappearing always
+/// restarts the current query; callbacks from a hidden or older query are stale.
+final class MessageSearchLifecycle {
+    private var visible = false
+    private var generation: UInt64 = 0
+
+    func appear(restart: () -> Void) {
+        visible = true
+        restart()
+    }
+    func disappear() {
+        visible = false
+        generation &+= 1
+    }
+    func beginQuery() -> UInt64? {
+        generation &+= 1
+        return visible ? generation : nil
+    }
+    func accepts(_ token: UInt64) -> Bool { visible && generation == token }
+}
+
 /// Message search is explicitly scoped to the computer that stores the history.
 private final class MessageSearchViewController: UITableViewController, UISearchResultsUpdating {
     let app: AppModel
     private var device: String?
     private var hits: [TranscriptSearchHit] = []
     private var task: Task<Void, Never>?
-    private var generation = 0
+    private let lifecycle = MessageSearchLifecycle()
     init(app: AppModel) { self.app = app; super.init(style: .insetGrouped) }
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
@@ -752,6 +773,13 @@ private final class MessageSearchViewController: UITableViewController, UISearch
         navigationItem.hidesSearchBarWhenScrolling = false
         updateHosts()
     }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        lifecycle.appear {
+            updateHosts()
+            search()
+        }
+    }
     private func updateHosts() {
         let hosts = app.client?.executionDevices() ?? []
         if device == nil { device = hosts.first?.id }
@@ -763,24 +791,25 @@ private final class MessageSearchViewController: UITableViewController, UISearch
     }
     func updateSearchResults(for searchController: UISearchController) { search() }
     private func search() {
-        task?.cancel(); generation += 1
-        let token = generation
+        task?.cancel(); task = nil
+        let token = lifecycle.beginQuery()
+        navigationItem.prompt = nil
         hits = []; tableView.reloadData()
         let query = navigationItem.searchController?.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !query.isEmpty, let device, let client = app.client else { return }
+        guard let token, !query.isEmpty, let device, let client = app.client else { return }
         navigationItem.prompt = "Searching…"
         task = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 while !Task.isCancelled {
                     let page = try await client.searchTranscripts(deviceId: device, query: query)
-                    guard let self, !Task.isCancelled, token == self.generation else { return }
+                    guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
                     self.hits = page.hits; self.navigationItem.prompt = page.indexing ? "Indexing stored history…" : nil; self.tableView.reloadData()
                     if !page.indexing { break }
                     try await Task.sleep(for: .milliseconds(500))
                 }
             } catch {
-                guard let self, !Task.isCancelled, token == self.generation else { return }
+                guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
                 self.navigationItem.prompt = "Message search unavailable on this computer"
             }
         }
@@ -804,5 +833,9 @@ private final class MessageSearchViewController: UITableViewController, UISearch
         app.messageSearchTarget = (hit.chatId, hit.messageId)
         navigationController?.pushViewController(session, animated: true)
     }
-    override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); task?.cancel() }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        lifecycle.disappear()
+        task?.cancel(); task = nil
+    }
 }

@@ -24,3 +24,17 @@ search cache; conversation data remains unchanged.
 Validation covers Chinese substrings, mixed-language queries, message identity,
 operator escaping, hidden reasoning, deletion, restart and cache rebuild. Mobile
 builds, generated bindings and UI checks run only in CI.
+
+Review regressions:
+
+- Desktop matching builds one original-byte-offset character index and uses
+  prefix fallback (linear scanning). It retains per-character lowercase and
+  non-overlapping matching semantics. Tests compare an independent naive oracle
+  on mixed Unicode input and cover dense matches and long near-miss prefixes.
+- Refresh must commit at least one pending chat even if metadata collection
+  already exhausted the budget, then yield normally. A zero-budget SQLite test
+  verifies progress across requests, stable message IDs, and eventual completion.
+- Returning to the iOS message-search page restarts the unchanged query on the
+  same selected computer. Hidden pages do not start requests, and lifecycle/query
+  generations reject late results from before navigation or query/host changes.
+  The lifecycle regressions are part of the iOS CI unit suite.

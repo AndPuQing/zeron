@@ -73,51 +73,10 @@ pub(crate) fn block_count(block: &Block, query: &str) -> usize {
     }
 }
 
-/// Byte range of `needle` in `text`, matched case-insensitively per char so the
-/// returned offsets always fall on char boundaries.
-pub(crate) fn char_range(text: &str, needle: &str) -> Option<(usize, usize)> {
-    let want: Vec<char> = needle.trim().to_lowercase().chars().collect();
-    want.first()?;
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
-    for (i, &(start, _)) in chars.iter().enumerate() {
-        let mut matched = true;
-        for (offset, expected) in want.iter().enumerate() {
-            match chars.get(i + offset) {
-                Some(&(_, found)) if found.to_lowercase().next() == Some(*expected) => {}
-                _ => {
-                    matched = false;
-                    break;
-                }
-            }
-        }
-        if matched {
-            let end = chars
-                .get(i + want.len())
-                .map(|&(byte, _)| byte)
-                .unwrap_or(text.len());
-            return Some((start, end));
-        }
-    }
-    None
-}
-
-/// Matches of `query` in `text` as byte ranges, left to right.
-pub(crate) fn match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
-    let mut ranges = Vec::new();
-    let mut from = 0;
-    while from < text.len() {
-        let Some((start, end)) = char_range(&text[from..], query) else {
-            break;
-        };
-        let (start, end) = (from + start, from + end);
-        if end <= start {
-            break;
-        }
-        ranges.push(start..end);
-        from = end;
-    }
-    ranges
-}
+mod matching;
+pub(crate) use matching::match_ranges;
+#[cfg(test)]
+use matching::char_range;
 
 thread_local! {
     /// The open find bar's query, read by the painters so matches can be

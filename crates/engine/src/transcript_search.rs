@@ -105,6 +105,10 @@ impl Inner {
     /// Reindex chats whose snapshot changed, newest first, within
     /// [`REFRESH_BUDGET`]. A refresh already in flight makes this a no-op.
     fn refresh(&self) -> Result<bool, EngineError> {
+        self.refresh_with_budget(REFRESH_BUDGET)
+    }
+
+    fn refresh_with_budget(&self, budget: Duration) -> Result<bool, EngineError> {
         let Ok(_refreshing) = self.refreshing.try_lock() else {
             return Ok(true);
         };
@@ -149,8 +153,12 @@ impl Inner {
         }
         wanted.retain(|(id, saved_at)| indexed.get(id).map(|(_, at)| at) != Some(saved_at));
         wanted.sort_by_key(|(id, saved_at)| (indexed.contains_key(id), std::cmp::Reverse(*saved_at)));
+        let mut processed = 0;
         for (chat_id, saved_at) in wanted {
-            if started.elapsed() > REFRESH_BUDGET {
+            // Metadata scanning/lock waits may consume the entire budget.
+            // Always commit at least one pending chat before yielding, or
+            // repeated requests can report indexing forever without progress.
+            if processed > 0 && started.elapsed() > budget {
                 return Ok(true);
             }
             let messages = match self.store.load_snapshot(&chat_id) {
@@ -181,6 +189,7 @@ impl Inner {
                 .map_err(sql)?;
             }
             tx.commit().map_err(sql)?;
+            processed += 1;
         }
         Ok(false)
     }
@@ -309,4 +318,78 @@ fn snippet(body: &str, query: &str) -> String {
         chars[start..end].iter().collect::<String>(),
         if end < chars.len() { "…" } else { "" }
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workspace_host::WorkspaceHostConfig;
+    use zeron_doc::{MessageStatus, SessionMessageEntry};
+
+    #[tokio::test]
+    async fn exhausted_budget_still_indexes_one_chat_and_eventually_finishes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let workspace = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test".into(),
+                device_name: "Test".into(),
+                platform: "test".into(),
+                org_id: "test".into(),
+                user_id: "test".into(),
+                edge: None,
+                local_only: true,
+            },
+        )
+        .unwrap();
+        for id in ["a", "b", "c"] {
+            workspace
+                .create_chat(id, None, Some("test"), None, None)
+                .unwrap();
+            let doc = SessionDoc::init(id).unwrap();
+            doc.push_message(&SessionMessageEntry {
+                id: format!("{id}-message"),
+                role: MessageRole::User,
+                parts: vec![MessagePart::Text {
+                    id: "text".into(),
+                    text: "needle 安卓".into(),
+                }],
+                created_at: 1,
+                device_id: "test".into(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: None,
+                duration_ms: None,
+            })
+            .unwrap();
+            store
+                .save_snapshot(id, &doc.export_snapshot().unwrap())
+                .unwrap();
+        }
+        let search = TranscriptSearch::open(dir.path(), store, workspace).unwrap();
+        // Zero remaining time models metadata/lock waits exhausting the budget.
+        // Each request must commit progress, still yield, and eventually finish.
+        for expected in 1..=3 {
+            let indexing = search.inner.refresh_with_budget(Duration::ZERO).unwrap();
+            let hits = search
+                .inner
+                .query(&match_expression("安卓").unwrap(), "安卓", 100)
+                .unwrap();
+            assert_eq!(hits.len(), expected);
+            assert_eq!(indexing, expected < 3);
+            assert!(
+                hits.iter()
+                    .all(|hit| hit.message_id == format!("{}-message", hit.chat_id))
+            );
+        }
+        assert!(!search.inner.refresh_with_budget(Duration::ZERO).unwrap());
+        assert_eq!(
+            search
+                .inner
+                .query(&match_expression("needle").unwrap(), "needle", 100)
+                .unwrap()
+                .len(),
+            3
+        );
+    }
 }
