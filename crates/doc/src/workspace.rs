@@ -826,6 +826,8 @@ pub(crate) struct RawSession {
     updated_at: i64,
     #[serde(default)]
     running_subagents: u32,
+    #[serde(default)]
+    background_tasks: Vec<zeron_proto::BackgroundTask>,
 }
 
 impl From<RawSession> for Session {
@@ -840,6 +842,7 @@ impl From<RawSession> for Session {
             last_turn_outcome: raw.last_turn_outcome,
             terminal_activity: raw.terminal_activity,
             running_subagents: raw.running_subagents,
+            background_tasks: raw.background_tasks,
         }
     }
 }
@@ -955,6 +958,7 @@ mod tests {
             last_turn_outcome: None,
             terminal_activity: None,
             running_subagents: 0,
+            background_tasks: Vec::new(),
         }
     }
 

@@ -1646,8 +1646,6 @@ impl Client {
         }
     }
 
-    /// Workspace file search for composer `@` mentions (host `SearchFiles`,
-    /// gitignore-aware; an empty query returns the chat's featured files).
     /// Search message text persisted on one computer. Unopened remote history
     /// is not guaranteed to be present on another computer's replica.
     pub async fn search_transcripts(
@@ -1666,6 +1664,79 @@ impl Client {
         serde_json::from_value(reply).map_err(|e| ClientError::HostError(e.to_string()))
     }
 
+    pub fn background_tasks_supported(&self, chat_id: &str) -> bool {
+        self.inner
+            .workspace
+            .chat(chat_id)
+            .and_then(|c| self.workspace().device(&c.device_id).cloned())
+            .is_some_and(|d| {
+                d.capabilities
+                    .iter()
+                    .any(|c| c == zeron_proto::capabilities::BACKGROUND_TASKS_V1)
+            })
+    }
+
+    async fn background_task_rpc(
+        &self,
+        chat_id: &str,
+        task_id: Option<&str>,
+        method: &str,
+    ) -> Result<serde_json::Value> {
+        let chat = self
+            .inner
+            .workspace
+            .chat(chat_id)
+            .ok_or_else(|| ClientError::NotFound(chat_id.into()))?;
+        if !self.background_tasks_supported(chat_id) {
+            return Err(ClientError::Unsupported(
+                "Update this computer to manage background processes.".into(),
+            ));
+        }
+        self.inner
+            .host_rpc(
+                &chat.device_id,
+                method,
+                serde_json::json!({"chatId":chat_id, "taskId":task_id}),
+            )
+            .await
+    }
+
+    pub async fn background_tasks(
+        &self,
+        chat_id: &str,
+    ) -> Result<Vec<zeron_proto::BackgroundTask>> {
+        let value = self
+            .background_task_rpc(chat_id, None, zeron_rpc::methods::LIST_BACKGROUND_TASKS)
+            .await?;
+        serde_json::from_value(value).map_err(|e| ClientError::HostError(e.to_string()))
+    }
+    pub async fn background_task_output(
+        &self,
+        chat_id: &str,
+        task_id: &str,
+    ) -> Result<Option<zeron_proto::BackgroundTaskOutput>> {
+        let value = self
+            .background_task_rpc(
+                chat_id,
+                Some(task_id),
+                zeron_rpc::methods::READ_BACKGROUND_TASK_OUTPUT,
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|e| ClientError::HostError(e.to_string()))
+    }
+    pub async fn stop_background_task(&self, chat_id: &str, task_id: &str) -> Result<bool> {
+        let value = self
+            .background_task_rpc(
+                chat_id,
+                Some(task_id),
+                zeron_rpc::methods::STOP_BACKGROUND_TASK,
+            )
+            .await?;
+        Ok(value["stopping"].as_bool().unwrap_or(false))
+    }
+
+    /// Workspace file search for composer `@` mentions (host `SearchFiles`,
+    /// gitignore-aware; an empty query returns the chat's featured files).
     pub async fn search_files(
         &self,
         device_id: &str,

@@ -124,6 +124,8 @@ fun SessionScreen(
         }
         return
     }
+    var showBackground by remember(chatId) { mutableStateOf(false) }
+    if (showBackground) BackgroundProcesses(core, chatId) { showBackground = false }
     val transcript = remember(chatId) { TranscriptState() }
     LaunchedEffect(transcript.frame, model.messageSearchTarget) {
         model.messageSearchTarget?.takeIf { it.first == chatId }?.let { target ->
@@ -309,6 +311,7 @@ fun SessionScreen(
                                 MenuAction("New side chat", ZIcons.SideChats) { newSideChat() },
                                 MenuAction("Fork into side chat", ZIcons.Fork) { fork() },
                                 MenuAction("Terminal", ZIcons.Terminal) { openTerminal() },
+                                MenuAction("Background processes", ZIcons.Terminal) { showBackground = true },
                             ),
                             listOfNotNull(
                                 row?.let { r -> MenuAction(if (r.pinned) "Unpin" else "Pin", ZIcons.Pin) { model.setPinned(chatId, !r.pinned) } },

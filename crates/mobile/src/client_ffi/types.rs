@@ -1318,3 +1318,16 @@ pub struct TranscriptSearchPage {
     pub hits: Vec<TranscriptSearchHit>,
     pub indexing: bool,
 }
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct BackgroundProcess {
+    pub id: String,
+    pub command: String,
+    pub description: Option<String>,
+    pub started_at_ms: i64,
+}
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct BackgroundOutput {
+    pub text: String,
+    pub truncated: bool,
+}
