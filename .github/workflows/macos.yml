@@ -13,6 +13,7 @@ on:
       - 'scripts/ci/run-macos-fixture.sh'
       - 'dist/macos/Info.plist'
       - 'apps/ios/**'
+      - 'scripts/ios/**'
       - '.github/workflows/macos.yml'
   push:
     branches: [dev]
@@ -27,11 +28,17 @@ on:
       - 'scripts/ci/run-macos-fixture.sh'
       - 'dist/macos/Info.plist'
       - 'apps/ios/**'
+      - 'scripts/ios/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
     inputs:
+      suite:
+        description: Checks to run (target a failed suite without repeating unrelated jobs)
+        type: choice
+        default: all
+        options: [all, native, ios]
       macos_runner:
-        description: Native runner pool (alternate pool for hosted capacity incidents)
+        description: Apple Silicon runner pool (alternate pool for hosted capacity incidents)
         type: choice
         default: macos-15
         options: [macos-15, xcode-27]
@@ -40,8 +47,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Manual diagnostics must not wait behind an automatic run in a scarce pool.
+  group: macos-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   # Tests run on the dev profile (workspace crates at opt-level 0, dependencies at 2 as configured in
@@ -57,38 +65,57 @@ jobs:
     permissions:
       pull-requests: read
     outputs:
-      ios: ${{ steps.filter.outputs.result }}
+      ios: ${{ fromJSON(steps.filter.outputs.result).ios }}
+      native: ${{ fromJSON(steps.filter.outputs.result).native }}
+      coretext: ${{ fromJSON(steps.filter.outputs.result).coretext }}
+      frame_source: ${{ fromJSON(steps.filter.outputs.result).frame_source }}
     steps:
       - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         id: filter
         with:
           script: |
-            // Preserve iOS coverage for main pushes and manual runs.
-            if (context.eventName !== 'pull_request') return true;
+            // Keep complete integration coverage on dev and default manual runs.
+            const all = {ios: true, native: true, coretext: true, frame_source: true};
+            if (context.eventName === 'workflow_dispatch') {
+              const suite = context.payload.inputs?.suite;
+              if (suite === 'native') return {ios: false, native: true, coretext: false, frame_source: false};
+              if (suite === 'ios') return {ios: true, native: false, coretext: false, frame_source: false};
+              return all;
+            }
+            if (context.eventName !== 'pull_request') return all;
             const files = await github.paginate(github.rest.pulls.listFiles, {
               ...context.repo,
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
             // Run conservatively if the API did not return the full diff.
-            if (files.length < context.payload.pull_request.changed_files) return true;
+            if (files.length < context.payload.pull_request.changed_files) return all;
+            const paths = files.flatMap(file => [file.filename, file.previous_filename]).filter(Boolean);
+            const shared = path => ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
+              '.github/workflows/macos.yml'].includes(path);
             // The app links the Rust mobile core and everything it depends on.
             const mobileCore = ['crates/mobile/', 'crates/client/', 'crates/text/', 'crates/markdown/',
               'crates/visual/', 'crates/visual-gpu/',
               'crates/doc/', 'crates/sync/', 'crates/proto/', 'crates/rpc/', 'crates/syntax/',
+              'crates/orb/', 'crates/veil/', 'crates/voice-session/', 'crates/preview/',
+              'crates/term/', 'crates/term-link/', 'crates/zatex/',
               'scripts/ios/'];
-            const affectsIOS = path => path?.startsWith('apps/ios/')
-              || mobileCore.some(prefix => path?.startsWith(prefix))
-              || path === 'Cargo.lock'
-              || path === 'Cargo.toml'
-              || path === 'rust-toolchain.toml'
-              || path === '.github/workflows/macos.yml';
-            return files.some(file => affectsIOS(file.filename)
-              || affectsIOS(file.previous_filename));
+            return {
+              ios: paths.some(path => shared(path) || path.startsWith('apps/ios/')
+                || mobileCore.some(prefix => path.startsWith(prefix))),
+              // Native desktop code does not depend on the mobile FFI or Swift app.
+              native: paths.some(path => !path.startsWith('apps/ios/')
+                && !path.startsWith('crates/mobile/') && !path.startsWith('scripts/ios/')),
+              coretext: paths.some(path => shared(path) || path.startsWith('crates/text/')),
+              // This job checks the GPUI revision pinned by Cargo.toml in its own workspace.
+              frame_source: paths.some(shared),
+            };
 
   # Updater and preview tests, native UI regressions and the two native WebKit fixtures. Everything is
   # compiled once (one cargo invocation, so dependencies are built once) and then run.
   macos-native:
+    needs: changes
+    if: needs.changes.outputs.native == 'true'
     runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -190,6 +217,8 @@ jobs:
   # This crate has no ONNX dependency, so stable Intel macOS can check the
   # complete CoreText suite against the newer system ICU without scarce ARM runners.
   coretext-fidelity:
+    needs: changes
+    if: needs.changes.outputs.coretext == 'true'
     runs-on: macos-26-intel
     timeout-minutes: 20
     steps:
@@ -207,6 +236,8 @@ jobs:
 
   # gpui_macos lives in the pinned GPUI checkout, a separate workspace with its own cache.
   macos-frame-source:
+    needs: changes
+    if: needs.changes.outputs.frame_source == 'true'
     runs-on: xcode-27
     timeout-minutes: 30
     steps:
@@ -277,12 +308,16 @@ jobs:
 
   # iOS unit tests and companion UI regressions in the simulator (only when
   # iOS or the mobile core changed, see `changes`).
-  # Waiting for macos-frame-source keeps a run to two macOS runners at a time.
+  # Waiting for macos-frame-source keeps a run to two ARM macOS runners at a time
+  # when it is needed. A skipped frame-source check must not skip iOS coverage.
   # Do not boot the simulator in the background: hundreds of launchd_sim daemons starve the 3-vCPU
   # VM and slow every other step down by minutes. xcodebuild boots it when needed.
   ios-tests:
     needs: [changes, ios-core, macos-frame-source]
-    if: needs.changes.outputs.ios == 'true'
+    if: >-
+      !cancelled() && needs.changes.outputs.ios == 'true'
+      && needs.ios-core.result == 'success'
+      && (needs.macos-frame-source.result == 'success' || needs.macos-frame-source.result == 'skipped')
     runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer

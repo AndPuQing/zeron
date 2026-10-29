@@ -8,8 +8,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: preview-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: preview-tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 jobs:
   # The Rust networking tests run in `core-tests` (ui-tests.yml, Linux) and
   # `macos-native` (macos.yml); this workflow keeps the edge coordinator.

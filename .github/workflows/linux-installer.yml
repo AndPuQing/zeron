@@ -26,8 +26,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: linux-installer-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: linux-installer-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   desktop-entry:
