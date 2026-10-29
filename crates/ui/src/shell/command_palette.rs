@@ -53,6 +53,7 @@ pub(super) struct CommandPalette {
     content: WorkspaceQuery<Vec<WorkspaceContentMatch>>,
     /// Chats whose transcripts mention the query, from the engine's FTS index.
     transcript_hits: Vec<zeron_proto::TranscriptSearchHit>,
+    transcript_status: Option<SharedString>,
     transcript_task: Option<Task<()>>,
     _search_events: Subscription,
 }
@@ -514,6 +515,7 @@ impl Shell {
             files_ready: None,
             content: WorkspaceQuery::default(),
             transcript_hits: Vec::new(),
+            transcript_status: None,
             transcript_task: None,
             _search_events: events,
         });
@@ -554,10 +556,12 @@ impl Shell {
         };
         let query = palette.search.read(cx).text().trim().to_owned();
         palette.transcript_hits.clear();
+        palette.transcript_status = None;
         if query.is_empty() {
             palette.transcript_task = None;
             return;
         }
+        palette.transcript_status = Some("Searching history stored on this computer…".into());
         palette.transcript_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(80))
@@ -569,22 +573,30 @@ impl Shell {
             let Ok(params) = serde_json::to_value(&request) else {
                 return;
             };
-            let Ok(hits) = engine
+            let hits = engine
                 .client()
                 .call(zeron_rpc::methods::SEARCH_TRANSCRIPTS, params)
                 .await
-                .map(serde_json::from_value::<Vec<zeron_proto::TranscriptSearchHit>>)
-            else {
-                return;
-            };
-            let Ok(hits) = hits else {
-                return;
-            };
+                .map_err(|e| e.to_string())
+                .and_then(|v| {
+                    serde_json::from_value::<Vec<zeron_proto::TranscriptSearchHit>>(v)
+                        .map_err(|e| e.to_string())
+                });
             let _ = this.update(cx, |this, cx| {
                 if let Some(palette) = this.command_palette.as_mut()
                     && palette.search.read(cx).text().trim() == query
                 {
-                    palette.transcript_hits = hits;
+                    match hits {
+                        Ok(hits) => {
+                            palette.transcript_hits = hits;
+                            palette.transcript_status =
+                                Some("History stored on this computer".into());
+                        }
+                        Err(error) => {
+                            palette.transcript_status =
+                                Some(format!("Message search unavailable: {error}").into());
+                        }
+                    }
                     cx.notify();
                 }
             });
@@ -818,6 +830,7 @@ impl Shell {
                     .cloned()
                     .map(RowKind::Message),
             )
+            .with_status(palette.transcript_status.clone())
         };
         let sections = match (palette.tab, query.is_empty()) {
             (Tab::All, true) => vec![

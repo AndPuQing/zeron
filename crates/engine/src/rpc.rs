@@ -2239,6 +2239,7 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_EXTERNAL_SESSIONS
             | methods::IMPORT_EXTERNAL_SESSIONS
             | methods::CANCEL_EXTERNAL_SESSION_IMPORT
+            | methods::SEARCH_TRANSCRIPTS
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL

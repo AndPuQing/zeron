@@ -18584,6 +18584,44 @@ mod tests {
     /// Leaving a chat caches its transcript; coming back shows it at once,
     /// so the revisit never reads as loading.
     #[gpui::test]
+    fn message_search_waits_for_exact_message_and_ignores_input_echo(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let state = cx.new(|_| AppState::new());
+        let transcript = cx.new(|cx| Transcript::new(state, cx));
+        transcript.update(cx, |this, cx| {
+            this.chat_id = Some("chat".into());
+            let entry = |id: &str| {
+                let mut e = user_message(id);
+                e.parts = vec![text_part("text", "安装包损坏")];
+                e
+            };
+            this.rows = rows_for_entry(&entry("first"), false, false, &mut parse);
+            this.list.reset(this.rows.len());
+            this.find_in_chat("chat".into(), "安装包".into(), "second".into(), cx);
+            assert_eq!(
+                this.find.as_ref().unwrap().target_message.as_deref(),
+                Some("second")
+            );
+            this.rows
+                .extend(rows_for_entry(&entry("second"), false, false, &mut parse));
+            this.list.reset(this.rows.len());
+            this.refresh_find();
+            assert_eq!(this.find.as_ref().unwrap().current, Some(1));
+            this.set_find_query("安装包".into(), cx);
+            assert_eq!(
+                this.find.as_ref().unwrap().current,
+                Some(1),
+                "input echo must not navigate to first hit"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn cached_revisit_never_shows_the_loader(cx: &mut gpui::TestAppContext) {
         let runtime = test_runtime();
         let _guard = runtime.enter();

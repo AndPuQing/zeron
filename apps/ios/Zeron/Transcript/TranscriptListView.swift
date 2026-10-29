@@ -377,6 +377,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     /// Jump (or glide) to the newest content and resume following.
     func scrollToMessage(_ id: String) -> Bool {
         guard let row = current?.messagePlacement(messageId: id) else { return false }
+        ownTurn = nil
         setFollowing(false)
         setContentOffset(CGPoint(x: 0, y: max(-adjustedContentInset.top, min(CGFloat(row.y), contentSize.height - bounds.height + adjustedContentInset.bottom))), animated: false)
         return true

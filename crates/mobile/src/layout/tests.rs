@@ -1645,3 +1645,31 @@ fn errors_render_as_cards_with_a_log_in_button_when_signing_in_fixes_them() {
         }
     }
 }
+
+#[test]
+fn message_search_locates_stable_message_after_layout() {
+    let mut w = worker(375.0);
+    w.input = debug_input(
+        vec![
+            DebugEntry {
+                id: "first".into(),
+                role: DebugRole::User,
+                markdown: "same query".into(),
+                streaming: false,
+            },
+            DebugEntry {
+                id: "second".into(),
+                role: DebugRole::User,
+                markdown: "same query".into(),
+                streaming: false,
+            },
+        ],
+        false,
+    );
+    let frame = w.pass();
+    assert!(frame.message_placement("missing".into()).is_none());
+    let first = frame.message_placement("first".into()).unwrap();
+    let second = frame.message_placement("second".into()).unwrap();
+    assert!(second.y > first.y);
+    assert_ne!(first.key, second.key);
+}
