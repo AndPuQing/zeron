@@ -13699,6 +13699,9 @@ impl Render for Shell {
         if let Some(command) = self.pending_workspace_command.take() {
             use crate::composer::WorkspaceCommand;
             match command {
+                WorkspaceCommand::Permissions => self
+                    .composer
+                    .update(cx, |c, cx| c.open_access_menu(window, cx)),
                 WorkspaceCommand::Model => self
                     .composer
                     .update(cx, |c, cx| c.open_model_menu(window, cx)),

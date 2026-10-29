@@ -5868,6 +5868,7 @@ fn skill_display_name(name: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkspaceCommand {
     Model,
+    Permissions,
     New,
     Resume,
     Settings,
@@ -5951,6 +5952,15 @@ fn with_provider_commands(
     side_chat: bool,
 ) -> Vec<InvocationCandidate> {
     let mut rows = with_workspace_commands(rows, in_chat);
+    for row in &mut rows {
+        if row.invocation.prefix() == '/'
+            && matches!(row.name.as_str(), "plan" | "permissions" | "approvals")
+        {
+            row.workspace_command = Some(WorkspaceCommand::Permissions);
+            row.unavailable_reason = None;
+            row.input_hint = None;
+        }
+    }
     if harness != Some(HarnessId::Codex) {
         return rows;
     }
@@ -6714,6 +6724,11 @@ impl Composer {
 
     /// Capture-knob passthrough (`ZERON_OPEN_DIALOG=model`): open the
     /// combined harness/model menu.
+    pub fn open_access_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pickers
+            .update(cx, |pickers, cx| pickers.open_access_menu(window, cx));
+    }
+
     pub fn open_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.pickers
             .update(cx, |pickers, cx| pickers.open_model_menu(window, cx));
@@ -9260,6 +9275,24 @@ impl Composer {
                 .selected_chat_row()
                 .map(|c| c.device_id.clone())
         };
+        let execution = zeron_proto::ExecutionPolicy {
+            access: resolved.access,
+            plan: resolved.plan,
+        };
+        let host = if device_id == "local" {
+            local_device_id.as_deref()
+        } else {
+            Some(device_id.as_str())
+        };
+        let policy_error = self.pickers.read(cx).validate_execution(cx).err().or_else(|| {
+            (execution.needs_support() && !host.is_some_and(|id| self.state.read(cx).device_supports(id, capabilities::EXECUTION_POLICY_V1)))
+                .then(|| "Update this computer's Zerun to use permissions and Plan. The message was not sent.".into())
+        });
+        if let Some(error) = policy_error {
+            self.failure = Some(error.into());
+            cx.notify();
+            return;
+        }
         let space_id = space.as_ref().map(|s| s.id.clone());
         let space_path = space.as_ref().map(|s| s.path.clone());
         // A host that predates scratch folders runs a projectless chat in `~`.
@@ -9868,6 +9901,7 @@ impl Composer {
                         "text": queue_text,
                         "attachments": attachment_paths,
                         "holdForTurnEnd": true,
+                        "execution": execution,
                     });
                     let reply = engine
                         .client()

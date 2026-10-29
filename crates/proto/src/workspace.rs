@@ -34,7 +34,10 @@ pub mod capabilities {
     /// provider, so a switch there hands one provider another's session id.
     pub const PROVIDER_SWITCH_V1: &str = "provider-switch-v1";
 
+    pub const EXECUTION_POLICY_V1: &str = "execution-policy-v1";
+
     pub const CURRENT: &[&str] = &[
+        EXECUTION_POLICY_V1,
         COMPOSER_REFERENCES_V1,
         MESSAGE_QUEUE_V1,
         MESSAGE_QUEUE_ACTIONS_V1,

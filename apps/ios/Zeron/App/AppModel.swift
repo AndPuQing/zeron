@@ -743,7 +743,7 @@ final class AppModel {
     @MainActor
     func createCloudSession(draft: NewSessionDraft, text: String, images: [StagedImage]) async throws -> String {
         guard let client, let spaceId = draft.projectId else { throw CoreError.Closed }
-        let config = ChatConfig(harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
+        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
         // A retry after a failed first send reuses that chat (and machine)
         // instead of starting a second one.
         let chatId: String
@@ -756,6 +756,7 @@ final class AppModel {
             chatId = try await client.createCloudSession(spaceId: spaceId, config: config, branch: draft.branch, title: nil)
             unsentCloudChat = (key, chatId)
         }
+        try client.setSessionConfig(chatId: chatId, config: config)
         let handle = try client.openSession(chatId: chatId)
         _ = try handle.send(request: SendRequest(text: text, attachments: images.map(\.outgoing), worktree: nil, busy: .queue))
         unsentCloudChat = nil
@@ -769,8 +770,11 @@ final class AppModel {
         (try? await client?.githubBranches(repo: repo)) ?? []
     }
 
+    private(set) var sessionCreationError: String?
+
     /// Create the chat, open it, and send the first message.
     func createSession(draft: NewSessionDraft, text: String, images: [StagedImage]) -> String? {
+        sessionCreationError = nil
         guard let client else { return nil }
         let target: SessionTarget
         if let p = draft.projectId {
@@ -780,7 +784,7 @@ final class AppModel {
         } else {
             return nil
         }
-        let config = ChatConfig(harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
+        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
         do {
             let chatId = try client.createSession(newSession: NewSession(target: target, config: config, branch: draft.worktree ? nil : draft.branch, cwd: nil, title: nil))
             let handle = try client.openSession(chatId: chatId)
@@ -792,6 +796,7 @@ final class AppModel {
             return chatId
         } catch {
             NSLog("create session failed: \(error)")
+            sessionCreationError = CloudStore.message(error)
             return nil
         }
     }

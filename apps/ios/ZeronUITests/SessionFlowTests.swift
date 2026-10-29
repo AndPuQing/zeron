@@ -73,6 +73,39 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch.waitForExistence(timeout: 10))
     }
 
+    func testExecutionPolicyControlsPersistAcrossModelPicker() {
+        let app = launch(["-route", "chat:chat-tabs"])
+        let input = app.textViews["composer-input"]
+        XCTAssertTrue(input.waitForExistence(timeout: 10))
+        input.tap()
+        app.buttons["composer-chip-model"].tap()
+        let settings = app.buttons["model-picker-execution-settings"]
+        XCTAssertTrue(settings.waitForExistence(timeout: 5))
+        settings.tap()
+        app.buttons["Permissions · applies next turn"].tap()
+        let supervised = app.buttons["Supervised"]
+        XCTAssertTrue(supervised.waitForExistence(timeout: 5))
+        snapshot(app, "execution-permissions-menu")
+        supervised.tap()
+        settings.tap()
+        app.buttons["Plan · applies next turn"].tap()
+        let plan = app.buttons["On — plan before executing"]
+        XCTAssertTrue(plan.waitForExistence(timeout: 5))
+        snapshot(app, "execution-plan-menu")
+        plan.tap()
+        app.buttons["model-picker-close"].tap()
+        let access = app.buttons["composer-chip-permissions"]
+        expectation(for: NSPredicate(format: "label == %@", "Supervised"), evaluatedWith: access)
+        waitForExpectations(timeout: 5)
+        let planChip = app.buttons["composer-chip-plan"]
+        XCTAssertEqual(planChip.label, "Plan on")
+        let chips = app.scrollViews["composer-chips"]
+        for _ in 0..<3 where !planChip.isHittable { chips.swipeLeft() }
+        XCTAssertTrue(access.isHittable, "selected permissions can be reached in the composer")
+        XCTAssertTrue(planChip.isHittable, "selected Plan mode can be reached in the composer")
+        snapshot(app, "execution-policy-selected")
+    }
+
     func testImportSessionsKeepsRowsBetweenControls() {
         let app = launch(["-appearance", "1"])
         openImport(app)

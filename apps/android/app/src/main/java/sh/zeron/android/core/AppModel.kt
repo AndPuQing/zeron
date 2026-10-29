@@ -184,12 +184,16 @@ class AppModel(private val app: Application) {
                     .putString("draft.harness", value.harness)
                     .putString("draft.model", value.model)
                     .putString("draft.effort", value.effort)
+                    .putString("draft.access", value.accessMode)
+                    .putBoolean("draft.plan", value.plan)
                     .putBoolean("draft.cloud", value.cloud)
                     .apply()
             }
         }
 
     private fun storedDraft() = NewSessionDraft(
+        accessMode = settings.getString("draft.access", null) ?: "full-access",
+        plan = settings.getBoolean("draft.plan", false),
         projectId = settings.getString("draft.project", null),
         hostId = settings.getString("draft.host", null),
         harness = settings.getString("draft.harness", null) ?: "claude-code",
@@ -660,11 +664,12 @@ class AppModel(private val app: Application) {
     suspend fun createCloudSession(draft: NewSessionDraft, text: String, attachments: List<uniffi.zeron_core.OutgoingAttachment>): String {
         val client = _client.value ?: throw uniffi.zeron_core.CoreException.Closed()
         val spaceId = draft.projectId ?: throw uniffi.zeron_core.CoreException.InvalidArgument("Choose a project")
-        val config = ChatConfig(draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
         // A retry after a failed first send reuses that chat (and machine), while nothing it was made with changed.
         val key = "$spaceId|${draft.branch.orEmpty()}|${draft.harness}|${draft.model.orEmpty()}"
         val chatId = unsentCloudChat?.takeIf { it.first == key && client.sessionRow(it.second) != null }?.second
             ?: client.createCloudSession(spaceId, config, draft.branch, null).also { unsentCloudChat = key to it }
+        client.setSessionConfig(chatId, config)
         client.openSession(chatId).send(SendRequest(text, attachments, null, BusyPolicy.QUEUE))
         unsentCloudChat = null
         noteDeliveryActivity()
@@ -672,15 +677,19 @@ class AppModel(private val app: Application) {
         return chatId
     }
 
+    var sessionCreationError: String? = null
+        private set
+
     /** Create the chat and send its first message. */
     fun createSession(draft: NewSessionDraft, text: String, attachments: List<uniffi.zeron_core.OutgoingAttachment> = emptyList()): String? {
+        sessionCreationError = null
         val client = _client.value ?: return null
         val target = when {
             draft.projectId != null -> SessionTarget.Project(draft.projectId)
             draft.hostId != null -> SessionTarget.Projectless(draft.hostId)
             else -> return null
         }
-        val config = ChatConfig(draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
         return try {
             val chatId = client.createSession(NewSession(target, config, if (draft.worktree) null else draft.branch, null, null))
             val handle = client.openSession(chatId)
@@ -692,6 +701,7 @@ class AppModel(private val app: Application) {
             chatId
         } catch (e: Exception) {
             Log.w("Zeron", "create session failed", e)
+            sessionCreationError = CloudStore.message(e)
             null
         }
     }
@@ -724,6 +734,8 @@ fun projectGroups(rows: List<SessionRow>, projects: List<ProjectView>): List<Pro
 
 /** The new-session page's options (kept across launches). */
 data class NewSessionDraft(
+    val accessMode: String = "full-access",
+    val plan: Boolean = false,
     val projectId: String? = null,
     val hostId: String? = null,
     val harness: String = "claude-code",

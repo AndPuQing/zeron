@@ -24,6 +24,9 @@ use crate::schema::{DocError, SessionDoc};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueuedMessage {
+    /// Retained across edits, queue promotion and host restarts.
+    #[serde(default)]
+    pub execution: zeron_proto::ExecutionPolicy,
     /// Stable through promotion: the host uses this as the transcript user
     /// message id when the row is finally dispatched.
     pub id: String,
@@ -88,6 +91,7 @@ impl QueuedMessage {
         issued_by: impl Into<String>,
     ) -> Self {
         Self {
+            execution: Default::default(),
             id: id.into(),
             text: text.into(),
             attachments: Vec::new(),
@@ -337,6 +341,10 @@ fn index_of(queue: &loro::LoroMovableList, id: &str) -> Option<usize> {
 }
 
 fn write_queued_map(map: &loro::LoroMap, item: &QueuedMessage) -> Result<(), DocError> {
+    map.insert(
+        "execution",
+        crate::schema::loro_value_from_json(&serde_json::to_value(item.execution)?),
+    )?;
     map.insert("id", item.id.as_str())?;
     map.insert("text", item.text.as_str())?;
     map.insert("issuedBy", item.issued_by.as_str())?;
@@ -372,6 +380,10 @@ fn queued_from_json(v: serde_json::Value) -> Option<QueuedMessage> {
         return None;
     }
     Some(QueuedMessage {
+        execution: match v.get("execution") {
+            None => Default::default(),
+            Some(policy) => serde_json::from_value(policy.clone()).ok()?,
+        },
         id,
         text,
         attachments: v
@@ -415,6 +427,7 @@ mod tests {
 
     fn item(id: &str, text: &str) -> QueuedMessage {
         QueuedMessage {
+            execution: Default::default(),
             id: id.into(),
             text: text.into(),
             attachments: Vec::new(),
@@ -424,6 +437,36 @@ mod tests {
             edited_at: None,
             delivery_gate: None,
         }
+    }
+
+    #[test]
+    fn execution_snapshot_survives_queue_edits_and_restart() {
+        let original = doc();
+        let mut message = item("q-policy", "first draft");
+        message.execution = zeron_proto::ExecutionPolicy {
+            access: zeron_proto::AccessMode::Supervised,
+            plan: true,
+        };
+        original.push_queued(&message).unwrap();
+        original
+            .set_queued_text(&message.id, "edited draft", 2_000)
+            .unwrap();
+        let restored = loro::LoroDoc::new();
+        restored
+            .import(&original.export_snapshot().unwrap())
+            .unwrap();
+        let restored = SessionDoc::from_doc(restored);
+        let taken = restored.take_queue_head().unwrap().unwrap();
+        assert_eq!(taken.execution, message.execution);
+        assert_eq!(taken.text, "edited draft");
+        restored.insert_queued(0, &taken).unwrap();
+        assert_eq!(
+            restored.read_queue().unwrap()[0].execution,
+            message.execution
+        );
+        let legacy =
+            queued_from_json(serde_json::json!({"id":"old", "text":"old client"})).unwrap();
+        assert_eq!(legacy.execution, Default::default());
     }
 
     fn texts(doc: &SessionDoc) -> Vec<String> {

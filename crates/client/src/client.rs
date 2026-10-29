@@ -155,6 +155,12 @@ impl ClientInner {
             for core in self.cores() {
                 core.refresh();
             }
+        } else {
+            // Permission/model-option changes need not alter a sidebar row.
+            // Each open composer deduplicates against its last raw config.
+            for core in self.cores() {
+                core.recompute_composer(self);
+            }
         }
     }
 
@@ -355,6 +361,44 @@ impl ClientInner {
             .snapshot()
             .session(chat_id)
             .is_some_and(|row| !row.device_online)
+    }
+
+    pub(crate) fn validate_execution(&self, device_id: &str, config: &ChatConfig) -> Result<()> {
+        if !self.is_demo()
+            && let Some(catalog) = lock(&self.harness_catalogs).get(device_id)
+        {
+            let id = serde_json::to_value(config.harness).unwrap();
+            if let Some(info) = catalog.iter().find(|h| id.as_str() == Some(h.id.as_str())) {
+                config
+                    .execution_policy()
+                    .validate(&info.access_modes, info.supports_plan)
+                    .map_err(ClientError::InvalidArgument)?;
+            }
+        }
+        self.validate_execution_snapshot(device_id, config.execution_policy())
+    }
+
+    pub(crate) fn validate_execution_snapshot(
+        &self,
+        device_id: &str,
+        policy: zeron_proto::ExecutionPolicy,
+    ) -> Result<()> {
+        if policy.needs_support() && !self.is_demo() {
+            let supported = self
+                .workspace
+                .snapshot()
+                .device(device_id)
+                .is_some_and(|device| {
+                    device
+                        .capabilities
+                        .iter()
+                        .any(|cap| cap == zeron_proto::capabilities::EXECUTION_POLICY_V1)
+                });
+            if !supported {
+                return Err(ClientError::Unsupported("Update this chat's computer to use access and Plan modes. The message was not sent.".into()));
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn room_state(&self, chat_id: &str) -> RoomState {
@@ -790,6 +834,9 @@ impl Client {
                 (device_id.clone(), None, cwd)
             }
         };
+        if let Some(config) = &new.config {
+            self.inner.validate_execution(&device_id, config)?;
+        }
         let chat = Chat {
             import_source: None,
             id,
@@ -1287,6 +1334,34 @@ impl Client {
     }
 
     // ── host RPC ───────────────────────────────────────────────────────────
+
+    /// Permission choices from the most recently loaded host catalog.
+    /// Missing capabilities remain unavailable until discovery completes.
+    pub fn execution_capabilities(
+        &self,
+        device_id: &str,
+        harness: zeron_proto::HarnessId,
+    ) -> (Vec<zeron_proto::AccessMode>, bool) {
+        let id = serde_json::to_value(harness).unwrap();
+        if self.is_demo() {
+            // Demo fixtures exercise native controls without a real host.
+            return if matches!(
+                harness,
+                zeron_proto::HarnessId::ClaudeCode
+                    | zeron_proto::HarnessId::Codex
+                    | zeron_proto::HarnessId::Opencode
+            ) {
+                (zeron_proto::AccessMode::ALL.to_vec(), true)
+            } else {
+                (vec![zeron_proto::AccessMode::FullAccess], false)
+            };
+        }
+        lock(&self.inner.harness_catalogs)
+            .get(device_id)
+            .and_then(|list| list.iter().find(|h| id.as_str() == Some(h.id.as_str())))
+            .map(|h| (h.access_modes.clone(), h.supports_plan))
+            .unwrap_or_else(|| (vec![zeron_proto::AccessMode::FullAccess], false))
+    }
 
     /// Harness catalog of an execution device: live (cached to disk), else
     /// the last cached list, else the static fallback. Cached in memory for
@@ -1869,6 +1944,51 @@ pub struct PushPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_only_edits_notify_mobile_composers_without_changing_the_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = Client::new(
+            ClientConfig::new("https://edge.invalid", dir.path()),
+            Credentials::Demo(Default::default()),
+            Arc::new(crate::events::NullListener),
+        )
+        .unwrap();
+        let chat = client
+            .inner
+            .workspace
+            .mutate(|doc| doc.read_chats())
+            .unwrap()
+            .into_iter()
+            .find(|c| c.config.is_some())
+            .unwrap();
+        let handle = client.open_session(&chat.id).unwrap();
+        let before = handle.composer().revision;
+        let mut config = chat.config.unwrap();
+        config.plan = true;
+        client.set_session_config(&chat.id, &config).unwrap();
+        let changed = handle.composer().revision;
+        assert!(
+            changed > before,
+            "a native composer must refresh its policy chips"
+        );
+        // Mirror a remote registry update without the local setter's side effects.
+        config.plan = false;
+        client
+            .inner
+            .workspace
+            .mutate(|doc| doc.set_chat_config(&chat.id, &config))
+            .unwrap();
+        client.inner.recompute_workspace();
+        assert!(handle.composer().revision > changed);
+        let unchanged = handle.composer().revision;
+        client.inner.recompute_workspace();
+        assert_eq!(
+            handle.composer().revision,
+            unchanged,
+            "identical configs do not churn revisions"
+        );
+    }
 
     #[test]
     fn demo_replica_is_local_only_and_never_queues() {

@@ -342,7 +342,7 @@ final class CloudStore {
         return id
     }
 
-    static func message(_ error: Error) -> String {
+    nonisolated static func message(_ error: Error) -> String {
         guard let core = error as? CoreError else { return error.localizedDescription }
         switch core {
         case let .NotFound(m), let .InvalidArgument(m), let .HostUnavailable(m), let .Unsupported(m),

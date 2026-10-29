@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HarnessInfo {
+    #[serde(default)]
+    pub access_modes: Vec<zeron_proto::AccessMode>,
+    #[serde(default)]
+    pub supports_plan: bool,
     /// Wire id (`claude-code`).
     pub id: String,
     /// Display name.
@@ -36,6 +40,8 @@ fn default_true() -> bool {
 impl HarnessInfo {
     fn fallback(id: &str, label: &str) -> Self {
         Self {
+            access_modes: Vec::new(),
+            supports_plan: false,
             id: id.into(),
             label: label.into(),
             supports_steering: None,

@@ -5,7 +5,7 @@ import org.junit.Test
 import uniffi.zeron_core.*
 
 class SessionModelPickerTest {
-    private val config = ChatConfig("codex", "old", "high", mapOf("contextWindow" to "1m"), SandboxLevel.READ_ONLY)
+    private val config = ChatConfig("supervised", true, "codex", "old", "high", mapOf("contextWindow" to "1m"), SandboxLevel.READ_ONLY)
     private fun state() = ComposerState(
         "chat", 0uL, "Chat", HostInfo("host", "Computer", true, HostCapabilities(true, true, true, true, true, true, true, true)),
         LiveStatus(ChatIndicator.IDLE, false, null, false, false), emptyList(), emptyList(), null, false,
@@ -19,6 +19,8 @@ class SessionModelPickerTest {
         assertNull(selected.reasoning)
         assertTrue(selected.modelOptions.isEmpty())
         assertEquals(SandboxLevel.READ_ONLY, selected.sandbox)
+        assertEquals("supervised", selected.accessMode)
+        assertTrue(selected.plan)
     }
 
     @Test fun sameAgentKeepsReasoningAndOptions() {

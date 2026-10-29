@@ -56,6 +56,8 @@ pub enum SteerOutcome {
     Accepted,
     /// A live run owns the turn, but an update prevents accepting another prompt.
     DeferredByUpdate,
+    /// The next policy needs a new runtime, after the current turn completes.
+    DeferredByPolicy,
     /// No live steerable run — the caller should dispatch the prompt as a new turn.
     NotSteerable,
 }
@@ -103,7 +105,9 @@ impl RuntimeConfig {
     }
 
     fn can_route(&self, harness_id: HarnessId, request: &RunRequest) -> bool {
-        self.harness_id == harness_id && self.harness.same_runtime(&self.request, request)
+        self.harness_id == harness_id
+            && self.request.execution_policy() == request.execution_policy()
+            && self.harness.same_runtime(&self.request, request)
     }
 
     /// How `request` reaches this runtime: `Some(false)` as is, `Some(true)`
@@ -113,6 +117,7 @@ impl RuntimeConfig {
         if self.can_route(harness_id, request) {
             Some(false)
         } else if self.harness_id == harness_id
+            && self.request.execution_policy() == request.execution_policy()
             && self.harness.reconfigures_in_place(&self.request, request)
         {
             Some(true)
@@ -633,7 +638,8 @@ impl SessionsEngine {
     /// still streaming for the message before it. Such prompts belong in the
     /// visible queue. `request` = a Run that may differ from the live config
     /// (one the runtime adopts in place still lands in its mailbox; any other
-    /// config restarts the runtime instead, which is no hold).
+    /// config restarts the runtime instead). A permission/Plan change always
+    /// waits for the active turn, so it cannot kill work or broaden that turn.
     pub fn defers_to_turn_end(
         &self,
         chat_id: &str,
@@ -642,14 +648,27 @@ impl SessionsEngine {
         if !self.turn_in_flight(chat_id) {
             return false;
         }
+        let saved = self
+            .inner
+            .workspace()
+            .and_then(|ws| ws.chat_config(chat_id))
+            .map(|c| c.execution_policy());
+        let requested = request.map(|(_, r)| r.execution_policy());
+        let policy = match (saved, requested) {
+            (Some(saved), Some(requested)) => Some(saved.restricted_by(requested)),
+            (saved, requested) => saved.or(requested),
+        };
         let live = lock(&self.inner.runs).get(chat_id).map(|h| {
             (
                 h.runtime_config.harness_id,
                 h.steerable
                     && request.is_none_or(|(id, r)| h.runtime_config.route(id, r).is_some()),
+                policy.is_some_and(|policy| policy != h.runtime_config.request.execution_policy()),
             )
         });
-        live.is_some_and(|(harness, routable)| routable && !self.steers_mid_turn(harness))
+        live.is_some_and(|(harness, routable, policy_changed)| {
+            policy_changed || (routable && !self.steers_mid_turn(harness))
+        })
     }
 
     /// The harness of the chat's live run, while one is in flight.
@@ -858,6 +877,42 @@ impl SessionsEngine {
         stops_seen: Option<u64>,
         idle: bool,
     ) -> Result<String, EngineError> {
+        // Config and command travel on separate docs. Keep restrictions from
+        // both: neither an old client nor a late config sync may relax a send.
+        if let Some(config) = self
+            .inner
+            .workspace()
+            .and_then(|ws| ws.chat_config(chat_id))
+        {
+            request.set_execution_policy(
+                request
+                    .execution_policy()
+                    .restricted_by(config.execution_policy()),
+            );
+        }
+        if let Some(ws) = self.inner.workspace() {
+            if let Some(parent) = ws.chat(chat_id)?.and_then(|chat| chat.parent_chat_id) {
+                if let Some(config) = ws.chat_config(&parent) {
+                    if !config
+                        .execution_policy()
+                        .permits_child(request.execution_policy())
+                    {
+                        return Err(EngineError::Other("This side chat has broader permissions than its parent. Match the parent's permissions and Plan before sending.".into()));
+                    }
+                }
+            }
+        }
+        let policy_harness = self.inner.registry.resolve(harness_id)?;
+        request
+            .execution_policy()
+            .validate(
+                policy_harness.access_modes(),
+                policy_harness.supports_plan(),
+            )
+            .map_err(EngineError::Other)?;
+        if request.execution_policy().needs_support() {
+            request.auto_approve = false;
+        }
         // Project-less chats store a home-relative cwd (the creating device
         // can't know the host's home); expand it here, on the host, where the
         // run spawns, creating a new chat's scratch folder.
@@ -896,12 +951,17 @@ impl SessionsEngine {
                     run.runtime_config.harness_id,
                     run.runtime_config.environment_revision.clone(),
                     run.run_id.clone(),
+                    run.runtime_config.request.execution_policy(),
                 )
             });
-            let Some((id, revision, existing_run_id)) = binding else {
+            let Some((id, revision, existing_run_id, execution)) = binding else {
                 break;
             };
-            if id != harness_id || !self.inner.registry.environment_changed(id, &revision) {
+            let policy_busy =
+                execution != request.execution_policy() && self.turn_in_flight(chat_id);
+            if id != harness_id
+                || (!self.inner.registry.environment_changed(id, &revision) && !policy_busy)
+            {
                 break;
             }
             if idle {
@@ -909,7 +969,8 @@ impl SessionsEngine {
             }
             statuses.changed().await.map_err(|_| {
                 EngineError::Other(
-                    "Session engine stopped while waiting for updated environment".into(),
+                    "Session engine stopped while waiting for execution settings to take effect"
+                        .into(),
                 )
             })?;
         }
@@ -1450,6 +1511,31 @@ impl SessionsEngine {
         )
     }
 
+    pub(crate) fn effective_execution(
+        &self,
+        chat_id: &str,
+        submitted: zeron_proto::ExecutionPolicy,
+    ) -> zeron_proto::ExecutionPolicy {
+        self.inner
+            .workspace()
+            .and_then(|ws| ws.chat_config(chat_id))
+            .map_or(submitted, |config| {
+                submitted.restricted_by(config.execution_policy())
+            })
+    }
+
+    pub(crate) fn execution_change_pending(
+        &self,
+        chat_id: &str,
+        submitted: zeron_proto::ExecutionPolicy,
+    ) -> bool {
+        let policy = self.effective_execution(chat_id, submitted);
+        self.turn_in_flight(chat_id)
+            && lock(&self.inner.runs)
+                .get(chat_id)
+                .is_some_and(|run| run.runtime_config.request.execution_policy() != policy)
+    }
+
     /// Push a steer prompt into the live run's mailbox. `NotSteerable` when no live
     /// steerable run exists — the caller (command executor) dispatches a new turn.
     pub async fn steer(
@@ -1458,7 +1544,8 @@ impl SessionsEngine {
         prompt: &str,
         message_id: Option<String>,
     ) -> Result<SteerOutcome, EngineError> {
-        self.steer_at(chat_id, prompt, message_id, now_ms()).await
+        self.steer_at(chat_id, prompt, message_id, now_ms(), Default::default())
+            .await
     }
 
     pub(crate) async fn steer_at(
@@ -1467,8 +1554,20 @@ impl SessionsEngine {
         prompt: &str,
         message_id: Option<String>,
         issued_at: i64,
+        execution: zeron_proto::ExecutionPolicy,
     ) -> Result<SteerOutcome, EngineError> {
         self.validate_imported_chat(chat_id)?;
+        let policy = self.effective_execution(chat_id, execution);
+        if lock(&self.inner.runs)
+            .get(chat_id)
+            .is_some_and(|run| run.runtime_config.request.execution_policy() != policy)
+        {
+            return Ok(if self.turn_in_flight(chat_id) {
+                SteerOutcome::DeferredByPolicy
+            } else {
+                SteerOutcome::NotSteerable
+            });
+        }
         let target = lock(&self.inner.runs)
             .get(chat_id)
             .filter(|h| h.steerable && !h.retiring.load(std::sync::atomic::Ordering::Acquire))
@@ -3688,6 +3787,13 @@ async fn drive_run(
     // agent can spawn and talk to side chats through the engine it runs in.
     if request.mcp.is_none() {
         request.mcp = inner.zeron_mcp(&chat_id, side_chats_only);
+    }
+    let execution = request.execution_policy();
+    if let Some(mcp) = &mut request.mcp {
+        mcp.env.insert(
+            "ZERON_EXECUTION_POLICY".into(),
+            serde_json::to_string(&execution).expect("execution policy is serializable"),
+        );
     }
     // A revived turn the resumed session already holds: the provider gets
     // the continuation, while the transcript, preview and title keep the

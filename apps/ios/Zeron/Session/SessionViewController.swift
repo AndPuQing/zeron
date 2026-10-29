@@ -762,6 +762,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         let c = source.chrome
         let old = shown
         shown = c
+        if c.error != old.error, let message = c.error { Toast.show(message, in: view.window) }
         if c.title != old.title || c.subtitle != old.subtitle || navigationItem.title == nil {
             navigationItem.title = c.title
             navigationItem.rightBarButtonItem?.menu = sessionMenu(title: c.title, subtitle: c.subtitle)
@@ -817,28 +818,8 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         guard let client = app.client else { throw CancellationError() }
         switch action {
         case .model:
-            let handle = try client.openSession(chatId: chatId)
-            guard let config = client.sessionConfig(chatId: chatId) else { throw CancellationError() }
-            let identity = source.commandContext
-            let models = try await client.listModels(deviceId: handle.composer().host.deviceId, harness: config.harness)
-            guard identity == source.commandContext, view.window != nil else { throw CancellationError() }
-            guard !models.isEmpty else {
-                throw NSError(domain: "Zerun", code: 1, userInfo: [NSLocalizedDescriptionKey: "No models available. Reopen the model picker to retry."])
-            }
-            let sheet = UIAlertController(title: "Choose model", message: nil, preferredStyle: .actionSheet)
-            for model in models {
-                sheet.addAction(UIAlertAction(title: model.label, style: .default) { [weak self] _ in
-                    guard let self, identity == self.source.commandContext,
-                          var latest = client.sessionConfig(chatId: self.chatId) else { return }
-                    latest.model = model.id
-                    latest.reasoning = nil
-                    do { try client.setSessionConfig(chatId: self.chatId, config: latest) }
-                    catch { self.presentSessionError("Couldn't change model", error) }
-                })
-            }
-            sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-            sheet.popoverPresentationController?.sourceView = composer
-            present(sheet, animated: true)
+            guard view.window != nil, let picker = source.modelPicker() else { throw CancellationError() }
+            present(picker, animated: true)
         case .new: router?.presentNewSession(prompt: nil)
         case .search: router?.showSearch()
         case .appearance: router?.showSettings()

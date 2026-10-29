@@ -140,6 +140,7 @@ fn main() -> anyhow::Result<()> {
     let message = attachments::with_attachments(&body, &paths);
     let queue = vec![
         zeron_doc::QueuedMessage {
+            execution: Default::default(),
             id: "queued-review".into(),
             text: body,
             attachments: paths.clone(),
@@ -150,6 +151,7 @@ fn main() -> anyhow::Result<()> {
             delivery_gate: None,
         },
         zeron_doc::QueuedMessage {
+            execution: Default::default(),
             id: "queued-text".into(),
             text: "Then check the spacing and keyboard navigation.".into(),
             attachments: vec![],

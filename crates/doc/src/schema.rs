@@ -2446,6 +2446,7 @@ mod tests {
         let entry = SessionCommandEntry {
             id: "c1".into(),
             payload: SessionCommandPayload::Steer {
+                execution: Default::default(),
                 prompt: "focus".into(),
                 message_id: None,
             },

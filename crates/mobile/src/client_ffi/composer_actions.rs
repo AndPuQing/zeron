@@ -4,7 +4,17 @@ use super::types::{ComposerCatalog, ComposerCommand};
 use zeron_proto::{HarnessId, invocation::Invocation};
 
 const LOCAL_COMMANDS: &[&str] = &[
-    "model", "new", "resume", "rename", "archive", "copy", "side", "fork", "theme",
+    "model",
+    "plan",
+    "permissions",
+    "new",
+    "resume",
+    "rename",
+    "archive",
+    "copy",
+    "side",
+    "fork",
+    "theme",
 ];
 
 fn known_harness(harness: &str) -> Option<HarnessId> {
@@ -89,12 +99,17 @@ pub fn mobile_composer_action(harness: String, text: String) -> Option<MobileCom
     let (name, args) = leading_command(&decoded)?;
     let (name, local_namespace) = match name.strip_prefix("zeron:") {
         Some(name) if LOCAL_COMMANDS.contains(&name) => (name, true),
-        _ if harness == "codex" => (name, false),
+        _ if harness == "codex" || matches!(name, "plan" | "permissions" | "approvals") => {
+            (name, false)
+        }
         _ => return None,
     };
     use MobileComposerAction::*;
     let (action, description) = match name {
         "model" => (Model, "Choose a model"),
+        "plan" | "permissions" | "approvals" => {
+            (Model, "Configure permissions and Plan in the composer")
+        }
         "new" | "clear" => (New, "Start a new conversation"),
         "resume" | "agents" => (Search, "Search conversations"),
         "rename" => (Rename, "Rename this conversation"),
@@ -238,7 +253,7 @@ mod tests {
                     command: None,
                 };
                 assert!(mobile_composer_action((*harness).into(), skill.link()).is_none());
-                if *harness != "codex" {
+                if *harness != "codex" && !matches!(*name, "plan" | "permissions") {
                     assert!(
                         mobile_composer_action((*harness).into(), format!("/{name}")).is_none()
                     );
@@ -265,6 +280,17 @@ mod tests {
             }
         }
         assert!(mobile_composer_action("unknown-agent".into(), "/zeron:model".into()).is_none());
+    }
+
+    #[test]
+    fn execution_shortcuts_open_the_shared_controls_and_do_not_send_native_mode_changes() {
+        for harness in PROVIDERS {
+            for name in ["plan", "permissions", "approvals"] {
+                let local = mobile_composer_action((*harness).into(), format!("/{name}")).unwrap();
+                assert_eq!(local.action, MobileComposerAction::Model);
+                assert!(!local.has_arguments);
+            }
+        }
     }
 
     #[test]

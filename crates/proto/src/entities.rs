@@ -173,9 +173,9 @@ pub struct ChatConfig {
     pub sandbox: SandboxLevel,
     /// The chat's access mode; absent on chats created before modes, which
     /// ran with full access.
-    #[serde(default, skip_serializing_if = "AccessMode::is_full_access")]
+    #[serde(default)]
     pub access: AccessMode,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub plan: bool,
 }
 

@@ -302,6 +302,7 @@ async fn update_deferred_steering_preserves_the_active_turn_and_queued_prompt() 
         handle.doc(),
         "deferred-steer",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "follow up".into(),
             message_id: Some("follow-up".into()),
         },
@@ -933,6 +934,7 @@ async fn steer_with_no_live_run_falls_back_to_new_turn() {
         handle.doc(),
         "cmd-steer-1",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "also do this".into(),
             message_id: Some("m-2".into()),
         },
@@ -1056,6 +1058,7 @@ async fn steer_into_unsteerable_live_turn_holds_instead_of_interrupting() {
         handle.doc(),
         "cmd-steer-1",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "also do this".into(),
             message_id: Some("m-2".into()),
         },
@@ -3008,6 +3011,7 @@ async fn parked_steer_restamps_started_at_and_idle_clears_it() {
         handle.doc(),
         "cmd-steer-park-timer",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "next".into(),
             message_id: Some("m-2".into()),
         },

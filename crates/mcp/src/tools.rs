@@ -1011,7 +1011,8 @@ impl Tools {
         // creates chats, and a new chat's parent is a top-level chat.
         // The calling chat's access mode caps the new one's: a supervised
         // agent must not hand its work to one that asks nothing.
-        let mut ceiling = AccessMode::FullAccess;
+        let mut caller_policy = self.zeron.origin().execution.unwrap_or_default();
+        let mut ceiling = caller_policy.access;
         if let Some(origin) = self.zeron.origin().chat_id.as_deref()
             && !zeron_proto::voice::is_orchestrator_chat(origin)
         {
@@ -1020,10 +1021,24 @@ impl Tools {
                 origin.parent_chat_id.is_none(),
                 "A delegated chat can't create chats of its own. Do the work in this chat, or ask the chat that started you."
             );
-            ceiling = origin.config.map(|c| c.access).unwrap_or_default();
+            caller_policy = caller_policy.restricted_by(
+                origin
+                    .config
+                    .map(|c| c.execution_policy())
+                    .unwrap_or_default(),
+            );
+            ceiling = caller_policy.access;
         }
         if let Some(parent) = parent_chat_id.as_deref() {
             let parent = self.zeron.resolve_chat(parent).await?;
+            caller_policy = caller_policy.restricted_by(
+                parent
+                    .config
+                    .as_ref()
+                    .map(|c| c.execution_policy())
+                    .unwrap_or_default(),
+            );
+            ceiling = caller_policy.access;
             anyhow::ensure!(
                 parent.parent_chat_id.is_none(),
                 "{} is itself a delegated chat: only top-level chats have side chats.",
@@ -1086,6 +1101,7 @@ impl Tools {
             "This chat runs {}, so the chats it creates can't have more access than that.",
             ceiling.label()
         );
+        let plan = args.plan || caller_policy.plan;
         // A Cloud machine's catalog is checked when it runs, not here; an
         // engine predating modes lists none and runs with full access.
         if let Some(info) = harnesses.iter().find(|h| h.id == harness).filter(|_| !args.cloud) {
@@ -1097,8 +1113,19 @@ impl Tools {
                 modes.iter().map(|m| m.label()).collect::<Vec<_>>().join(", ")
             );
             anyhow::ensure!(
-                !args.plan || info.supports_plan,
+                !plan || info.supports_plan,
                 "{harness:?} on device {device_id} has no plan mode"
+            );
+        }
+        if !access.is_full_access() || plan {
+            anyhow::ensure!(
+                !args.cloud,
+                "Start restricted Cloud sessions after the host advertises execution-policy-v1"
+            );
+            anyhow::ensure!(
+                self.zeron.devices().await?.iter().any(|d| d.id == device_id
+                    && d.supports(zeron_proto::capabilities::EXECUTION_POLICY_V1)),
+                "Update the target host to delegate with permissions and Plan"
             );
         }
         let config = ChatConfig {
@@ -1108,7 +1135,7 @@ impl Tools {
             model_options: Default::default(),
             sandbox,
             access,
-            plan: args.plan,
+            plan,
         };
 
         let chat_id = uuid::Uuid::new_v4().to_string();
@@ -1434,7 +1461,29 @@ impl Tools {
     }
 
     async fn respond_to_input(&self, args: RespondArgs) -> anyhow::Result<Value> {
+        if let Some(origin) = self.zeron.origin().chat_id.as_deref() {
+            let caller = self.zeron.resolve_chat(origin).await?;
+            anyhow::ensure!(
+                !self
+                    .zeron
+                    .origin()
+                    .execution
+                    .unwrap_or_else(|| caller
+                        .config
+                        .map(|c| c.execution_policy())
+                        .unwrap_or_default())
+                    .needs_support(),
+                "Permission and input decisions from a restricted agent must be answered by the user in Zerun"
+            );
+        }
         let chat = self.zeron.resolve_chat(&args.chat).await?;
+        anyhow::ensure!(
+            !chat
+                .config
+                .as_ref()
+                .is_some_and(|c| c.execution_policy().needs_support()),
+            "This chat's permission and input decisions must be answered by the user in Zerun"
+        );
         let request_id = match args.request_id {
             Some(id) => id,
             None => {
@@ -1535,6 +1584,37 @@ impl Tools {
             "run" | "steer" | "queue" => mode,
             other => anyhow::bail!("unknown mode {other:?}; expected auto, run, steer, or queue"),
         };
+        let target_policy = chat
+            .config
+            .as_ref()
+            .map(|c| c.execution_policy())
+            .unwrap_or_default();
+        if let Some(origin) = self.zeron.origin().chat_id.as_deref() {
+            let caller = self.zeron.resolve_chat(origin).await?;
+            let ceiling = self.zeron.origin().execution.unwrap_or_else(|| {
+                caller
+                    .config
+                    .map(|c| c.execution_policy())
+                    .unwrap_or_default()
+            });
+            anyhow::ensure!(
+                ceiling.permits_child(target_policy),
+                "Target chat has broader execution permissions than this caller"
+            );
+        }
+        if target_policy.needs_support() {
+            anyhow::ensure!(
+                self.zeron
+                    .devices()
+                    .await?
+                    .iter()
+                    .any(|d| d.id == chat.device_id
+                        && d.capabilities
+                            .iter()
+                            .any(|c| c == zeron_proto::capabilities::EXECUTION_POLICY_V1)),
+                "Update the target host before sending with permissions or Plan"
+            );
+        }
         let id = match chosen {
             "run" => {
                 let config = chat.config.clone();
@@ -1582,13 +1662,18 @@ impl Tools {
                     .queue_command(
                         &chat.id,
                         &SessionCommandPayload::Steer {
+                            execution: target_policy,
                             prompt: text,
                             message_id: Some(uuid::Uuid::new_v4().to_string()),
                         },
                     )
                     .await?
             }
-            _ => self.zeron.queue_message(&chat.id, &text).await?,
+            _ => {
+                self.zeron
+                    .queue_message(&chat.id, &text, target_policy)
+                    .await?
+            }
         };
         Ok(json!({
             "delivery": chosen,
@@ -1737,6 +1822,7 @@ mod tests {
     /// two chats with a two-message transcript. Writes are recorded for assertions.
     #[derive(Default)]
     struct World {
+        legacy_host: bool,
         writes: Mutex<Vec<(String, Value)>>,
         dispatch_barrier: Option<tokio::sync::Barrier>,
         beta_parent: Option<String>,
@@ -1778,6 +1864,7 @@ mod tests {
                 })),
                 methods::WATCH_DEVICES => stream(json!([{
                     "id": "dev-local", "name": "Laptop", "platform": "linux",
+                    "capabilities": if self.legacy_host { vec![] } else { vec![zeron_proto::capabilities::EXECUTION_POLICY_V1] },
                     "lastSeenAt": null
                 }, {"id": "dev-remote", "name": "Worker", "platform": "linux", "lastSeenAt": null}])),
                 methods::WATCH_SPACES => stream(json!([{
@@ -1899,6 +1986,94 @@ mod tests {
     fn tools(world: Arc<World>, origin: Origin) -> Tools {
         let client = memory_client(world);
         Tools::new(Arc::new(Zeron::with_client(client, origin)))
+    }
+
+    #[tokio::test]
+    async fn frozen_plan_is_inherited_and_legacy_hosts_reject_it() {
+        for legacy_host in [false, true] {
+            let world = Arc::new(World {
+                legacy_host,
+                ..Default::default()
+            });
+            let tools = tools(
+                world.clone(),
+                Origin {
+                    chat_id: Some("chat-alpha-1".into()),
+                    execution: Some(zeron_proto::ExecutionPolicy {
+                        plan: true,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            );
+            let result = tools.call("create_chat", json!({"plan":false})).await;
+            if legacy_host {
+                assert!(result.unwrap_err().contains("Update the target host"));
+                assert!(world.writes.lock().unwrap().is_empty());
+            } else {
+                result.unwrap();
+                let writes = world.writes.lock().unwrap();
+                let created = writes
+                    .iter()
+                    .find(|(_, w)| w["op"] == "createChat")
+                    .unwrap();
+                assert_eq!(created.1["config"]["plan"], true);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn frozen_restricted_origin_cannot_delegate_to_full_access_or_answer_approvals() {
+        let world = Arc::new(World::default());
+        let tools = tools(
+            world.clone(),
+            Origin {
+                chat_id: Some("chat-alpha-1".into()),
+                execution: Some(zeron_proto::ExecutionPolicy {
+                    access: zeron_proto::AccessMode::Supervised,
+                    plan: true,
+                }),
+                ..Default::default()
+            },
+        );
+        let send = tools
+            .call(
+                "send_message",
+                json!({"chat":"chat-beta-2", "text":"implement", "wait":false}),
+            )
+            .await;
+        assert!(send.unwrap_err().contains("broader execution permissions"));
+        let reply = tools
+            .call(
+                "respond_to_input",
+                json!({"chat":"chat-beta-2", "requestId":"approval", "answers":[]}),
+            )
+            .await;
+        assert!(reply.unwrap_err().contains("answered by the user"));
+        assert!(world.writes.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn full_access_agent_cannot_answer_a_restricted_chats_approval() {
+        let world = Arc::new(World {
+            extra_chats: vec![json!({
+                "id":"restricted", "deviceId":"dev-local", "title":"Restricted", "archived":false,
+                "createdAt":"2026-09-01T00:00:00Z", "config":{
+                    "harness":"claude-code", "model":null, "reasoning":null, "sandbox":"workspace-write",
+                    "access":"supervised", "plan":false
+                }
+            })],
+            ..Default::default()
+        });
+        let tools = tools(world.clone(), origin("chat-alpha-1"));
+        let reply = tools
+            .call(
+                "respond_to_input",
+                json!({"chat":"restricted", "request_id":"approval", "answers":[]}),
+            )
+            .await;
+        assert!(reply.unwrap_err().contains("answered by the user"));
+        assert!(world.writes.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2454,7 +2629,7 @@ mod tests {
             .rev()
             .find(|(_, w)| w["op"] == "createChat")
             .unwrap();
-        assert!(last.1["config"].get("access").is_none());
+        assert_eq!(last.1["config"]["access"], "full-access");
     }
 
     #[tokio::test]

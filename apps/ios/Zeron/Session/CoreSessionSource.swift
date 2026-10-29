@@ -21,6 +21,7 @@ final class CoreSessionSource: SessionSource {
     private var canSwitchProvider = false
     private var hostSwitchesProviders = false
     private var turnRunning = false
+    private var configError: String?
     /// The host's providers, read ahead: a menu whose top level waits on the
     /// host doesn't open until it answers.
     private var hostHarnesses: [HarnessInfo] = []
@@ -122,6 +123,10 @@ final class CoreSessionSource: SessionSource {
                 ))
             }
         }
+        if let config = client.sessionConfig(chatId: chatId) {
+            chips.append(ComposerChip(id: "permissions", title: accessModeLabel(config.accessMode), symbol: "lock.shield"))
+            chips.append(ComposerChip(id: "plan", title: config.plan ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
+        }
         next.chips = chips
         if let sendFailure {
             next.banner = .failed(sendFailure)
@@ -155,7 +160,7 @@ final class CoreSessionSource: SessionSource {
             }
             return SessionChrome.QueuedItem(id: q.id, text: q.visibleText, thumbnail: nil, gate: gate)
         }
-        next.error = c.queueError
+        next.error = configError ?? c.queueError
         if next != chrome {
             chrome = next
             onChange?()
@@ -257,6 +262,12 @@ final class CoreSessionSource: SessionSource {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
         switch id {
+        case "permissions", "plan":
+            guard let config = client.sessionConfig(chatId: chatId) else { return nil }
+            let caps = try? client.executionCapabilities(harness: harness, deviceId: hostDevice)
+            return makeExecutionMenu(caps: caps, access: config.accessMode, plan: config.plan, showPlan: id == "plan") { [weak self] selection in
+                self?.setConfig { config in selection.apply(to: &config) }
+            }
         case "model":
             // The picker sheet takes the tap (see `modelPicker`).
             return nil
@@ -313,7 +324,9 @@ final class CoreSessionSource: SessionSource {
         let host = row.isCloud ? (name: "Cloud", symbol: "cloud") : (name: app?.deviceName(hostDevice) ?? "This computer", symbol: "desktopcomputer")
         // No model of its own: it runs the default, so that's the one ticked.
         let current = row.model ?? defaultModel(for: row)?.id
-        return ModelPickerViewController.sheet(tabs: tabs, harness: harness, model: current, host: host, note: note) { [weak self] pickedHarness, model in
+        return ModelPickerViewController.sheet(tabs: tabs, harness: harness, model: current, host: host, note: note, settingsMenu: { [weak self] in
+            UIMenu(children: [self?.chipMenu("permissions"), self?.chipMenu("plan")].compactMap { $0 })
+        }) { [weak self] pickedHarness, model in
             guard let self else { return }
             // Re-checked at the pick: a turn may have started since the
             // sheet opened with other providers' tabs.
@@ -375,9 +388,11 @@ final class CoreSessionSource: SessionSource {
     }
 
     private func setConfig(_ change: (inout ChatConfig) -> Void) {
-        var config = client.sessionConfig(chatId: chatId) ?? ChatConfig(harness: app?.row(chatId)?.harness ?? "claude-code", model: nil, reasoning: nil, modelOptions: [:], sandbox: .workspaceWrite)
+        var config = client.sessionConfig(chatId: chatId) ?? ChatConfig(accessMode: "full-access", plan: false, harness: app?.row(chatId)?.harness ?? "claude-code", model: nil, reasoning: nil, modelOptions: [:], sandbox: .workspaceWrite)
         change(&config)
-        try? client.setSessionConfig(chatId: chatId, config: config)
+        do { try client.setSessionConfig(chatId: chatId, config: config); configError = nil }
+        catch { configError = "Couldn't update permissions or model: \(error.localizedDescription)" }
+        refresh()
     }
 
     var commandContext: String { "\(hostDevice):\(client.sessionConfig(chatId: chatId)?.harness ?? ""):\(chatId)" }
@@ -423,4 +438,46 @@ final class CoreSessionSource: SessionSource {
             }
         }
     }
+}
+
+func accessModeLabel(_ mode: String) -> String {
+    switch mode {
+    case "supervised": "Supervised"
+    case "auto-accept-edits": "Auto-accept edits"
+    case "full-access": "Full access"
+    default: mode
+    }
+}
+
+/// A menu action edits only its own field on the latest configuration.
+/// The menu may outlive a configuration update from another device.
+enum ExecutionSelection {
+    case access(String)
+    case plan(Bool)
+
+    func apply(to config: inout ChatConfig) {
+        switch self {
+        case .access(let mode): config.accessMode = mode
+        case .plan(let enabled): config.plan = enabled
+        }
+    }
+}
+
+func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool, showPlan: Bool,
+                       onPick: @escaping (ExecutionSelection) -> Void) -> UIMenu {
+    var actions: [UIMenuElement] = []
+    if showPlan {
+        actions.append(UIAction(title: "Off", state: plan ? .off : .on) { _ in onPick(.plan(false)) })
+        if caps?.supportsPlan == true {
+            actions.append(UIAction(title: "On — plan before executing", state: plan ? .on : .off) { _ in onPick(.plan(true)) })
+        }
+    } else {
+        for mode in caps?.accessModes ?? ["full-access"] {
+            actions.append(UIAction(title: accessModeLabel(mode), state: mode == access ? .on : .off) { _ in onPick(.access(mode)) })
+        }
+    }
+    if let reason = caps?.reason {
+        actions.append(UIAction(title: reason, attributes: .disabled) { _ in })
+    }
+    return UIMenu(title: showPlan ? "Plan · applies next turn" : "Permissions · applies next turn", children: actions)
 }

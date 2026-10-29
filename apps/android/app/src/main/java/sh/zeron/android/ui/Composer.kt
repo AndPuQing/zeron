@@ -365,7 +365,7 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     LaunchedEffect(modelRequest) { if (modelRequest > 0) open("model") }
 
     fun setConfig(change: (ChatConfig) -> ChatConfig) {
-        val current = client.sessionConfig(c.chatId) ?: ChatConfig(harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        val current = client.sessionConfig(c.chatId) ?: ChatConfig("full-access", false, harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
         runCatching { client.setSessionConfig(c.chatId, change(current)) }
             .onFailure { configError = it.message ?: "Couldn't update this chat." }
     }
@@ -375,6 +375,10 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     val modelLabel = row?.modelLabel ?: fallback?.label ?: row?.harnessLabel
     if (modelLabel != null) {
         ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = { menu = "model" })
+    }
+    val execution = client.sessionConfig(c.chatId)
+    ExecutionChips(client, harness, c.host.deviceId, execution?.accessMode ?: "full-access", execution?.plan ?: false) { access, plan ->
+        setConfig { it.copy(accessMode = access ?: it.accessMode, plan = plan ?: it.plan) }
     }
     if (menu == "model") key(c.chatId, c.host.deviceId) { SessionModelPicker(client, c, row, onDismiss = { menu = null }) }
     configError?.let { message ->

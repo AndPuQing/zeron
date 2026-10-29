@@ -179,6 +179,10 @@ struct CoreState {
     hydrated: bool,
     transcript_revision: u64,
     composer_revision: u64,
+    /// Configuration-only edits must notify native composers even when their
+    /// projected model/title/status fields did not change.
+    composer_config: Option<zeron_proto::ChatConfig>,
+    composer_capabilities: Option<(Vec<zeron_proto::AccessMode>, bool)>,
 }
 
 pub(crate) struct SessionCore {
@@ -252,6 +256,8 @@ impl SessionCore {
                 hydrated: false,
                 transcript_revision: 0,
                 composer_revision: 0,
+                composer_config: None,
+                composer_capabilities: None,
             }),
             transcript_tx,
             composer: RwLock::new(composer),
@@ -563,11 +569,30 @@ impl SessionCore {
             last_submitted_message_id: st.last_submitted.clone(),
             context_usage: st.context_usage,
         };
+        let config = client
+            .workspace
+            .chat(&self.chat_id)
+            .and_then(|chat| chat.config);
+        let capabilities = client.workspace.chat(&self.chat_id).and_then(|chat| {
+            let harness = serde_json::to_value(chat.config.as_ref()?.harness).ok()?;
+            lock(&client.harness_catalogs)
+                .get(&chat.device_id)
+                .and_then(|list| {
+                    list.iter()
+                        .find(|h| harness.as_str() == Some(h.id.as_str()))
+                })
+                .map(|h| (h.access_modes.clone(), h.supports_plan))
+        });
         let current = self.composer();
         next.revision = current.revision;
-        if *current == next {
+        if *current == next
+            && st.composer_config == config
+            && st.composer_capabilities == capabilities
+        {
             return;
         }
+        st.composer_config = config;
+        st.composer_capabilities = capabilities;
         st.composer_revision += 1;
         next.revision = st.composer_revision;
         drop(st);
@@ -748,6 +773,7 @@ fn derive_pending(st: &mut CoreState, device_id: &str, degraded: bool, now: i64)
             SessionCommandPayload::Steer {
                 prompt,
                 message_id: Some(message_id),
+                ..
             } => (message_id, prompt, PendingKind::Steer),
             _ => continue,
         };
@@ -1079,6 +1105,9 @@ impl SessionHandle {
             .workspace
             .chat(&self.core.chat_id)
             .ok_or_else(|| ClientError::NotFound(self.core.chat_id.clone()))?;
+        if let Some(config) = &chat.config {
+            client.validate_execution(&chat.device_id, config)?;
+        }
         if request.text.trim().is_empty() && request.attachments.is_empty() {
             return Err(ClientError::InvalidArgument("empty message".into()));
         }
@@ -1140,6 +1169,11 @@ impl SessionHandle {
                 self.core.queue_command(
                     &device_id,
                     SessionCommandPayload::Steer {
+                        execution: chat
+                            .config
+                            .as_ref()
+                            .map(|c| c.execution_policy())
+                            .unwrap_or_default(),
                         prompt: content,
                         message_id: Some(message_id.clone()),
                     },
@@ -1216,7 +1250,20 @@ impl SessionHandle {
         attachments: Vec<String>,
         hold_for_turn_end: bool,
     ) -> Result<String> {
+        let client = self.core.client()?;
+        let chat = client
+            .workspace
+            .chat(&self.core.chat_id)
+            .ok_or_else(|| ClientError::NotFound(self.core.chat_id.clone()))?;
+        if let Some(config) = &chat.config {
+            client.validate_execution(&chat.device_id, config)?;
+        }
         let mut item = QueuedMessage::new(crate::new_id(), text, device_id);
+        item.execution = chat
+            .config
+            .as_ref()
+            .map(|c| c.execution_policy())
+            .unwrap_or_default();
         item.attachments = attachments;
         item.hold_for_turn_end = hold_for_turn_end;
         item.issued_at = now_ms();
@@ -1391,6 +1438,22 @@ impl SessionHandle {
 
     async fn queue_action(&self, id: &str, action: QueueAction) -> Result<bool> {
         let send_now = action != QueueAction::Remove;
+        if send_now {
+            let client = self.core.client()?;
+            if let Some(chat) = client.workspace.chat(&self.core.chat_id) {
+                if let Some(policy) = lock(&self.core.state)
+                    .queue
+                    .iter()
+                    .find(|q| q.id == id)
+                    .map(|q| q.execution)
+                {
+                    client.validate_execution_snapshot(&chat.device_id, policy)?;
+                }
+                if let Some(config) = &chat.config {
+                    client.validate_execution(&chat.device_id, config)?;
+                }
+            }
+        }
         {
             let mut st = lock(&self.core.state);
             let Some(row) = st.queue.iter().find(|q| q.id == id) else {
@@ -1492,6 +1555,11 @@ impl SessionHandle {
     /// user entry by message id), kick the room, nudge the host.
     pub fn retry_delivery(&self) -> Result<()> {
         let client = self.core.client()?;
+        if let Some(chat) = client.workspace.chat(&self.core.chat_id) {
+            if let Some(config) = &chat.config {
+                client.validate_execution(&chat.device_id, config)?;
+            }
+        }
         let now = now_ms();
         let device_id = client.config.device_id.clone();
         let (commands, pending_ids) = {
@@ -1545,6 +1613,16 @@ impl SessionHandle {
             if live.contains(&message_id) {
                 continue;
             }
+            let policy = match &attempt.payload {
+                SessionCommandPayload::Run { request, .. } => request.execution_policy(),
+                SessionCommandPayload::Steer { execution, .. } => *execution,
+                _ => Default::default(),
+            };
+            let chat = client
+                .workspace
+                .chat(&self.core.chat_id)
+                .ok_or_else(|| ClientError::NotFound(self.core.chat_id.clone()))?;
+            client.validate_execution_snapshot(&chat.device_id, policy)?;
             tracing::info!(chat = %self.core.chat_id, old = %attempt.id, "retry re-issues a dead send attempt");
             self.core
                 .queue_command(&device_id, attempt.payload.clone())?;
@@ -1577,6 +1655,8 @@ mod setup_placeholder_tests {
             hydrated: true,
             transcript_revision: 0,
             composer_revision: 0,
+            composer_config: None,
+            composer_capabilities: None,
         };
         let pending = PendingSend {
             message_id: "m1".into(),

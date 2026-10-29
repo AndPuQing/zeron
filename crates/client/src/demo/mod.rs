@@ -409,7 +409,9 @@ impl DemoHost {
                         None,
                     );
                 }
-                SessionCommandPayload::Steer { prompt, message_id } => {
+                SessionCommandPayload::Steer {
+                    prompt, message_id, ..
+                } => {
                     let prompt = self.adopt_attachments(&client, &host, &prompt);
                     let steps = self.reply_for(&prompt);
                     let id = message_id.unwrap_or_else(crate::new_id);
@@ -1129,6 +1131,8 @@ impl DemoHost {
             harness.enabled = Some(true);
         }
         list.push(HarnessInfo {
+            access_modes: vec![zeron_proto::AccessMode::FullAccess],
+            supports_plan: false,
             id: "opencode".into(),
             label: "OpenCode".into(),
             supports_steering: Some(false),
@@ -1138,6 +1142,8 @@ impl DemoHost {
             enabled: Some(true),
         });
         list.push(HarnessInfo {
+            access_modes: vec![zeron_proto::AccessMode::FullAccess],
+            supports_plan: false,
             id: "omp".into(),
             label: "Oh My Pi".into(),
             supports_steering: Some(true),

@@ -71,6 +71,7 @@ fn main() {
     doc.queue_command(&SessionCommandEntry {
         id: "cmd-1".into(),
         payload: SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "also run clippy".into(),
             message_id: None,
         },

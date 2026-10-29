@@ -2,6 +2,8 @@ import UIKit
 
 /// What a new session will be created with.
 struct NewSessionDraft: Equatable, Codable {
+    var accessMode: String?
+    var plan: Bool?
     var projectId: String?
     /// Projectless sessions run on an explicit host.
     var hostId: String?
@@ -334,12 +336,16 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
         if let efforts = model?.efforts, !efforts.isEmpty {
             chips.append(ComposerChip(id: "effort", title: (draft.effort ?? efforts[efforts.count / 2]).capitalized, symbol: "gauge.with.dots.needle.67percent"))
         }
+        chips.append(ComposerChip(id: "permissions", title: accessModeLabel(draft.accessMode ?? "full-access"), symbol: "lock.shield"))
+        chips.append(ComposerChip(id: "plan", title: draft.plan == true ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
         composer.chips = chips
         composer.chipMenus = [
             "project": { [weak self] in self?.projectMenu() },
             "host": { [weak self] in self?.hostMenu() },
             "branch": { [weak self] in self?.branchMenu() },
             "effort": { [weak self] in self?.effortMenu() },
+            "permissions": { [weak self] in self?.executionMenu(plan: false) },
+            "plan": { [weak self] in self?.executionMenu(plan: true) },
         ]
         mark.image = BrandMarks.image(for: draft.harness, side: 34)
     }
@@ -506,7 +512,9 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             return ModelPickerTab(harness: h, label: first.harnessLabel) { rows }
         }
         let host = runsOnCloud ? (name: "Cloud", symbol: "cloud") : (name: app.deviceName(deviceId), symbol: "desktopcomputer")
-        return ModelPickerViewController.sheet(tabs: tabs, harness: draft.harness, model: draft.model, host: host) { [weak self] harness, model in
+        return ModelPickerViewController.sheet(tabs: tabs, harness: draft.harness, model: draft.model, host: host, settingsMenu: { [weak self] in
+            UIMenu(children: [self?.executionMenu(plan: false), self?.executionMenu(plan: true)].compactMap { $0 })
+        }) { [weak self] harness, model in
             guard let self else { return }
             if harness != self.draft.harness { self.draft.effort = nil }
             self.draft.harness = harness
@@ -522,6 +530,19 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
         draft.model == nil
             ? models.first { $0.harness == draft.harness }
             : models.first { $0.harness == draft.harness && $0.id == draft.model }
+    }
+
+    private func executionMenu(plan: Bool) -> UIMenu? {
+        guard let client = app.client else { return nil }
+        let caps = try? client.executionCapabilities(harness: draft.harness, deviceId: runsOnCloud ? nil : deviceId)
+        return makeExecutionMenu(caps: caps, access: draft.accessMode ?? "full-access", plan: draft.plan ?? false, showPlan: plan) { [weak self] selection in
+            guard let self else { return }
+            switch selection {
+            case .access(let mode): self.draft.accessMode = mode
+            case .plan(let enabled): self.draft.plan = enabled
+            }
+            self.refreshChips()
+        }
     }
 
     private func effortMenu() -> UIMenu {
@@ -542,7 +563,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             return false
         }
         guard let chatId = app.createSession(draft: draft, text: text, images: images) else {
-            let alert = UIAlertController(title: "Couldn't start the session", message: "Choose a project or a host that can run it.", preferredStyle: .alert)
+            let alert = UIAlertController(title: "Couldn't start the session", message: app.sessionCreationError ?? "Choose a project or a host that can run it.", preferredStyle: .alert)
             alert.addAction(UIAlertAction(title: "OK", style: .default))
             present(alert, animated: true)
             return false

@@ -60,6 +60,7 @@ use base64::Engine as _;
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde::Deserialize;
+use serde_json::Value;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::watch;
@@ -175,6 +176,8 @@ struct TakeProjectActionSetupParams {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct QueueMessageParams {
+    #[serde(default)]
+    execution: zeron_proto::ExecutionPolicy,
     chat_id: String,
     text: String,
     #[serde(default)]
@@ -1002,6 +1005,64 @@ impl EngineRpc {
                         && device.supports(zeron_proto::capabilities::PROVIDER_SWITCH_V1)
                 })
             })
+    }
+
+    fn validate_chat_execution(&self, chat_id: &str) -> Result<(), RpcError> {
+        self.validate_execution_command(chat_id, Default::default(), None)
+    }
+
+    fn validate_execution_command(
+        &self,
+        chat_id: &str,
+        envelope: zeron_proto::ExecutionPolicy,
+        harness: Option<zeron_proto::HarnessId>,
+    ) -> Result<(), RpcError> {
+        let Some(chat) = self
+            .workspace
+            .chat(chat_id)
+            .map_err(|e| RpcError::Failed(e.to_string()))?
+        else {
+            return if envelope.needs_support() {
+                Err(RpcError::Failed("Wait for this conversation's host information to sync before sending with permissions or Plan.".into()))
+            } else {
+                Ok(())
+            };
+        };
+        let policy = envelope.restricted_by(
+            chat.config
+                .as_ref()
+                .map(|c| c.execution_policy())
+                .unwrap_or_default(),
+        );
+        if chat.device_id == self.workspace.device_id()
+            && let Some(harness) = harness.or_else(|| chat.config.as_ref().map(|c| c.harness))
+        {
+            let descriptor = self
+                .registry
+                .descriptors()
+                .into_iter()
+                .find(|d| d.id == harness);
+            if let Some(descriptor) = descriptor {
+                policy
+                    .validate(&descriptor.access_modes, descriptor.supports_plan)
+                    .map_err(RpcError::Failed)?;
+            }
+        }
+        if policy.needs_support() && chat.device_id != self.workspace.device_id() {
+            let supported = self.workspace.read_devices().is_ok_and(|devices| {
+                devices.iter().any(|d| {
+                    d.id == chat.device_id
+                        && d.supports(zeron_proto::capabilities::EXECUTION_POLICY_V1)
+                })
+            });
+            if !supported {
+                return Err(RpcError::Failed(
+                    "Update the target host to use permissions and Plan. The message was not sent."
+                        .into(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// A deleted Cloud chat takes its machine with it (and whatever is
@@ -2843,6 +2904,17 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_COMMAND => {
                 let p: QueueCommandParams = parse_params(params)?;
+                match &p.command {
+                    SessionCommandPayload::Run { request, .. } => self.validate_execution_command(
+                        &p.chat_id,
+                        request.execution_policy(),
+                        request.harness,
+                    )?,
+                    SessionCommandPayload::Steer { execution, .. } => {
+                        self.validate_execution_command(&p.chat_id, *execution, None)?
+                    }
+                    _ => {}
+                }
                 let command_id = self
                     .doc_host
                     .queue_command_with_transfers(&p.chat_id, p.command, p.transfers)
@@ -2865,6 +2937,7 @@ impl RpcService for EngineRpc {
             }
             methods::RETRY_DELIVERY => {
                 let p: ChatParams = parse_params(params)?;
+                self.validate_chat_execution(&p.chat_id)?;
                 self.doc_host
                     .retry_delivery(&p.chat_id)
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
@@ -3088,13 +3161,15 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_MESSAGE => {
                 let p: QueueMessageParams = parse_params(params)?;
+                self.validate_execution_command(&p.chat_id, p.execution, None)?;
                 let id = self
                     .doc_host
-                    .queue_message_with_behavior(
+                    .queue_message_with_execution(
                         &p.chat_id,
                         &p.text,
                         p.attachments,
                         p.hold_for_turn_end,
+                        p.execution,
                     )
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "id": id }))
@@ -3186,6 +3261,7 @@ impl RpcService for EngineRpc {
             }
             methods::SEND_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
+                self.validate_chat_execution(&p.chat_id)?;
                 let sent = self
                     .doc_host
                     .send_queued_now(&p.chat_id, &p.id)
@@ -3195,6 +3271,7 @@ impl RpcService for EngineRpc {
             }
             methods::STEER_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;
+                self.validate_chat_execution(&p.chat_id)?;
                 let sent = self
                     .doc_host
                     .steer_queued_now(&p.chat_id, &p.id)
@@ -3494,6 +3571,23 @@ impl RpcService for EngineRpc {
                 RpcReply::value(&self.harness_updates()?.set_policy(p.harness, p.policy))
             }
             methods::MUTATE => {
+                // Legacy model editors omit these fields; retain independently.
+                let mut params = params;
+                if params.get("op").and_then(Value::as_str) == Some("setChatConfig")
+                    && let Some(config) = params
+                        .get("chatId")
+                        .and_then(Value::as_str)
+                        .and_then(|id| self.workspace.chat_config(id))
+                {
+                    if let Some(fields) = params.get_mut("config").and_then(Value::as_object_mut) {
+                        fields
+                            .entry("access")
+                            .or_insert_with(|| serde_json::json!(config.access));
+                        fields
+                            .entry("plan")
+                            .or_insert_with(|| serde_json::json!(config.plan));
+                    }
+                }
                 let p: MutateParams = parse_params(params)?;
                 if let MutateParams::CreateChat {
                     chat_id,
@@ -4933,6 +5027,55 @@ impl RpcService for EngineRpc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn execution_fields_survive_legacy_model_edits_and_explicit_reset() {
+        let temp = tempfile::tempdir().unwrap();
+        let core = crate::EngineCore::assemble_with_profile(
+            crate::EngineProfile::local(temp.path()).unwrap(),
+            std::sync::Arc::new(HarnessRegistry::new()),
+            HarnessId::Codex,
+            None,
+        )
+        .unwrap();
+        let rpc = core.rpc_service();
+        rpc.handle(methods::MUTATE, serde_json::json!({"op":"createChat", "chatId":"policy",
+            "deviceId":core.device_id, "config":{"harness":"codex", "sandbox":"workspace-write", "access":"supervised", "plan":true}
+        })).await.unwrap();
+        for (patch, expected_access, expected_plan) in [
+            (
+                serde_json::json!({"model":"new"}),
+                zeron_proto::AccessMode::Supervised,
+                true,
+            ),
+            (
+                serde_json::json!({"plan":false}),
+                zeron_proto::AccessMode::Supervised,
+                false,
+            ),
+            (
+                serde_json::json!({"access":"full-access", "plan":false}),
+                zeron_proto::AccessMode::FullAccess,
+                false,
+            ),
+        ] {
+            let mut config = serde_json::json!({"harness":"codex", "sandbox":"workspace-write"});
+            config
+                .as_object_mut()
+                .unwrap()
+                .extend(patch.as_object().unwrap().clone());
+            rpc.handle(
+                methods::MUTATE,
+                serde_json::json!({"op":"setChatConfig", "chatId":"policy", "config":config}),
+            )
+            .await
+            .unwrap();
+            let saved = core.workspace.chat_config("policy").unwrap();
+            assert_eq!(saved.access, expected_access);
+            assert_eq!(saved.plan, expected_plan);
+        }
+        core.sessions.shutdown().await;
+    }
 
     #[tokio::test]
     async fn voice_owner_is_shared_across_services_and_shutdown_retires_it() {

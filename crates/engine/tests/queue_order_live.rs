@@ -329,6 +329,7 @@ async fn scenario(name: &str, which: &str) {
                 .queue_command(
                     CHAT,
                     SessionCommandPayload::Steer {
+                        execution: Default::default(),
                         prompt: Rig::follow_up(2),
                         message_id: Some("steer-2".into()),
                     },

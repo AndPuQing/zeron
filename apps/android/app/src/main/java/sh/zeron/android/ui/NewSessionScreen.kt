@@ -217,7 +217,7 @@ fun NewSessionScreen(
             model.newSessionImages = emptyList()
             onCreated(id)
         } else {
-            scope.launch { snackbar.showSnackbar("Choose a project or a host that can run it.") }
+            scope.launch { snackbar.showSnackbar(model.sessionCreationError ?: "Choose a project or a host that can run it.") }
         }
     }
 
@@ -327,7 +327,17 @@ fun NewSessionScreen(
                     hostIcon = if (runsOnCloud) ZIcons.Cloud else ZIcons.Laptop,
                     openAtStart = model.launch.companion == "model-picker",
                     modelRequest = modelRequest,
+                    settings = {
+                        client?.let { core -> ExecutionChips(core, draft.harness, if (runsOnCloud) null else deviceId, draft.accessMode, draft.plan) { access, plan ->
+                            draft = draft.copy(accessMode = access ?: draft.accessMode, plan = plan ?: draft.plan)
+                        } }
+                    },
                 ) { draft = it }
+                client?.let { core ->
+                    ExecutionChips(core, draft.harness, if (runsOnCloud) null else deviceId, draft.accessMode, draft.plan) { access, plan ->
+                        draft = draft.copy(accessMode = access ?: draft.accessMode, plan = plan ?: draft.plan)
+                    }
+                }
                 val efforts = choice?.model?.reasoningLevels.orEmpty()
                 if (efforts.isNotEmpty()) {
                     val effort = draft.effort?.takeIf { it in efforts } ?: choice?.model?.defaultReasoning ?: efforts[efforts.size / 2]
@@ -646,6 +656,7 @@ private fun ModelChip(
     @androidx.annotation.DrawableRes hostIcon: Int,
     openAtStart: Boolean = false,
     modelRequest: Int = 0,
+    settings: @Composable () -> Unit = {},
     onPick: (sh.zeron.android.core.NewSessionDraft) -> Unit,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -675,6 +686,7 @@ private fun ModelChip(
             draft.model ?: choice?.model?.id,
             host = host,
             hostIcon = hostIcon,
+            settings = settings,
             onPick = { harness, row ->
                 onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort))
             },
