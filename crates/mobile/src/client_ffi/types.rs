@@ -1312,3 +1312,9 @@ pub struct TranscriptSearchHit {
     pub snippet: String,
     pub from_user: bool,
 }
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TranscriptSearchPage {
+    pub hits: Vec<TranscriptSearchHit>,
+    pub indexing: bool,
+}

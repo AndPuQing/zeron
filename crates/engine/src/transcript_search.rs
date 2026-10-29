@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
 use zeron_doc::{MessagePart, MessageRole, SessionDoc};
-use zeron_proto::TranscriptSearchHit;
+use zeron_proto::{TranscriptSearchHit, TranscriptSearchPage};
 use zeron_sync::DocsStore;
 
 use crate::EngineError;
@@ -86,16 +86,15 @@ impl TranscriptSearch {
         &self,
         query: String,
         limit: u16,
-    ) -> Result<Vec<TranscriptSearchHit>, EngineError> {
+    ) -> Result<TranscriptSearchPage, EngineError> {
         let inner = self.inner.clone();
         tokio::task::spawn_blocking(move || {
-            if let Err(error) = inner.refresh() {
-                tracing::warn!(%error, "transcript index refresh failed");
-            }
-            match match_expression(&query) {
-                Some(expr) => inner.query(&expr, &query, limit.clamp(1, 100)),
-                None => Ok(Vec::new()),
-            }
+            let indexing = inner.refresh()?;
+            let hits = match match_expression(&query) {
+                Some(expr) => inner.query(&expr, &query, limit.clamp(1, 100))?,
+                None => Vec::new(),
+            };
+            Ok(TranscriptSearchPage { hits, indexing })
         })
         .await
         .map_err(|e| EngineError::Other(e.to_string()))?
@@ -105,9 +104,9 @@ impl TranscriptSearch {
 impl Inner {
     /// Reindex chats whose snapshot changed, newest first, within
     /// [`REFRESH_BUDGET`]. A refresh already in flight makes this a no-op.
-    fn refresh(&self) -> Result<(), EngineError> {
+    fn refresh(&self) -> Result<bool, EngineError> {
         let Ok(_refreshing) = self.refreshing.try_lock() else {
-            return Ok(());
+            return Ok(true);
         };
         let started = Instant::now();
         let live: HashSet<String> = self
@@ -149,10 +148,10 @@ impl Inner {
             tx.commit().map_err(sql)?;
         }
         wanted.retain(|(id, saved_at)| indexed.get(id).map(|(_, at)| at) != Some(saved_at));
-        wanted.sort_by_key(|(_, saved_at)| std::cmp::Reverse(*saved_at));
+        wanted.sort_by_key(|(id, saved_at)| (indexed.contains_key(id), std::cmp::Reverse(*saved_at)));
         for (chat_id, saved_at) in wanted {
             if started.elapsed() > REFRESH_BUDGET {
-                break;
+                return Ok(true);
             }
             let messages = match self.store.load_snapshot(&chat_id) {
                 Ok(Some(bytes)) => transcript_messages(&bytes).unwrap_or_else(|error| {
@@ -183,7 +182,7 @@ impl Inner {
             }
             tx.commit().map_err(sql)?;
         }
-        Ok(())
+        Ok(false)
     }
 
     fn query(

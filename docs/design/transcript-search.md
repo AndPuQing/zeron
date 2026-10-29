@@ -15,7 +15,10 @@ The derived FTS index separates Chinese/Japanese/Korean characters before
 indexing and querying, retaining original text for snippets. This supports
 queries within unspaced sentences without enabling raw FTS operators. Latin
 terms retain prefix matching; all whitespace-separated query terms must match.
-Result counts are bounded at the host. Index schema changes rebuild only the
+Result counts are bounded at the host. A bounded refresh reports `indexing` until
+all pending snapshots have been considered; clients retry while the query stays
+active. Unindexed chats precede already-indexed changing chats so live output
+cannot starve older history. Index schema changes rebuild only the
 search cache; conversation data remains unchanged.
 
 Validation covers Chinese substrings, mixed-language queries, message identity,

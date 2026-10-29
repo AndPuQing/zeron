@@ -68,7 +68,11 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
             loading = true
             try {
                 delay(250)
-                hits = core.searchTranscripts(device, query.trim())
+                do {
+                    val page = core.searchTranscripts(device, query.trim())
+                    hits = page.hits
+                    if (page.indexing) delay(500)
+                } while (page.indexing)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (e: Exception) { error = "Message search unavailable: ${e.message}" }
             finally { loading = false }

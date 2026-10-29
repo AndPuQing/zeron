@@ -1654,7 +1654,7 @@ impl Client {
         &self,
         device_id: &str,
         query: &str,
-    ) -> Result<Vec<zeron_proto::TranscriptSearchHit>> {
+    ) -> Result<zeron_proto::TranscriptSearchPage> {
         let reply = self
             .inner
             .host_rpc(

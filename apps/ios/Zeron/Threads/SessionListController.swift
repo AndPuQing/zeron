@@ -772,9 +772,13 @@ private final class MessageSearchViewController: UITableViewController, UISearch
         task = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(250))
-                let hits = try await client.searchTranscripts(deviceId: device, query: query)
-                guard let self, !Task.isCancelled, token == self.generation else { return }
-                self.hits = hits; self.navigationItem.prompt = nil; self.tableView.reloadData()
+                while !Task.isCancelled {
+                    let page = try await client.searchTranscripts(deviceId: device, query: query)
+                    guard let self, !Task.isCancelled, token == self.generation else { return }
+                    self.hits = page.hits; self.navigationItem.prompt = page.indexing ? "Indexing stored history…" : nil; self.tableView.reloadData()
+                    if !page.indexing { break }
+                    try await Task.sleep(for: .milliseconds(500))
+                }
             } catch {
                 guard let self, !Task.isCancelled, token == self.generation else { return }
                 self.navigationItem.prompt = "Message search unavailable on this computer"

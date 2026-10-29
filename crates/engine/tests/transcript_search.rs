@@ -102,7 +102,8 @@ async fn search(client: &RpcClient, query: &str) -> Vec<(String, String)> {
         )
         .await
         .unwrap_or_else(|e| panic!("SearchTranscripts {query:?}: {e}"));
-    let hits: Vec<zeron_proto::TranscriptSearchHit> = serde_json::from_value(reply).unwrap();
+    let page: zeron_proto::TranscriptSearchPage = serde_json::from_value(reply).unwrap();
+    let hits = page.hits;
     let mut hits: Vec<_> = hits.into_iter().map(|h| (h.chat_id, h.snippet)).collect();
     hits.sort();
     // One hit per message: compare chats, first snippet each.
@@ -177,8 +178,13 @@ async fn palette_search_finds_words_inside_transcripts() {
         )
         .await
         .unwrap();
-    assert_eq!(exact[0]["messageId"], format!("{DEPLOY}-m1"));
-    assert!(exact[0]["snippet"].as_str().unwrap().contains("安装包"));
+    assert_eq!(exact["hits"][0]["messageId"], format!("{DEPLOY}-m1"));
+    assert!(
+        exact["hits"][0]["snippet"]
+            .as_str()
+            .unwrap()
+            .contains("安装包")
+    );
     let assistant = eventually(&client, "kube config", &[DEPLOY, LUNCH]).await;
     log.insert("kube config".into(), serde_json::json!(assistant));
 

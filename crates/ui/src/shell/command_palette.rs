@@ -573,33 +573,21 @@ impl Shell {
             let Ok(params) = serde_json::to_value(&request) else {
                 return;
             };
-            let hits = engine
-                .client()
-                .call(zeron_rpc::methods::SEARCH_TRANSCRIPTS, params)
-                .await
-                .map_err(|e| e.to_string())
-                .and_then(|v| {
-                    serde_json::from_value::<Vec<zeron_proto::TranscriptSearchHit>>(v)
-                        .map_err(|e| e.to_string())
-                });
-            let _ = this.update(cx, |this, cx| {
-                if let Some(palette) = this.command_palette.as_mut()
-                    && palette.search.read(cx).text().trim() == query
-                {
-                    match hits {
-                        Ok(hits) => {
-                            palette.transcript_hits = hits;
-                            palette.transcript_status =
-                                Some("History stored on this computer".into());
-                        }
-                        Err(error) => {
-                            palette.transcript_status =
-                                Some(format!("Message search unavailable: {error}").into());
-                        }
+            loop {
+                let result = engine.client().call(zeron_rpc::methods::SEARCH_TRANSCRIPTS, params.clone()).await
+                    .map_err(|e| e.to_string()).and_then(|v| serde_json::from_value::<zeron_proto::TranscriptSearchPage>(v).map_err(|e| e.to_string()));
+                let indexing = result.as_ref().is_ok_and(|p| p.indexing);
+                let keep = this.update(cx, |this, cx| {
+                    let Some(palette) = this.command_palette.as_mut().filter(|p| p.search.read(cx).text().trim() == query) else { return false; };
+                    match result {
+                        Ok(page) => { palette.transcript_hits = page.hits; palette.transcript_status = Some(if indexing { "Indexing stored history…" } else { "History stored on this computer" }.into()); }
+                        Err(_) => { palette.transcript_status = Some("Message search unavailable; check the computer's connection and version.".into()); }
                     }
-                    cx.notify();
-                }
-            });
+                    cx.notify(); true
+                }).unwrap_or(false);
+                if !keep || !indexing { break; }
+                cx.background_executor().timer(std::time::Duration::from_millis(500)).await;
+            }
         }));
     }
 
