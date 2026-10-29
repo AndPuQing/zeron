@@ -52,6 +52,26 @@ class ExecutionPolicyFlowTest {
         await { !device.hasObject(By.desc("Close")) }
         assertTrue(core.sessionConfig("chat-deploy")!!.plan)
         assertEquals("supervised", core.sessionConfig("chat-deploy")!!.accessMode)
+
+        // Also cover the ordinary toolbar entry point. Opening the sheet takes
+        // focus away from this empty editor; that must not dispose the sheet.
+        requireNotNull(device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5_000)).click()
+        val label = model.row("chat-deploy")!!.modelLabel!!
+        var lastBounds: android.graphics.Rect? = null
+        var stableSince = SystemClock.uptimeMillis()
+        await {
+            val bounds = device.findObject(By.text(label))?.visibleBounds ?: return@await false
+            if (lastBounds != bounds) { lastBounds = bounds; stableSince = SystemClock.uptimeMillis() }
+            SystemClock.uptimeMillis() - stableSince > 500
+        }
+        text(label).click()
+        requireNotNull(device.wait(Until.findObject(By.desc("Close")), 5_000)) {
+            "Model settings sheet must survive the editor losing focus"
+        }
+        text("Model")
+        text("Supervised")
+        text("Plan on")
+        capture("execution-reopened")
     }
 
     @After fun recordFinalUi() {
