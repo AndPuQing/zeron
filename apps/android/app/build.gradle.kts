@@ -193,3 +193,11 @@ kotlin {
         )
     }
 }
+
+composeCompiler {
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
+}
+
+tasks.withType<Test>().configureEach {
+    inputs.file(layout.projectDirectory.file("compose-stability.conf"))
+}
