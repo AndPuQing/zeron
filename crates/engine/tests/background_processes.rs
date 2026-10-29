@@ -8,6 +8,24 @@ use zeron_proto::{AgentEvent, BackgroundTask, HarnessId, Model, RunRequest, Sand
 use zeron_rpc::methods;
 
 struct Fixture(Arc<Mutex<Option<TurnControl>>>);
+
+fn task(id: &str) -> BackgroundTask {
+    BackgroundTask {
+        can_stop: true, id: id.into(), command: format!("watch {id}"),
+        description: None, started_at: chrono::Utc::now(),
+    }
+}
+
+async fn wait_for_published_tasks(core: &EngineCore, expected: &[&str]) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if core.sessions.session_status("background").is_some_and(|session| {
+                session.background_tasks.iter().map(|task| task.id.as_str()).collect::<Vec<_>>() == expected
+            }) { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("session row must publish the runtime's current task set");
+}
 #[async_trait]
 impl Harness for Fixture {
     fn display_name(&self) -> &str { "Background fixture" }
@@ -18,6 +36,9 @@ impl Harness for Fixture {
     fn id(&self) -> HarnessId { HarnessId::Mock }
     async fn models(&self) -> Result<Vec<Model>, HarnessError> { Ok(vec![]) }
     async fn run(&self, _: RunRequest, controls: RunControls) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        // Publish before returning the stream, deterministically before the
+        // engine subscribes. A watch subscriber considers this value seen.
+        controls.turn.set_background_processes(vec![task("one"), task("two")]);
         *self.0.lock().unwrap() = Some(controls.turn);
         Ok(futures::stream::pending().boxed())
     }
@@ -46,14 +67,7 @@ async fn controls_list_read_and_stop_only_the_addressed_runtime_task() {
     })
     .await
     .unwrap();
-    let task = |id: &str| BackgroundTask {
-        can_stop: true,
-        id: id.into(),
-        command: format!("watch {id}"),
-        description: None,
-        started_at: chrono::Utc::now(),
-    };
-    turn.set_background_processes(vec![task("one"), task("two")]);
+    wait_for_published_tasks(&core, &["one", "two"]).await;
     turn.append_background_output("one", "output from one\n");
     let params = serde_json::json!({"chatId":"background", "taskId":"one"});
     let listed = client.call(methods::LIST_BACKGROUND_TASKS, params.clone()).await.unwrap();
@@ -66,10 +80,16 @@ async fn controls_list_read_and_stop_only_the_addressed_runtime_task() {
     // A request is not a completion: the driver must confirm it disappeared.
     assert_eq!(client.call(methods::LIST_BACKGROUND_TASKS, params.clone()).await.unwrap().as_array().unwrap().len(), 2);
     turn.set_background_processes(vec![task("two")]);
+    wait_for_published_tasks(&core, &["two"]).await;
     assert!(client.call(methods::READ_BACKGROUND_TASK_OUTPUT, params.clone()).await.unwrap().is_null());
     assert_eq!(client.call(methods::STOP_BACKGROUND_TASK, params).await.unwrap()["stopping"], false);
     let listed = client.call(methods::LIST_BACKGROUND_TASKS, serde_json::json!({"chatId":"background"})).await.unwrap();
     assert_eq!(listed[0]["id"], "two");
+    turn.set_background_processes(vec![]);
+    wait_for_published_tasks(&core, &[]).await;
+    turn.set_background_processes(vec![task("three")]);
+    wait_for_published_tasks(&core, &["three"]).await;
     core.shutdown().await;
     assert!(core.sessions.background_tasks("background").is_empty());
+    wait_for_published_tasks(&core, &[]).await;
 }

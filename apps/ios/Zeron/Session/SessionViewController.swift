@@ -1160,6 +1160,29 @@ enum Drafts {
     }
 }
 
+/// An output response belongs to one selection lifetime, not just a task id.
+/// Invalidating on A → B → A or sheet dismissal prevents late A results from
+/// being mistaken for a new request for A.
+struct BackgroundOutputSelection {
+    struct Request: Equatable {
+        let taskId: String
+        fileprivate let generation: UInt64
+    }
+    private(set) var id: String?
+    private var generation: UInt64 = 0
+
+    var request: Request? { id.map { Request(taskId: $0, generation: generation) } }
+    func accepts(_ request: Request) -> Bool { self.request == request }
+    mutating func invalidate() { generation &+= 1 }
+    mutating func toggle(_ taskId: String) {
+        invalidate()
+        id = id == taskId ? nil : taskId
+    }
+    mutating func retain(available: Set<String>) {
+        if let id, !available.contains(id) { invalidate(); self.id = nil }
+    }
+}
+
 /// Polls only while this sheet is visible. The host owns process identity;
 /// neither output paths nor OS process ids are accepted from the phone.
 private final class BackgroundProcessesViewController: UITableViewController {
@@ -1169,7 +1192,8 @@ private final class BackgroundProcessesViewController: UITableViewController {
     private var stopping: Set<String> = []
     private var stopStarted: [String: Date] = [:]
     private var actionError: String?
-    private var selected: String?
+    private var selection = BackgroundOutputSelection()
+    private var selected: String? { selection.id }
     private var output: BackgroundOutput?
     private var poll: Task<Void, Never>?
     init(client: CoreClient, chatId: String) { self.client = client; self.chatId = chatId; super.init(style: .insetGrouped) }
@@ -1181,6 +1205,8 @@ private final class BackgroundProcessesViewController: UITableViewController {
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        poll?.cancel()
+        selection.invalidate()
         guard client.backgroundTasksSupported(chatId: chatId) else { navigationItem.prompt = "Update the computer to manage processes"; return }
         poll = Task { [weak self] in
             while !Task.isCancelled {
@@ -1192,11 +1218,14 @@ private final class BackgroundProcessesViewController: UITableViewController {
                     let rows = try await self.client.backgroundTasks(chatId: self.chatId)
                     guard !Task.isCancelled else { return }
                     self.processes = rows
+                    self.selection.retain(available: Set(rows.map(\.id)))
                     self.stopping.formIntersection(Set(rows.map(\.id)))
                     let expired = self.stopping.filter { Date().timeIntervalSince(self.stopStarted[$0] ?? .distantPast) >= 15 }
                     if !expired.isEmpty { self.stopping.subtract(expired); self.actionError = "Stop not confirmed; process still running" }
-                    if let id = self.selected, rows.contains(where: { $0.id == id }) {
-                        self.output = try await self.client.backgroundTaskOutput(chatId: self.chatId, taskId: id)
+                    if let request = self.selection.request {
+                        let output = try await self.client.backgroundTaskOutput(chatId: self.chatId, taskId: request.taskId)
+                        guard !Task.isCancelled else { return }
+                        if self.selection.accepts(request) { self.output = output }
                     } else { self.output = nil }
                     guard !Task.isCancelled else { return }
                     self.navigationItem.prompt = self.actionError ?? (rows.isEmpty ? "No background processes reported" : nil)
@@ -1209,7 +1238,11 @@ private final class BackgroundProcessesViewController: UITableViewController {
             }
         }
     }
-    override func viewWillDisappear(_ animated: Bool) { super.viewWillDisappear(animated); poll?.cancel(); poll = nil }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        poll?.cancel(); poll = nil
+        selection.invalidate(); output = nil
+    }
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { processes.count }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let process = processes[indexPath.row]
@@ -1242,6 +1275,6 @@ private final class BackgroundProcessesViewController: UITableViewController {
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         let id = processes[indexPath.row].id
-        selected = selected == id ? nil : id; output = nil; tableView.reloadData()
+        selection.toggle(id); output = nil; tableView.reloadData()
     }
 }

@@ -100,6 +100,17 @@ sends.
 
 ## Testing
 
+The engine RPC regression publishes its initial process set before the harness
+returns its stream. It checks the mirrored session row as well as direct RPCs,
+including sibling removal, an empty set, a subsequent addition and shutdown.
+The engine seeds the current watch value on subscription before waiting for
+changes, so an early publication is not lost.
+
+iOS output responses carry a selection generation. Switching A → B → A,
+collapsing a row, removing a process or dismissing the sheet invalidates older
+responses before they can replace the current output. `BackgroundOutputSelectionTests`
+covers these cases in the iOS unit suite (CI only).
+
 ```sh
 cargo test --locked -p zeron-harness background      # BackgroundWork, Claude roster joins
 cargo test --locked -p zeron-harness --test claude background_shells

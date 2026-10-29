@@ -4240,6 +4240,11 @@ async fn drive_run(
     live_heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // The runtime's background processes, published on the session row.
     let mut background_processes = turn.watch_background_processes();
+    // The driver may have published before run()/start_idle() returned.
+    // subscribe() marks the current value seen: seed the row now, then use
+    // changed() for later updates. A concurrent update remains unseen.
+    let initial_background = background_processes.borrow_and_update().clone();
+    inner.set_background_tasks(&chat_id, initial_background);
     // PERSISTENT SESSION (zeron runsBySession): a completed turn on a
     // steerable harness parks here instead of ending the run — the child and
     // its steering mailbox stay warm, and the next user message (dispatch
