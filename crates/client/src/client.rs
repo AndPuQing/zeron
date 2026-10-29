@@ -1648,6 +1648,24 @@ impl Client {
 
     /// Workspace file search for composer `@` mentions (host `SearchFiles`,
     /// gitignore-aware; an empty query returns the chat's featured files).
+    /// Search message text persisted on one computer. Unopened remote history
+    /// is not guaranteed to be present on another computer's replica.
+    pub async fn search_transcripts(
+        &self,
+        device_id: &str,
+        query: &str,
+    ) -> Result<zeron_proto::TranscriptSearchPage> {
+        let reply = self
+            .inner
+            .host_rpc(
+                device_id,
+                zeron_rpc::methods::SEARCH_TRANSCRIPTS,
+                serde_json::json!({"query":query, "limit":50}),
+            )
+            .await?;
+        serde_json::from_value(reply).map_err(|e| ClientError::HostError(e.to_string()))
+    }
+
     pub async fn search_files(
         &self,
         device_id: &str,

@@ -705,6 +705,10 @@ final class SearchViewController: SessionListController, UISearchResultsUpdating
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Messages", primaryAction: UIAction { [weak self] _ in
+            guard let self else { return }
+            self.navigationController?.pushViewController(MessageSearchViewController(app: self.app), animated: true)
+        })
         title = "Search"
         navigationItem.largeTitleDisplayMode = .always
         let search = UISearchController(searchResultsController: nil)
@@ -725,5 +729,113 @@ final class SearchViewController: SessionListController, UISearchResultsUpdating
         var out: [(id: String, header: String?, folders: [FolderRowVM], sessions: [SessionRowVM])] = [("results", nil, [], results.sessions)]
         if !results.sideChats.isEmpty { out.append(("side-chats", "Side chats", [], results.sideChats)) }
         return out
+    }
+}
+
+/// Main-thread lifecycle shared with deterministic tests. Reappearing always
+/// restarts the current query; callbacks from a hidden or older query are stale.
+final class MessageSearchLifecycle {
+    private var visible = false
+    private var generation: UInt64 = 0
+
+    func appear(restart: () -> Void) {
+        visible = true
+        restart()
+    }
+    func disappear() {
+        visible = false
+        generation &+= 1
+    }
+    func beginQuery() -> UInt64? {
+        generation &+= 1
+        return visible ? generation : nil
+    }
+    func accepts(_ token: UInt64) -> Bool { visible && generation == token }
+}
+
+/// Message search is explicitly scoped to the computer that stores the history.
+private final class MessageSearchViewController: UITableViewController, UISearchResultsUpdating {
+    let app: AppModel
+    private var device: String?
+    private var hits: [TranscriptSearchHit] = []
+    private var task: Task<Void, Never>?
+    private let lifecycle = MessageSearchLifecycle()
+    init(app: AppModel) { self.app = app; super.init(style: .insetGrouped) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Messages"
+        let search = UISearchController(searchResultsController: nil)
+        search.searchResultsUpdater = self
+        search.obscuresBackgroundDuringPresentation = false
+        search.searchBar.placeholder = "Search message text"
+        navigationItem.searchController = search
+        navigationItem.hidesSearchBarWhenScrolling = false
+        updateHosts()
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        lifecycle.appear {
+            updateHosts()
+            search()
+        }
+    }
+    private func updateHosts() {
+        let hosts = app.client?.executionDevices() ?? []
+        if device == nil { device = hosts.first?.id }
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: hosts.first(where: { $0.id == device })?.name ?? "Computer", menu: UIMenu(children: hosts.map { host in
+            UIAction(title: host.name, state: host.id == device ? .on : .off) { [weak self] _ in
+                self?.device = host.id; self?.updateHosts(); self?.search()
+            }
+        }))
+    }
+    func updateSearchResults(for searchController: UISearchController) { search() }
+    private func search() {
+        task?.cancel(); task = nil
+        let token = lifecycle.beginQuery()
+        navigationItem.prompt = nil
+        hits = []; tableView.reloadData()
+        let query = navigationItem.searchController?.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let token, !query.isEmpty, let device, let client = app.client else { return }
+        navigationItem.prompt = "Searching…"
+        task = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .milliseconds(250))
+                while !Task.isCancelled {
+                    let page = try await client.searchTranscripts(deviceId: device, query: query)
+                    guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
+                    self.hits = page.hits; self.navigationItem.prompt = page.indexing ? "Indexing stored history…" : nil; self.tableView.reloadData()
+                    if !page.indexing { break }
+                    try await Task.sleep(for: .milliseconds(500))
+                }
+            } catch {
+                guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
+                self.navigationItem.prompt = "Message search unavailable on this computer"
+            }
+        }
+    }
+    override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        "History stored on this computer; unsynced messages may be missing."
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { hits.count }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        let hit = hits[indexPath.row]
+        cell.textLabel?.text = app.row(hit.chatId)?.title ?? "Conversation"
+        cell.detailTextLabel?.text = (hit.fromUser ? "You: " : "Agent: ") + hit.snippet
+        cell.detailTextLabel?.numberOfLines = 4
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let hit = hits[indexPath.row]
+        guard let session = SessionViewController(app: app, chatId: hit.chatId) else { return }
+        app.messageSearchTarget = (hit.chatId, hit.messageId)
+        navigationController?.pushViewController(session, animated: true)
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        lifecycle.disappear()
+        task?.cancel(); task = nil
     }
 }

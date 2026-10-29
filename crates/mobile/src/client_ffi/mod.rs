@@ -568,6 +568,29 @@ impl CoreClient {
 
     /// Files matching `query` in the chat's (or project's) workspace, for
     /// composer `@` mentions.
+    pub async fn search_transcripts(
+        &self,
+        device_id: String,
+        query: String,
+    ) -> CoreResult<TranscriptSearchPage> {
+        let client = self.client.clone();
+        let page =
+            on_runtime(async move { client.search_transcripts(&device_id, &query).await }).await?;
+        Ok(TranscriptSearchPage {
+            indexing: page.indexing,
+            hits: page
+                .hits
+                .into_iter()
+                .map(|h| TranscriptSearchHit {
+                    chat_id: h.chat_id,
+                    message_id: h.message_id,
+                    snippet: h.snippet,
+                    from_user: h.from_user,
+                })
+                .collect(),
+        })
+    }
+
     pub async fn search_files(
         &self,
         device_id: String,

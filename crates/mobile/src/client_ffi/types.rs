@@ -1304,3 +1304,17 @@ mod execution_config_tests {
         assert_eq!(updated.model.as_deref(), Some("new"));
     }
 }
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TranscriptSearchHit {
+    pub chat_id: String,
+    pub message_id: String,
+    pub snippet: String,
+    pub from_user: bool,
+}
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct TranscriptSearchPage {
+    pub hits: Vec<TranscriptSearchHit>,
+    pub indexing: bool,
+}

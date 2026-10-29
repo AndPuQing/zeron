@@ -804,6 +804,7 @@ pub struct EngineRpc {
     credentials: Option<crate::credentials::CredentialBroker>,
     /// Viewports' window focus, for desktop banners.
     viewport_focus: crate::desktop_notify::ViewportFocus,
+    transcript_search: Option<crate::transcript_search::TranscriptSearch>,
     engine_info: EngineInfo,
 }
 
@@ -867,6 +868,7 @@ impl EngineRpc {
             external_sessions: None,
             credentials: None,
             viewport_focus: Default::default(),
+            transcript_search: None,
             engine_info,
         }
     }
@@ -951,6 +953,14 @@ impl EngineRpc {
     /// Attach the Cloud runner's credential broker.
     pub fn with_credentials(mut self, broker: crate::credentials::CredentialBroker) -> Self {
         self.credentials = Some(broker);
+        self
+    }
+
+    pub fn with_transcript_search(
+        mut self,
+        search: crate::transcript_search::TranscriptSearch,
+    ) -> Self {
+        self.transcript_search = Some(search);
         self
     }
 
@@ -2229,6 +2239,7 @@ fn forwardable(method: &str) -> bool {
             | methods::LIST_EXTERNAL_SESSIONS
             | methods::IMPORT_EXTERNAL_SESSIONS
             | methods::CANCEL_EXTERNAL_SESSION_IMPORT
+            | methods::SEARCH_TRANSCRIPTS
             | methods::LIST_HARNESSES
             | methods::INSTALL_HARNESS
             | methods::CANCEL_INSTALL
@@ -3478,6 +3489,18 @@ impl RpcService for EngineRpc {
             }
             methods::WATCH_CHATS => {
                 Ok(RpcReply::Stream(watch_stream(self.workspace.watch_chats())))
+            }
+            methods::SEARCH_TRANSCRIPTS => {
+                let request: zeron_proto::SearchTranscriptsRequest = parse_params(params)?;
+                let search = self
+                    .transcript_search
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("transcript search unavailable".into()))?;
+                let hits = search
+                    .search(request.query, request.limit)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&hits)
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
