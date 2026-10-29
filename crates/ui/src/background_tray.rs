@@ -810,6 +810,7 @@ mod tests {
 
     fn chat(id: &str) -> zeron_proto::Chat {
         zeron_proto::Chat {
+            import_source: None,
             id: id.into(),
             device_id: "host".into(),
             title: None,
