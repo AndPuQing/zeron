@@ -155,6 +155,126 @@ async fn run_to_end(
 }
 
 #[tokio::test]
+async fn service_tier_off_survives_live_reconfiguration_and_native_resume() {
+    async fn reply(
+        stream: &mut futures::stream::BoxStream<'static, Result<AgentEvent, HarnessError>>,
+    ) -> String {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            let mut text = String::new();
+            while let Some(event) = stream.next().await {
+                match event.unwrap() {
+                    AgentEvent::TextDelta { text: delta } => text.push_str(&delta),
+                    AgentEvent::Done { status, .. } => {
+                        assert_eq!(status, DoneStatus::Completed);
+                        return text;
+                    }
+                    _ => {}
+                }
+            }
+            panic!("stream closed before completion")
+        })
+        .await
+        .unwrap()
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let harness = CodexHarness::new().with_executable(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-service-tier.py"),
+    );
+    let mut inherited = request("fixture");
+    inherited.cwd = dir.path().display().to_string();
+    let mut fast = inherited.clone();
+    fast.model_options
+        .insert("serviceTier".into(), "fast".into());
+    let mut standard = inherited.clone();
+    standard
+        .model_options
+        .insert("serviceTier".into(), "default".into());
+    assert!(!harness.same_runtime(&fast, &standard));
+    assert!(!harness.same_runtime(&standard, &inherited));
+    assert!(harness.reconfigures_in_place(&fast, &standard));
+    assert!(!harness.reconfigures_in_place(&fast, &inherited));
+
+    let (ctl, steer, token) = controls("Yes");
+    let mut stream = harness.run(fast.clone(), ctl).await.unwrap();
+    assert_eq!(reply(&mut stream).await, "priority");
+    // The same app-server receives the off selection, then an ordinary follow-up.
+    for config in [Some(standard.clone()), None] {
+        steer
+            .send(SteerMessage {
+                config: config.map(Box::new),
+                ..SteerMessage::text("next")
+            })
+            .await
+            .unwrap();
+        assert_eq!(reply(&mut stream).await, "default");
+    }
+    // Leave native history Fast to reproduce the user's restart case.
+    steer
+        .send(SteerMessage {
+            config: Some(Box::new(fast)),
+            ..SteerMessage::text("fast again")
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply(&mut stream).await, "priority");
+    token.cancel();
+    drop(stream);
+
+    // A separate process restores native priority. Missing still inherits;
+    // explicit off overrides it and remains off after another restart.
+    for (mut req, expected) in [
+        (inherited, "priority"),
+        (standard.clone(), "default"),
+        (standard.clone(), "default"),
+    ] {
+        req.resume = Some("tier-thread".into());
+        let (ctl, _steer, token) = controls("Yes");
+        let mut stream = harness.run(req, ctl).await.unwrap();
+        assert_eq!(reply(&mut stream).await, expected);
+        token.cancel();
+    }
+    // Explicit Standard must also defeat a global Fast default on new threads.
+    let (ctl, _steer, token) = controls("Yes");
+    let mut stream = harness.run(standard, ctl).await.unwrap();
+    assert_eq!(reply(&mut stream).await, "default");
+    token.cancel();
+    let wire: Vec<serde_json::Value> = std::fs::read_to_string(dir.path().join("wire.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let turns: Vec<_> = wire
+        .iter()
+        .filter(|r| r["method"] == "turn/start")
+        .map(|r| r["params"].get("serviceTier").and_then(|v| v.as_str()))
+        .collect();
+    assert_eq!(
+        turns,
+        [
+            Some("fast"),
+            Some("default"),
+            Some("default"),
+            Some("fast"),
+            None,
+            Some("default"),
+            Some("default"),
+            Some("default")
+        ]
+    );
+    let resumes: Vec<_> = wire
+        .iter()
+        .filter(|r| r["method"] == "thread/resume")
+        .map(|r| r["params"].get("serviceTier").and_then(|v| v.as_str()))
+        .collect();
+    assert_eq!(resumes, [None, Some("default"), Some("default")]);
+    assert_eq!(wire.last().unwrap()["params"]["serviceTier"], "default");
+    assert!(
+        wire.iter()
+            .any(|r| r["method"] == "thread/start" && r["params"]["serviceTier"] == "default")
+    );
+}
+
+#[tokio::test]
 async fn reasoning_preserves_summary_parts_and_item_boundaries_per_thread() {
     let (controls, _steer, _token) = controls("Yes");
     let events = run_to_end(&harness(), request("scenario:reasoning"), controls).await;

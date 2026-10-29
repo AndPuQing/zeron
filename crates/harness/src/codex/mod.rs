@@ -417,13 +417,14 @@ impl CodexHarness {
     }
 }
 
-/// The `serviceTier` a request runs with; "default" (Standard) is omitted.
+/// Missing means inherit; `default` explicitly clears a native thread's tier
+/// (including a persisted `priority` or a global Fast default). Keep that value
+/// on both thread setup and every turn/start, including in-place reconfiguration.
 fn service_tier(request: &RunRequest) -> Option<String> {
     request
         .model_options
         .get("serviceTier")
         .and_then(Value::as_str)
-        .filter(|t| *t != "default")
         .map(str::to_owned)
 }
 
@@ -782,8 +783,9 @@ impl Harness for CodexHarness {
     /// `turn/start` carries model, effort, service tier, approval policy,
     /// sandbox and collaboration mode, and each sticks for later turns — so
     /// a change applies from the next turn without a new app-server.
-    /// Clearing a model, effort or tier back to the default cannot be
-    /// expressed that way (an omitted parameter keeps the previous value).
+    /// An explicit Standard tier is `default`; removing a selection to
+    /// inherit is different (omission keeps the previous value). Model and
+    /// effort still have no explicit reset here.
     fn reconfigures_in_place(&self, live: &RunRequest, next: &RunRequest) -> bool {
         live.cwd == next.cwd
             && (next.model.is_some() || live.model.is_none())

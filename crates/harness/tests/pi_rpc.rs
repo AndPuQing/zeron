@@ -238,7 +238,9 @@ async fn steers_confirm_on_consumption_and_interrupt_is_terminal_once() {
         .await
         .unwrap();
     tx.send(SteerMessage {
-        prompt: "redirect".into(),
+        // Keep the consumed steer running until abort, so completion cannot
+        // race the test task receiving its Steered event and cancelling it.
+        prompt: "burst-start".into(),
         message_id: Some("user-id".into()),
         attachments: Vec::new(),
         config: None,

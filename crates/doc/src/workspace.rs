@@ -1072,6 +1072,36 @@ mod tests {
     }
 
     #[test]
+    fn codex_explicit_standard_survives_workspace_snapshot() {
+        let ws = WorkspaceDoc::new();
+        ws.upsert_chat(&chat("tier-chat", "dev-a")).unwrap();
+        let mut config = ChatConfig {
+            harness: HarnessId::Codex,
+            model: Some("gpt-6-astra".into()),
+            reasoning: Some(zeron_proto::ReasoningLevel::High),
+            model_options: Default::default(),
+            sandbox: SandboxLevel::WorkspaceWrite,
+            access: Default::default(),
+            plan: false,
+        };
+        for tier in [None, Some("fast"), Some("default")] {
+            if let Some(tier) = tier {
+                config
+                    .model_options
+                    .insert("serviceTier".into(), tier.into());
+            }
+            ws.set_chat_config("tier-chat", &config).unwrap();
+            let doc = LoroDoc::new();
+            doc.import(&ws.export_snapshot().unwrap()).unwrap();
+            let restored = WorkspaceDoc::from_doc(doc);
+            assert_eq!(
+                restored.chat("tier-chat").unwrap().unwrap().config,
+                Some(config.clone())
+            );
+        }
+    }
+
+    #[test]
     fn snapshot_round_trips_between_docs() {
         let ws = WorkspaceDoc::new();
         ws.upsert_device(&device("dev-a", "laptop")).unwrap();

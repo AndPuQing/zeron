@@ -9220,9 +9220,9 @@ impl Composer {
         // Fully-resolved model/reasoning/options — concrete values (chat config
         // or defaults), so the engine never has to guess a "default".
         let resolved = self.pickers.read(cx).resolved(cx);
-        // The Run runs what the picker SHOWS: explicit picks plus each
-        // offered option's default (the picker renders the default as
-        // selected). Chat rows still persist only explicit picks.
+        // Explicit picks plus offered defaults; an unspecified Codex service
+        // tier inherits native settings. Chat rows persist explicit picks,
+        // including an explicit Standard tier after switching Fast off.
         let run_options = self.pickers.read(cx).run_model_options(cx);
         let existing_cwd = self
             .state
