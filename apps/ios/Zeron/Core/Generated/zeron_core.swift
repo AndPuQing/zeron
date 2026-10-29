@@ -1049,10 +1049,6 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     
     func backgroundTasks(chatId: String) async throws  -> [BackgroundProcess]
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
     func backgroundTasksSupported(chatId: String)  -> Bool
     
     /**
@@ -1237,6 +1233,10 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     
     func search(query: String, limit: UInt32)  -> [SearchHit]
     
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
     func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query: String) async throws  -> [FileMatch]
     
     /**
@@ -1245,10 +1245,6 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func searchIncludingChildren(query: String, limit: UInt32)  -> [SearchHit]
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
     func searchTranscripts(deviceId: String, query: String) async throws  -> TranscriptSearchPage
     
     /**
@@ -1609,10 +1605,6 @@ open func backgroundTasks(chatId: String)async throws  -> [BackgroundProcess]  {
         )
 }
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
 open func backgroundTasksSupported(chatId: String) -> Bool  {
     return try!  FfiConverterBool.lift(try! rustCall() {
         uniffiCallStatus in
@@ -2231,6 +2223,10 @@ open func search(query: String, limit: UInt32) -> [SearchHit]  {
 })
 }
     
+    /**
+     * Files matching `query` in the chat's (or project's) workspace, for
+     * composer `@` mentions.
+     */
 open func searchFiles(deviceId: String, chatId: String?, spaceId: String?, query: String)async throws  -> [FileMatch]  {
     return
         try  await uniffiRustCallAsync(
@@ -2262,10 +2258,6 @@ open func searchIncludingChildren(query: String, limit: UInt32) -> [SearchHit]  
 })
 }
     
-    /**
-     * Files matching `query` in the chat's (or project's) workspace, for
-     * composer `@` mentions.
-     */
 open func searchTranscripts(deviceId: String, query: String)async throws  -> TranscriptSearchPage  {
     return
         try  await uniffiRustCallAsync(
@@ -24100,7 +24092,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_background_tasks() != 38109) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_background_tasks_supported() != 28130) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_background_tasks_supported() != 7168) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_child_sessions() != 10159) {
@@ -24241,13 +24233,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_search() != 33140) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_search_files() != 56784) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_files() != 31096) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_search_including_children() != 10816) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_search_transcripts() != 64542) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_transcripts() != 56551) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session() != 12772) {
