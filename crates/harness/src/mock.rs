@@ -982,6 +982,7 @@ fn background_run(
                 diff: None,
             });
             listed.push(zeron_proto::BackgroundTask {
+                can_stop: true,
                 id: id.into(),
                 command: command.into(),
                 description: Some(description.into()),

@@ -64,6 +64,7 @@ pub(crate) struct BackgroundTrayState {
     open: Option<String>,
     /// Stops asked of the host, until the process leaves the list.
     stopping: HashSet<String>,
+    stop_started: HashMap<String, std::time::Instant>,
     /// The last output read per process.
     outputs: HashMap<String, BackgroundTaskOutput>,
     /// A stop that failed, shown under the list until the next action.
@@ -77,6 +78,18 @@ impl BackgroundTrayState {
     pub fn observe(&mut self, tasks: &[BackgroundTask]) {
         let listed = |id: &String| tasks.iter().any(|t| t.id == *id);
         self.stopping.retain(listed);
+        self.stop_started.retain(|id, since| {
+            if !listed(id) {
+                return false;
+            }
+            if since.elapsed() >= Duration::from_secs(15) {
+                self.stopping.remove(id);
+                self.failure =
+                    Some("Stop not confirmed; the process is still reported running.".into());
+                return false;
+            }
+            true
+        });
         self.outputs.retain(|id, _| listed(id));
         if self.open.as_ref().is_some_and(|id| !listed(id)) {
             self.open = None;
@@ -456,7 +469,7 @@ impl Composer {
                         uptime(task, now)
                     })),
             )
-            .when(listed.actions, |el| {
+            .when(listed.actions && task.can_stop, |el| {
                 el.child(self.background_stop_button(listed, task, stopping, theme, cx))
             });
 
@@ -533,6 +546,8 @@ impl Composer {
         if !tray.stopping.insert(id.to_owned()) {
             return;
         }
+        tray.stop_started
+            .insert(id.to_owned(), std::time::Instant::now());
         tray.failure = None;
         cx.notify();
         let params = serde_json::json!({
@@ -719,6 +734,7 @@ mod tests {
 
     fn task(id: &str, command: &str, ago: i64) -> BackgroundTask {
         BackgroundTask {
+            can_stop: true,
             id: id.into(),
             command: command.into(),
             description: None,

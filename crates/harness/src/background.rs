@@ -135,7 +135,7 @@ impl BackgroundWork {
 
     /// Host: ask the driver to stop `id`. False when it is not listed.
     pub fn request_stop(&self, id: &str) -> bool {
-        if !self.tasks.borrow().iter().any(|t| t.id == id) {
+        if !self.tasks.borrow().iter().any(|t| t.id == id && t.can_stop) {
             return false;
         }
         lock(&self.stops).push_back(id.to_owned());
@@ -233,6 +233,7 @@ mod tests {
 
     fn task(id: &str) -> BackgroundTask {
         BackgroundTask {
+            can_stop: true,
             id: id.into(),
             command: format!("run {id}"),
             description: None,

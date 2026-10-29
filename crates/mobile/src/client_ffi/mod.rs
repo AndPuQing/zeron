@@ -599,6 +599,7 @@ impl CoreClient {
         Ok(tasks
             .into_iter()
             .map(|t| BackgroundProcess {
+                can_stop: t.can_stop,
                 id: t.id,
                 command: t.command,
                 description: t.description,

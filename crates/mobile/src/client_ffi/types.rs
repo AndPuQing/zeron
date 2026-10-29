@@ -1321,6 +1321,7 @@ pub struct TranscriptSearchPage {
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct BackgroundProcess {
+    pub can_stop: bool,
     pub id: String,
     pub command: String,
     pub description: Option<String>,

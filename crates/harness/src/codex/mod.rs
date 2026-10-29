@@ -2675,6 +2675,7 @@ fn publish_background(
                 .is_none_or(|t| Some(t) != active && Some(t) != pruning)
         })
         .map(|(id, c)| zeron_proto::BackgroundTask {
+            can_stop: c.process.is_some(),
             id: id.clone(),
             command: c.command.clone(),
             description: None,

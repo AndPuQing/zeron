@@ -38,8 +38,16 @@ async fn controls_list_read_and_stop_only_the_addressed_runtime_task() {
             if let Some(turn) = published.lock().unwrap().clone() { break turn; }
             tokio::task::yield_now().await;
         }
-    }).await.unwrap();
-    let task = |id: &str| BackgroundTask { id: id.into(), command: format!("watch {id}"), description: None, started_at: chrono::Utc::now() };
+    })
+    .await
+    .unwrap();
+    let task = |id: &str| BackgroundTask {
+        can_stop: true,
+        id: id.into(),
+        command: format!("watch {id}"),
+        description: None,
+        started_at: chrono::Utc::now(),
+    };
     turn.set_background_processes(vec![task("one"), task("two")]);
     turn.append_background_output("one", "output from one\n");
     let params = serde_json::json!({"chatId":"background", "taskId":"one"});

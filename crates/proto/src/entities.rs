@@ -409,6 +409,9 @@ pub struct Session {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundTask {
+    /// True only when the driver has an addressable native stop control.
+    #[serde(default)]
+    pub can_stop: bool,
     /// The runtime's id for it: what `StopBackgroundTask` and
     /// `ReadBackgroundTaskOutput` address.
     pub id: String,

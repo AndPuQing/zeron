@@ -27,6 +27,8 @@ internal fun BackgroundProcesses(client: CoreClient, chatId: String, onDismiss: 
     var output by remember(chatId) { mutableStateOf<BackgroundOutput?>(null) }
     var stopping by remember(chatId) { mutableStateOf<Set<String>>(emptySet()) }
     var error by remember(chatId) { mutableStateOf<String?>(null) }
+    var actionError by remember(chatId) { mutableStateOf<String?>(null) }
+    val stopStarted = remember(chatId) { mutableMapOf<String, Long>() }
     var loaded by remember(chatId) { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current
@@ -40,6 +42,8 @@ internal fun BackgroundProcesses(client: CoreClient, chatId: String, onDismiss: 
                     tasks = client.backgroundTasks(chatId)
                     loaded = true
                     stopping = stopping.intersect(tasks.map { it.id }.toSet())
+                    val expired = stopping.filter { System.currentTimeMillis() - (stopStarted[it] ?: 0) >= 15000 }
+                    if (expired.isNotEmpty()) { stopping = stopping - expired.toSet(); actionError = "Stop not confirmed; the process is still reported running." }
                     val id = selected
                     output = if (id != null && tasks.any { it.id == id }) client.backgroundTaskOutput(chatId, id) else null
                     error = null
@@ -56,6 +60,7 @@ internal fun BackgroundProcesses(client: CoreClient, chatId: String, onDismiss: 
             else if (!loaded && error == null) Text("Loading…")
             else if (tasks.isEmpty() && error == null) Text("No background processes reported by this agent.")
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            actionError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             tasks.forEach { task ->
                 Row(Modifier.fillMaxWidth()) {
                     Column(Modifier.weight(1f).clickable { selected = if (selected == task.id) null else task.id }) {
@@ -63,8 +68,9 @@ internal fun BackgroundProcesses(client: CoreClient, chatId: String, onDismiss: 
                         task.description?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                         Text("Running for ${((System.currentTimeMillis() - task.startedAtMs).coerceAtLeast(0) / 1000)}s", style = MaterialTheme.typography.bodySmall)
                     }
-                    TextButton(enabled = task.id !in stopping, onClick = {
+                    if (task.canStop) TextButton(enabled = task.id !in stopping, onClick = {
                         stopping = stopping + task.id
+                        stopStarted[task.id] = System.currentTimeMillis(); actionError = null
                         scope.launch {
                             try {
                                 if (!client.stopBackgroundTask(chatId, task.id)) {
@@ -72,7 +78,7 @@ internal fun BackgroundProcesses(client: CoreClient, chatId: String, onDismiss: 
                                     tasks = client.backgroundTasks(chatId)
                                 }
                             } catch (cancelled: CancellationException) { throw cancelled }
-                            catch (e: Exception) { stopping = stopping - task.id; error = e.message }
+                            catch (e: Exception) { stopping = stopping - task.id; actionError = e.message }
                         }
                     }) { Text(if (task.id in stopping) "Stopping…" else "Stop") }
                 }

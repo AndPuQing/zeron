@@ -1167,6 +1167,8 @@ private final class BackgroundProcessesViewController: UITableViewController {
     private let chatId: String
     private var processes: [BackgroundProcess] = []
     private var stopping: Set<String> = []
+    private var stopStarted: [String: Date] = [:]
+    private var actionError: String?
     private var selected: String?
     private var output: BackgroundOutput?
     private var poll: Task<Void, Never>?
@@ -1191,11 +1193,13 @@ private final class BackgroundProcessesViewController: UITableViewController {
                     guard !Task.isCancelled else { return }
                     self.processes = rows
                     self.stopping.formIntersection(Set(rows.map(\.id)))
+                    let expired = self.stopping.filter { Date().timeIntervalSince(self.stopStarted[$0] ?? .distantPast) >= 15 }
+                    if !expired.isEmpty { self.stopping.subtract(expired); self.actionError = "Stop not confirmed; process still running" }
                     if let id = self.selected, rows.contains(where: { $0.id == id }) {
                         self.output = try await self.client.backgroundTaskOutput(chatId: self.chatId, taskId: id)
                     } else { self.output = nil }
                     guard !Task.isCancelled else { return }
-                    self.navigationItem.prompt = rows.isEmpty ? "No background processes reported" : nil
+                    self.navigationItem.prompt = self.actionError ?? (rows.isEmpty ? "No background processes reported" : nil)
                     self.tableView.reloadData()
                 } catch {
                     guard !Task.isCancelled else { return }
@@ -1218,22 +1222,22 @@ private final class BackgroundProcessesViewController: UITableViewController {
             detail += "\n" + (output?.truncated == true ? "Earlier output not shown\n" : "") + (output?.text.isEmpty == false ? output!.text : "No output yet")
         }
         cell.detailTextLabel?.text = detail
-        cell.detailTextLabel?.numberOfLines = selected == process.id ? 12 : 2
+        cell.detailTextLabel?.numberOfLines = selected == process.id ? 0 : 2
         let button = UIButton(type: .system)
         button.setTitle(stopping.contains(process.id) ? "Stopping…" : "Stop", for: .normal)
         button.isEnabled = !stopping.contains(process.id)
         button.addAction(UIAction { [weak self] _ in
             guard let self else { return }
-            self.stopping.insert(process.id); self.tableView.reloadData()
+            self.stopping.insert(process.id); self.stopStarted[process.id] = Date(); self.actionError = nil; self.tableView.reloadData()
             Task { [weak self] in
                 guard let self else { return }
                 do {
                     if !(try await self.client.stopBackgroundTask(chatId: self.chatId, taskId: process.id)) { self.stopping.remove(process.id) }
-                } catch { self.stopping.remove(process.id); self.navigationItem.prompt = "Couldn't stop that process" }
+                } catch { self.stopping.remove(process.id); self.actionError = "Couldn't stop that process"; self.navigationItem.prompt = self.actionError }
                 self.tableView.reloadData()
             }
         }, for: .touchUpInside)
-        button.sizeToFit(); cell.accessoryView = button
+        button.sizeToFit(); cell.accessoryView = process.canStop ? button : nil
         return cell
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

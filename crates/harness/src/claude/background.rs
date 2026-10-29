@@ -188,6 +188,7 @@ impl BackgroundShells {
                     .map(|(_, command)| command.clone())
                     .filter(|c| !c.is_empty());
                 BackgroundTask {
+                    can_stop: true,
                     id: listed.id.clone(),
                     command: command
                         .clone()

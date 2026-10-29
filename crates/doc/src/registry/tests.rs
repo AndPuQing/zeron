@@ -319,6 +319,7 @@ fn background_processes_replicate_and_clear() {
     let mut viewer = RegistryDoc::new("viewer");
     let mut row = session("chat", "host", SessionStatus::Idle);
     row.background_tasks = vec![zeron_proto::BackgroundTask {
+        can_stop: true,
         id: "bgsh".into(),
         command: "npm run dev".into(),
         description: Some("Start the dev server".into()),
