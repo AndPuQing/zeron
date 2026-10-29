@@ -11527,8 +11527,8 @@ impl Transcript {
                     .position(|(ix, _)| self.rows[*ix].entry_id.as_ref() == message_id);
                 find.target_message = None;
                 find.jump_pending = false;
-                self.sync_find_current();
-                self.jump_to_find_row(row_ix);
+                let matched_row = self.sync_find_current().unwrap_or(row_ix);
+                self.jump_to_find_row(matched_row);
             }
             return;
         }
@@ -18581,8 +18581,8 @@ mod tests {
         );
     }
 
-    /// Leaving a chat caches its transcript; coming back shows it at once,
-    /// so the revisit never reads as loading.
+    /// A delayed search hit lands on its matching block, not the start of
+    /// that message or an earlier message containing the same query.
     #[gpui::test]
     fn message_search_waits_for_exact_message_and_ignores_input_echo(
         cx: &mut gpui::TestAppContext,
@@ -18607,20 +18607,69 @@ mod tests {
                 this.find.as_ref().unwrap().target_message.as_deref(),
                 Some("second")
             );
+            let target = assistant(
+                "second",
+                MessageStatus::Complete,
+                vec![text_part(
+                    "text",
+                    "Opening paragraph.\n\nMore context.\n\n安装包损坏",
+                )],
+            );
+            let target_start = this.rows.len();
             this.rows
-                .extend(rows_for_entry(&entry("second"), false, false, &mut parse));
+                .extend(rows_for_entry(&target, false, false, &mut parse));
+            let matched_row = this.rows.len() - 1;
+            assert!(matched_row > target_start, "the hit is in a later block");
             this.list.reset(this.rows.len());
             this.refresh_find();
             assert_eq!(this.find.as_ref().unwrap().current, Some(1));
+            assert_eq!(this.list.logical_scroll_top().item_ix, matched_row);
             this.set_find_query("安装包".into(), cx);
             assert_eq!(
                 this.find.as_ref().unwrap().current,
                 Some(1),
                 "input echo must not navigate to first hit"
             );
+            assert_eq!(this.list.logical_scroll_top().item_ix, matched_row);
         });
     }
 
+    #[gpui::test]
+    fn message_search_without_a_literal_match_still_lands_on_the_exact_message(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let state = cx.new(|_| AppState::new());
+        let transcript = cx.new(|cx| Transcript::new(state, cx));
+        transcript.update(cx, |this, cx| {
+            this.chat_id = Some("chat".into());
+            this.rows = rows_for_entry(&user_message("first"), false, false, &mut parse);
+            this.list.reset(this.rows.len());
+            // FTS accepts separate word prefixes; find-in-thread uses literal text.
+            this.find_in_chat("chat".into(), "kube config".into(), "second".into(), cx);
+            let target_start = this.rows.len();
+            let target = assistant(
+                "second",
+                MessageStatus::Complete,
+                vec![text_part("text", "Context.\n\nKubernetes configmap.")],
+            );
+            this.rows
+                .extend(rows_for_entry(&target, false, false, &mut parse));
+            this.list.reset(this.rows.len());
+            this.refresh_find();
+            let find = this.find.as_ref().unwrap();
+            assert!(find.matches.is_empty());
+            assert!(find.target_message.is_none());
+            assert!(!find.jump_pending);
+            assert_eq!(this.list.logical_scroll_top().item_ix, target_start);
+        });
+    }
+
+    /// Leaving a chat caches its transcript; coming back shows it at once,
+    /// so the revisit never reads as loading.
     #[gpui::test]
     fn cached_revisit_never_shows_the_loader(cx: &mut gpui::TestAppContext) {
         let runtime = test_runtime();

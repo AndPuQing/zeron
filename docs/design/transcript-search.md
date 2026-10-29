@@ -27,6 +27,16 @@ builds, generated bindings and UI checks run only in CI.
 
 Review regressions:
 
+- Continuation segments join onto the same root message ID used by desktop and
+  mobile layouts. Index version 4 rebuilds older derived entries; the regression
+  restores a version 3 cache and checks root IDs, deduplication and queries whose
+  terms span two segments. The transcript-search RPC integration test runs in
+  the Linux core CI suite.
+- Palette message identities use the chat and stable message ID, so repeated or
+  changing snippets cannot move keyboard selection to another result.
+- A delayed desktop result scrolls to the matching block inside its exact
+  message. A token-prefix query with no literal find match still lands on that
+  message's first block; input echoes do not reset an exact result selection.
 - Desktop matching builds one original-byte-offset character index and uses
   prefix fallback (linear scanning). It retains per-character lowercase and
   non-overlapping matching semantics. Tests compare an independent naive oracle

@@ -331,7 +331,7 @@ impl PaletteRow {
         let id = match &self.kind {
             RowKind::Command(command) => format!("command:{}", command.label()),
             RowKind::Chat(id) => format!("chat:{id}"),
-            RowKind::Message(hit) => format!("message:{}:{}", hit.chat_id, hit.snippet),
+            RowKind::Message(hit) => format!("message:{}:{}", hit.chat_id, hit.message_id),
             RowKind::File { path, .. } => format!("file:{path}"),
             RowKind::Content(found) => {
                 format!("content:{}:{}:{}", found.path, found.line, found.column)
@@ -3001,6 +3001,41 @@ mod tests {
         }
         cx.simulate_keystrokes(window.into(), "shift-tab");
         assert_eq!(palette_tab(window, cx), Some(Tab::Files));
+    }
+
+    #[test]
+    fn message_selection_uses_identity_even_when_snippets_repeat_or_change() {
+        let message = |id: &str, snippet: &str| {
+            PaletteRow::new(
+                Section::InMessages,
+                RowKind::Message(zeron_proto::TranscriptSearchHit {
+                    message_id: id.into(),
+                    chat_id: "chat".into(),
+                    snippet: snippet.into(),
+                    from_user: true,
+                }),
+            )
+        };
+        let rows: Vec<_> = ["first", "second", "third"]
+            .into_iter()
+            .map(|id| message(id, "please continue"))
+            .collect();
+        let flat: Vec<_> = rows.iter().collect();
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(
+                row_position(Some(&row.key()), index, &flat),
+                index,
+                "keyboard selection must resolve to this exact message"
+            );
+        }
+        let active = rows[1].key();
+        let updated = message("second", "please continue after the update");
+        let refreshed = vec![&rows[2], &rows[0], &updated];
+        assert_eq!(
+            row_position(Some(&active), 1, &refreshed),
+            2,
+            "the same message stays selected after ranking and snippet changes"
+        );
     }
 
     #[test]

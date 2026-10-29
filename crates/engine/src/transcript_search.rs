@@ -13,14 +13,15 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params};
-use zeron_doc::{MessagePart, MessageRole, SessionDoc};
+use zeron_doc::{MessagePart, MessageRole, SessionDoc, join_continuation_entries};
 use zeron_proto::{TranscriptSearchHit, TranscriptSearchPage};
 use zeron_sync::DocsStore;
 
 use crate::EngineError;
 use crate::workspace_host::WorkspaceHost;
 
-const SCHEMA_VERSION: i64 = 3;
+// Rebuild older indexes so continuation hits use the same root IDs as the UI.
+const SCHEMA_VERSION: i64 = 4;
 /// A message's FTS rowid is `chat row * MESSAGE_SLOTS + message index`, so a
 /// chat's messages are one rowid range.
 // ponytail: messages past a million in one chat go unindexed.
@@ -244,7 +245,7 @@ fn transcript_messages(snapshot: &[u8]) -> Result<Vec<(String, bool, String)>, E
     let raw = loro::LoroDoc::new();
     raw.import(snapshot)
         .map_err(|e| EngineError::Other(e.to_string()))?;
-    let entries = SessionDoc::from_doc(raw).read_entries()?;
+    let entries = join_continuation_entries(SessionDoc::from_doc(raw).read_entries()?);
     let mut messages = Vec::new();
     for entry in entries {
         if !matches!(entry.role, MessageRole::User | MessageRole::Assistant) {
@@ -325,6 +326,108 @@ mod tests {
     use super::*;
     use crate::workspace_host::WorkspaceHostConfig;
     use zeron_doc::{MessageStatus, SessionMessageEntry};
+
+    #[tokio::test]
+    async fn continuation_search_rebuilds_legacy_hits_and_returns_the_visible_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(DocsStore::open(dir.path()).unwrap());
+        let workspace = WorkspaceHost::open(
+            store.clone(),
+            WorkspaceHostConfig {
+                device_id: "test".into(),
+                device_name: "Test".into(),
+                platform: "test".into(),
+                org_id: "test".into(),
+                user_id: "test".into(),
+                edge: None,
+                local_only: true,
+            },
+        )
+        .unwrap();
+        workspace
+            .create_chat("chat", None, Some("test"), None, None)
+            .unwrap();
+        let doc = SessionDoc::init("chat").unwrap();
+        let parts = vec![MessagePart::Text {
+            id: "text".into(),
+            text: format!(
+                "needle headmarker {} needle tailmarker",
+                "padding ".repeat(zeron_doc::MSG_INLINE_MAX / 8)
+            ),
+        }];
+        let chunks = zeron_doc::split_parts(&parts);
+        assert!(chunks.len() > 1, "exercise the imported-history split path");
+        for (index, parts) in chunks.into_iter().enumerate() {
+            doc.push_message(&SessionMessageEntry {
+                id: if index == 0 {
+                    "root".into()
+                } else {
+                    zeron_doc::continuation_id("root", index)
+                },
+                role: MessageRole::Assistant,
+                parts,
+                created_at: 1,
+                device_id: "test".into(),
+                status: Some(MessageStatus::Complete),
+                continuation_of: (index > 0).then(|| "root".into()),
+                duration_ms: None,
+            })
+            .unwrap();
+        }
+        store
+            .save_snapshot("chat", &doc.export_snapshot().unwrap())
+            .unwrap();
+        let saved_at = store.snapshot_saved_at().unwrap()["chat"];
+        let legacy = TranscriptSearch::open(dir.path(), store.clone(), workspace.clone()).unwrap();
+        {
+            let conn = legacy.inner.conn();
+            conn.execute(
+                "INSERT INTO chats (id, chat_id, saved_at) VALUES (1, 'chat', ?1)",
+                params![saved_at],
+            )
+            .unwrap();
+            // Version 3 indexed each raw segment separately at this same saved_at.
+            for (index, entry) in doc.read_entries().unwrap().into_iter().enumerate() {
+                let body = entry
+                    .parts
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        MessagePart::Text { text, .. } => Some(text),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                conn.execute(
+                    "INSERT INTO transcripts (rowid, indexed_text, body, from_user, message_id)
+                     VALUES (?1, ?2, ?3, 0, ?4)",
+                    params![
+                        MESSAGE_SLOTS + index as i64,
+                        searchable_text(&body),
+                        body,
+                        entry.id
+                    ],
+                )
+                .unwrap();
+            }
+            conn.pragma_update(None, "user_version", 3).unwrap();
+        }
+        let old_hits = legacy
+            .inner
+            .query(&match_expression("needle").unwrap(), "needle", 100)
+            .unwrap();
+        assert_eq!(old_hits.len(), 2);
+        assert!(old_hits.iter().any(|hit| hit.message_id == "root#c1"));
+        drop(legacy);
+
+        let search = TranscriptSearch::open(dir.path(), store, workspace).unwrap();
+        for query in ["needle", "tailmarker", "headmarker tailmarker"] {
+            let page = search.search(query.into(), 100).await.unwrap();
+            assert!(!page.indexing);
+            assert_eq!(page.hits.len(), 1, "one visible message for {query:?}");
+            assert_eq!(page.hits[0].message_id, "root");
+            assert!(!page.hits[0].from_user);
+        }
+    }
 
     #[tokio::test]
     async fn exhausted_budget_still_indexes_one_chat_and_eventually_finishes() {
