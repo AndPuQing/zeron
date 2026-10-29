@@ -34,8 +34,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: ui-tests-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ui-tests-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   # Every Linux Rust test that is not UI: one build, one nextest run (see
