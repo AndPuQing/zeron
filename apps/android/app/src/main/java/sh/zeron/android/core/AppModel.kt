@@ -11,6 +11,9 @@ import uniffi.zeron_core.SendState
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CompletableDeferred
 import sh.zeron.android.design.Appearance
 import sh.zeron.android.design.ThemeMode
