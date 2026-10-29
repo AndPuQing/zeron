@@ -1239,7 +1239,7 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      * Files matching `query` in the chat's (or project's) workspace, for
      * composer `@` mentions.
      */
-    func searchTranscripts(deviceId: String, query: String) async throws  -> [TranscriptSearchHit]
+    func searchTranscripts(deviceId: String, query: String) async throws  -> TranscriptSearchPage
     
     /**
      * An already-open session.
@@ -2208,7 +2208,7 @@ open func searchIncludingChildren(query: String, limit: UInt32) -> [SearchHit]  
      * Files matching `query` in the chat's (or project's) workspace, for
      * composer `@` mentions.
      */
-open func searchTranscripts(deviceId: String, query: String)async throws  -> [TranscriptSearchHit]  {
+open func searchTranscripts(deviceId: String, query: String)async throws  -> TranscriptSearchPage  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
@@ -2219,7 +2219,7 @@ open func searchTranscripts(deviceId: String, query: String)async throws  -> [Tr
             pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
             completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
             freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterSequenceTypeTranscriptSearchHit.lift,
+            liftFunc: FfiConverterTypeTranscriptSearchPage_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -14620,6 +14620,60 @@ public func FfiConverterTypeTranscriptSearchHit_lower(_ value: TranscriptSearchH
 }
 
 
+public struct TranscriptSearchPage: Equatable, Hashable {
+    public var hits: [TranscriptSearchHit]
+    public var indexing: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(hits: [TranscriptSearchHit], indexing: Bool) {
+        self.hits = hits
+        self.indexing = indexing
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TranscriptSearchPage: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTranscriptSearchPage: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TranscriptSearchPage {
+        return
+            try TranscriptSearchPage(
+                hits: FfiConverterSequenceTypeTranscriptSearchHit.read(from: &buf), 
+                indexing: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TranscriptSearchPage, into buf: inout [UInt8]) {
+        FfiConverterSequenceTypeTranscriptSearchHit.write(value.hits, into: &buf)
+        FfiConverterBool.write(value.indexing, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptSearchPage_lift(_ buf: RustBuffer) throws -> TranscriptSearchPage {
+    return try FfiConverterTypeTranscriptSearchPage.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTranscriptSearchPage_lower(_ value: TranscriptSearchPage) -> RustBuffer {
+    return FfiConverterTypeTranscriptSearchPage.lower(value)
+}
+
+
 /**
  * Transcript-level facts the platform needs without the rows (loader vs
  * empty state, scroll-to-bottom affordances, the working pill).
@@ -23941,7 +23995,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_search_including_children() != 10816) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_search_transcripts() != 53169) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_search_transcripts() != 64542) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_session() != 12772) {
