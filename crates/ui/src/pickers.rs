@@ -5108,10 +5108,17 @@ impl Pickers {
         if self.title.is_some() {
             return None;
         }
-        if self.offered_access(cx).is_empty() {
+        // Preserve dev's layout while the host catalog is unknown/legacy.
+        // A retained restricted choice still needs a visible way to reset it.
+        let mode = self.effective_access(cx);
+        if self
+            .effective_descriptor(cx)
+            .is_none_or(|d| d.access_modes.is_empty())
+            && mode.is_full_access()
+            && !self.effective_plan(cx)
+        {
             return None;
         }
-        let mode = self.effective_access(cx);
         let plan = self
             .effective_plan(cx)
             .then(|| (SharedString::from("Plan"), Some(theme.accent)));
