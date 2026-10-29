@@ -1653,14 +1653,14 @@ fn message_search_locates_stable_message_after_layout() {
         vec![
             DebugEntry {
                 id: "first".into(),
-                role: DebugRole::User,
-                markdown: "same query".into(),
+                user: true,
+                text: "same query".into(),
                 streaming: false,
             },
             DebugEntry {
                 id: "second".into(),
-                role: DebugRole::User,
-                markdown: "same query".into(),
+                user: true,
+                text: "same query".into(),
                 streaming: false,
             },
         ],
