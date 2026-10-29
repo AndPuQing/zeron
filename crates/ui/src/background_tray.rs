@@ -71,9 +71,64 @@ pub(crate) struct BackgroundTrayState {
     failure: Option<SharedString>,
     /// Bumped on every toggle so the list's fade-in replays.
     epoch: u32,
+    output_generation: u64,
+    output_sequence: u64,
+    applied_output_sequence: u64,
+    output_host: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+struct OutputRequest {
+    generation: u64,
+    sequence: u64,
 }
 
 impl BackgroundTrayState {
+    pub(crate) fn invalidate_output(&mut self) {
+        self.output_generation = self.output_generation.wrapping_add(1);
+        self.applied_output_sequence = 0;
+    }
+
+    fn begin_output(&mut self, id: &str, host: &str) -> Option<OutputRequest> {
+        if !self.expanded || self.open.as_deref() != Some(id) {
+            return None;
+        }
+        if self.output_host.as_deref() != Some(host) {
+            self.invalidate_output();
+            self.outputs.clear();
+            self.output_host = Some(host.to_owned());
+        }
+        self.output_sequence += 1;
+        Some(OutputRequest {
+            generation: self.output_generation,
+            sequence: self.output_sequence,
+        })
+    }
+
+    /// Accept responses in request order, without starving a slow host when
+    /// another poll has already started. Even an unchanged response advances
+    /// the watermark, so an older different response cannot roll it back.
+    fn apply_output(
+        &mut self,
+        id: &str,
+        request: OutputRequest,
+        output: BackgroundTaskOutput,
+    ) -> bool {
+        if !self.expanded
+            || self.open.as_deref() != Some(id)
+            || request.generation != self.output_generation
+            || request.sequence <= self.applied_output_sequence
+        {
+            return false;
+        }
+        self.applied_output_sequence = request.sequence;
+        if self.outputs.get(id) == Some(&output) {
+            return false;
+        }
+        self.outputs.insert(id.to_owned(), output);
+        true
+    }
+
     /// Forget what belonged to processes that have ended.
     pub fn observe(&mut self, tasks: &[BackgroundTask]) {
         let listed = |id: &String| tasks.iter().any(|t| t.id == *id);
@@ -92,6 +147,7 @@ impl BackgroundTrayState {
         });
         self.outputs.retain(|id, _| listed(id));
         if self.open.as_ref().is_some_and(|id| !listed(id)) {
+            self.invalidate_output();
             self.open = None;
         }
     }
@@ -101,6 +157,7 @@ impl BackgroundTrayState {
     }
 
     pub fn toggle(&mut self) {
+        self.invalidate_output();
         self.expanded = !self.expanded;
         self.failure = None;
         self.epoch = self.epoch.wrapping_add(1);
@@ -108,6 +165,7 @@ impl BackgroundTrayState {
 
     /// Open `id`'s output, or close it when it is the one open.
     pub fn toggle_output(&mut self, id: &str) {
+        self.invalidate_output();
         self.open = if self.open.as_deref() == Some(id) {
             None
         } else {
@@ -187,6 +245,9 @@ impl Composer {
     ) -> Option<AnyElement> {
         let Some(listed) = self.selected_background_tasks(cx) else {
             self.background_tick = None;
+            for tray in self.background_trays.values_mut() {
+                tray.invalidate_output();
+            }
             return None;
         };
         let tray = self
@@ -593,12 +654,19 @@ impl Composer {
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             return;
         };
+        let Some(request) = self
+            .background_trays
+            .get_mut(chat_id)
+            .and_then(|tray| tray.begin_output(id, host))
+        else {
+            return;
+        };
         let params = serde_json::json!({
             "chatId": chat_id,
             "taskId": id,
             "targetDeviceId": host,
         });
-        let (chat_id, id) = (chat_id.to_owned(), id.to_owned());
+        let (chat_id, host, id) = (chat_id.to_owned(), host.to_owned(), id.to_owned());
         cx.spawn(async move |this, cx| {
             let Ok(reply) = engine
                 .client()
@@ -612,22 +680,43 @@ impl Composer {
                 return;
             };
             let _ = this.update(cx, |composer, cx| {
-                let tray = composer.background_trays.entry(chat_id).or_default();
-                if tray.outputs.get(&id) == Some(&output) {
-                    return;
-                }
-                let follow = tray.outputs.get(&id).is_none_or(|_| {
-                    let scroll = &composer.background_output_scroll;
-                    scroll.max_offset().y - (-scroll.offset().y) < px(4.0)
-                });
-                tray.outputs.insert(id, output);
-                if follow {
-                    composer.background_output_scroll.scroll_to_bottom();
-                }
-                cx.notify();
+                composer.apply_background_output(&chat_id, &host, &id, request, output, cx);
             });
         })
         .detach();
+    }
+
+    fn apply_background_output(
+        &mut self,
+        chat_id: &str,
+        host: &str,
+        id: &str,
+        request: OutputRequest,
+        output: BackgroundTaskOutput,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(listed) = self.selected_background_tasks(cx) else {
+            return false;
+        };
+        if listed.chat_id != chat_id || listed.host != host || !listed.actions {
+            return false;
+        }
+        let Some(tray) = self.background_trays.get_mut(chat_id) else {
+            return false;
+        };
+        tray.observe(&listed.tasks);
+        let follow = tray.outputs.get(id).is_none_or(|_| {
+            let scroll = &self.background_output_scroll;
+            scroll.max_offset().y - (-scroll.offset().y) < px(4.0)
+        });
+        if !tray.apply_output(id, request, output) {
+            return false;
+        }
+        if follow {
+            self.background_output_scroll.scroll_to_bottom();
+        }
+        cx.notify();
+        true
     }
 
     /// While the tray is expanded: once a second, re-render for the clocks
@@ -805,6 +894,77 @@ mod tests {
         assert!(state.outputs.is_empty());
     }
 
+    fn output(text: &str) -> BackgroundTaskOutput {
+        BackgroundTaskOutput {
+            text: text.into(),
+            truncated: false,
+        }
+    }
+
+    fn reading() -> BackgroundTrayState {
+        let mut state = BackgroundTrayState::default();
+        state.toggle();
+        state.toggle_output("a");
+        state
+    }
+
+    #[test]
+    fn output_responses_cannot_roll_back_even_after_an_unchanged_reply() {
+        let mut state = reading();
+        let first = state.begin_output("a", "host").unwrap();
+        let second = state.begin_output("a", "host").unwrap();
+        assert!(state.apply_output("a", second, output("new")));
+        assert!(!state.apply_output("a", first, output("old")));
+        let third = state.begin_output("a", "host").unwrap();
+        let fourth = state.begin_output("a", "host").unwrap();
+        assert!(!state.apply_output("a", fourth, output("new")));
+        assert!(!state.apply_output("a", third, output("intermediate")));
+        assert_eq!(state.outputs["a"].text, "new");
+    }
+
+    #[test]
+    fn slow_output_still_advances_while_a_newer_poll_is_pending() {
+        let mut state = reading();
+        let first = state.begin_output("a", "host").unwrap();
+        let second = state.begin_output("a", "host").unwrap();
+        assert!(state.apply_output("a", first, output("first")));
+        assert!(state.apply_output("a", second, output("second")));
+        assert_eq!(state.outputs["a"].text, "second");
+    }
+
+    #[test]
+    fn old_output_is_rejected_after_selection_collapse_removal_or_navigation() {
+        for boundary in ["selection", "collapse", "removal", "navigation", "host"] {
+            let mut state = reading();
+            let old = state.begin_output("a", "host").unwrap();
+            match boundary {
+                "selection" => {
+                    state.toggle_output("b");
+                    state.toggle_output("a");
+                }
+                "collapse" => {
+                    state.toggle();
+                    state.toggle();
+                }
+                "removal" => {
+                    state.observe(&[]);
+                    state.toggle_output("a");
+                }
+                "navigation" => state.invalidate_output(),
+                "host" => {
+                    state.begin_output("a", "other-host").unwrap();
+                }
+                _ => unreachable!(),
+            }
+            let fresh = state.begin_output("a", "host").unwrap();
+            assert!(!state.apply_output("a", old, output("stale")), "{boundary}");
+            assert!(
+                state.apply_output("a", fresh, output("fresh")),
+                "{boundary}"
+            );
+        }
+    }
+
     use crate::state::AppState;
     use gpui::AppContext as _;
 
@@ -944,6 +1104,84 @@ mod tests {
         let (_dir, state, handle) = window(cx);
         show(&state, "a", vec![task("p", "pnpm dev", 30)], 0, false, cx);
         assert_eq!(listed(&handle, cx), Some((1, false)));
+    }
+
+    #[gpui::test]
+    fn late_output_cannot_publish_into_a_different_task_chat_or_host(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (_dir, state, handle) = window(cx);
+        show(
+            &state,
+            "chat-a",
+            vec![task("a", "watch a", 0), task("b", "watch b", 0)],
+            0,
+            true,
+            cx,
+        );
+        let request = handle
+            .update(cx, |composer, _, cx| {
+                let tray = composer
+                    .background_trays
+                    .entry("chat-a".into())
+                    .or_insert_with(reading);
+                let request = tray.begin_output("a", "host").unwrap();
+                tray.toggle_output("b");
+                let next = tray.begin_output("b", "host").unwrap();
+                assert!(composer.apply_background_output(
+                    "chat-a",
+                    "host",
+                    "b",
+                    next,
+                    output("B"),
+                    cx
+                ));
+                assert!(!composer.apply_background_output(
+                    "chat-a",
+                    "host",
+                    "a",
+                    request,
+                    output("late A"),
+                    cx
+                ));
+                assert_eq!(composer.background_trays["chat-a"].outputs["b"].text, "B");
+                assert!(
+                    !composer.background_trays["chat-a"]
+                        .outputs
+                        .contains_key("a")
+                );
+                request
+            })
+            .unwrap();
+        show(
+            &state,
+            "chat-b",
+            vec![task("a", "another process", 0)],
+            0,
+            true,
+            cx,
+        );
+        handle
+            .update(cx, |composer, _, cx| {
+                assert!(!composer.apply_background_output(
+                    "chat-a",
+                    "host",
+                    "a",
+                    request,
+                    output("late A"),
+                    cx
+                ));
+                assert!(!composer.apply_background_output(
+                    "chat-b",
+                    "old-host",
+                    "a",
+                    request,
+                    output("old host"),
+                    cx
+                ));
+                assert!(!composer.background_trays.contains_key("chat-b"));
+            })
+            .unwrap();
     }
 
     #[gpui::test]

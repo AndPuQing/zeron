@@ -111,6 +111,15 @@ collapsing a row, removing a process or dismissing the sheet invalidates older
 responses before they can replace the current output. `BackgroundOutputSelectionTests`
 covers these cases in the iOS unit suite (CI only).
 
+Desktop output responses carry a selection generation and a request sequence.
+Only responses newer than the last applied response may update the output;
+an unchanged response still advances that watermark. This rejects out-of-order
+results without starving slow connections while newer polls are pending.
+Selection changes, collapse, process removal and chat navigation invalidate
+older requests. The response handler also checks the current chat and host
+before touching the shared output scroll handle. Regression tests cover these
+boundaries, including A → B → A and returning to the same host.
+
 ```sh
 cargo test --locked -p zeron-harness background      # BackgroundWork, Claude roster joins
 cargo test --locked -p zeron-harness --test claude background_shells

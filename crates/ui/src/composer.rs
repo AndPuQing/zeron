@@ -8981,6 +8981,9 @@ impl Composer {
         if key != self.current_key {
             self.input
                 .update(cx, |input, cx| input.set_prompt_suggestion(None, cx));
+            for tray in self.background_trays.values_mut() {
+                tray.invalidate_output();
+            }
             if !key.is_empty() && !self.current_key.is_empty() {
                 // Switching between established chats still snaps to the new
                 // draft; a tail from a hero transition belongs to its old chat.
