@@ -111,12 +111,7 @@ pub const CATALOG: &[Entry] = &[
     entry!("mention", "Browse project files", Desktop),
     entry!("model", "Choose model and reasoning", Desktop),
     entry!("fast", "Choose the model's service tier", Desktop),
-    Entry {
-        name: "plan",
-        description: "Enable plan mode, or plan an inline request",
-        hint: Some("optional prompt, or off"),
-        delivery: Native,
-    },
+    entry!("plan", "Configure Plan in Zerun permissions", Desktop),
     Entry {
         name: "goal",
         description: "Set, inspect, pause, resume, edit or clear a goal",
@@ -267,7 +262,6 @@ pub fn request(
             ));
         }
         // These need the resolved model/project context from turn/start params.
-        "plan" => return Ok(("zerun/plan", json!({"threadId":thread,"arguments":args}))),
         "mcp" if args == "verbose" => {
             return Ok(("mcpServerStatus/list", json!({"threadId":thread})));
         }
@@ -347,7 +341,6 @@ pub(super) async fn execute(
     mut arguments: Value,
     mut turn: Value,
 ) -> Result<Started, HarnessError> {
-    let thread = turn["threadId"].as_str().unwrap_or_default().to_owned();
     let decoded = zeron_proto::invocation::invocation_prompt(
         turn["input"][0]["text"].as_str().unwrap_or_default(),
     );
@@ -360,46 +353,6 @@ pub(super) async fn execute(
         } else {
             "Summarize this conversation's objective, completed work, decisions, and remaining tasks. Do not perform further work in this turn."
         }}]);
-        let response = client.request("turn/start", turn).await?;
-        return Ok(Started::Turn(
-            response["turn"]["id"].as_str().unwrap_or_default().into(),
-        ));
-    }
-    if method == "zerun/plan" {
-        let text = arguments["arguments"].as_str().unwrap_or_default();
-        let mode = if text == "off" { "default" } else { "plan" };
-        let model = match turn["model"].as_str() {
-            Some(model) => model.to_owned(),
-            None => {
-                let models = client.request("model/list", json!({"limit":100})).await?;
-                models["data"]
-                    .as_array()
-                    .and_then(|models| models.iter().find(|model| model["isDefault"] == true))
-                    .and_then(|model| model["model"].as_str())
-                    .ok_or_else(|| invalid("Choose a Codex model before switching plan mode."))?
-                    .to_owned()
-            }
-        };
-        let collaboration = json!({"mode":mode,"settings":{"model":model,
-            "reasoning_effort":turn.get("effort"),"developer_instructions":null}});
-        if text.is_empty() || text == "off" {
-            client
-                .request(
-                    "thread/settings/update",
-                    json!({"threadId":thread,"collaborationMode":collaboration}),
-                )
-                .await?;
-            return Ok(Started::Reply(
-                if mode == "plan" {
-                    "Plan mode enabled."
-                } else {
-                    "Plan mode disabled."
-                }
-                .into(),
-            ));
-        }
-        turn["collaborationMode"] = collaboration;
-        turn["input"] = json!([{"type":"text","text":text}]);
         let response = client.request("turn/start", turn).await?;
         return Ok(Started::Turn(
             response["turn"]["id"].as_str().unwrap_or_default().into(),

@@ -29,6 +29,12 @@ on:
       - 'apps/ios/**'
       - '.github/workflows/macos.yml'
   workflow_dispatch:
+    inputs:
+      macos_runner:
+        description: Native runner pool (alternate pool for hosted capacity incidents)
+        type: choice
+        default: macos-15
+        options: [macos-15, xcode-27]
 
 permissions:
   contents: read
@@ -83,7 +89,7 @@ jobs:
   # Updater and preview tests, native UI regressions and the two native WebKit fixtures. Everything is
   # compiled once (one cargo invocation, so dependencies are built once) and then run.
   macos-native:
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     # A cold cache (first run, eviction, toolchain bump) takes about 32 minutes; warm is about 10.
@@ -93,6 +99,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Use the alternate pool's selected Xcode
+        if: inputs.macos_runner == 'xcode-27'
+        run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
       - name: Rust toolchain
         run: |
           rustup update stable --no-self-update
@@ -252,6 +261,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ios-include"
           cp "$RUNNER_TEMP/gen/zeron_coreFFI.h" "$RUNNER_TEMP/ios-include/zeron_coreFFI.h"
           cp "$RUNNER_TEMP/gen/zeron_coreFFI.modulemap" "$RUNNER_TEMP/ios-include/module.modulemap"
+      - name: Upload generated Swift bindings for regeneration without a local mobile build
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-generated-swift
+          path: ${{ runner.temp }}/gen/zeron_core.swift
+          retention-days: 3
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ios-ffi-include
@@ -266,7 +283,7 @@ jobs:
   ios-tests:
     needs: [changes, ios-core, macos-frame-source]
     if: needs.changes.outputs.ios == 'true'
-    runs-on: macos-15
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     # Use the same stable Apple Silicon image as the desktop checks. Leave
@@ -274,6 +291,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Use the alternate pool's selected Xcode
+        if: inputs.macos_runner == 'xcode-27'
+        run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
       - name: Select an available iPhone simulator
         run: |
           # The app targets iOS 26: use the newest Xcode 26 and the newest iOS runtime installed.
@@ -335,6 +355,7 @@ jobs:
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsKeepsRowsBetweenControls \
             -only-testing:ZeronUITests/SessionFlowTests/testImportSessionsFoldsUnavailableAndLoadsMore \
             -only-testing:ZeronUITests/SessionFlowTests/testCommandSuggestionsStayCompactAndInsertSkills \
+            -only-testing:ZeronUITests/SessionFlowTests/testExecutionPolicyControlsPersistAcrossModelPicker \
             -only-testing:ZeronUITests/SessionFlowTests/testCrossChatMessageShowsSenderAndBody \
             -only-testing:ZeronUITests/AgentSenderTests/testSenderCaptionOpensTheSendingChat \
             -only-testing:ZeronUITests/AgentSenderTests/testSentMessageOpensTheRecipient \

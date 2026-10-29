@@ -100,6 +100,7 @@ async fn quiet_acp_prompt_stays_working_until_response() {
     queue(
         "followup",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "second".into(),
             message_id: Some("second-user".into()),
         },
@@ -160,6 +161,7 @@ async fn quiet_acp_prompt_stays_working_until_response() {
     queue(
         "self-continue",
         SessionCommandPayload::Steer {
+            execution: Default::default(),
             prompt: "self-continue".into(),
             message_id: Some("third-user".into()),
         },

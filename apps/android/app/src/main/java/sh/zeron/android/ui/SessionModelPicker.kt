@@ -15,6 +15,9 @@ internal fun modelSelection(config: ChatConfig, harness: String, model: String):
 @Composable
 internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: SessionRow?, onDismiss: () -> Unit) {
     val current = row?.harness ?: "claude-code"
+    var policy by remember(c.chatId) { mutableStateOf(client.sessionConfig(c.chatId)) }
+    var policyError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(c.revision) { policy = client.sessionConfig(c.chatId) }
     val switches = canSwitchAgent(c)
     var providers by remember(client, c.host.deviceId) { mutableStateOf<List<HarnessInfo>>(emptyList()) }
     LaunchedEffect(client, c.host.deviceId, switches, current) {
@@ -33,6 +36,16 @@ internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: Sessi
         }
     }
     ModelPickerSheet(tabs, current, row?.model, host = c.host.name ?: "This computer", hostIcon = ZIcons.Laptop,
+        settings = {
+            ExecutionChips(client, current, c.host.deviceId, policy?.accessMode ?: "full-access", policy?.plan ?: false) { access, plan ->
+                runCatching {
+                    val next = checkNotNull(client.sessionConfig(c.chatId)).let { it.copy(accessMode = access ?: it.accessMode, plan = plan ?: it.plan) }
+                    client.setSessionConfig(c.chatId, next)
+                    policy = next
+                }.onFailure { policyError = it.message }
+            }
+            policyError?.let { androidx.compose.material3.Text(it) }
+        },
         onDismiss = onDismiss, onPick = { harness, picked ->
             // Catalog lookup can suspend. Check the current target and pending work again at commit time.
             if (harness != current) {

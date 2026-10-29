@@ -3,6 +3,31 @@ import UIKit
 @testable import Zeron
 
 final class MobileCommandTests: XCTestCase {
+    func testExecutionMenuSelectionKeepsNewerIndependentSetting() {
+        var latest = ChatConfig(accessMode: "full-access", plan: false, harness: "codex", model: nil, reasoning: nil, modelOptions: [:], sandbox: .workspaceWrite)
+        let accessSelection = ExecutionSelection.access("supervised")
+        // Another device changes Plan after the access menu was opened.
+        latest.plan = true
+        accessSelection.apply(to: &latest)
+        XCTAssertEqual(latest.accessMode, "supervised")
+        XCTAssertTrue(latest.plan)
+        let planSelection = ExecutionSelection.plan(false)
+        latest.accessMode = "auto-accept-edits"
+        planSelection.apply(to: &latest)
+        XCTAssertEqual(latest.accessMode, "auto-accept-edits")
+        XCTAssertFalse(latest.plan)
+    }
+
+    func testExecutionPolicySurvivesDraftRestoreAndOldDraftsDecode() throws {
+        let old = try JSONDecoder().decode(NewSessionDraft.self, from: Data(#"{"harness":"codex","worktree":false}"#.utf8))
+        XCTAssertNil(old.accessMode)
+        XCTAssertNil(old.plan)
+        var draft = old
+        draft.accessMode = "supervised"
+        draft.plan = true
+        XCTAssertEqual(try JSONDecoder().decode(NewSessionDraft.self, from: JSONEncoder().encode(draft)), draft)
+    }
+
     private var context: MobileComposerContext {
         MobileComposerContext(inSession: true, isChild: false, canFork: true, hasReply: true, busy: false, editing: false)
     }

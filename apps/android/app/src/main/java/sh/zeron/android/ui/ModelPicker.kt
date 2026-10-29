@@ -126,6 +126,7 @@ fun ModelPickerSheet(
     host: String,
     @DrawableRes hostIcon: Int,
     note: String? = null,
+    settings: @Composable () -> Unit = {},
     onPick: suspend (harness: String, row: ModelPickerRow) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -216,6 +217,7 @@ fun ModelPickerSheet(
                 }
             }, size = 40.dp, container = MaterialTheme.colorScheme.surfaceContainerHighest)
         }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) { settings() }
         if (tabs.size > 1) {
             ProviderSwitcher(
                 tabs,

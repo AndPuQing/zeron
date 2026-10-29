@@ -1105,6 +1105,8 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     
     func devices()  -> [DeviceView]
     
+    func executionCapabilities(harness: String, deviceId: String?) throws  -> ExecutionCapabilities
+    
     /**
      * Devices that can run sessions (new-session / new-project pickers).
      */
@@ -1756,6 +1758,17 @@ open func devices() -> [DeviceView]  {
         uniffiCallStatus in
     uniffi_zeron_mobile_fn_method_coreclient_devices(
             self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+    
+open func executionCapabilities(harness: String, deviceId: String?)throws  -> ExecutionCapabilities  {
+    return try  FfiConverterTypeExecutionCapabilities_lift(try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_execution_capabilities(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(harness),
+        FfiConverterOptionString.lower(deviceId),uniffiCallStatus
     )
 })
 }
@@ -8187,6 +8200,8 @@ public func FfiConverterTypeCaptionSpan_lower(_ value: CaptionSpan) -> RustBuffe
  * A chat's run configuration. Ids are wire strings.
  */
 public struct ChatConfig: Equatable, Hashable {
+    public var accessMode: String
+    public var plan: Bool
     /**
      * `claude-code`, `codex`, …
      */
@@ -8204,7 +8219,7 @@ public struct ChatConfig: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(
+    public init(accessMode: String, plan: Bool, 
         /**
          * `claude-code`, `codex`, …
          */harness: String, model: String?, 
@@ -8214,6 +8229,8 @@ public struct ChatConfig: Equatable, Hashable {
         /**
          * Model option id → choice id (`contextWindow` → `1m`).
          */modelOptions: [String: String], sandbox: SandboxLevel) {
+        self.accessMode = accessMode
+        self.plan = plan
         self.harness = harness
         self.model = model
         self.reasoning = reasoning
@@ -8237,6 +8254,8 @@ public struct FfiConverterTypeChatConfig: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ChatConfig {
         return
             try ChatConfig(
+                accessMode: FfiConverterString.read(from: &buf), 
+                plan: FfiConverterBool.read(from: &buf), 
                 harness: FfiConverterString.read(from: &buf), 
                 model: FfiConverterOptionString.read(from: &buf), 
                 reasoning: FfiConverterOptionString.read(from: &buf), 
@@ -8246,6 +8265,8 @@ public struct FfiConverterTypeChatConfig: FfiConverterRustBuffer {
     }
 
     public static func write(_ value: ChatConfig, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.accessMode, into: &buf)
+        FfiConverterBool.write(value.plan, into: &buf)
         FfiConverterString.write(value.harness, into: &buf)
         FfiConverterOptionString.write(value.model, into: &buf)
         FfiConverterOptionString.write(value.reasoning, into: &buf)
@@ -9712,6 +9733,67 @@ public func FfiConverterTypeDeviceView_lift(_ buf: RustBuffer) throws -> DeviceV
 #endif
 public func FfiConverterTypeDeviceView_lower(_ value: DeviceView) -> RustBuffer {
     return FfiConverterTypeDeviceView.lower(value)
+}
+
+
+/**
+ * Native policy choices shared by all clients. None of these are model traits.
+ */
+public struct ExecutionCapabilities: Equatable, Hashable {
+    public var accessModes: [String]
+    public var supportsPlan: Bool
+    public var reason: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(accessModes: [String], supportsPlan: Bool, reason: String?) {
+        self.accessModes = accessModes
+        self.supportsPlan = supportsPlan
+        self.reason = reason
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension ExecutionCapabilities: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeExecutionCapabilities: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ExecutionCapabilities {
+        return
+            try ExecutionCapabilities(
+                accessModes: FfiConverterSequenceString.read(from: &buf), 
+                supportsPlan: FfiConverterBool.read(from: &buf), 
+                reason: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: ExecutionCapabilities, into buf: inout [UInt8]) {
+        FfiConverterSequenceString.write(value.accessModes, into: &buf)
+        FfiConverterBool.write(value.supportsPlan, into: &buf)
+        FfiConverterOptionString.write(value.reason, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutionCapabilities_lift(_ buf: RustBuffer) throws -> ExecutionCapabilities {
+    return try FfiConverterTypeExecutionCapabilities.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeExecutionCapabilities_lower(_ value: ExecutionCapabilities) -> RustBuffer {
+    return FfiConverterTypeExecutionCapabilities.lower(value)
 }
 
 
@@ -23635,6 +23717,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_devices() != 57985) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_execution_capabilities() != 7828) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_execution_devices() != 15578) {

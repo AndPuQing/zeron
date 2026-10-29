@@ -40,6 +40,7 @@ struct Ledger {
     reconfigured: Mutex<Vec<Option<String>>>,
     /// The model each process was spawned with.
     spawned_models: Mutex<Vec<Option<String>>>,
+    spawned_execution: Mutex<Vec<zeron_proto::ExecutionPolicy>>,
     /// Ends a turn whose prompt contains `wait`.
     release: tokio::sync::Notify,
 }
@@ -68,6 +69,13 @@ fn done(status: DoneStatus) -> AgentEvent {
 
 #[async_trait]
 impl Harness for ProcessHarness {
+    fn access_modes(&self) -> &[zeron_proto::AccessMode] {
+        &zeron_proto::AccessMode::ALL
+    }
+    fn supports_plan(&self) -> bool {
+        true
+    }
+
     fn id(&self) -> HarnessId {
         HarnessId::Mock
     }
@@ -106,6 +114,11 @@ impl Harness for ProcessHarness {
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let ledger = self.ledger.clone();
         ledger.spawns.fetch_add(1, Ordering::SeqCst);
+        ledger
+            .spawned_execution
+            .lock()
+            .unwrap()
+            .push(request.execution_policy());
         ledger
             .spawned_models
             .lock()
@@ -1041,4 +1054,174 @@ async fn the_idle_reaper_spares_a_runtime_holding_background_work() {
     )
     .await;
     rig.core.sessions.shutdown().await;
+}
+
+/// Selecting a different policy must not apply halfway through a live turn,
+/// even on a provider that normally takes steers and model changes in place.
+#[tokio::test]
+async fn execution_changes_hold_sends_until_the_turn_ends_then_replace_the_runtime() {
+    for steer in [false, true] {
+        let rig = rig_with(true);
+        let first = request("wait: original turn");
+        let mut config = zeron_proto::ChatConfig {
+            access: Default::default(),
+            plan: false,
+            harness: HarnessId::Mock,
+            model: first.model.clone(),
+            reasoning: first.reasoning,
+            model_options: first.model_options.clone(),
+            sandbox: first.sandbox,
+        };
+        rig.core
+            .workspace
+            .create_chat(
+                CHAT,
+                None,
+                Some(&rig.core.device_id),
+                Some(config.clone()),
+                None,
+            )
+            .unwrap();
+        rig.core
+            .sessions
+            .dispatch(CHAT, HarnessId::Mock, first, None)
+            .await
+            .unwrap();
+        wait_for(
+            || rig.ledger.prompts.lock().unwrap().len() == 1,
+            "original turn",
+        )
+        .await;
+        config.set_execution_policy(zeron_proto::ExecutionPolicy {
+            access: zeron_proto::AccessMode::Supervised,
+            plan: true,
+        });
+        rig.core.workspace.set_chat_config(CHAT, &config).unwrap();
+        let command = if steer {
+            SessionCommandPayload::Steer {
+                execution: Default::default(),
+                prompt: "next policy".into(),
+                message_id: Some("policy-message".into()),
+            }
+        } else {
+            SessionCommandPayload::Run {
+                request: RunRequest {
+                    access: config.access,
+                    plan: config.plan,
+                    ..request("next policy")
+                },
+                message_id: "policy-message".into(),
+            }
+        };
+        rig.core.doc_host.queue_command(CHAT, command).unwrap();
+        wait_for(|| queued(&rig) == ["next policy"], "policy send to be held").await;
+        assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            rig.ledger.kills.load(Ordering::SeqCst),
+            0,
+            "changing a policy killed the active turn"
+        );
+        rig.ledger.release.notify_one();
+        settle(&rig, 2).await;
+        assert_eq!(rig.ledger.spawns.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            rig.ledger.spawned_execution.lock().unwrap().last(),
+            Some(&config.execution_policy())
+        );
+        rig.core.sessions.shutdown().await;
+    }
+}
+
+/// The session document can arrive before the registry update from a phone.
+/// Every delivery kind must retain the policy selected when the user sent it.
+#[tokio::test]
+async fn submitted_execution_survives_delayed_registry_sync() {
+    for delivery in ["run", "steer", "queue"] {
+        let rig = rig_with(true);
+        let first = request("wait: original turn");
+        let config = zeron_proto::ChatConfig {
+            access: Default::default(),
+            plan: false,
+            harness: HarnessId::Mock,
+            model: first.model.clone(),
+            reasoning: first.reasoning,
+            model_options: first.model_options.clone(),
+            sandbox: first.sandbox,
+        };
+        rig.core
+            .workspace
+            .create_chat(CHAT, None, Some(&rig.core.device_id), Some(config), None)
+            .unwrap();
+        rig.core
+            .sessions
+            .dispatch(CHAT, HarnessId::Mock, first, None)
+            .await
+            .unwrap();
+        wait_for(
+            || rig.ledger.prompts.lock().unwrap().len() == 1,
+            "original turn",
+        )
+        .await;
+        let execution = zeron_proto::ExecutionPolicy {
+            access: zeron_proto::AccessMode::Supervised,
+            plan: true,
+        };
+        // Deliberately leave the host's registry at Full access throughout.
+        let message = "follow-up selected with Plan";
+        match delivery {
+            "run" => {
+                rig.core
+                    .doc_host
+                    .queue_command(
+                        CHAT,
+                        SessionCommandPayload::Run {
+                            request: RunRequest {
+                                access: execution.access,
+                                plan: execution.plan,
+                                ..request(message)
+                            },
+                            message_id: "policy-race".into(),
+                        },
+                    )
+                    .unwrap();
+            }
+            "steer" => {
+                rig.core
+                    .doc_host
+                    .queue_command(
+                        CHAT,
+                        SessionCommandPayload::Steer {
+                            execution,
+                            prompt: message.into(),
+                            message_id: Some("policy-race".into()),
+                        },
+                    )
+                    .unwrap();
+            }
+            _ => {
+                let id = rig
+                    .core
+                    .doc_host
+                    .queue_message_with_execution(CHAT, message, vec![], true, execution)
+                    .unwrap();
+                assert!(rig.core.doc_host.steer_queued_now(CHAT, &id).await.unwrap());
+            }
+        }
+        wait_for(|| queued(&rig) == [message], "restricted message held").await;
+        assert_eq!(
+            rig.ledger.prompts.lock().unwrap().len(),
+            1,
+            "{delivery} reached the old runtime"
+        );
+        let handle = rig.core.doc_host.open(CHAT).unwrap();
+        assert_eq!(handle.watch_queue().borrow()[0].execution, execution);
+        rig.ledger.release.notify_one();
+        settle(&rig, 2).await;
+        assert_eq!(
+            rig.ledger.spawned_execution.lock().unwrap().last(),
+            Some(&execution),
+            "{delivery}"
+        );
+        rig.core.sessions.shutdown().await;
+    }
 }

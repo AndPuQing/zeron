@@ -136,7 +136,7 @@ async fn remote_steer_batch_reaches_real_muse_with_every_message() {
     for (i, token) in tokens.iter().enumerate().skip(1) {
         handle.doc().queue_command(&zeron_doc::SessionCommandEntry {
             id: format!("remote-{i}"),
-            payload: SessionCommandPayload::Steer {prompt: format!("Remember {token}. Reply with the immediately previous user token and this token. Do not use tools."), message_id: Some(format!("message-{i}"))},
+            payload: SessionCommandPayload::Steer {execution: Default::default(),prompt: format!("Remember {token}. Reply with the immediately previous user token and this token. Do not use tools."), message_id: Some(format!("message-{i}"))},
             issued_by: "remote-viewer".into(), issued_at: now + i as i64,
             based_on: None, expires_at: None, status: zeron_doc::SessionCommandStatus::Pending, resolution: None,
         }).unwrap();

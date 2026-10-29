@@ -33,10 +33,12 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
     private var switcher: ProviderSwitcher?
     private weak var sheet: UISheetPresentationController?
     private var picked = false
+    private var settingsMenu: (() -> UIMenu)?
 
     /// The picker in its sheet, ready to present.
-    static func sheet(tabs: [ModelPickerTab], harness: String, model: String?, host: (name: String, symbol: String), note: String? = nil, onPick: @escaping (String, ModelPickerRow) -> Void) -> UIViewController {
+    static func sheet(tabs: [ModelPickerTab], harness: String, model: String?, host: (name: String, symbol: String), note: String? = nil, settingsMenu: (() -> UIMenu)? = nil, onPick: @escaping (String, ModelPickerRow) -> Void) -> UIViewController {
         let picker = ModelPickerViewController(tabs: tabs, harness: harness, model: model, host: host, note: note, onPick: onPick)
+        picker.settingsMenu = settingsMenu
         picker.modalPresentationStyle = .pageSheet
         if let sheet = picker.sheetPresentationController {
             sheet.detents = [
@@ -158,6 +160,17 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
         text.axis = .vertical
         text.alignment = .leading
         text.spacing = 3
+        if settingsMenu != nil {
+            let settings = UIButton(type: .system)
+            settings.setTitle("Permissions & Plan", for: .normal)
+            settings.accessibilityIdentifier = "model-picker-execution-settings"
+            settings.titleLabel?.font = Fonts.ui(.sans, 13)
+            settings.showsMenuAsPrimaryAction = true
+            settings.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] done in
+                done(self?.settingsMenu?().children ?? [])
+            }])
+            text.addArrangedSubview(settings)
+        }
         text.accessibilityIdentifier = "model-picker-title"
 
         var c = UIButton.Configuration.glass()

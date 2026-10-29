@@ -773,6 +773,8 @@ pub enum SandboxLevel {
 /// A chat's run configuration. Ids are wire strings.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ChatConfig {
+    pub access_mode: String,
+    pub plan: bool,
     /// `claude-code`, `codex`, …
     pub harness: String,
     pub model: Option<String>,
@@ -801,6 +803,8 @@ fn from_wire<T: serde::de::DeserializeOwned>(value: &str, what: &str) -> CoreRes
 impl From<&zc::ChatConfig> for ChatConfig {
     fn from(c: &zc::ChatConfig) -> Self {
         Self {
+            access_mode: wire(&c.access),
+            plan: c.plan,
             harness: wire(&c.harness),
             model: c.model.clone(),
             reasoning: c.reasoning.as_ref().map(wire),
@@ -843,8 +847,8 @@ impl TryFrom<ChatConfig> for zc::ChatConfig {
                 SandboxLevel::WorkspaceWrite => zeron_proto::SandboxLevel::WorkspaceWrite,
                 SandboxLevel::DangerFullAccess => zeron_proto::SandboxLevel::DangerFullAccess,
             },
-            access: Default::default(),
-            plan: false,
+            access: from_wire(&c.access_mode, "access mode")?,
+            plan: c.plan,
         })
     }
 }
@@ -1267,5 +1271,36 @@ mod completion_tests {
         assert!(skill.skills);
         assert_eq!(skill.start, 8);
         assert_eq!(skill.query, "skill");
+    }
+}
+
+/// Native policy choices shared by all clients. None of these are model traits.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct ExecutionCapabilities {
+    pub access_modes: Vec<String>,
+    pub supports_plan: bool,
+    pub reason: Option<String>,
+}
+
+#[cfg(test)]
+mod execution_config_tests {
+    use super::*;
+    #[test]
+    fn mobile_model_edits_round_trip_dev_policy_fields() {
+        let original = zc::ChatConfig {
+            harness: zeron_proto::HarnessId::Codex,
+            model: Some("old".into()),
+            reasoning: None,
+            model_options: Default::default(),
+            sandbox: zeron_proto::SandboxLevel::WorkspaceWrite,
+            access: zeron_proto::AccessMode::Supervised,
+            plan: true,
+        };
+        let mut mobile = ChatConfig::from(&original);
+        mobile.model = Some("new".into());
+        let updated: zc::ChatConfig = mobile.try_into().unwrap();
+        assert_eq!(updated.access, original.access);
+        assert!(updated.plan);
+        assert_eq!(updated.model.as_deref(), Some("new"));
     }
 }

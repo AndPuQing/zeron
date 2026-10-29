@@ -2632,14 +2632,9 @@ async fn slash_goal_commands_finish_without_turn_events_and_keep_the_session_usa
         ("/stop", "Background terminals stopped"),
         ("/skills", "fixture-skill"),
         ("/pwd", "/fixture"),
-        ("/plan", "Plan mode enabled"),
-        ("ordinary prompt", "mode=plan"),
-        ("/plan off", "Plan mode disabled"),
-        ("ordinary follow-up", "mode=default"),
-        ("/plan prepare an implementation plan", "mode=plan"),
-        ("/plan off", "Plan mode disabled"),
-        ("/init", "mode=default"),
-        ("/recap", "mode=default"),
+        ("ordinary prompt", "mode=None"),
+        ("/init", "mode=None"),
+        ("/recap", "mode=None"),
     ] {
         steers.send(SteerMessage::text(command)).await.unwrap();
         let (text, steered) = reply(&mut stream).await;

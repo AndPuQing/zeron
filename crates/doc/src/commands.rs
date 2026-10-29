@@ -47,6 +47,9 @@ pub enum SessionCommandPayload {
     Steer {
         prompt: String,
         message_id: Option<String>,
+        /// Submission-time restrictions travel with the session document.
+        #[serde(default)]
+        execution: zeron_proto::ExecutionPolicy,
     },
     Interrupt {},
     #[serde(rename_all = "camelCase")]
@@ -193,6 +196,7 @@ mod tests {
         entry(
             id,
             SessionCommandPayload::Steer {
+                execution: Default::default(),
                 prompt: "go".into(),
                 message_id: None,
             },
@@ -254,6 +258,7 @@ mod tests {
                     entry(
                         &format!("c{i}"),
                         SessionCommandPayload::Steer {
+                            execution: Default::default(),
                             prompt: format!("unique message {i}"),
                             message_id: Some(format!("m{i}")),
                         },

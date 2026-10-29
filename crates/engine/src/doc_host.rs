@@ -3671,9 +3671,33 @@ impl DocHost {
         attachments: Vec<String>,
         hold_for_turn_end: bool,
     ) -> Result<String, EngineError> {
+        self.queue_message_with_execution(
+            chat_id,
+            text,
+            attachments,
+            hold_for_turn_end,
+            Default::default(),
+        )
+    }
+
+    pub fn queue_message_with_execution(
+        &self,
+        chat_id: &str,
+        text: &str,
+        attachments: Vec<String>,
+        hold_for_turn_end: bool,
+        execution: zeron_proto::ExecutionPolicy,
+    ) -> Result<String, EngineError> {
+        let execution = self
+            .workspace()
+            .and_then(|ws| ws.chat_config(chat_id))
+            .map_or(execution, |config| {
+                execution.restricted_by(config.execution_policy())
+            });
         let handle = self.open(chat_id)?;
         let id = new_id();
         handle.doc.push_queued(&QueuedMessage {
+            execution,
             id: id.clone(),
             text: text.to_string(),
             attachments,
@@ -4171,10 +4195,10 @@ impl DocHost {
                 "queued message is blocked for editing or review".into(),
             ));
         }
-        if self
-            .sessions()
-            .is_some_and(|sessions| sessions.defers_to_turn_end(chat_id, None))
-        {
+        if self.sessions().is_some_and(|sessions| {
+            sessions.defers_to_turn_end(chat_id, None)
+                || sessions.execution_change_pending(chat_id, candidate.execution)
+        }) {
             // Send next: lead the ordinary rows; the drain delivers it the
             // moment the current turn ends.
             let Some(item) = handle.doc.take_queued(id)? else {
@@ -4464,13 +4488,19 @@ impl DocHost {
         self.resolve_attachment_refs(&mut prompt, &mut attachments);
         if send == QueueSend::Steer {
             match sessions
-                .steer(chat_id, &prompt, Some(message_id.clone()))
+                .steer_at(
+                    chat_id,
+                    &prompt,
+                    Some(message_id.clone()),
+                    item.issued_at,
+                    item.execution,
+                )
                 .await?
             {
                 SteerOutcome::Accepted => return Ok(()),
-                SteerOutcome::DeferredByUpdate => {
+                SteerOutcome::DeferredByUpdate | SteerOutcome::DeferredByPolicy => {
                     return Err(EngineError::Other(
-                        "agent update pending; the message remains queued".into(),
+                        "execution settings pending; the message remains queued until the current turn ends".into(),
                     ));
                 }
                 // The run died under us between the status read and the send;
@@ -4503,6 +4533,7 @@ impl DocHost {
                 "no live run and no prior run config".into(),
             ));
         };
+        request.set_execution_policy(request.execution_policy().restricted_by(item.execution));
         request.prompt = prompt;
         request.resume = None; // dispatch re-derives the harness session
         request.attachments = attachments;
@@ -5651,6 +5682,7 @@ impl DocHost {
                         entry.issued_at,
                         false,
                         Some(&request),
+                        sessions.effective_execution(chat_id, request.execution_policy()),
                     )?;
                     return Ok((
                         SessionCommandStatus::Applied,
@@ -5685,13 +5717,18 @@ impl DocHost {
                 handle.queue_paused.store(false, Ordering::Release);
                 Ok((SessionCommandStatus::Applied, None))
             }
-            SessionCommandPayload::Steer { prompt, message_id } => {
+            SessionCommandPayload::Steer {
+                prompt,
+                message_id,
+                execution,
+            } => {
                 self.deliver_prompt(
                     sessions,
                     handle,
                     prompt,
                     message_id.clone(),
                     entry.issued_at,
+                    *execution,
                 )
                 .await
             }
@@ -5813,8 +5850,10 @@ impl DocHost {
         issued_at: i64,
         steer: bool,
         request: Option<&zeron_proto::RunRequest>,
+        execution: zeron_proto::ExecutionPolicy,
     ) -> Result<(), EngineError> {
         let item = QueuedMessage {
+            execution,
             id: message_id.to_string(),
             text: prompt.to_string(),
             attachments: request.map(|r| r.attachments.clone()).unwrap_or_default(),
@@ -5858,8 +5897,10 @@ impl DocHost {
         prompt: &str,
         message_id: Option<String>,
         issued_at: i64,
+        execution: zeron_proto::ExecutionPolicy,
     ) -> Result<(SessionCommandStatus, Option<String>), EngineError> {
         let chat_id = &handle.chat_id;
+        let execution = sessions.effective_execution(chat_id, execution);
         sessions.validate_imported_chat(chat_id)?;
         // Explicit steering uses the run mailbox when the agent reads it
         // mid-turn. A turn-boundary agent would read it only after the turn,
@@ -5872,10 +5913,12 @@ impl DocHost {
         let unsteerable_turn =
             sessions.turn_in_flight(chat_id) && !sessions.live_run_steerable(chat_id);
         if !prompt.trim().is_empty()
-            && (unsteerable_turn || sessions.defers_to_turn_end(chat_id, None))
+            && (unsteerable_turn
+                || sessions.defers_to_turn_end(chat_id, None)
+                || sessions.execution_change_pending(chat_id, execution))
         {
             let id = message_id.unwrap_or_else(new_id);
-            self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None)?;
+            self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None, execution)?;
             return Ok((
                 SessionCommandStatus::Applied,
                 Some("held until the turn ends".into()),
@@ -5885,6 +5928,7 @@ impl DocHost {
         // A pending agent update instead holds it in the queue below, where a
         // transcript copy would duplicate it until the update finishes.
         if !sessions.live_run_update_pending(chat_id)
+            && !sessions.execution_change_pending(chat_id, execution)
             && let Some(message_id) = message_id.as_deref()
             && let Err(err) =
                 handle.write_user_message(message_id, &prompt, issued_at.min(now_ms()))
@@ -5892,7 +5936,7 @@ impl DocHost {
             tracing::warn!(chat = %chat_id, error = %err, "canonical user-message write failed");
         }
         match sessions
-            .steer_at(chat_id, &prompt, message_id.clone(), issued_at)
+            .steer_at(chat_id, &prompt, message_id.clone(), issued_at, execution)
             .await?
         {
             SteerOutcome::Accepted => {
@@ -5912,6 +5956,10 @@ impl DocHost {
                         Some("no live run and no prior run config".into()),
                     ));
                 };
+                if let Some(current) = self.request_from_chat_row(chat_id, &prompt) {
+                    request.set_execution_policy(current.execution_policy());
+                }
+                request.set_execution_policy(request.execution_policy().restricted_by(execution));
                 request.prompt = prompt;
                 request.resume = None; // dispatch re-derives the harness session
                 // A reused config must not re-inline the PREVIOUS turn's
@@ -5926,15 +5974,15 @@ impl DocHost {
                     Some("queued as new turn".into()),
                 ))
             }
-            SteerOutcome::DeferredByUpdate => {
+            SteerOutcome::DeferredByUpdate | SteerOutcome::DeferredByPolicy => {
                 let id = message_id.unwrap_or_else(new_id);
-                self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None)?;
+                self.hold_until_turn_end(handle, &id, &prompt, issued_at, true, None, execution)?;
                 // The completed turn's status publication normally re-drains
                 // this queue. Also cover completion racing the enqueue itself.
                 self.drain_queue(handle).await;
                 Ok((
                     SessionCommandStatus::Applied,
-                    Some("held until the agent update finishes".into()),
+                    Some("held until execution settings can take effect".into()),
                 ))
             }
         }

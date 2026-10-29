@@ -561,6 +561,7 @@ async fn a_steer_command_for_a_turn_boundary_agent_waits_in_the_queue_for_the_tu
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                execution: Default::default(),
                 prompt: "and also this".into(),
                 message_id: Some("m-steer".into()),
             },
@@ -657,6 +658,7 @@ async fn interrupt_bypasses_a_saturated_prompt_command_drain() {
             .queue_command(
                 CHAT,
                 SessionCommandPayload::Steer {
+                    execution: Default::default(),
                     prompt: format!("blocked {i}"),
                     message_id: Some(format!("blocked-{i}")),
                 },
@@ -710,6 +712,7 @@ async fn batched_remote_steers_preserve_every_message_in_order_exactly_once() {
             .queue_command(&zeron_doc::SessionCommandEntry {
                 id: format!("remote-command-{i}"),
                 payload: SessionCommandPayload::Steer {
+                    execution: Default::default(),
                     prompt: prompt.clone(),
                     message_id: Some(format!("remote-message-{i}")),
                 },

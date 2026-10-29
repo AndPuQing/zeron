@@ -170,7 +170,7 @@ pub struct ResolvedRunConfig {
     pub model: Option<String>,
     pub reasoning: Option<ReasoningLevel>,
     pub model_options: serde_json::Map<String, serde_json::Value>,
-    /// Always one the harness honors (see [`resolve_access`]).
+    /// The selected mode; checked against the host before sending.
     pub access: AccessMode,
     pub plan: bool,
 }
@@ -190,26 +190,10 @@ impl ResolvedRunConfig {
     }
 }
 
-/// The mode a run gets when `wanted` is not among those the harness
-/// `offered`: the most trusting offered mode that still asks at least as
-/// much. A harness with nothing that asks as much runs in its least
-/// trusting mode — for an agent that cannot ask at all, full access, which
-/// the chip then shows. Nothing offered (an engine predating modes) runs as
-/// before, with full access.
-pub fn resolve_access(wanted: AccessMode, offered: &[AccessMode]) -> AccessMode {
-    if offered.is_empty() {
-        return AccessMode::FullAccess;
-    }
-    if offered.contains(&wanted) {
-        return wanted;
-    }
-    let rank = |mode: AccessMode| AccessMode::ALL.iter().position(|m| *m == mode);
-    offered
-        .iter()
-        .copied()
-        .filter(|mode| rank(*mode) <= rank(wanted))
-        .max_by_key(|mode| rank(*mode))
-        .unwrap_or(offered[0])
+/// Preserve the user's selection when this harness cannot honor it. Admission
+/// reports the unsupported choice; switching agents must never widen access.
+pub fn resolve_access(wanted: AccessMode, _offered: &[AccessMode]) -> AccessMode {
+    wanted
 }
 
 // ---------------------------------------------------------------------------
@@ -1801,21 +1785,20 @@ impl Pickers {
             .and_then(|list| list.iter().find(|d| d.id == harness))
     }
 
-    /// The access modes the effective harness honors; empty while its
-    /// catalog loads, or from an engine predating modes.
+    /// The host's modes; unknown/legacy catalogs offer only Full access.
     fn offered_access(&self, cx: &App) -> Vec<AccessMode> {
         self.effective_descriptor(cx)
             .map(|d| d.access_modes.clone())
-            .unwrap_or_default()
+            .filter(|modes| !modes.is_empty())
+            .unwrap_or_else(|| vec![AccessMode::FullAccess])
     }
 
     fn plan_offered(&self, cx: &App) -> bool {
         self.effective_descriptor(cx).is_some_and(|d| d.supports_plan)
     }
 
-    /// The chat's mode, else the draft's pick, else the remembered one —
-    /// narrowed to what the harness honors. Before the catalog loads the
-    /// pick is sent as-is: the host narrows it the same way.
+    /// The chat's mode, else the draft's pick, else the remembered one.
+    /// Unsupported choices remain visible and are rejected on send.
     fn effective_access(&self, cx: &App) -> AccessMode {
         let wanted = match self.state.read(cx).selected_chat_row() {
             Some(chat) => chat.config.as_ref().map(|c| c.access).unwrap_or_default(),
@@ -1836,7 +1819,7 @@ impl Pickers {
             Some(chat) => chat.config.as_ref().is_some_and(|c| c.plan),
             None => self.config.plan,
         };
-        wanted && (self.effective_descriptor(cx).is_none() || self.plan_offered(cx))
+        wanted
     }
 
     fn pick_access(&mut self, mode: AccessMode, cx: &mut Context<Self>) {
@@ -1923,6 +1906,20 @@ impl Pickers {
         self.activate_model_index(slot, cx);
         cx.notify();
         true
+    }
+
+    pub fn open_access_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.open_kind() != Some(PickerKind::Access) {
+            self.toggle(PickerKind::Access, window, cx);
+        }
+    }
+
+    pub fn validate_execution(&self, cx: &App) -> Result<(), String> {
+        let policy = zeron_proto::ExecutionPolicy {
+            access: self.effective_access(cx),
+            plan: self.effective_plan(cx),
+        };
+        policy.validate(&self.offered_access(cx), self.plan_offered(cx))
     }
 
     pub fn open_model_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -5042,7 +5039,8 @@ impl Pickers {
         let theme = Theme::of(cx).for_popup();
         let modes = self.offered_access(cx);
         let current = self.effective_access(cx);
-        let plan = self.plan_offered(cx).then(|| self.effective_plan(cx));
+        let plan =
+            (self.plan_offered(cx) || self.effective_plan(cx)).then(|| self.effective_plan(cx));
         // An agent with one mode cannot ask before acting: say so.
         let only = (modes.len() == 1)
             .then(|| self.effective_descriptor(cx).map(|d| d.name.clone()))
@@ -5110,10 +5108,17 @@ impl Pickers {
         if self.title.is_some() {
             return None;
         }
-        if self.offered_access(cx).is_empty() {
+        // Preserve dev's layout while the host catalog is unknown/legacy.
+        // A retained restricted choice still needs a visible way to reset it.
+        let mode = self.effective_access(cx);
+        if self
+            .effective_descriptor(cx)
+            .is_none_or(|d| d.access_modes.is_empty())
+            && mode.is_full_access()
+            && !self.effective_plan(cx)
+        {
             return None;
         }
-        let mode = self.effective_access(cx);
         let plan = self
             .effective_plan(cx)
             .then(|| (SharedString::from("Plan"), Some(theme.accent)));
@@ -7355,12 +7360,12 @@ mod tests {
         assert_eq!(resolve_access(AutoAcceptEdits, &ALL_MODES), AutoAcceptEdits);
         // Muse: supervised or full access.
         let muse = [Supervised, FullAccess];
-        assert_eq!(resolve_access(AutoAcceptEdits, &muse), Supervised);
+        assert_eq!(resolve_access(AutoAcceptEdits, &muse), AutoAcceptEdits);
         assert_eq!(resolve_access(FullAccess, &muse), FullAccess);
-        // Only full access offered: nothing safer to fall back to.
-        assert_eq!(resolve_access(Supervised, &[FullAccess]), FullAccess);
-        // An engine predating modes runs everything as before.
-        assert_eq!(resolve_access(Supervised, &[]), FullAccess);
+        // Unsupported choices stay selected until explicitly changed.
+        assert_eq!(resolve_access(Supervised, &[FullAccess]), Supervised);
+        // A legacy catalog cannot silently relax the selection.
+        assert_eq!(resolve_access(Supervised, &[]), Supervised);
     }
 
     const ALL_MODES: [AccessMode; 3] = AccessMode::ALL;

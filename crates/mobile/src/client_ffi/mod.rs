@@ -12,8 +12,8 @@
 //! (`snapshot()` / `subscribe()`), never over FFI.
 
 mod cloud;
-mod composer_actions;
 pub(crate) mod companions;
+mod composer_actions;
 mod providers;
 pub use providers::UsageWindowInfo;
 mod session;
@@ -285,13 +285,53 @@ impl CoreClient {
     }
 
     pub fn set_session_config(&self, chat_id: String, config: ChatConfig) -> CoreResult<()> {
-        let mut config: zc::ChatConfig = config.try_into()?;
-        // The phone does not pick a mode yet: keep the chat's own.
-        if let Some(current) = self.client.session_config(&chat_id) {
-            config.access = current.access;
-            config.plan = current.plan;
+        Ok(self
+            .client
+            .set_session_config(&chat_id, &config.try_into()?)?)
+    }
+
+    pub fn execution_capabilities(
+        &self,
+        harness: String,
+        device_id: Option<String>,
+    ) -> CoreResult<ExecutionCapabilities> {
+        let harness = serde_json::from_value(serde_json::json!(harness)).map_err(|_| {
+            CoreError::InvalidArgument {
+                message: "Unknown agent".into(),
+            }
+        })?;
+        let (mut access_modes, supports_plan) = self
+            .client
+            .execution_capabilities(device_id.as_deref().unwrap_or(""), harness);
+        if access_modes.is_empty() {
+            access_modes.push(zeron_proto::AccessMode::FullAccess);
         }
-        Ok(self.client.set_session_config(&chat_id, &config)?)
+        if let Some(device) = device_id.filter(|_| !self.client.is_demo()) {
+            let supported = self.client.workspace().device(&device).is_some_and(|d| {
+                d.capabilities
+                    .iter()
+                    .any(|c| c == zeron_proto::capabilities::EXECUTION_POLICY_V1)
+            });
+            if !supported {
+                return Ok(ExecutionCapabilities {
+                    access_modes: vec!["full-access".into()],
+                    supports_plan: false,
+                    reason: Some(
+                        "Update this computer's Zerun to use permissions and Plan.".into(),
+                    ),
+                });
+            }
+        }
+        Ok(ExecutionCapabilities {
+            access_modes: access_modes
+                .iter()
+                .map(|mode| serde_json::to_value(mode).unwrap().as_str().unwrap().into())
+                .collect(),
+            supports_plan,
+            reason: (!supports_plan && access_modes.len() <= 1).then(|| {
+                "No additional permission or Plan controls advertised by this host.".into()
+            }),
+        })
     }
 
     pub fn delete_session(&self, chat_id: String) -> CoreResult<()> {
@@ -499,7 +539,10 @@ impl CoreClient {
             .unwrap_or_default();
         let client = self.client.clone();
         let catalog = on_runtime(async move { client.composer_catalog(&chat_id).await }).await?;
-        Ok(composer_actions::with_mobile_actions(catalog.into(), &harness))
+        Ok(composer_actions::with_mobile_actions(
+            catalog.into(),
+            &harness,
+        ))
     }
 
     /// Commands and skills before a conversation exists.

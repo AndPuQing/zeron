@@ -32,6 +32,8 @@ const RESUBSCRIBE_DELAY: Duration = Duration::from_millis(300);
 /// harness. Unset when a human runs `zeron mcp` from a terminal.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Origin {
+    /// Frozen at runtime launch; UI edits apply only to subsequent turns.
+    pub execution: Option<zeron_proto::ExecutionPolicy>,
     pub chat_id: Option<String>,
     pub device_id: Option<String>,
     /// The host launched the agent without its own subagent tools
@@ -48,6 +50,12 @@ impl Origin {
                 .filter(|v| !v.is_empty())
         };
         Self {
+            execution: read("ZERON_EXECUTION_POLICY").map(|raw| {
+                serde_json::from_str(&raw).unwrap_or(zeron_proto::ExecutionPolicy {
+                    access: zeron_proto::AccessMode::Supervised,
+                    plan: true,
+                })
+            }),
             chat_id: read("ZERON_CHAT_ID"),
             device_id: read("ZERON_DEVICE_ID"),
             side_chats_only: read(zeron_proto::McpServer::SIDE_CHATS_ONLY_ENV).as_deref()
@@ -409,11 +417,16 @@ impl Zeron {
 
     /// Queue-row send for a busy chat whose harness cannot steer mid-turn:
     /// the host promotes it when the live turn ends.
-    pub async fn queue_message(&self, chat_id: &str, text: &str) -> anyhow::Result<String> {
+    pub async fn queue_message(
+        &self,
+        chat_id: &str,
+        text: &str,
+        execution: zeron_proto::ExecutionPolicy,
+    ) -> anyhow::Result<String> {
         let reply = self
             .call(
                 methods::QUEUE_MESSAGE,
-                json!({ "chatId": chat_id, "text": text, "holdForTurnEnd": true }),
+                json!({ "chatId": chat_id, "text": text, "holdForTurnEnd": true, "execution": execution }),
             )
             .await?;
         Ok(reply

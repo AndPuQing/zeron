@@ -5878,6 +5878,7 @@ fn access_config(
     protocol: Protocol,
 ) -> Result<String, HarnessError> {
     let mut config = inline_config(inherited)?;
+    let original = config.clone();
     let supervised = access == AccessMode::Supervised;
     let mut asked: Vec<&str> = ASKED_PERMISSIONS.to_vec();
     if supervised {
@@ -5960,7 +5961,117 @@ fn access_config(
             }
         }
     }
+    preserve_permission_denials(&mut config, &original, protocol)?;
     Ok(config.to_string())
+}
+
+// Permission overlays can replace a scalar with a pattern map. Carry every
+// explicit deny forward, after allows/asks, including each agent's overrides.
+fn merge_denials(target: &mut Value, source: &Value) {
+    if *target == "deny" {
+        return;
+    }
+    if source == "deny" {
+        *target = if target.is_object() {
+            json!({"*": "deny"})
+        } else {
+            json!("deny")
+        };
+        return;
+    }
+    if let Some(rules) = source.as_object() {
+        // A wildcard denial is an upper bound, not an overridable default.
+        if rules.get("*").is_some_and(|v| v == "deny") {
+            *target = json!({"*": "deny"});
+            return;
+        }
+        for (name, rule) in rules {
+            let mut denial = Value::Null;
+            merge_denials(&mut denial, rule);
+            if denial.is_null() {
+                continue;
+            }
+            if !target.is_object() {
+                *target = if target.is_string() {
+                    json!({"*": target.clone()})
+                } else {
+                    json!({})
+                };
+            }
+            let map = target.as_object_mut().unwrap();
+            let mut entry = map.remove(name).unwrap_or(Value::Null);
+            merge_denials(&mut entry, &denial);
+            map.insert(name.clone(), entry);
+        }
+    }
+}
+
+fn preserve_permission_denials(
+    config: &mut Value,
+    original: &Value,
+    protocol: Protocol,
+) -> Result<(), HarnessError> {
+    let object = config.as_object_mut().unwrap();
+    match protocol {
+        Protocol::V1 => {
+            let global = &original["permission"];
+            merge_denials(object.entry("permission").or_insert(Value::Null), global);
+            let mut inherited_denials = Value::Null;
+            merge_denials(&mut inherited_denials, global);
+            if inherited_denials.is_null() && object.get("agent").is_none() {
+                return Ok(());
+            }
+            let agents = object
+                .entry("agent")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    HarnessError::Protocol("OpenCode agent config must be an object".into())
+                })?;
+            for name in ["build", "plan", "general", "explore"] {
+                agents.entry(name).or_insert_with(|| json!({}));
+            }
+            for (name, agent) in agents {
+                let agent = agent.as_object_mut().ok_or_else(|| {
+                    HarnessError::Protocol("OpenCode agent config must be an object".into())
+                })?;
+                let permission = agent.entry("permission").or_insert_with(|| json!({}));
+                merge_denials(permission, global);
+                merge_denials(permission, &original["agent"][name]["permission"]);
+            }
+        }
+        Protocol::V2 => {
+            let denials = |v: &Value| -> Vec<Value> {
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|r| r["effect"] == "deny")
+                    .cloned()
+                    .collect()
+            };
+            let global = denials(&original["permissions"]);
+            permission_list(object, "OPENCODE_CONFIG_CONTENT")?.extend(global.clone());
+            let agents = object
+                .entry("agents")
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .ok_or_else(|| {
+                    HarnessError::Protocol("OpenCode agents config must be an object".into())
+                })?;
+            for name in ["build", "plan", "general", "explore"] {
+                agents.entry(name).or_insert_with(|| json!({}));
+            }
+            for (name, agent) in agents {
+                let agent = agent.as_object_mut().ok_or_else(|| {
+                    HarnessError::Protocol("OpenCode agent config must be an object".into())
+                })?;
+                let rules = permission_list(agent, "OpenCode agent permissions")?;
+                rules.extend(global.clone());
+                rules.extend(denials(&original["agents"][name]["permissions"]));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `owner[key]` as a 1.x permission object; the one-word form (`"allow"`)
@@ -6379,5 +6490,71 @@ http.createServer((req, res) => {
         assert_eq!(report["config"]["permission"]["*"], "ask");
         assert_eq!(report["config"]["permission"]["edit"], "ask");
         server.shutdown(Duration::from_millis(100)).await;
+    }
+}
+
+#[cfg(test)]
+mod denial_regressions {
+    use super::*;
+    #[test]
+    fn inherited_path_and_agent_denials_survive_access_overlays() {
+        let original = json!({"permission":{"read":{"*.env":"deny","*":"allow"},"bash":{"rm *":"deny"}},
+            "agent":{"build":{"permission":{"read":"allow"}},"plan":{"permission":{"edit":{"secret/*":"deny"}}}}});
+        for access in [AccessMode::Supervised, AccessMode::AutoAcceptEdits] {
+            let result: Value = serde_json::from_str(
+                &access_config(Some(&original.to_string()), access, Protocol::V1).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(result["permission"]["read"]["*.env"], "deny");
+            assert_eq!(result["permission"]["read"]["*"], "allow");
+            assert_eq!(
+                result["agent"]["build"]["permission"]["read"]["*.env"],
+                "deny"
+            );
+            assert_eq!(
+                result["agent"]["plan"]["permission"]["edit"]["secret/*"],
+                "deny"
+            );
+        }
+    }
+    #[test]
+    fn global_deny_remains_an_upper_bound_for_agents() {
+        let original = json!({"permission":{"*":"deny"},"agent":{"build":{"permission":"allow"}}});
+        let result: Value = serde_json::from_str(
+            &access_config(
+                Some(&original.to_string()),
+                AccessMode::Supervised,
+                Protocol::V1,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result["permission"], json!({"*":"deny"}));
+        assert_eq!(result["agent"]["build"]["permission"], json!({"*":"deny"}));
+    }
+    #[test]
+    fn v2_denials_follow_new_ask_rules_and_agent_overrides() {
+        let deny = json!({"action":"bash","resource":"rm *","effect":"deny"});
+        let original = json!({"permissions":[deny.clone()],"agents":{"build":{"permissions":[{"action":"bash","resource":"*","effect":"allow"}]}}});
+        let result: Value = serde_json::from_str(
+            &access_config(
+                Some(&original.to_string()),
+                AccessMode::Supervised,
+                Protocol::V2,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            result["permissions"].as_array().unwrap().last(),
+            Some(&deny)
+        );
+        assert_eq!(
+            result["agents"]["build"]["permissions"]
+                .as_array()
+                .unwrap()
+                .last(),
+            Some(&deny)
+        );
     }
 }

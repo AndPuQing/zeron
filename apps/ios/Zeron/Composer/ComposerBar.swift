@@ -319,6 +319,7 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         // would swallow taps on "+" (the action button is added later).
         content.insertSubview(toolbar, at: 0)
         chipScroll.showsHorizontalScrollIndicator = false
+        chipScroll.accessibilityIdentifier = "composer-chips"
         chipScroll.translatesAutoresizingMaskIntoConstraints = false
         chipStrip.axis = .horizontal
         chipStrip.spacing = 6

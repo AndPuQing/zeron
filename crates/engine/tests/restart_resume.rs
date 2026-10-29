@@ -1349,6 +1349,7 @@ async fn steer_after_restart_dispatches_new_turn_with_resume() {
         .queue_command(
             CHAT,
             SessionCommandPayload::Steer {
+                execution: Default::default(),
                 prompt: "actually, also add tests".into(),
                 message_id: Some("msg-user-2".into()),
             },
