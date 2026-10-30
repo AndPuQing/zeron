@@ -60,6 +60,7 @@ pub mod methods {
     pub const GET_NATIVE_SUBAGENTS: &str = "GetNativeSubagents";
     pub const SET_NATIVE_SUBAGENTS: &str = "SetNativeSubagents";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
+    pub const LIST_HARNESS_CONFIG_FILES: &str = "ListHarnessConfigFiles";
     pub const GET_HARNESS_ENVIRONMENT: &str = "GetHarnessEnvironment";
     pub const PATCH_HARNESS_ENVIRONMENT: &str = "PatchHarnessEnvironment";
     pub const REVEAL_HARNESS_ENVIRONMENT_VALUE: &str = "RevealHarnessEnvironmentValue";

@@ -18,7 +18,7 @@ pub(super) fn home() -> Result<PathBuf, HarnessError> {
     )
 }
 
-pub(super) fn resolve_home(
+pub(crate) fn resolve_home(
     gemini_home: Option<&Path>,
     home: Option<&Path>,
     child_cwd: &Path,

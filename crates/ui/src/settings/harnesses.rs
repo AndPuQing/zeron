@@ -250,6 +250,7 @@ pub struct HarnessesPage {
     /// providers expand, so every provider shares the same sign-in flow.
     accounts_page: Option<Entity<AccountsPage>>,
     environment_editor: Option<Entity<crate::settings::environment::EnvironmentEditor>>,
+    config_files: Option<Entity<crate::settings::config_files::ConfigFiles>>,
     /// Repaints the rows' account counts as the open Accounts section adds
     /// or forgets one.
     _observe_accounts: Option<gpui::Subscription>,
@@ -294,6 +295,7 @@ impl HarnessesPage {
             pending_sign_in: None,
             accounts_page: None,
             environment_editor: None,
+            config_files: None,
             _observe_accounts: None,
             update_task: None,
             update_action_task: None,
@@ -410,12 +412,18 @@ impl HarnessesPage {
         if self.expanded_harness == Some(harness) {
             self.expanded_harness = None;
             self.environment_editor = None;
+            self.config_files = None;
         } else {
             self.expanded_harness = Some(harness);
             let state = self.state.clone();
             let target = self.target_device.clone();
             self.environment_editor = Some(cx.new(|cx| {
                 crate::settings::environment::EnvironmentEditor::new(state, target, harness, cx)
+            }));
+            let state = self.state.clone();
+            let target = self.target_device.clone();
+            self.config_files = Some(cx.new(|cx| {
+                crate::settings::config_files::ConfigFiles::new(state, target, harness, cx)
             }));
             if accounts::signs_in(harness) {
                 if let Some(accounts) = &self.accounts_page {
@@ -495,6 +503,7 @@ impl HarnessesPage {
             .child(self.render_completion_for(harness, theme, cx))
             .children(self.render_native_subagents_for(harness, theme, cx))
             .children(self.render_updates_for(harness, theme, cx))
+            .children(self.config_files.clone())
             .children(self.environment_editor.clone())
             .when_some(accounts, |details, accounts| details.child(accounts));
         if motion::reduced_motion(cx) {
@@ -672,6 +681,11 @@ impl HarnessesPage {
             cx.new(|cx| {
                 crate::settings::environment::EnvironmentEditor::new(state, target, harness, cx)
             })
+        });
+        self.config_files = self.expanded_harness.map(|harness| {
+            let state = self.state.clone();
+            let target = self.target_device.clone();
+            cx.new(|cx| crate::settings::config_files::ConfigFiles::new(state, target, harness, cx))
         });
         if let Some(accounts) = &self.accounts_page {
             accounts.update(cx, |page, cx| {

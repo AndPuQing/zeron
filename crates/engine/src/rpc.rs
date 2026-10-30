@@ -2257,6 +2257,7 @@ fn forwardable(method: &str) -> bool {
             | methods::GET_NATIVE_SUBAGENTS
             | methods::SET_NATIVE_SUBAGENTS
             | methods::SET_HARNESS_ENABLED
+            | methods::LIST_HARNESS_CONFIG_FILES
             | methods::GET_HARNESS_ENVIRONMENT
             | methods::PATCH_HARNESS_ENVIRONMENT
             | methods::REVEAL_HARNESS_ENVIRONMENT_VALUE
@@ -2742,6 +2743,22 @@ impl RpcService for EngineRpc {
             methods::LIST_CLOUD_BRANCHES => Box::pin(self.cloud_branches(params)).await,
             methods::ENGINE_READY => RpcReply::value(&serde_json::json!({ "ready": true })),
             methods::LIST_HARNESSES => RpcReply::value(&self.registry.descriptors()),
+            methods::LIST_HARNESS_CONFIG_FILES => {
+                let p: zeron_proto::HarnessEnvironmentParams = parse_params(params)?;
+                if !self.registry.is_registered(p.harness)
+                    || matches!(p.harness, HarnessId::Mock | HarnessId::Muse)
+                {
+                    return Err(RpcError::BadParams("Unsupported provider".into()));
+                }
+                let environment = self.registry.environment.snapshot(p.harness)
+                    .map_err(RpcError::Failed)?;
+                let files = tokio::task::spawn_blocking(move || {
+                    zeron_harness::config_files::list(p.harness, &environment)
+                })
+                .await.map_err(|error| RpcError::Failed(error.to_string()))?
+                .map_err(RpcError::Failed)?;
+                RpcReply::value(&files)
+            }
             methods::GET_HARNESS_ENVIRONMENT => {
                 let p: zeron_proto::HarnessEnvironmentParams = parse_params(params)?;
                 if !self
@@ -5752,6 +5769,7 @@ mod tests {
         assert!(!forwardable(methods::ENGINE_READY));
         assert!(forwardable(methods::QUEUE_COMMAND));
         for method in [
+            methods::LIST_HARNESS_CONFIG_FILES,
             methods::GET_HARNESS_ENVIRONMENT,
             methods::PATCH_HARNESS_ENVIRONMENT,
             methods::REVEAL_HARNESS_ENVIRONMENT_VALUE,

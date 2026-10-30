@@ -24,6 +24,7 @@ pub mod archived;
 pub mod billing;
 pub mod cloud;
 pub mod composer;
+pub mod config_files;
 pub mod devices;
 pub mod environment;
 pub mod files;
