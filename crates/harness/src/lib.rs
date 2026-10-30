@@ -27,6 +27,7 @@ use zeron_proto::{
 };
 
 pub mod environment;
+pub mod config_files;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HarnessError {

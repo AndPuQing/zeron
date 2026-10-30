@@ -2,6 +2,23 @@
 
 use serde::{Deserialize, Serialize};
 
+/// User-global provider configuration metadata, resolved on the execution host.
+/// File contents and credentials are never returned by this API.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessConfigFile {
+    pub label: String,
+    pub path: String,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessConfigFiles {
+    pub files: Vec<HarnessConfigFile>,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum HarnessId {

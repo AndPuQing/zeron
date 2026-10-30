@@ -34,7 +34,7 @@
 //! - Interrupt: `session/cancel`, escalating SIGTERM → SIGKILL; the stream
 //!   always ends with `Done { status: Interrupted }`.
 
-mod antigravity_paths;
+pub(crate) mod antigravity_paths;
 mod copilot_saved;
 mod devin_models;
 mod dsh_discovery;
