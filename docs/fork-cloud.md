@@ -18,6 +18,12 @@ then set the endpoint's signing secret as `WORKOS_WEBHOOK_SECRET` on
 without it, the endpoint answers 404. A deploy does not create the WorkOS webhook
 subscription or backfill existing users.
 
+The same optional admin token protects badge management: `GET`/`POST
+`/admin/badges` lists or defines badges; `POST /admin/badges/grant` and
+`POST /admin/badges/revoke` assign or remove them. User exports include held
+badges. These routes also return 404 without `ADMIN_TOKEN`; syncing or deploying
+this source does not configure a token or grant any badges.
+
 ## What that means at runtime
 
 - `GET /cloud` answers HTTP 200 with `available: false`, so nothing on the
