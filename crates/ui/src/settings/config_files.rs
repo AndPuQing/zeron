@@ -1,6 +1,9 @@
 //! Host-resolved configuration paths; only local files can open through the OS.
 use crate::{
-    settings::widgets,
+    settings::{
+        search::{SearchAnchor, SettingId},
+        widgets,
+    },
     state::{AppState, EngineHandle},
     theme::Theme,
 };
@@ -286,6 +289,8 @@ impl Render for ConfigFiles {
                 );
             }
         }
-        section.into_any_element()
+        section
+            .search_anchor(SettingId::ConfigurationFiles)
+            .into_any_element()
     }
 }

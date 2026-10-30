@@ -151,6 +151,8 @@ settings_index! {
         "slash menu skills autocomplete"),
     (NativeSubagents, Harnesses, Some("Delegation"), "Native subagents",
         "subagent delegate side chats tasks spawn"),
+    (ConfigurationFiles, Harnesses, None, "Configuration files",
+        "config settings file path json toml yaml editor open"),
     (UpdatePolicy, Harnesses, Some("Updates"), "Update policy",
         "automatic upgrade version cli"),
     (CloudUsage, Cloud, None, "Usage",
@@ -203,6 +205,7 @@ impl SettingId {
                 | SettingId::SkillSlash
                 | SettingId::NativeSubagents
                 | SettingId::UpdatePolicy
+                | SettingId::ConfigurationFiles
         )
     }
 }
