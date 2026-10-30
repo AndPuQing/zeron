@@ -129,6 +129,7 @@ mod tests {
                 "workspaceScope": "local",
                 "cursorSdkVersion": "1.0.31",
                 "capabilities": [
+                    "execution-policy-v1",
                     "composer-references-v1",
                     "message-queue-v1",
                     "message-queue-actions-v1",
