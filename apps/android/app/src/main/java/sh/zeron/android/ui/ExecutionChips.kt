@@ -1,5 +1,6 @@
 package sh.zeron.android.ui
 
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.*
 import uniffi.zeron_core.CoreClient
 
@@ -19,11 +20,18 @@ internal fun ExecutionChips(
     var menu by remember { mutableStateOf<String?>(null) }
     // Read the workspace's current host capability; reconnecting can upgrade it.
     val caps = runCatching { client.executionCapabilities(harness, deviceId) }.getOrNull()
-    ContextChip(accessModeLabel(access), leading = {}, onClick = { menu = "access" }) {
+    val fullAccessColor = warningColor()
+    ContextChip(
+        accessModeLabel(access), leading = {}, onClick = { menu = "access" },
+        tint = if (access == "full-access") fullAccessColor else MaterialTheme.colorScheme.onSurfaceVariant,
+    ) {
         ChoiceMenu(menu == "access", { menu = null }, listOf(MenuSection(
             caps?.reason ?: "Permissions · applies next turn",
             (caps?.accessModes ?: listOf("full-access")).map { mode ->
-                MenuChoice(accessModeLabel(mode), mode == access) { onPick(mode, null) }
+                MenuChoice(
+                    accessModeLabel(mode), mode == access,
+                    tint = if (mode == "full-access") fullAccessColor else null,
+                ) { onPick(mode, null) }
             },
         )))
     }
