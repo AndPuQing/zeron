@@ -707,7 +707,7 @@ final class SearchViewController: SessionListController, UISearchResultsUpdating
         super.viewDidLoad()
         navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Messages", primaryAction: UIAction { [weak self] _ in
             guard let self else { return }
-            self.navigationController?.pushViewController(MessageSearchViewController(app: self.app), animated: true)
+            self.navigationController?.pushViewController(MessageSearchViewController(app: self.app, query: self.query), animated: true)
         })
         title = "Search"
         navigationItem.largeTitleDisplayMode = .always
@@ -753,81 +753,225 @@ final class MessageSearchLifecycle {
     func accepts(_ token: UInt64) -> Bool { visible && generation == token }
 }
 
+/// Retain scope through roster gaps; only the initial choice prefers an online host.
+func retainedMessageSearchHost(_ current: DeviceView?, hosts: [DeviceView]) -> DeviceView? {
+    guard let current else { return hosts.first(where: { $0.online }) ?? hosts.first }
+    return hosts.first(where: { $0.id == current.id }) ?? current
+}
+
 /// Message search is explicitly scoped to the computer that stores the history.
 private final class MessageSearchViewController: UITableViewController, UISearchResultsUpdating {
     let app: AppModel
-    private var device: String?
+    private let initialQuery: String
+    private var retainedHost: DeviceView?
+    private var device: String? { retainedHost?.id }
+    private var hosts: [DeviceView] = []
     private var hits: [TranscriptSearchHit] = []
     private var task: Task<Void, Never>?
     private let lifecycle = MessageSearchLifecycle()
-    init(app: AppModel) { self.app = app; super.init(style: .insetGrouped) }
+    private var loading = false
+    private var indexing = false
+    private var failed = false
+    private let scopeView = UIView()
+    private let hostButton = UIButton(type: .system)
+    private var observer: AnyObject?
+    private var selectedHost: DeviceView? { hosts.first { $0.id == device } }
+    private var query: String { navigationItem.searchController?.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "" }
+
+    init(app: AppModel, query: String = "") {
+        self.app = app; self.initialQuery = query
+        super.init(style: .insetGrouped)
+    }
     required init?(coder: NSCoder) { fatalError() }
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "Messages"
+        title = "Search Messages"
+        navigationItem.largeTitleDisplayMode = .never
         let search = UISearchController(searchResultsController: nil)
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
-        search.searchBar.placeholder = "Search message text"
+        search.searchBar.placeholder = "Words or phrases in messages"
         navigationItem.searchController = search
         navigationItem.hidesSearchBarWhenScrolling = false
+        tableView.keyboardDismissMode = .onDrag
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "message-result")
+        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "search-status")
+        configureScope()
         updateHosts()
+        search.searchBar.text = initialQuery
+        observer = app.observe { [weak self] in
+            guard let self else { return }
+            let previous = self.selectedHost
+            self.updateHosts()
+            if previous?.id != self.selectedHost?.id || previous?.online != self.selectedHost?.online { self.search() }
+        }
+    }
+    private func configureScope() {
+        let label = UILabel()
+        label.text = "Search in"
+        label.font = .preferredFont(forTextStyle: .subheadline)
+        label.textColor = .secondaryLabel
+        label.adjustsFontForContentSizeCategory = true
+        label.setContentCompressionResistancePriority(.required, for: .horizontal)
+        var config = UIButton.Configuration.tinted()
+        config.cornerStyle = .capsule
+        config.image = UIImage(systemName: "desktopcomputer")
+        config.imagePadding = 8
+        hostButton.configuration = config
+        hostButton.showsMenuAsPrimaryAction = true
+        hostButton.titleLabel?.lineBreakMode = .byTruncatingTail
+        hostButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        hostButton.accessibilityLabel = "Search computer"
+        let row = UIStackView(arrangedSubviews: [label, hostButton])
+        row.axis = .horizontal; row.alignment = .center; row.spacing = 12
+        let note = UILabel()
+        note.text = "Saved history on this computer. Messages that haven’t synced may be missing."
+        note.font = .preferredFont(forTextStyle: .footnote)
+        note.textColor = .secondaryLabel
+        note.numberOfLines = 0
+        note.adjustsFontForContentSizeCategory = true
+        let stack = UIStackView(arrangedSubviews: [row, note])
+        stack.axis = .vertical; stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        scopeView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: scopeView.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: scopeView.trailingAnchor, constant: -20),
+            stack.topAnchor.constraint(equalTo: scopeView.topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: scopeView.bottomAnchor, constant: -12),
+        ])
+        tableView.tableHeaderView = scopeView
+    }
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = tableView.bounds.width
+        let height = scopeView.systemLayoutSizeFitting(CGSize(width: width, height: 0), withHorizontalFittingPriority: .required, verticalFittingPriority: .fittingSizeLevel).height
+        if abs(scopeView.frame.height - height) > 0.5 || scopeView.frame.width != width {
+            scopeView.frame = CGRect(x: 0, y: 0, width: width, height: height)
+            tableView.tableHeaderView = scopeView
+        }
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        lifecycle.appear {
-            updateHosts()
-            search()
-        }
+        lifecycle.appear { updateHosts(); search() }
     }
     private func updateHosts() {
-        let hosts = app.client?.executionDevices() ?? []
-        if device == nil { device = hosts.first?.id }
-        navigationItem.rightBarButtonItem = UIBarButtonItem(title: hosts.first(where: { $0.id == device })?.name ?? "Computer", menu: UIMenu(children: hosts.map { host in
-            UIAction(title: host.name, state: host.id == device ? .on : .off) { [weak self] _ in
-                self?.device = host.id; self?.updateHosts(); self?.search()
+        hosts = app.client?.executionDevices() ?? []
+        retainedHost = retainedMessageSearchHost(retainedHost, hosts: hosts)
+        hostButton.configuration?.title = selectedHost?.name ?? retainedHost?.name ?? "No computer"
+        hostButton.isEnabled = !hosts.isEmpty
+        hostButton.accessibilityValue = retainedHost.map { "\($0.name), \(selectedHost?.online == true ? "Online" : "Unavailable")" }
+        hostButton.menu = UIMenu(children: hosts.map { host in
+            let dot = UIImage(systemName: "circle.fill")?.withTintColor(host.online ? .systemGreen : .systemGray, renderingMode: .alwaysOriginal)
+            return UIAction(title: host.name, image: dot, state: host.id == device ? .on : .off) { [weak self] _ in
+                self?.retainedHost = host; self?.updateHosts(); self?.search()
             }
-        }))
+        })
     }
     func updateSearchResults(for searchController: UISearchController) { search() }
     private func search() {
         task?.cancel(); task = nil
         let token = lifecycle.beginQuery()
-        navigationItem.prompt = nil
-        hits = []; tableView.reloadData()
-        let query = navigationItem.searchController?.searchBar.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard let token, !query.isEmpty, let device, let client = app.client else { return }
-        navigationItem.prompt = "Searching…"
+        hits = []; loading = false; indexing = false; failed = false
+        let text = query
+        guard let token, !text.isEmpty, let device, let client = app.client, selectedHost?.online == true else {
+            tableView.reloadData(); return
+        }
+        loading = true; tableView.reloadData()
         task = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(250))
                 while !Task.isCancelled {
-                    let page = try await client.searchTranscripts(deviceId: device, query: query)
+                    let page = try await client.searchTranscripts(deviceId: device, query: text)
                     guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
-                    self.hits = page.hits; self.navigationItem.prompt = page.indexing ? "Indexing stored history…" : nil; self.tableView.reloadData()
+                    self.hits = page.hits; self.indexing = page.indexing; self.loading = page.indexing
+                    self.tableView.reloadData()
                     if !page.indexing { break }
                     try await Task.sleep(for: .milliseconds(500))
                 }
             } catch {
                 guard let self, !Task.isCancelled, self.lifecycle.accepts(token) else { return }
-                self.navigationItem.prompt = "Message search unavailable on this computer"
+                self.loading = false; self.indexing = false; self.failed = true
+                self.tableView.reloadData()
             }
         }
     }
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        "History stored on this computer; unsynced messages may be missing."
+        guard !hits.isEmpty else { return nil }
+        return "\(hits.count) \(hits.count == 1 ? "message" : "messages")"
     }
-    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { hits.count }
+    override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
+        if failed && !hits.isEmpty { return "Search interrupted. Edit the query to try again." }
+        return indexing && !hits.isEmpty ? "Searching saved history…" : nil
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { max(1, hits.count) }
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        guard !hits.isEmpty else { return statusCell() }
+        let cell = tableView.dequeueReusableCell(withIdentifier: "message-result", for: indexPath)
         let hit = hits[indexPath.row]
-        cell.textLabel?.text = app.row(hit.chatId)?.title ?? "Conversation"
-        cell.detailTextLabel?.text = (hit.fromUser ? "You: " : "Agent: ") + hit.snippet
-        cell.detailTextLabel?.numberOfLines = 4
+        var content = cell.defaultContentConfiguration()
+        content.text = app.row(hit.chatId)?.title ?? "Conversation"
+        content.textProperties.font = .preferredFont(forTextStyle: .headline)
+        content.textProperties.numberOfLines = 2
+        let author = hit.fromUser ? "You" : "Agent"
+        let body = NSMutableAttributedString(string: author + "\n" + hit.snippet, attributes: [.font: UIFont.preferredFont(forTextStyle: .body), .foregroundColor: UIColor.label])
+        body.addAttributes([.font: UIFont.preferredFont(forTextStyle: .caption1), .foregroundColor: UIColor.secondaryLabel], range: NSRange(location: 0, length: (author as NSString).length))
+        if !query.isEmpty {
+            let snippet = hit.snippet as NSString
+            var remaining = NSRange(location: 0, length: snippet.length)
+            while remaining.length > 0 {
+                let match = snippet.range(of: query, options: .caseInsensitive, range: remaining)
+                if match.location == NSNotFound { break }
+                let font = UIFont.preferredFont(forTextStyle: .body)
+                let bold = UIFont(descriptor: font.fontDescriptor.withSymbolicTraits(.traitBold) ?? font.fontDescriptor, size: 0)
+                body.addAttribute(.font, value: bold, range: NSRange(location: (author as NSString).length + 1 + match.location, length: match.length))
+                remaining = NSRange(location: NSMaxRange(match), length: snippet.length - NSMaxRange(match))
+            }
+        }
+        content.secondaryAttributedText = body
+        content.secondaryTextProperties.numberOfLines = 5
+        content.textToSecondaryTextVerticalPadding = 6
+        cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
+        cell.accessibilityHint = "Open conversation at this message"
+        return cell
+    }
+    private func statusCell() -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "search-status")!
+        var content = cell.defaultContentConfiguration()
+        content.textProperties.font = .preferredFont(forTextStyle: .headline)
+        content.secondaryTextProperties.numberOfLines = 0
+        cell.accessoryView = nil
+        cell.selectionStyle = .none
+        if retainedHost == nil {
+            content.text = "Connect a computer"
+            content.secondaryText = "Message search uses the history saved on a connected computer."
+        } else if selectedHost?.online != true {
+            content.text = "Computer is unavailable"
+            content.secondaryText = "Reconnect this computer or select another one."
+        } else if failed {
+            content.text = "Couldn’t search messages"
+            content.secondaryText = "Check that this computer is connected and running the latest Zerun."
+            let retry = UIButton(type: .system)
+            retry.setTitle("Try again", for: .normal)
+            retry.addAction(UIAction { [weak self] _ in self?.search() }, for: .touchUpInside)
+            retry.sizeToFit(); cell.accessoryView = retry
+        } else if query.isEmpty {
+            content.text = "Find a message"
+            content.secondaryText = "Search words or phrases from your conversations. Tap a result to jump to the message."
+        } else if loading {
+            content.text = indexing ? "Searching saved history…" : "Searching…"
+            let spinner = UIActivityIndicatorView(style: .medium)
+            spinner.startAnimating(); cell.accessoryView = spinner
+        } else {
+            content.text = "No matching messages"
+            content.secondaryText = "Try fewer words or choose another computer."
+        }
+        cell.contentConfiguration = content
         return cell
     }
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        guard !hits.isEmpty else { return }
         let hit = hits[indexPath.row]
         guard let session = SessionViewController(app: app, chatId: hit.chatId) else { return }
         app.messageSearchTarget = (hit.chatId, hit.messageId)
