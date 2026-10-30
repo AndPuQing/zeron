@@ -1,6 +1,8 @@
 package sh.zeron.android.ui
 
 import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,6 +31,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
@@ -174,14 +180,18 @@ fun ProvidersScreen(model: AppModel, target: String?, onBack: () -> Unit, onOpen
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     for (c in computers) {
-                        Pill(c.name + if (c.online) "" else " · offline", c.id == selected, onClick = { select(c.id) }, icon = sh.zeron.android.voice.platformIcon(c))
+                        Pill(c.name, c.id == selected, onClick = { select(c.id) }, icon = sh.zeron.android.voice.platformIcon(c), trailing = {
+                            Box(Modifier.size(8.dp)
+                                .background(if (c.online) successColor() else Color(0xFF9CA3AF), CircleShape)
+                                .semantics { contentDescription = if (c.online) "Online" else "Offline" })
+                        })
                     }
                     if (cloudOffered) Pill("Cloud", onCloud, onClick = { select(CLOUD) }, icon = ZIcons.Cloud)
                 }
             }
             val footer = when {
                 onCloud -> "Cloud agents use the account marked in use. Signing in here stores the login in Cloud, not on this phone."
-                !online -> "$name is offline — showing what it last reported."
+                !online -> "Showing what $name last reported. Reconnect it to make changes."
                 else -> "Agents run with the logins on $name. Switch accounts here; to add one, sign in from Zerun on that computer."
             }
             cloudSection("Agents", footer = footer, key = "agents-$selected") {
@@ -200,7 +210,7 @@ fun ProvidersScreen(model: AppModel, target: String?, onBack: () -> Unit, onOpen
                             val rules = remember(h.id) { agentLoginRules(h.id) }
                             val detail = when {
                                 !h.installed -> "Not installed"
-                                logins == null -> failed[selected] ?: if (online) "Installed" else "Offline"
+                                logins == null -> failed[selected] ?: "Installed"
                                 else -> accountSummary(mine.firstOrNull { it.active }?.let(::deviceAccountTitle), mine.size, showsNone = rules.signsIn)
                             }
                             // Every agent with logins opens its accounts — to add the first one too.
@@ -209,16 +219,22 @@ fun ProvidersScreen(model: AppModel, target: String?, onBack: () -> Unit, onOpen
                                 i, sorted.size, h.label, detail,
                                 leading = { Box(Modifier.alpha(if (h.installed) 1f else 0.45f)) { AgentTile(h.id) } },
                                 trailing = {
-                                    if (toggling[h.id] == true) {
-                                        LoadingIndicator(Modifier.size(32.dp))
-                                    } else {
-                                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                            Switch(
-                                                checked = h.installed && h.offered,
-                                                onCheckedChange = { setEnabled(h, it) },
-                                                // The last agent standing stays on: new sessions need one.
-                                                enabled = online && h.installed && !(h.offered && enabledCount <= 1),
-                                            )
+                                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        // Keep the switch column stable while a request is pending.
+                                        Box(Modifier.size(width = 52.dp, height = 48.dp), contentAlignment = Alignment.Center) {
+                                            if (toggling[h.id] == true) {
+                                                LoadingIndicator(Modifier.size(32.dp))
+                                            } else {
+                                                Switch(
+                                                    checked = h.installed && h.offered,
+                                                    onCheckedChange = { setEnabled(h, it) },
+                                                    // The last agent standing stays on: new sessions need one.
+                                                    enabled = online && h.installed && !(h.offered && enabledCount <= 1),
+                                                )
+                                            }
+                                        }
+                                        // Rows without account navigation reserve the same arrow slot.
+                                        Box(Modifier.size(18.dp), contentAlignment = Alignment.Center) {
                                             if (opens) Chevron()
                                         }
                                     }
@@ -227,7 +243,7 @@ fun ProvidersScreen(model: AppModel, target: String?, onBack: () -> Unit, onOpen
                                 onClick = if (opens) ({ onOpenAccounts(AccountsTarget.Device(selected, name, h.id, h.label)) }) else null,
                             )
                         }
-                        if (sorted.isEmpty()) CloudRow(0, 1, "No agents", if (online) "$name hasn't reported any agents." else "$name is offline.")
+                        if (sorted.isEmpty()) CloudRow(0, 1, "No agents", if (online) "$name hasn't reported any agents." else "Reconnect $name to refresh its agents.")
                     }
                 }
             }

@@ -5082,13 +5082,22 @@ impl Pickers {
                 popover::menu_row_nav(&theme, selected, ix == active, format!("access-row-{ix}"))
                     .id(("access-row", ix))
                     .on_click(cx.listener(move |this, _, _, cx| this.pick_access(mode, cx)))
-                    .child(access_row_text(mode.label(), mode.description(), &theme))
+                    .child(
+                        access_row_text(mode.label(), mode.description(), &theme)
+                            .when(mode.is_full_access(), |text| {
+                                text.text_color(theme.full_access_color())
+                            }),
+                    )
                     .when(selected, |row| {
                         row.child(
                             crate::icons::icon(crate::icons::CHECK)
                                 .size(px(14.0))
                                 .flex_none()
-                                .text_color(theme.text_muted),
+                                .text_color(if mode.is_full_access() {
+                                    theme.full_access_color()
+                                } else {
+                                    theme.text_muted
+                                }),
                         )
                     })
             }))
@@ -5104,7 +5113,11 @@ impl Pickers {
     /// has a single mode, so a chat never runs with more access than it
     /// says; None only before the catalog names the modes (or from an
     /// engine predating them).
-    fn access_chip(&self, theme: &Theme, cx: &mut Context<Self>) -> Option<gpui::Stateful<gpui::Div>> {
+    fn access_chip(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
         if self.title.is_some() {
             return None;
         }
@@ -5122,17 +5135,22 @@ impl Pickers {
         let plan = self
             .effective_plan(cx)
             .then(|| (SharedString::from("Plan"), Some(theme.accent)));
-        Some(self.trigger_chip(
-            PickerKind::Access,
-            mode.label().into(),
-            !mode.is_full_access(),
-            None,
-            false,
-            false,
-            plan,
-            theme,
-            cx,
-        ))
+        Some(
+            self.trigger_chip(
+                PickerKind::Access,
+                mode.label().into(),
+                !mode.is_full_access(),
+                None,
+                false,
+                false,
+                plan,
+                theme,
+                cx,
+            )
+            .when(mode.is_full_access(), |chip| {
+                chip.text_color(theme.full_access_color())
+            }),
+        )
     }
 
     /// Model picker with favorites and harness tabs above a scoped search.

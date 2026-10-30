@@ -783,6 +783,16 @@ impl TerminalColors {
 }
 
 impl Theme {
+    /// Full access stays orange regardless of the selected accent palette.
+    pub fn full_access_color(&self) -> Hsla {
+        gpui::rgb(if self.appearance.is_dark() {
+            0xfb923c
+        } else {
+            0xc2410c
+        })
+        .into()
+    }
+
     // ---- numbers drive layout (px) ----
     /// Frost translucency over the blurred window background (macOS vibrancy
     /// or Windows Acrylic). Linux stays opaque because compositor blur is not

@@ -317,7 +317,7 @@ fun ChoiceMenu(expanded: Boolean, onDismiss: () -> Unit, sections: List<MenuSect
                             choice.onClick()
                             onDismiss()
                         },
-                        text = { Text(choice.label) },
+                        text = { Text(choice.label, color = choice.tint ?: Color.Unspecified) },
                         supportingText = choice.supporting?.let { { Text(it) } },
                         shapes = MenuDefaults.itemShape(index++, all),
                         leadingIcon = choice.leading,
@@ -328,10 +328,10 @@ fun ChoiceMenu(expanded: Boolean, onDismiss: () -> Unit, sections: List<MenuSect
                             null
                         },
                         colors = MenuDefaults.selectableItemColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
-                            selectedTextColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            selectedLeadingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
-                            selectedTrailingIconColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedContainerColor = choice.tint?.copy(alpha = 0.14f) ?: MaterialTheme.colorScheme.secondaryContainer,
+                            selectedTextColor = choice.tint ?: MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedLeadingIconColor = choice.tint ?: MaterialTheme.colorScheme.onSecondaryContainer,
+                            selectedTrailingIconColor = choice.tint ?: MaterialTheme.colorScheme.onSecondaryContainer,
                         ),
                     )
                 }

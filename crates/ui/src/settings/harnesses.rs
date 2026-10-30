@@ -1069,15 +1069,38 @@ impl HarnessesPage {
             let is_local = local_id.as_deref() == Some(device.id.as_str());
             let glyph = crate::cloud::device_glyph(&device.id, &device.platform);
             let muted = theme.text_muted;
+            let presence = self.state.read(cx).device_presence(&device.id, now);
+            let online = is_local
+                || matches!(
+                    presence,
+                    crate::cloud::Presence::Online | crate::cloud::Presence::Available
+                );
+            let status_id: SharedString = format!("provider-device-status-{}", device.id).into();
+            let status_color = if online {
+                theme.success
+            } else {
+                gpui::rgb(0x9ca3af).into()
+            };
             let option = widgets::SelectOption::new(device.name.clone()).leading(move || {
-                icon(glyph)
+                div()
+                    .relative()
                     .size(px(16.0))
                     .flex_none()
-                    .text_color(muted)
+                    .child(icon(glyph).size(px(16.0)).text_color(muted))
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(-2.0))
+                            .bottom(px(-1.0))
+                            .size(px(6.0))
+                            .rounded_full()
+                            .bg(status_color)
+                            .id(status_id.clone())
+                            .aria_label(if online { "Online" } else { "Offline" }),
+                    )
                     .into_any_element()
             });
             // A sleeping Cloud device says so; it wakes when asked.
-            let presence = self.state.read(cx).device_presence(&device.id, now);
             options.push(if is_local {
                 option.detail("You")
             } else if matches!(

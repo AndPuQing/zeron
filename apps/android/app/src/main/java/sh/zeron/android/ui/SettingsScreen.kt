@@ -138,15 +138,17 @@ fun SettingsScreen(
                                 Triple(ThemeMode.Dark, "Dark", ZIcons.Moon),
                             )
                             modes.forEachIndexed { index, (mode, label, icon) ->
+                                val shapes = when (index) {
+                                    0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
+                                    modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
+                                    else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
+                                }
                                 ToggleButton(
                                     checked = appearance.mode == mode,
                                     onCheckedChange = { model.setAppearance(appearance.copy(mode = mode)) },
                                     modifier = Modifier.weight(1f).semantics { role = Role.RadioButton },
-                                    shapes = when (index) {
-                                        0 -> ButtonGroupDefaults.connectedLeadingButtonShapes()
-                                        modes.lastIndex -> ButtonGroupDefaults.connectedTrailingButtonShapes()
-                                        else -> ButtonGroupDefaults.connectedMiddleButtonShapes()
-                                    },
+                                    // Selection changes color, not the connected segment's outline.
+                                    shapes = shapes.copy(checkedShape = shapes.shape, pressedShape = shapes.shape),
                                 ) {
                                     ZIcon(icon, null, Modifier.size(ToggleButtonDefaults.IconSize))
                                     Spacer(Modifier.size(ToggleButtonDefaults.IconSpacing))

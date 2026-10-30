@@ -149,6 +149,7 @@ class MenuChoice(
     val selected: Boolean = false,
     val supporting: String? = null,
     val leading: (@Composable () -> Unit)? = null,
+    val tint: Color? = null,
     val onClick: () -> Unit,
 )
 
