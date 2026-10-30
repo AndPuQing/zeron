@@ -1075,6 +1075,7 @@ impl HarnessesPage {
                     presence,
                     crate::cloud::Presence::Online | crate::cloud::Presence::Available
                 );
+            let status_id: SharedString = format!("provider-device-status-{}", device.id).into();
             let status_color = if online {
                 theme.success
             } else {
@@ -1094,6 +1095,7 @@ impl HarnessesPage {
                             .size(px(6.0))
                             .rounded_full()
                             .bg(status_color)
+                            .id(status_id.clone())
                             .aria_label(if online { "Online" } else { "Offline" }),
                     )
                     .into_any_element()
