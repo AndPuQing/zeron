@@ -83,7 +83,7 @@ fun ScreenHeader(title: String, subtitle: String?, modifier: Modifier = Modifier
 
 /** A filter pill: filled when selected, tonal otherwise, with an optional count. */
 @Composable
-fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = null, @DrawableRes icon: Int? = null) {
+fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = null, @DrawableRes icon: Int? = null, trailing: (@Composable () -> Unit)? = null) {
     val container by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
         MaterialTheme.motionScheme.defaultEffectsSpec(),
@@ -98,6 +98,7 @@ fun Pill(label: String, selected: Boolean, onClick: () -> Unit, count: Int? = nu
         ) {
             icon?.let { ZIcon(it, null, Modifier.size(18.dp)) }
             Text(label, style = MaterialTheme.typography.labelLarge)
+            trailing?.invoke()
             if (count != null && count > 0) {
                 Box(
                     Modifier
