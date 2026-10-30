@@ -16,6 +16,8 @@ pub enum HarnessId {
     Grok,
     /// Nous Research's Hermes Agent, driven over ACP (`hermes acp`).
     Hermes,
+    /// Vercel fx, driven by its native ACP server.
+    Fx,
     /// The Pi coding agent (pi.dev), driven over its native JSONL RPC protocol.
     Pi,
     /// Oh My Pi (omp.sh), a Pi-derived agent driven over its own native JSONL
@@ -44,7 +46,7 @@ pub enum HarnessId {
 
 impl HarnessId {
     /// Every harness, in declaration order.
-    pub const ALL: [HarnessId; 14] = [
+    pub const ALL: [HarnessId; 15] = [
         HarnessId::ClaudeCode,
         HarnessId::Codex,
         HarnessId::Copilot,
@@ -52,6 +54,7 @@ impl HarnessId {
         HarnessId::Devin,
         HarnessId::Grok,
         HarnessId::Hermes,
+        HarnessId::Fx,
         HarnessId::Pi,
         HarnessId::Omp,
         HarnessId::Opencode,
@@ -71,6 +74,7 @@ impl HarnessId {
             HarnessId::Devin => "devin",
             HarnessId::Grok => "grok",
             HarnessId::Hermes => "hermes",
+            HarnessId::Fx => "fx",
             HarnessId::Pi => "pi",
             HarnessId::Omp => "omp",
             HarnessId::Opencode => "opencode",

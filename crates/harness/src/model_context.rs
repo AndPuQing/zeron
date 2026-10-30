@@ -28,6 +28,13 @@ pub(crate) fn context(
             let root = crate::acp::copilot_home();
             vec![root.join("config.json")]
         }
+        HarnessId::Fx => vec![
+            home.join(".fx/auth.json"),
+            home.join(".fx/settings.json"),
+            home.join(".fx/api-key"),
+            home.join(".fx/chatgpt-auth.json"),
+            home.join(".fx/grok-auth.json"),
+        ],
         HarnessId::Opencode => {
             let data = root("XDG_DATA_HOME", home.join(".local/share"));
             let config = root("XDG_CONFIG_HOME", home.join(".config"));
@@ -133,6 +140,7 @@ pub(crate) fn context(
         HarnessId::Antigravity => &["GEMINI_", "GOOGLE_"],
         HarnessId::Dsh => &["DSH_", "DEEPSEEK_"],
         HarnessId::Cursor => &["CURSOR_"],
+        HarnessId::Fx => &["FX_", "AI_GATEWAY_", "OPENAI_", "ANTHROPIC_"],
         _ => &[],
     };
     let mut env: Vec<_> = std::env::vars_os()
