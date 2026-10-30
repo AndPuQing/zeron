@@ -30,6 +30,12 @@ import sh.zeron.android.core.AppModel
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import uniffi.zeron_core.TranscriptSearchHit
+import uniffi.zeron_core.DeviceView
+
+/** Choose once; a missing selection stays unavailable until the user changes it. */
+internal fun retainedSearchHost(current: DeviceView?, hosts: List<DeviceView>): DeviceView? =
+    if (current == null) hosts.firstOrNull { it.online } ?: hosts.firstOrNull()
+    else hosts.firstOrNull { it.id == current.id } ?: current
 
 @Composable
 fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) {
@@ -38,8 +44,10 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
     var query by remember { mutableStateOf("") }
     var messages by remember { mutableStateOf(false) }
     val hosts = workspace?.devices.orEmpty().filter { it.isExecutionHost }
-    var host by remember { mutableStateOf<String?>(null) }
-    val selectedHost = hosts.firstOrNull { it.id == host } ?: hosts.firstOrNull { it.online } ?: hosts.firstOrNull()
+    var host by remember { mutableStateOf<DeviceView?>(null) }
+    LaunchedEffect(hosts) { host = retainedSearchHost(host, hosts) }
+    // Resolve availability from the live roster, never from the retained snapshot.
+    val selectedHost = hosts.firstOrNull { it.id == host?.id }
     var hostMenu by remember { mutableStateOf(false) }
     var hits by remember { mutableStateOf<List<TranscriptSearchHit>>(emptyList()) }
     var error by remember { mutableStateOf(false) }
@@ -113,7 +121,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
                     TextButton(onClick = { hostMenu = true }, enabled = hosts.isNotEmpty()) {
                         ZIcon(ZIcons.Laptop, null, Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(selectedHost?.name ?: "No computer", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                        Text(selectedHost?.name ?: host?.name ?: "No computer", maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                         Spacer(Modifier.width(6.dp))
                         ZIcon(ZIcons.ChevronDown, null, Modifier.size(14.dp))
                     }
@@ -121,7 +129,7 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
                         hosts.forEach { device -> DropdownMenuItem(text = { Text(device.name) }, leadingIcon = {
                             Box(Modifier.size(8.dp).background(if (device.online) successColor() else MaterialTheme.colorScheme.outline, CircleShape)
                                 .semantics { contentDescription = if (device.online) "Online" else "Offline" })
-                        }, trailingIcon = { if (device.id == selectedHost?.id) ZIcon(ZIcons.Check, null, Modifier.size(18.dp)) }, onClick = { host = device.id; hostMenu = false }) }
+                        }, trailingIcon = { if (device.id == selectedHost?.id) ZIcon(ZIcons.Check, null, Modifier.size(18.dp)) }, onClick = { host = device; hostMenu = false }) }
                     }
                 }
             }
@@ -131,8 +139,8 @@ fun SearchScreen(model: AppModel, onBack: () -> Unit, onOpen: (String) -> Unit) 
             if (messages) {
                 item("message-status") {
                     when {
-                        selectedHost == null -> SearchNotice("Connect a computer", "Message search uses the history saved on a connected computer.")
-                        !selectedHost.online -> SearchNotice("Computer is unavailable", "Reconnect ${selectedHost.name} or select another computer.")
+                        host == null -> SearchNotice("Connect a computer", "Message search uses the history saved on a connected computer.")
+                        selectedHost?.online != true -> SearchNotice("Computer is unavailable", "Reconnect ${host?.name} or select another computer.")
                         error -> SearchNotice("Couldn't search messages", "Check that this computer is connected and running the latest Zerun.", onRetry = { retry++ })
                         query.isBlank() -> SearchNotice("Find a message", "Search words or phrases from your conversations. Tap a result to jump to the message.")
                         loading -> Row(Modifier.padding(horizontal = 24.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {

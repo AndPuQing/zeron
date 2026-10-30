@@ -753,11 +753,18 @@ final class MessageSearchLifecycle {
     func accepts(_ token: UInt64) -> Bool { visible && generation == token }
 }
 
+/// Retain scope through roster gaps; only the initial choice prefers an online host.
+func retainedMessageSearchHost(_ current: DeviceView?, hosts: [DeviceView]) -> DeviceView? {
+    guard let current else { return hosts.first(where: { $0.online }) ?? hosts.first }
+    return hosts.first(where: { $0.id == current.id }) ?? current
+}
+
 /// Message search is explicitly scoped to the computer that stores the history.
 private final class MessageSearchViewController: UITableViewController, UISearchResultsUpdating {
     let app: AppModel
     private let initialQuery: String
-    private var device: String?
+    private var retainedHost: DeviceView?
+    private var device: String? { retainedHost?.id }
     private var hosts: [DeviceView] = []
     private var hits: [TranscriptSearchHit] = []
     private var task: Task<Void, Never>?
@@ -850,14 +857,14 @@ private final class MessageSearchViewController: UITableViewController, UISearch
     }
     private func updateHosts() {
         hosts = app.client?.executionDevices() ?? []
-        if !hosts.contains(where: { $0.id == device }) { device = hosts.first(where: { $0.online })?.id ?? hosts.first?.id }
-        hostButton.configuration?.title = selectedHost?.name ?? "No computer"
+        retainedHost = retainedMessageSearchHost(retainedHost, hosts: hosts)
+        hostButton.configuration?.title = selectedHost?.name ?? retainedHost?.name ?? "No computer"
         hostButton.isEnabled = !hosts.isEmpty
-        hostButton.accessibilityValue = selectedHost.map { "\($0.name), \($0.online ? "Online" : "Offline")" }
+        hostButton.accessibilityValue = retainedHost.map { "\($0.name), \(selectedHost?.online == true ? "Online" : "Unavailable")" }
         hostButton.menu = UIMenu(children: hosts.map { host in
             let dot = UIImage(systemName: "circle.fill")?.withTintColor(host.online ? .systemGreen : .systemGray, renderingMode: .alwaysOriginal)
             return UIAction(title: host.name, image: dot, state: host.id == device ? .on : .off) { [weak self] _ in
-                self?.device = host.id; self?.updateHosts(); self?.search()
+                self?.retainedHost = host; self?.updateHosts(); self?.search()
             }
         })
     }
@@ -936,10 +943,10 @@ private final class MessageSearchViewController: UITableViewController, UISearch
         content.secondaryTextProperties.numberOfLines = 0
         cell.accessoryView = nil
         cell.selectionStyle = .none
-        if selectedHost == nil {
+        if retainedHost == nil {
             content.text = "Connect a computer"
             content.secondaryText = "Message search uses the history saved on a connected computer."
-        } else if selectedHost?.online == false {
+        } else if selectedHost?.online != true {
             content.text = "Computer is unavailable"
             content.secondaryText = "Reconnect this computer or select another one."
         } else if failed {
