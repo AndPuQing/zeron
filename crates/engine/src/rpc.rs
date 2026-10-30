@@ -317,6 +317,13 @@ struct DeleteProjectActionParams {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct BackgroundTaskParams {
+    chat_id: String,
+    task_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RunProjectActionParams {
     space_id: String,
     chat_id: String,
@@ -2309,6 +2316,10 @@ fn forwardable(method: &str) -> bool {
             | methods::UPSERT_PROJECT_ACTION
             | methods::DELETE_PROJECT_ACTION
             | methods::RUN_PROJECT_ACTION
+            // Background processes run in the chat host's runtime.
+            | methods::LIST_BACKGROUND_TASKS
+            | methods::STOP_BACKGROUND_TASK
+            | methods::READ_BACKGROUND_TASK_OUTPUT
             // Checkout diffs are produced on the device holding the checkout.
             | methods::WATCH_CHECKOUT_DIFFS
             | methods::WATCH_WORKSPACE_GIT_STATUS
@@ -3332,6 +3343,23 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "removed": removed }))
+            }
+            methods::LIST_BACKGROUND_TASKS => {
+                let p: ChatParams = parse_params(params)?;
+                RpcReply::value(&self.sessions.background_tasks(&p.chat_id))
+            }
+            methods::STOP_BACKGROUND_TASK => {
+                let p: BackgroundTaskParams = parse_params(params)?;
+                let stopping = self.sessions.stop_background_task(&p.chat_id, &p.task_id);
+                RpcReply::value(&serde_json::json!({ "stopping": stopping }))
+            }
+            methods::READ_BACKGROUND_TASK_OUTPUT => {
+                let p: BackgroundTaskParams = parse_params(params)?;
+                let output = self
+                    .sessions
+                    .background_task_output(&p.chat_id, &p.task_id)
+                    .await;
+                RpcReply::value(&output)
             }
             methods::SEND_QUEUED_MESSAGE_NOW => {
                 let p: QueuedMessageParams = parse_params(params)?;

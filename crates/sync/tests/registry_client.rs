@@ -122,6 +122,7 @@ async fn two_clients_converge_and_stream_live_updates() {
             last_turn_outcome: None,
             terminal_activity: None,
             running_subagents: 0,
+            background_tasks: Vec::new(),
             chat_id: "chat-1".into(),
             device_id: "dev-a".into(),
             status: SessionStatus::Working,
@@ -434,6 +435,7 @@ async fn churn_stays_bounded_no_history_growth() {
                 last_turn_outcome: None,
                 terminal_activity: None,
                 running_subagents: 0,
+                background_tasks: Vec::new(),
                 chat_id: "chat-1".into(),
                 device_id: "dev-a".into(),
                 status: if i % 2 == 0 {

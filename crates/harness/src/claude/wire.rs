@@ -52,6 +52,8 @@ pub(crate) struct ControlResponseBody {
     /// Why an `error` response failed (a string on every CLI seen so far).
     #[serde(default)]
     pub error: Option<Value>,
+    #[serde(default)]
+    pub response: Value,
 }
 
 impl ControlResponseBody {
@@ -660,6 +662,27 @@ pub(crate) fn stop_turn_request_line(request_id: &str) -> String {
         "type": "control_request",
         "request_id": request_id,
         "request": { "subtype": "interrupt", "cancel_queued": true },
+    })
+    .to_string()
+}
+
+/// Stop one background task (`stop_task`): the CLI kills it, then reports
+/// it `stopped` and the roster without it.
+pub(crate) fn stop_task_request_line(request_id: &str, task_id: &str) -> String {
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "stop_task", "task_id": task_id },
+    })
+    .to_string()
+}
+
+/// Read a shell or Monitor task's output without a model turn or a file path.
+pub(crate) fn task_output_request_line(request_id: &str, task_id: &str) -> String {
+    json!({
+        "type": "control_request",
+        "request_id": request_id,
+        "request": { "subtype": "get_task_output", "task_id": task_id },
     })
     .to_string()
 }

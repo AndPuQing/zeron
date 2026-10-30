@@ -1091,6 +1091,57 @@ async fn commands_come_from_the_initialize_control_request() {
 
 /// Live smoke against the real CLI: `cargo test -p zeron-harness --test
 /// claude -- --ignored live_commands`. No model turn, no API cost.
+/// A real background shell is listed with its command, its output file is
+/// read while it runs, and a host stop ends it through `stop_task`.
+#[tokio::test]
+#[ignore = "spawns the real claude CLI; needs install + auth + network"]
+async fn live_background_shell_is_listed_read_and_stopped() {
+    use zeron_harness::TurnControl;
+    let dir = tempfile::tempdir().unwrap();
+    let mut req = request(
+        "Use the Bash tool with run_in_background set to true to run exactly: \
+         for i in $(seq 1 120); do echo tick $i; sleep 1; done \
+         Then reply STARTED and nothing else.",
+    );
+    req.model = Some("haiku".into());
+    req.cwd = dir.path().display().to_string();
+    let (mut controls, _steer, _token) = controls("A");
+    let turn = TurnControl::default();
+    controls.turn = turn.clone();
+    let mut processes = turn.watch_background_processes();
+    let mut stream = ClaudeHarness::new()
+        .run(req, controls)
+        .await
+        .expect("run starts");
+    tokio::time::timeout(Duration::from_secs(120), async {
+        while let Some(event) = stream.next().await {
+            if matches!(event.expect("event"), AgentEvent::Done { .. }) {
+                return;
+            }
+        }
+        panic!("stream ended without Done");
+    })
+    .await
+    .expect("turn ends");
+    let listed = processes.borrow_and_update().clone();
+    eprintln!("listed: {listed:?}");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert!(listed[0].command.contains("echo tick"), "{listed:?}");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let output = turn.background_output(&listed[0].id).await.expect("listed");
+    eprintln!("output: {output:?}");
+    assert!(output.text.contains("tick"), "{output:?}");
+
+    assert!(turn.stop_background_process(&listed[0].id));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !processes.borrow_and_update().is_empty() {
+            processes.changed().await.expect("runtime alive");
+        }
+    })
+    .await
+    .expect("the stopped shell leaves the list");
+}
+
 #[tokio::test]
 #[ignore]
 async fn live_commands_discovery() {
@@ -1980,10 +2031,12 @@ async fn results_settling_killed_tasks_on_resume_do_not_end_the_prompt() {
     );
 }
 
-/// A steer the CLI never replays must not hold the turn end forever.
+/// A steer the CLI never replays must not hold the turn end forever, even
+/// while a viewport keeps polling its background command's output.
 #[tokio::test]
 async fn an_unreplayed_steer_releases_the_turn_end() {
-    let (controls, steer, _token) = controls("A");
+    let (controls, steer, token) = controls("A");
+    let turn = controls.turn.clone();
     steer
         .send(SteerMessage {
             prompt: "absorbed steer".into(),
@@ -1999,26 +2052,118 @@ async fn an_unreplayed_steer_releases_the_turn_end() {
         .await
         .expect("run starts");
     let mut steered = 0;
+    let mut output_reads = 0;
     let done = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while let Some(event) = stream.next().await {
-            match event.expect("event") {
-                AgentEvent::Steered { .. } => steered += 1,
-                AgentEvent::Done { status, .. } => return status,
-                _ => {}
+        let mut poll = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                event = stream.next() => match event.expect("stream still open").expect("event") {
+                    AgentEvent::Steered { .. } => steered += 1,
+                    AgentEvent::Done { status, .. } => return status,
+                    _ => {}
+                },
+                _ = poll.tick() => {
+                    if let Some(output) = turn.background_output("bg-abs").await {
+                        assert_eq!(output.text, "still running");
+                        output_reads += 1;
+                    }
+                }
             }
         }
-        panic!("stream ended without Done");
     })
     .await
     .expect("turn end must be released");
     assert_eq!(done, DoneStatus::Completed);
     assert_eq!(steered, 1);
+    assert!(output_reads >= 2, "continuous output polling was exercised");
     assert!(started.elapsed() >= std::time::Duration::from_secs(4));
+    token.cancel();
 }
 
 // ---------------------------------------------------------------------------
 // Stopping a turn in place
 // ---------------------------------------------------------------------------
+
+/// A background shell is listed with its command and output once the CLI
+/// reports it, outlives its turn, and a host stop becomes the CLI's
+/// `stop_task` — after which the roster drops it.
+#[tokio::test]
+async fn background_shells_are_listed_read_and_stopped() {
+    use zeron_harness::TurnControl;
+    let (mut controls, _steer, _token) = controls("A");
+    let turn = TurnControl::default();
+    controls.turn = turn.clone();
+    let mut processes = turn.watch_background_processes();
+    let mut stream = harness()
+        .run(request("scenario:background-shell"), controls)
+        .await
+        .expect("run starts");
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            if matches!(event.expect("event"), AgentEvent::Done { .. }) {
+                return;
+            }
+        }
+        panic!("stream ended without Done");
+    })
+    .await
+    .expect("turn ends");
+
+    let listed = processes.borrow_and_update().clone();
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].id, "bgsh");
+    assert_eq!(listed[0].command, "npm run dev");
+    assert_eq!(
+        listed[0].description.as_deref(),
+        Some("Start the dev server")
+    );
+    let output = turn.background_output("bgsh").await.expect("listed");
+    assert_eq!(output.text, "listening on :5173\nready in 412 ms");
+
+    assert!(turn.stop_background_process("bgsh"));
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while !processes.borrow_and_update().is_empty() {
+            processes.changed().await.expect("runtime alive");
+        }
+    })
+    .await
+    .expect("the stopped shell leaves the list");
+    assert!(turn.background_output("bgsh").await.is_none());
+}
+
+#[tokio::test]
+async fn a_first_background_monitor_reads_native_output_without_a_path() {
+    let (mut controls, _steer, token) = controls("A");
+    let turn = zeron_harness::TurnControl::default();
+    controls.turn = turn.clone();
+    let mut processes = turn.watch_background_processes();
+    let mut stream = harness()
+        .run(request("scenario:background-monitor"), controls)
+        .await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            if matches!(event.unwrap(), AgentEvent::Done { .. }) { return; }
+        }
+        panic!("monitor turn did not end");
+    }).await.unwrap();
+    assert_eq!(processes.borrow().len(), 1);
+    assert_eq!(processes.borrow()[0].command, "tail -f app.log");
+    for read in 1..=2 {
+        let output = turn.background_output("bmonitor").await.unwrap();
+        assert_eq!(output.text, format!("watching\nline {read}"));
+        assert!(output.truncated);
+    }
+    assert!(tokio::time::timeout(Duration::from_millis(20), stream.next()).await.is_err(),
+        "output control replies must not create another turn");
+    assert!(turn.stop_background_process("bmonitor"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !processes.borrow_and_update().is_empty() {
+            processes.changed().await.unwrap();
+        }
+    }).await.unwrap();
+    assert!(turn.background_output("bmonitor").await.is_none());
+    token.cancel();
+}
 
 #[tokio::test]
 async fn a_stopped_turn_keeps_the_process_and_its_background_work() {

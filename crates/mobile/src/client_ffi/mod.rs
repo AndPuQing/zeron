@@ -566,8 +566,6 @@ impl CoreClient {
         ))
     }
 
-    /// Files matching `query` in the chat's (or project's) workspace, for
-    /// composer `@` mentions.
     pub async fn search_transcripts(
         &self,
         device_id: String,
@@ -591,6 +589,45 @@ impl CoreClient {
         })
     }
 
+    pub fn background_tasks_supported(&self, chat_id: String) -> bool {
+        self.client.background_tasks_supported(&chat_id)
+    }
+
+    pub async fn background_tasks(&self, chat_id: String) -> CoreResult<Vec<BackgroundProcess>> {
+        let client = self.client.clone();
+        let tasks = on_runtime(async move { client.background_tasks(&chat_id).await }).await?;
+        Ok(tasks
+            .into_iter()
+            .map(|t| BackgroundProcess {
+                can_stop: t.can_stop,
+                id: t.id,
+                command: t.command,
+                description: t.description,
+                started_at_ms: t.started_at.timestamp_millis(),
+            })
+            .collect())
+    }
+    pub async fn background_task_output(
+        &self,
+        chat_id: String,
+        task_id: String,
+    ) -> CoreResult<Option<BackgroundOutput>> {
+        let client = self.client.clone();
+        let result =
+            on_runtime(async move { client.background_task_output(&chat_id, &task_id).await })
+                .await?;
+        Ok(result.map(|o| BackgroundOutput {
+            text: o.text,
+            truncated: o.truncated,
+        }))
+    }
+    pub async fn stop_background_task(&self, chat_id: String, task_id: String) -> CoreResult<bool> {
+        let client = self.client.clone();
+        on_runtime(async move { client.stop_background_task(&chat_id, &task_id).await }).await
+    }
+
+    /// Files matching `query` in the chat's (or project's) workspace, for
+    /// composer `@` mentions.
     pub async fn search_files(
         &self,
         device_id: String,

@@ -872,6 +872,10 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
                 },
                 UIAction(title: "Fork Into Side Chat", image: UIImage(systemName: "arrow.triangle.branch")) { _ in self.fork() },
                 UIAction(title: "Terminal", image: UIImage(systemName: "apple.terminal")) { _ in self.openTerminal() },
+                UIAction(title: "Background Processes", image: UIImage(systemName: "gearshape.2")) { _ in
+                    guard let client = self.app.client else { return }
+                    self.present(UINavigationController(rootViewController: BackgroundProcessesViewController(client: client, chatId: self.chatId)), animated: true)
+                },
             ])
             done([
                 companions,
@@ -1153,5 +1157,124 @@ enum Drafts {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         all[chatId] = trimmed.isEmpty ? nil : text
         UserDefaults.standard.set(all, forKey: key)
+    }
+}
+
+/// An output response belongs to one selection lifetime, not just a task id.
+/// Invalidating on A → B → A or sheet dismissal prevents late A results from
+/// being mistaken for a new request for A.
+struct BackgroundOutputSelection {
+    struct Request: Equatable {
+        let taskId: String
+        fileprivate let generation: UInt64
+    }
+    private(set) var id: String?
+    private var generation: UInt64 = 0
+
+    var request: Request? { id.map { Request(taskId: $0, generation: generation) } }
+    func accepts(_ request: Request) -> Bool { self.request == request }
+    mutating func invalidate() { generation &+= 1 }
+    mutating func toggle(_ taskId: String) {
+        invalidate()
+        id = id == taskId ? nil : taskId
+    }
+    mutating func retain(available: Set<String>) {
+        if let id, !available.contains(id) { invalidate(); self.id = nil }
+    }
+}
+
+/// Polls only while this sheet is visible. The host owns process identity;
+/// neither output paths nor OS process ids are accepted from the phone.
+private final class BackgroundProcessesViewController: UITableViewController {
+    private let client: CoreClient
+    private let chatId: String
+    private var processes: [BackgroundProcess] = []
+    private var stopping: Set<String> = []
+    private var stopStarted: [String: Date] = [:]
+    private var actionError: String?
+    private var selection = BackgroundOutputSelection()
+    private var selected: String? { selection.id }
+    private var output: BackgroundOutput?
+    private var poll: Task<Void, Never>?
+    init(client: CoreClient, chatId: String) { self.client = client; self.chatId = chatId; super.init(style: .insetGrouped) }
+    required init?(coder: NSCoder) { fatalError() }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        title = "Background Processes"
+        navigationItem.rightBarButtonItem = UIBarButtonItem(systemItem: .done, primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+    }
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        poll?.cancel()
+        selection.invalidate()
+        guard client.backgroundTasksSupported(chatId: chatId) else { navigationItem.prompt = "Update the computer to manage processes"; return }
+        poll = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if UIApplication.shared.applicationState != .active {
+                    try? await Task.sleep(for: .milliseconds(1500)); continue
+                }
+                do {
+                    let rows = try await self.client.backgroundTasks(chatId: self.chatId)
+                    guard !Task.isCancelled else { return }
+                    self.processes = rows
+                    self.selection.retain(available: Set(rows.map(\.id)))
+                    self.stopping.formIntersection(Set(rows.map(\.id)))
+                    let expired = self.stopping.filter { Date().timeIntervalSince(self.stopStarted[$0] ?? .distantPast) >= 15 }
+                    if !expired.isEmpty { self.stopping.subtract(expired); self.actionError = "Stop not confirmed; process still running" }
+                    if let request = self.selection.request {
+                        let output = try await self.client.backgroundTaskOutput(chatId: self.chatId, taskId: request.taskId)
+                        guard !Task.isCancelled else { return }
+                        if self.selection.accepts(request) { self.output = output }
+                    } else { self.output = nil }
+                    guard !Task.isCancelled else { return }
+                    self.navigationItem.prompt = self.actionError ?? (rows.isEmpty ? "No background processes reported" : nil)
+                    self.tableView.reloadData()
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    self.navigationItem.prompt = "Couldn't refresh background processes"
+                }
+                try? await Task.sleep(for: .milliseconds(1500))
+            }
+        }
+    }
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        poll?.cancel(); poll = nil
+        selection.invalidate(); output = nil
+    }
+    override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { processes.count }
+    override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let process = processes[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.textLabel?.text = process.command
+        cell.textLabel?.numberOfLines = 2
+        let age = max(0, Int64(Date().timeIntervalSince1970 * 1000) - process.startedAtMs) / 1000
+        var detail = process.description ?? "Running for \(age)s"
+        if selected == process.id {
+            detail += "\n" + (output?.truncated == true ? "Earlier output not shown\n" : "") + (output?.text.isEmpty == false ? output!.text : "No output yet")
+        }
+        cell.detailTextLabel?.text = detail
+        cell.detailTextLabel?.numberOfLines = selected == process.id ? 0 : 2
+        let button = UIButton(type: .system)
+        button.setTitle(stopping.contains(process.id) ? "Stopping…" : "Stop", for: .normal)
+        button.isEnabled = !stopping.contains(process.id)
+        button.addAction(UIAction { [weak self] _ in
+            guard let self else { return }
+            self.stopping.insert(process.id); self.stopStarted[process.id] = Date(); self.actionError = nil; self.tableView.reloadData()
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    if !(try await self.client.stopBackgroundTask(chatId: self.chatId, taskId: process.id)) { self.stopping.remove(process.id) }
+                } catch { self.stopping.remove(process.id); self.actionError = "Couldn't stop that process"; self.navigationItem.prompt = self.actionError }
+                self.tableView.reloadData()
+            }
+        }, for: .touchUpInside)
+        button.sizeToFit(); cell.accessoryView = process.canStop ? button : nil
+        return cell
+    }
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let id = processes[indexPath.row].id
+        selection.toggle(id); output = nil; tableView.reloadData()
     }
 }

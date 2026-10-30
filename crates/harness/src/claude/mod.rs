@@ -50,6 +50,7 @@
 //! - Interrupt: cancelling [`RunControls::interrupt`] tears the runtime down —
 //!   the interrupt control request, then SIGTERM and SIGKILL.
 
+mod background;
 pub mod catalog;
 mod discovery;
 mod fork_tail;
@@ -1390,8 +1391,18 @@ async fn run_session(session: Session) {
     #[cfg_attr(not(unix), allow(unused_mut))]
     let mut torn_down: Vec<crate::process::Tracked> = Vec::new();
     // The typed fork whose transcript is read off disk (see [`fork_tail`]).
-    let claude_root = saved_home.clone().unwrap_or_else(|| config_root(&launched.env));
+    let claude_root = saved_home
+        .clone()
+        .unwrap_or_else(|| config_root(&launched.env));
     let mut tail: Option<ForkTail> = None;
+    // The session's background shells, for the host's list (see
+    // [`background`]), and the stops asked of them.
+    let mut shells = background::BackgroundShells::default();
+    let mut task_stops_sent = 0u64;
+    let mut output_requests = turn.background_output_requests();
+    let mut output_reads_sent = 0u64;
+    let mut pending_outputs: std::collections::HashMap<String, crate::background::OutputRead> =
+        std::collections::HashMap::new();
 
     'main: loop {
         if std::mem::take(&mut relaunch) {
@@ -1404,6 +1415,9 @@ async fn run_session(session: Session) {
             }
             stdin.close_for_teardown();
             child.shutdown(kill_grace).await;
+            shells = background::BackgroundShells::default();
+            pending_outputs.clear();
+            turn.set_background_processes(Vec::new());
             let mut fresh = launched.clone();
             fresh.resume = None;
             match ClaudeHarness::launch(&exe, &fresh, title_only, saved_home.as_ref(), &environment) {
@@ -1449,9 +1463,6 @@ async fn run_session(session: Session) {
                     if line.is_empty() {
                         continue;
                     }
-                    // The CLI is still producing: whatever it is doing is not
-                    // the quiet end a held turn end's fallback waits for.
-                    last_frame_at = tokio::time::Instant::now();
                     let frame = match wire::parse_frame(line) {
                         Ok(frame) => frame,
                         Err(e) => {
@@ -1459,6 +1470,14 @@ async fn run_session(session: Session) {
                             continue;
                         }
                     };
+                    // Output polling is metadata, including a reply whose
+                    // reader timed out: it must not postpone a turn end held
+                    // for a missing steer replay indefinitely.
+                    if !matches!(&frame, Frame::ControlResponse(response)
+                        if response.response.request_id.starts_with("zeron_task_output_"))
+                    {
+                        last_frame_at = tokio::time::Instant::now();
+                    }
                     if restore_fallback
                         && !interrupted
                         && !norm.started()
@@ -1510,6 +1529,19 @@ async fn run_session(session: Session) {
                             stop_settle_at = Some(tokio::time::Instant::now() + STOP_SETTLE);
                         }
                         let error = response.error_message();
+                        if let Some(read) = pending_outputs.remove(&response.request_id) {
+                            let output = if error.is_none() {
+                                response.response.get("output").and_then(Value::as_str).map(|text| {
+                                    zeron_proto::BackgroundTaskOutput {
+                                        text: text.to_owned(),
+                                        truncated: response.response.get("truncated")
+                                            .and_then(Value::as_bool).unwrap_or(false),
+                                    }
+                                })
+                            } else { None };
+                            let _ = read.reply.send(output);
+                            continue;
+                        }
                         if let Some((what, asked, _)) = pending_controls.remove(&response.request_id) {
                             if let Some(error) = &error {
                                 config_unsure = true;
@@ -1530,6 +1562,17 @@ async fn run_session(session: Session) {
                             );
                         }
                         continue;
+                    }
+                    // Every frame: a shell's command, start and output file
+                    // arrive on different ones.
+                    let listed = shells.observe(&frame);
+                    if listed {
+                        turn.set_background_processes(shells.tasks());
+                    }
+                    if listed || matches!(frame, Frame::User(_)) {
+                        for (id, path) in shells.output_files() {
+                            turn.set_background_output(&id, crate::OutputSource::File(path));
+                        }
                     }
                     if let Frame::System(system) = &frame {
                         if let Some(mode) = &system.permission_mode {
@@ -1808,6 +1851,34 @@ async fn run_session(session: Session) {
                     }
                     stopped_end = Some(done);
                 }
+            },
+
+            // The person stopped one background shell: the CLI's own task
+            // stop, which kills it and reports the roster without it.
+            task = turn.background_stop_requested(), if !interrupted => {
+                task_stops_sent += 1;
+                let id = format!("zeron_stop_task_{task_stops_sent}");
+                if !stdin.line(wire::stop_task_request_line(&id, &task)) {
+                    break 'main;
+                }
+            },
+
+            // Read only when a viewport asks. Monitor results need not name
+            // a file, and the native task id also works on the first task.
+            Some(read) = output_requests.recv(), if !interrupted => {
+                pending_outputs.retain(|_, read| !read.reply.is_closed());
+                if pending_outputs.len() >= crate::background::OUTPUT_READ_LIMIT
+                    || !shells.tasks().iter().any(|task| task.id == read.id)
+                {
+                    let _ = read.reply.send(None);
+                    continue;
+                }
+                output_reads_sent += 1;
+                let id = format!("zeron_task_output_{output_reads_sent}");
+                if !stdin.line(wire::task_output_request_line(&id, &read.id)) {
+                    break 'main;
+                }
+                pending_outputs.insert(id, read);
             },
 
             // The CLI answered the stop and no turn ended: it was between
