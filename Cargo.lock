@@ -13831,6 +13831,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "webrtc",
+ "windows-sys 0.61.2",
  "zeron-proto",
  "zeron-sync",
 ]
