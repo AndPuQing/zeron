@@ -405,7 +405,7 @@ fn fx_spec() -> AcpAgentSpec {
         display_name: "fx",
         executable: "fx",
         env_override: "FX_EXECUTABLE",
-        args: &["acp"],
+        args: || args(&["acp"]),
         npm_package: None,
         archive: None,
         extra_paths: fx_install_paths,
