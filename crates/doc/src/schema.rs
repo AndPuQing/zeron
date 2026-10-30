@@ -407,12 +407,19 @@ pub struct ProviderSessionMark {
 /// A session doc handle: typed access over a LoroDoc with the schema above.
 pub struct SessionDoc {
     doc: LoroDoc,
+    // Queue mutations combine index reads and writes that Loro locks
+    // separately. Serialize local callers so a take cannot invalidate an
+    // append position or return a partially populated row.
+    queue_mutation: std::sync::Mutex<()>,
 }
 
 impl SessionDoc {
     /// Wrap an existing doc (e.g. imported from a snapshot).
     pub fn from_doc(doc: LoroDoc) -> Self {
-        Self { doc }
+        Self {
+            doc,
+            queue_mutation: std::sync::Mutex::new(()),
+        }
     }
 
     /// Create + initialize a fresh doc for `chat_id` (host-only).
@@ -422,11 +429,17 @@ impl SessionDoc {
         meta.insert("chatId", chat_id)?;
         meta.insert("schemaVersion", SESSION_SCHEMA_VERSION as i64)?;
         doc.commit();
-        Ok(Self { doc })
+        Ok(Self::from_doc(doc))
     }
 
     pub fn doc(&self) -> &LoroDoc {
         &self.doc
+    }
+
+    pub(crate) fn lock_queue_mutation(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.queue_mutation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn prompt_suggestion(&self) -> Option<zeron_proto::PromptSuggestion> {

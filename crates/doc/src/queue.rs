@@ -127,6 +127,7 @@ impl SessionDoc {
         if item.text.trim().is_empty() {
             return Err(DocError::Schema("queued message text required".into()));
         }
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let map = queue.push_container(loro::LoroMap::new())?;
         write_queued_map(&map, item)?;
@@ -145,6 +146,7 @@ impl SessionDoc {
         if item.text.trim().is_empty() {
             return Err(DocError::Schema("queued message text required".into()));
         }
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let map = queue.insert_container(index.min(queue.len()), loro::LoroMap::new())?;
         write_queued_map(&map, item)?;
@@ -159,6 +161,7 @@ impl SessionDoc {
         if text.trim().is_empty() {
             return self.remove_queued(id);
         }
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
@@ -187,6 +190,7 @@ impl SessionDoc {
         id: &str,
         gate: Option<&QueueDeliveryGate>,
     ) -> Result<bool, DocError> {
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
@@ -236,6 +240,7 @@ impl SessionDoc {
         if replacement.is_some_and(|text| text.trim().is_empty()) {
             return self.remove_queued(id);
         }
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
@@ -270,6 +275,7 @@ impl SessionDoc {
     /// Move a row to `to` (clamped to the queue's bounds). `false` when the row
     /// is missing or already sits there.
     pub fn move_queued(&self, id: &str, to: usize) -> Result<bool, DocError> {
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(from) = index_of(&queue, id) else {
             return Ok(false);
@@ -285,6 +291,7 @@ impl SessionDoc {
 
     /// Drop a row. `false` when it was already gone (another device took it).
     pub fn remove_queued(&self, id: &str) -> Result<bool, DocError> {
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(false);
@@ -298,6 +305,7 @@ impl SessionDoc {
     /// `None` when it is already gone, which is the race we want: two devices
     /// popping the same row means exactly one of them gets it.
     pub fn take_queued(&self, id: &str) -> Result<Option<QueuedMessage>, DocError> {
+        let _queue = self.lock_queue_mutation();
         let queue = self.doc().get_movable_list("queue");
         let Some(index) = index_of(&queue, id) else {
             return Ok(None);
@@ -509,6 +517,53 @@ mod tests {
         doc.push_queued(&first).unwrap();
         doc.push_queued(&item("q2", "second")).unwrap();
         assert_eq!(doc.read_queue().unwrap(), vec![first, item("q2", "second")]);
+    }
+
+    #[test]
+    fn concurrent_append_and_take_preserve_complete_rows_in_order() {
+        let doc = doc();
+        let expected: Vec<_> = (0..512)
+            .map(|i| {
+                let mut row = item(&format!("q{i}"), &format!("message {i}"));
+                row.attachments = vec![format!("uploads/{i}.png")];
+                row.hold_for_turn_end = true;
+                row
+            })
+            .collect();
+        let start = std::sync::Barrier::new(2);
+        doc.push_queued(&expected[0]).unwrap();
+        let received = std::thread::scope(|scope| {
+            let producer = scope.spawn(|| {
+                expected
+                    .iter()
+                    .skip(1)
+                    .map(|row| {
+                        start.wait();
+                        let result = doc.push_queued(row);
+                        start.wait();
+                        result
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut received = Vec::new();
+            for _ in 1..expected.len() {
+                start.wait();
+                received.push(doc.take_queue_head());
+                start.wait();
+            }
+            // Check results after both threads have passed every barrier, so
+            // an error reports a failure instead of stranding the other thread.
+            for result in producer.join().unwrap() {
+                result.expect("concurrent append");
+            }
+            received.push(doc.take_queue_head());
+            received
+                .into_iter()
+                .map(|row| row.unwrap().expect("queued row"))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(received, expected);
+        assert!(doc.read_queue().unwrap().is_empty());
     }
 
     #[test]
