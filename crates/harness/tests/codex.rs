@@ -695,7 +695,7 @@ async fn a_background_command_is_listed_read_and_terminated() {
     assert_eq!(listed[0].id, "bg");
     assert_eq!(listed[0].command, "npm run dev");
     assert_eq!(
-        turn.background_output("bg").expect("listed").text,
+        turn.background_output("bg").await.expect("listed").text,
         "ready on :3000"
     );
 

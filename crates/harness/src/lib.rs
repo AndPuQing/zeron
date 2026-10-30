@@ -151,10 +151,16 @@ impl TurnControl {
         self.processes.request_stop(id)
     }
 
+    pub(crate) fn background_output_requests(
+        &self,
+    ) -> tokio::sync::mpsc::Receiver<background::OutputRead> {
+        self.processes.output_requests()
+    }
+
     /// Host: the tail of a listed process's output; `None` when it is not
-    /// listed. May read a file: call it off the async runtime.
-    pub fn background_output(&self, id: &str) -> Option<zeron_proto::BackgroundTaskOutput> {
-        self.processes.output(id)
+    /// listed. Native reads time out; file reads run off the async runtime.
+    pub async fn background_output(&self, id: &str) -> Option<zeron_proto::BackgroundTaskOutput> {
+        self.processes.output(id).await
     }
 }
 

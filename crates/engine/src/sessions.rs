@@ -637,11 +637,7 @@ impl SessionsEngine {
         task_id: &str,
     ) -> Option<zeron_proto::BackgroundTaskOutput> {
         let turn = lock(&self.inner.runs).get(chat_id)?.turn.clone();
-        let task_id = task_id.to_owned();
-        tokio::task::spawn_blocking(move || turn.background_output(&task_id))
-            .await
-            .ok()
-            .flatten()
+        turn.background_output(task_id).await
     }
 
     /// How many chats have a turn in flight (the Cloud runner heartbeat's

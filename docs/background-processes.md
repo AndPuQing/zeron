@@ -21,7 +21,7 @@ ends, the list is cleared.
 
 | Harness | Listed | Command | Output | Stop |
 | --- | --- | --- | --- | --- |
-| Claude | `background_tasks_changed` roster, `task_type: "local_bash"` (Bash `run_in_background`, a command moved to the background, `Monitor`) | the spawning tool_use's `input.command`, joined via `task_started.tool_use_id`; else the roster's description | the task output file the tool_result names ("Output is being written to: …"), or `<tasks dir>/<task id>.output` | `stop_task` control request (`perTaskStopAffordance` is already declared) |
+| Claude | `background_tasks_changed` roster, `task_type: "local_bash"` (Bash `run_in_background`, a command moved to the background, `Monitor`) | the spawning tool_use's `input.command`, joined via `task_started.tool_use_id`; else the roster's description | `get_task_output` control request by task id; older CLIs fall back to the task output file | `stop_task` control request (`perTaskStopAffordance` is already declared) |
 | Codex | `commandExecution` items still open after their turn ended | `item.command`, without the login-shell wrapper (`/usr/bin/zsh -lc '…'`) | `item/commandExecution/outputDelta`, kept as the last 16 KB per open command (no longer opted out at `initialize`) | `thread/backgroundTerminals/terminate {threadId, processId}`, then the command's `item/completed` (or the existing prune) removes it |
 | Mock | `ZERON_MOCK_BACKGROUND=1` | three scripted processes | each prints its script once, a line every 1.6 s | honored after 250 ms |
 
@@ -39,6 +39,13 @@ Output is plain text: `background::plain_text` drops terminal escapes,
 collapses carriage-return rewrites (progress bars) to their final state, and
 trims trailing blank lines. Files are read from their last 16 KB, starting at a
 whole line.
+
+Claude output is requested only when a viewport reads it. The native control
+works for a first Monitor task whose result names no file. Reads time out after
+five seconds; an unsupported control falls back to the Bash result's output
+file, or `<tasks dir>/<task id>.output` once that folder is known. The filename
+parser preserves directories containing `.output` and spaces. Output-control
+replies do not postpone turn-end settlement.
 
 ### RPC
 

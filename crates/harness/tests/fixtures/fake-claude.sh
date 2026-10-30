@@ -587,12 +587,22 @@ case "$first" in
   ;;
 
 *scenario:absorbed-steer*)
-  # A steer whose replay never comes: the turn end must not be held forever.
+  # A steer whose replay never comes: output polling must not keep the
+  # turn end held forever.
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/tmp","session_id":"sess-abs"}'
   read -r steer || exit 1
   emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"absorbed"}}}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bg-abs","task_type":"local_bash","description":"Still running"}]}'
   emit '{"type":"result","subtype":"success","result":"absorbed","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-abs"}'
-  exec sleep 30
+  while read -r control; do
+    case "$control" in
+      *'"subtype":"get_task_output"'*'"task_id":"bg-abs"'*)
+        rid=$(printf '%s\n' "$control" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+        emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"output\":\"still running\\n\",\"total_bytes\":14,\"truncated\":false}}}"
+        ;;
+      *) exit 12 ;;
+    esac
+  done
   ;;
 
 *scenario:stop-in-place*)
@@ -630,7 +640,9 @@ case "$first" in
   # `Bash` with `run_in_background`: the roster lists it, its result names
   # its output file, and it outlives the turn until `stop_task` (frame shapes
   # live-verified 2.1.312).
-  out="${TMPDIR:-/tmp}/fake-claude-bgsh-$$.output"
+  bgdir=$(mktemp -d "${TMPDIR:-/tmp}/fake-claude.output.XXXXXX") || exit 1
+  trap 'rm -rf "$bgdir"' EXIT HUP INT TERM
+  out="$bgdir/dev server.output"
   printf 'listening on :5173\nready in 412 ms\n' >"$out"
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Bash"],"cwd":"/tmp","session_id":"sess-bgsh"}'
   emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_dev","name":"Bash","input":{"command":"npm run dev","description":"Start the dev server","run_in_background":true}}]},"parent_tool_use_id":null}'
@@ -638,14 +650,50 @@ case "$first" in
   emit '{"type":"system","subtype":"task_started","task_id":"bgsh","tool_use_id":"toolu_dev","description":"Start the dev server","is_backgrounded":true,"task_type":"local_bash"}'
   emit "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":[{\"tool_use_id\":\"toolu_dev\",\"type\":\"tool_result\",\"content\":\"Command running in background with ID: bgsh. Output is being written to: $out. You will be notified when it completes.\",\"is_error\":false}]},\"parent_tool_use_id\":null}"
   emit '{"type":"result","subtype":"success","result":"started","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-bgsh"}'
-  read -r stop || exit 1
-  case "$stop" in *'"subtype":"stop_task"'*'"task_id":"bgsh"'*) ;; *) exit 10 ;; esac
+  # An older CLI has no native output control; file fallback must still
+  # work when directories contain `.output` and the path contains spaces.
+  while read -r stop; do
+    case "$stop" in
+      *'"subtype":"get_task_output"'*)
+        rid=$(printf '%s\n' "$stop" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+        emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"error\",\"request_id\":\"$rid\",\"error\":\"unknown control request\"}}"
+        ;;
+      *'"subtype":"stop_task"'*'"task_id":"bgsh"'*) break ;;
+      *) exit 10 ;;
+    esac
+  done
   rid=$(printf '%s\n' "$stop" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
   emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{}}}"
   emit "{\"type\":\"system\",\"subtype\":\"task_notification\",\"task_id\":\"bgsh\",\"tool_use_id\":\"toolu_dev\",\"status\":\"stopped\",\"output_file\":\"$out\"}"
   emit '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
   rm -f "$out"
   cat >/dev/null
+  ;;
+
+*scenario:background-monitor*)
+  # Monitor's native result does not expose an output path, even when it
+  # is the first task. Output is available only through get_task_output.
+  emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":["Monitor"],"cwd":"/tmp","session_id":"sess-monitor"}'
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_monitor","name":"Monitor","input":{"command":"tail -f app.log","description":"Watch the application log"}}]},"parent_tool_use_id":null}'
+  emit '{"type":"system","subtype":"background_tasks_changed","tasks":[{"task_id":"bmonitor","task_type":"local_bash","description":"Watch the application log"}]}'
+  emit '{"type":"system","subtype":"task_started","task_id":"bmonitor","tool_use_id":"toolu_monitor","is_backgrounded":true,"task_type":"local_bash"}'
+  emit '{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_monitor","type":"tool_result","content":"Monitor started (task bmonitor, timeout 60000ms). You will be notified on each event. Keep working — do not poll or sleep. Events may arrive while you are waiting for the user — an event is not their reply.","is_error":false}]},"parent_tool_use_id":null}'
+  emit '{"type":"result","subtype":"success","result":"monitoring","errors":[],"usage":{"input_tokens":1,"output_tokens":1},"session_id":"sess-monitor"}'
+  reads=0
+  while read -r control; do
+    rid=$(printf '%s\n' "$control" | sed 's/.*"request_id":"\([^"]*\)".*/\1/')
+    case "$control" in
+      *'"subtype":"get_task_output"'*'"task_id":"bmonitor"'*)
+        reads=$((reads + 1))
+        emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{\"output\":\"\\u001b[32mwatching\\u001b[0m\\nline $reads\\n\",\"total_bytes\":32,\"truncated\":true}}}"
+        ;;
+      *'"subtype":"stop_task"'*'"task_id":"bmonitor"'*)
+        emit "{\"type\":\"control_response\",\"response\":{\"subtype\":\"success\",\"request_id\":\"$rid\",\"response\":{}}}"
+        emit '{"type":"system","subtype":"background_tasks_changed","tasks":[]}'
+        ;;
+      *) exit 11 ;;
+    esac
+  done
   ;;
 
 *scenario:interrupt*)

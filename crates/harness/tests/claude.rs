@@ -1128,7 +1128,7 @@ async fn live_background_shell_is_listed_read_and_stopped() {
     assert_eq!(listed.len(), 1, "{listed:?}");
     assert!(listed[0].command.contains("echo tick"), "{listed:?}");
     tokio::time::sleep(Duration::from_secs(3)).await;
-    let output = turn.background_output(&listed[0].id).expect("listed");
+    let output = turn.background_output(&listed[0].id).await.expect("listed");
     eprintln!("output: {output:?}");
     assert!(output.text.contains("tick"), "{output:?}");
 
@@ -2031,10 +2031,12 @@ async fn results_settling_killed_tasks_on_resume_do_not_end_the_prompt() {
     );
 }
 
-/// A steer the CLI never replays must not hold the turn end forever.
+/// A steer the CLI never replays must not hold the turn end forever, even
+/// while a viewport keeps polling its background command's output.
 #[tokio::test]
 async fn an_unreplayed_steer_releases_the_turn_end() {
-    let (controls, steer, _token) = controls("A");
+    let (controls, steer, token) = controls("A");
+    let turn = controls.turn.clone();
     steer
         .send(SteerMessage {
             prompt: "absorbed steer".into(),
@@ -2050,21 +2052,32 @@ async fn an_unreplayed_steer_releases_the_turn_end() {
         .await
         .expect("run starts");
     let mut steered = 0;
+    let mut output_reads = 0;
     let done = tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while let Some(event) = stream.next().await {
-            match event.expect("event") {
-                AgentEvent::Steered { .. } => steered += 1,
-                AgentEvent::Done { status, .. } => return status,
-                _ => {}
+        let mut poll = tokio::time::interval(Duration::from_millis(250));
+        loop {
+            tokio::select! {
+                event = stream.next() => match event.expect("stream still open").expect("event") {
+                    AgentEvent::Steered { .. } => steered += 1,
+                    AgentEvent::Done { status, .. } => return status,
+                    _ => {}
+                },
+                _ = poll.tick() => {
+                    if let Some(output) = turn.background_output("bg-abs").await {
+                        assert_eq!(output.text, "still running");
+                        output_reads += 1;
+                    }
+                }
             }
         }
-        panic!("stream ended without Done");
     })
     .await
     .expect("turn end must be released");
     assert_eq!(done, DoneStatus::Completed);
     assert_eq!(steered, 1);
+    assert!(output_reads >= 2, "continuous output polling was exercised");
     assert!(started.elapsed() >= std::time::Duration::from_secs(4));
+    token.cancel();
 }
 
 // ---------------------------------------------------------------------------
@@ -2104,7 +2117,7 @@ async fn background_shells_are_listed_read_and_stopped() {
         listed[0].description.as_deref(),
         Some("Start the dev server")
     );
-    let output = turn.background_output("bgsh").expect("listed");
+    let output = turn.background_output("bgsh").await.expect("listed");
     assert_eq!(output.text, "listening on :5173\nready in 412 ms");
 
     assert!(turn.stop_background_process("bgsh"));
@@ -2115,7 +2128,41 @@ async fn background_shells_are_listed_read_and_stopped() {
     })
     .await
     .expect("the stopped shell leaves the list");
-    assert!(turn.background_output("bgsh").is_none());
+    assert!(turn.background_output("bgsh").await.is_none());
+}
+
+#[tokio::test]
+async fn a_first_background_monitor_reads_native_output_without_a_path() {
+    let (mut controls, _steer, token) = controls("A");
+    let turn = zeron_harness::TurnControl::default();
+    controls.turn = turn.clone();
+    let mut processes = turn.watch_background_processes();
+    let mut stream = harness()
+        .run(request("scenario:background-monitor"), controls)
+        .await.unwrap();
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(event) = stream.next().await {
+            if matches!(event.unwrap(), AgentEvent::Done { .. }) { return; }
+        }
+        panic!("monitor turn did not end");
+    }).await.unwrap();
+    assert_eq!(processes.borrow().len(), 1);
+    assert_eq!(processes.borrow()[0].command, "tail -f app.log");
+    for read in 1..=2 {
+        let output = turn.background_output("bmonitor").await.unwrap();
+        assert_eq!(output.text, format!("watching\nline {read}"));
+        assert!(output.truncated);
+    }
+    assert!(tokio::time::timeout(Duration::from_millis(20), stream.next()).await.is_err(),
+        "output control replies must not create another turn");
+    assert!(turn.stop_background_process("bmonitor"));
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !processes.borrow_and_update().is_empty() {
+            processes.changed().await.unwrap();
+        }
+    }).await.unwrap();
+    assert!(turn.background_output("bmonitor").await.is_none());
+    token.cancel();
 }
 
 #[tokio::test]

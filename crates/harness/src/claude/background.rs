@@ -9,10 +9,10 @@
 //!
 //! - `task_started` pairs the task id with the `tool_use_id` that spawned it;
 //! - that tool_use's `input.command` is what it runs;
-//! - the tool_result says where its output goes ("Output is being written
-//!   to: <path>"), a file in the session's `tasks/` folder named after the
-//!   task id — so a task whose result never said it (one backgrounded later)
-//!   is found in the same folder.
+//! - output is read on demand by `get_task_output`, including a Monitor
+//!   whose result does not name a file. For older CLIs, a Bash tool_result's
+//!   "Output is being written to: <path>" seeds a file fallback in the
+//!   session's `tasks/` folder.
 //!
 //! Background agents are subagents: their chips show them, not this list.
 
@@ -243,9 +243,19 @@ fn output_file(text: &str) -> Option<PathBuf> {
     const MARKER: &str = "Output is being written to: ";
     let rest = &text[text.find(MARKER)? + MARKER.len()..];
     let path = rest.lines().next()?;
-    // The sentence ends after the path; a path itself ends `.output`.
-    let path = match path.find(".output") {
-        Some(end) => &path[..end + ".output".len()],
+    // The result ends the filename with `.output.` and then prose. A
+    // directory may itself contain `.output`, including spaces/dots.
+    let end = path.match_indices(".output").find_map(|(at, suffix)| {
+        let end = at + suffix.len();
+        let rest = &path[end..];
+        (rest.is_empty()
+            || rest
+                .strip_prefix('.')
+                .is_some_and(|after| after.is_empty() || after.starts_with(char::is_whitespace)))
+        .then_some(end)
+    });
+    let path = match end {
+        Some(end) => &path[..end],
         None => path.split_whitespace().next()?.trim_end_matches('.'),
     };
     (!path.is_empty()).then(|| PathBuf::from(path))
@@ -363,5 +373,22 @@ mod tests {
         let tasks = shells.tasks();
         assert_eq!(tasks[0].command, "Watch the build");
         assert_eq!(tasks[0].description, None);
+    }
+
+    #[test]
+    fn output_paths_preserve_output_named_directories_and_spaces() {
+        for path in [
+            "/tmp/review.output-cache/tasks/b1.output",
+            "/tmp/review.output/cache/tasks/b1.output",
+            "/tmp/review.output.cache/a directory/tasks/b1.output",
+            "/tmp/review.output directory/tasks/b1.output",
+        ] {
+            let text = format!("Output is being written to: {path}. To check output, Read {path}.");
+            assert_eq!(output_file(&text), Some(PathBuf::from(path)));
+            assert_eq!(
+                output_file(&format!("Output is being written to: {path}")),
+                Some(PathBuf::from(path))
+            );
+        }
     }
 }
