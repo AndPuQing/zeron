@@ -383,6 +383,7 @@ enum DiffCodeWidth {
 
 #[derive(Clone)]
 struct DiffCodeScroll {
+    selection: Option<Arc<str>>,
     handle: gpui::ScrollHandle,
     id: SharedString,
 }
@@ -398,8 +399,24 @@ impl DiffCodeScrollContext {
         DiffCodeScroll {
             handle: self.handle.clone(),
             id: SharedString::from(format!("{}-{suffix}", self.prefix)),
+            selection: None,
         }
     }
+}
+
+impl DiffCodeScroll {
+    fn selectable(mut self, key: Option<Arc<str>>) -> Self { self.selection = key; self }
+}
+
+fn diff_selection_prefix(parsed_key: &str, file: usize, side: CommentSide) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    parsed_key.hash(&mut hash);
+    format!("diff-selection-{:016x}-{file}-{}", hash.finish(), side.tag())
+}
+
+fn diff_selection_key(parsed_key: &str, file: usize, side: CommentSide, line: u32) -> Arc<str> {
+    format!("{}|{line}", diff_selection_prefix(parsed_key, file, side)).into()
 }
 
 fn reset_horizontal_scroll(handle: &gpui::ScrollHandle) {
@@ -1635,6 +1652,11 @@ struct CommentDraft {
 /// The Changes pane entity. Lazy: no RPC until [`Changes::ensure_watch`] runs
 /// (the shell calls it when the pane first opens).
 pub struct Changes {
+    selection_menu: Entity<crate::chat_selection::SelectionMenu>,
+    selection_revision: Option<String>,
+    selection_drag: bool,
+    selection_chat: Option<String>,
+    _selection_events: Subscription,
     state: Entity<AppState>,
     diffs: Vec<CheckoutDiff>,
     started: bool,
@@ -1709,6 +1731,7 @@ pub struct DiscardWorkingTreeRequest {
 }
 
 pub enum ChangesEvent {
+    Selection(crate::chat_selection::ChatSelectionEvent),
     /// A History row was clicked — open this commit as its own diff tab.
     OpenCommit(GitHistoryCommit),
     /// Open the post-change path in the workspace file browser.
@@ -1741,10 +1764,22 @@ impl Render for DiffHeaderTooltip {
 
 impl Changes {
     pub fn new(state: Entity<AppState>, cx: &mut Context<Self>) -> Self {
+        let selection_menu = cx.new(crate::chat_selection::SelectionMenu::new);
+        let selection_events = cx.subscribe(&selection_menu, |this: &mut Self, _, event: &crate::chat_selection::ChatSelectionEvent, cx| {
+            let current = this.active_diff(cx).map(|diff| this.parse_key(&diff));
+            if current == this.selection_revision && this.state.read(cx).selected_chat.as_deref() == Some(event.quote.chat_id.as_str()) {
+                cx.emit(ChangesEvent::Selection(event.clone()));
+            }
+        });
         let observe = cx.observe(&state, |this: &mut Self, _, cx| this.sync(cx));
         let settings = crate::settings::current(cx);
         let mode = DiffMode::from_split(settings.diff_split);
         Self {
+            selection_menu,
+            selection_revision: None,
+            selection_drag: false,
+            selection_chat: None,
+            _selection_events: selection_events,
             state,
             mode,
             wrap_lines: settings.diff_wrap,
@@ -2289,6 +2324,18 @@ impl Changes {
 
     /// Reconcile parsed content with the currently-active diff.
     fn sync(&mut self, cx: &mut Context<Self>) {
+        let current = self.active_diff(cx).map(|diff| self.parse_key(&diff));
+        let changed_chat = self.selection_chat.is_some() && self.selection_chat != self.state.read(cx).selected_chat;
+        if changed_chat || (self.selection_revision.is_some() && current != self.selection_revision) {
+            self.selection_menu.update(cx, |menu, cx| menu.close(cx));
+            self.selection_revision = None;
+            self.selection_drag = false;
+            self.selection_chat = None;
+            if crate::markdown::selection::anchor_surface() == cx.entity_id().as_u64()
+                && let Some(anchor) = crate::markdown::selection::anchor_key() {
+                crate::markdown::selection::clear_if_owner(&anchor);
+            }
+        }
         self.discard_stale_draft(cx);
         // The watch follows the selected chat's host device (idempotent when
         // the target is unchanged); a boot-deferred attempt retries here too.
@@ -3200,6 +3247,93 @@ impl Changes {
 
     // ---- rendering ----
 
+    fn open_selection_menu(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::markdown::selection;
+        if selection::anchor_surface() != cx.entity_id().as_u64() {
+            return;
+        }
+        selection::end_active_drag();
+        let spans = selection::selected_spans_for(cx.entity_id().as_u64());
+        let Some(first) = spans.first() else { return };
+        let Some((prefix, start)) = first.key.split_once('|') else {
+            return;
+        };
+        let Some((before_side, side)) = prefix.rsplit_once('-') else {
+            return;
+        };
+        let side = match side {
+            "L" => CommentSide::Old,
+            "R" => CommentSide::New,
+            _ => return,
+        };
+        let Some(file) = before_side
+            .rsplit_once('-')
+            .and_then(|(_, file)| file.parse::<usize>().ok())
+        else {
+            return;
+        };
+        let Some(parsed) = &self.parsed else { return };
+        if prefix != diff_selection_prefix(&parsed.key, file, side)
+            || self
+                .active_diff(cx)
+                .map(|diff| self.parse_key(&diff))
+                .as_ref()
+                != Some(&parsed.key)
+        {
+            return;
+        }
+        let Some(file) = parsed.files.get(file) else {
+            return;
+        };
+        if spans
+            .iter()
+            .any(|span| !span.key.starts_with(&format!("{prefix}|")))
+        {
+            return;
+        }
+        let end = spans
+            .last()
+            .and_then(|span| span.key.split_once('|'))
+            .map(|(_, number)| number)
+            .unwrap_or(start);
+        let path = if side == CommentSide::Old {
+            file.old_path.as_deref().unwrap_or(&file.path)
+        } else {
+            &file.path
+        };
+        let Some(chat_id) = self.state.read(cx).selected_chat.clone() else {
+            return;
+        };
+        if self.selection_chat.as_ref() != Some(&chat_id) {
+            return;
+        }
+        let Some(text) = selection::selected_text() else {
+            return;
+        };
+        let source = format!(
+            "{path}:{}{start}-{}{end} (diff {})",
+            side.tag(),
+            side.tag(),
+            if side == CommentSide::Old {
+                "before"
+            } else {
+                "after"
+            }
+        );
+        let Some(quote) = crate::chat_selection::ChatQuote::new(chat_id, source, text) else {
+            return;
+        };
+        self.selection_revision = Some(parsed.key.clone());
+        self.selection_menu
+            .update(cx, |menu, cx| menu.open(quote, position, focus, window, cx));
+    }
+
     fn render_row(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(parsed) = &self.parsed else {
             return gpui::Empty.into_any_element();
@@ -3280,7 +3414,7 @@ impl Changes {
                     &theme,
                     gutter_px,
                     code_width,
-                    Some(code_scroll.slot("unified")),
+                    Some(code_scroll.slot("unified").selectable(line_anchor(line).map(|(side, number)| diff_selection_key(&parsed_key, row.file(), side, number)))),
                 );
                 let Some((side, line_no)) = line_anchor(line) else {
                     return row;
@@ -3362,7 +3496,7 @@ impl Changes {
                             &theme,
                             gutter_px,
                             code_width,
-                            Some(code_scroll.slot(if old { "old" } else { "new" })),
+                            Some(code_scroll.slot(if old { "old" } else { "new" }).selectable(number.map(|number| diff_selection_key(&parsed_key, row.file(), if old { CommentSide::Old } else { CommentSide::New }, number)))),
                         )
                     })
                 };
@@ -4399,6 +4533,10 @@ fn code_text_viewport(
     wrapped: bool,
     scroll: Option<DiffCodeScroll>,
 ) -> AnyElement {
+    let code = match scroll.as_ref().and_then(|scroll| scroll.selection.clone()) {
+        Some(key) => render::selectable_text_wrap().child(render::selectable_text_element(key, text.into(), runs, theme.selection, None)).into_any_element(),
+        None => gpui::StyledText::new(text).with_runs(runs).into_any_element(),
+    };
     let content = div()
         .when(wrapped, |el| el.w_full().min_w_0())
         .when_some(content_width, |el, width| {
@@ -4418,7 +4556,7 @@ fn code_text_viewport(
                 el.whitespace_nowrap()
             }
         })
-        .child(gpui::StyledText::new(text).with_runs(runs));
+        .child(code);
     let viewport = div()
         .flex_1()
         .min_w_0()
@@ -4479,6 +4617,7 @@ pub(crate) fn readonly_scrolled_diff_line(
         Some(DiffCodeScroll {
             handle: scroll.clone(),
             id: format!("pr-code-{row}").into(),
+            selection: None,
         }),
     )
 }
@@ -4517,6 +4656,7 @@ pub(crate) fn readonly_split_line(
                     Some(DiffCodeScroll {
                         handle: scroll.clone(),
                         id: format!("pr-split-code-{row}-{old}").into(),
+                        selection: None,
                     }),
                 )
             })
@@ -5193,6 +5333,22 @@ impl Render for Changes {
 
         div()
             .size_full()
+            .relative()
+            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                this.selection_drag = crate::markdown::selection::is_dragging() && crate::markdown::selection::anchor_surface() == cx.entity_id().as_u64();
+                if this.selection_drag { this.selection_chat = this.state.read(cx).selected_chat.clone(); }
+            }))
+            .on_mouse_move(cx.listener(|this, event: &gpui::MouseMoveEvent, window, _| {
+                if this.selection_drag && event.dragging() && render::update_drag_at(event.position) { window.refresh(); }
+            }))
+            .on_mouse_up(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                if std::mem::take(&mut this.selection_drag) { this.open_selection_menu(event.position, false, window, cx); }
+            }))
+            .on_mouse_up_out(gpui::MouseButton::Left, cx.listener(|this, event: &gpui::MouseUpEvent, window, cx| {
+                if std::mem::take(&mut this.selection_drag) { this.open_selection_menu(event.position, false, window, cx); }
+            }))
+            .on_mouse_down(gpui::MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| this.open_selection_menu(event.position, true, window, cx)))
+            .child(render::selection_frame_reset_for(cx.entity_id().as_u64()))
             .flex()
             .flex_col()
             // Changes is a code-adjacent surface: chrome stays Geist while
@@ -5212,6 +5368,7 @@ impl Render for Changes {
                 )
             })
             .child(content)
+            .child(self.selection_menu.clone())
             .into_any_element()
     }
 }
@@ -6002,6 +6159,81 @@ rename to new_name.rs
                 );
             }
         }
+    }
+
+    #[gpui::test]
+    fn diff_selection_quotes_the_renamed_old_file_and_rejects_changed_revisions(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _selection_lock = crate::markdown::selection::test_state_lock();
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        let (changes, cx) = cx.add_window_view(|_, cx| {
+            let state = cx.new(|_| {
+                let mut state = AppState::new();
+                state.chats = vec![chat(Some("checkout"), "host", Some("/repo"))];
+                state.selected_chat = Some("c1".into());
+                state
+            });
+            Changes::new(state, cx)
+        });
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = events.clone();
+        let _sub = cx.update(|_, cx| {
+            cx.subscribe(&changes, move |_, event, _| {
+                if let ChangesEvent::Selection(event) = event {
+                    recorded.borrow_mut().push(event.clone());
+                }
+            })
+        });
+        cx.update(|window, cx| {
+            window.activate_window();
+            changes.update(cx, |changes, cx| {
+                let patch = "diff --git a/old.rs b/new.rs\n@@ -7 +7 @@\n-old\n+new\n";
+                let diff = diff("checkout", "host", "/repo", patch);
+                let key = changes.parse_key(&diff);
+                let files = parse_patch(patch);
+                changes.diffs = vec![diff];
+                changes.parsed = Some(ParsedDiff {
+                    key: key.clone(),
+                    truncated: false,
+                    additions: 1,
+                    deletions: 1,
+                    file_count: 1,
+                    horizontal: files.iter().map(FileHorizontalState::new).collect(),
+                    files: Arc::new(files),
+                });
+                changes.selection_chat = Some("c1".into());
+                let anchor = diff_selection_key(&key, 0, CommentSide::Old, 7);
+                crate::markdown::selection::begin_with_span_in(
+                    cx.entity_id().as_u64(),
+                    &anchor,
+                    "old",
+                    0..3,
+                );
+                changes.open_selection_menu(gpui::point(px(30.), px(30.)), true, window, cx);
+            });
+            window.draw(cx).clear();
+        });
+        cx.simulate_keystrokes("down down enter");
+        cx.run_until_parked();
+        assert_eq!(events.borrow().len(), 1);
+        assert_eq!(
+            events.borrow()[0].quote.source,
+            "old.rs:L7-L7 (diff before)"
+        );
+        assert_eq!(events.borrow()[0].quote.text, "old");
+        cx.update(|window, cx| {
+            changes.update(cx, |changes, cx| {
+                changes.diffs[0].checksum = "new revision".into();
+                changes.open_selection_menu(gpui::point(px(30.), px(30.)), true, window, cx);
+            })
+        });
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(events.borrow().len(), 1);
     }
 
     #[test]

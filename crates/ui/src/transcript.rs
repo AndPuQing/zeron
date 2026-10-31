@@ -3572,6 +3572,8 @@ pub struct Transcript {
     /// Right-click menu over any transcript image (Copy path / Copy image).
     image_menu: crate::popover::Popup<ImageMenu>,
     image_menu_focus: gpui::FocusHandle,
+    selection_menu: Entity<crate::chat_selection::SelectionMenu>,
+    _selection_events: Subscription,
     image_copy: Option<Task<()>>,
     /// In-flight ReadAttachmentChunk loads, keyed by device, path and validation
     /// policy; results land in the global attachment cache.
@@ -3611,6 +3613,7 @@ enum BlobFetch {
 /// Shell-facing events (the transcript itself hosts no surfaces).
 #[derive(Debug, Clone)]
 pub enum TranscriptEvent {
+    Selection(crate::chat_selection::ChatSelectionEvent),
     /// An error card's "Log in": sign in to the provider this chat's run
     /// was refused by (signed out, or out of usage).
     SignIn { chat_id: String },
@@ -3790,6 +3793,13 @@ impl Transcript {
         );
         // The rail is sized for the conversation column; a narrow right-pane
         // tab has no width gate driving it, so override instances skip it.
+        let selection_menu = cx.new(crate::chat_selection::SelectionMenu::new);
+        let selection_events = cx.subscribe(&selection_menu, |this: &mut Self, _, event: &crate::chat_selection::ChatSelectionEvent, cx| {
+            let owner = this.workspace_link.as_ref().and_then(|link| link.source_session.as_ref()).or(this.chat_id.as_ref());
+            if owner.map(String::as_str) == Some(event.quote.chat_id.as_str()) {
+                cx.emit(TranscriptEvent::Selection(event.clone()));
+            }
+        });
         let rail_enabled = doc_override.is_none();
         // `follow` is the initial pin: the primary transcript always opens
         // pinned; an override instance pins only while its doc is LIVE (a
@@ -3897,6 +3907,8 @@ impl Transcript {
             tool_images: Default::default(),
             image_menu: Default::default(),
             image_menu_focus: cx.focus_handle(),
+            selection_menu,
+            _selection_events: selection_events,
             image_copy: None,
             attachment_loads: HashMap::new(),
             reply_images: Rc::default(),
@@ -4403,8 +4415,8 @@ impl Transcript {
 
     fn on_selection_mouse_up(
         &mut self,
-        _event: &MouseUpEvent,
-        _window: &mut Window,
+        event: &MouseUpEvent,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let was_selecting = self.selection_drag_position.is_some();
@@ -4416,11 +4428,59 @@ impl Transcript {
             cx.write_to_primary(ClipboardItem::new_string(_text));
         }
         if was_selecting {
+            self.open_selection_menu(event.position, false, window, cx);
             self.last_scroll_distance = self.distance_from_bottom();
             self.show_jump_button =
                 jump_visibility(self.show_jump_button, self.last_scroll_distance);
             cx.notify();
         }
+    }
+
+    fn open_selection_menu(
+        &mut self,
+        position: Point<Pixels>,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if crate::markdown::selection::anchor_surface() != cx.entity_id().as_u64() {
+            return;
+        }
+        let Some(text) = crate::markdown::selection::selected_text() else {
+            return;
+        };
+        let Some(chat_id) = self
+            .workspace_link
+            .as_ref()
+            .and_then(|link| link.source_session.clone())
+            .or_else(|| self.chat_id.clone())
+        else {
+            return;
+        };
+        let Some(chat) = self
+            .state
+            .read(cx)
+            .chats
+            .iter()
+            .find(|chat| chat.id == chat_id)
+        else {
+            return;
+        };
+        let title = chat.title.as_deref().unwrap_or("conversation");
+        let source = format!(
+            "{}{}",
+            title,
+            if self.doc_override.is_some() {
+                " (subagent)"
+            } else {
+                ""
+            }
+        );
+        let Some(quote) = crate::chat_selection::ChatQuote::new(chat_id, source, text) else {
+            return;
+        };
+        self.selection_menu
+            .update(cx, |menu, cx| menu.open(quote, position, focus, window, cx));
     }
 
     fn stop_selection_scroll(&mut self) {
@@ -5128,6 +5188,11 @@ impl Transcript {
                 self.own_turn = None;
                 self.own_turn_kick = false;
                 self.own_turn_last_tick = None;
+            }
+            self.selection_menu.update(cx, |menu, cx| menu.close(cx));
+            if crate::markdown::selection::anchor_surface() == cx.entity_id().as_u64()
+                && let Some(anchor) = crate::markdown::selection::anchor_key() {
+                crate::markdown::selection::clear_if_owner(&anchor);
             }
             self.chat_id = selected;
             self.rows.clear();
@@ -11892,7 +11957,9 @@ impl Render for Transcript {
             ))
             .child(content)
             .child(rail);
-        let root = root.children(self.render_image_menu(cx));
+        let root = root.on_mouse_down(MouseButton::Right, cx.listener(|this, event: &gpui::MouseDownEvent, window, cx| {
+            this.open_selection_menu(event.position, true, window, cx);
+        })).child(self.selection_menu.clone()).children(self.render_image_menu(cx));
         let loader = self
             .loader_shown
             .then_some(self.loading)

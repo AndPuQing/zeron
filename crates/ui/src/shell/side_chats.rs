@@ -20,6 +20,7 @@ pub(super) struct PendingFork {
     error: Option<SharedString>,
     /// Its request is in flight. Per tab: one fork never waits on another.
     running: bool,
+    quote: Option<crate::chat_selection::ChatQuote>,
 }
 
 /// The row of a chat about to exist under `parent_id`, on `from`'s device
@@ -41,6 +42,45 @@ fn draft_child_row(from: &zeron_proto::Chat, parent_id: String) -> zeron_proto::
 }
 
 impl Shell {
+    /// Route by the selection's captured owner, never the most recently focused pane.
+    pub(super) fn on_chat_selection(
+        &mut self,
+        event: &crate::chat_selection::ChatSelectionEvent,
+        cx: &mut Context<Self>,
+    ) {
+        let id = &event.quote.chat_id;
+        let owner = if self.state.read(cx).selected_chat.as_ref() == Some(id) {
+            Some((self.state.clone(), self.composer.clone()))
+        } else {
+            self.side_chats
+                .values()
+                .find(|tab| {
+                    tab.fork.is_none() && tab.state.read(cx).selected_chat.as_ref() == Some(id)
+                })
+                .map(|tab| (tab.state.clone(), tab.composer.clone()))
+        };
+        let Some((state, composer)) = owner else {
+            return;
+        };
+        match event.action {
+            crate::chat_selection::ChatSelectionAction::AddToChat => {
+                composer.update(cx, |composer, cx| {
+                    composer.add_quote(&event.quote, cx);
+                });
+            }
+            crate::chat_selection::ChatSelectionAction::AskInSideChat => {
+                let Some(source) = state.read(cx).selected_chat_row().cloned() else {
+                    return;
+                };
+                let parent = source
+                    .parent_chat_id
+                    .clone()
+                    .unwrap_or_else(|| source.id.clone());
+                self.fork_chat_with_quote(source, parent, Some(event.quote.clone()), cx);
+            }
+        }
+    }
+
     pub(super) fn close_empty_right_pane(&mut self, key: &str, cx: &mut Context<Self>) {
         let empty = if key == self.panel_key(cx) {
             self.right_surface_rows(cx).is_empty()
@@ -88,7 +128,18 @@ impl Shell {
         parent_id: String,
         cx: &mut Context<Self>,
     ) {
+        self.fork_chat_with_quote(source, parent_id, None, cx);
+    }
+
+    fn fork_chat_with_quote(
+        &mut self,
+        source: zeron_proto::Chat,
+        parent_id: String,
+        quote: Option<crate::chat_selection::ChatQuote>,
+        cx: &mut Context<Self>,
+    ) {
         if self.state.read(cx).engine().is_none() {
+            self.show_side_chat_error("Connect to the host before starting a side chat.", cx);
             return;
         }
         let chat = draft_child_row(&source, parent_id.clone());
@@ -113,6 +164,7 @@ impl Shell {
                 host,
                 error: None,
                 running: false,
+                quote,
             });
         }
         self.run_fork(id, cx);
@@ -175,7 +227,17 @@ impl Shell {
             .iter()
             .any(|c| Some(&c.id) == chat.parent_chat_id.as_ref());
         if parent_listed {
+            let quote = self
+                .side_chats
+                .get(&id)
+                .and_then(|tab| tab.fork.as_ref())
+                .and_then(|fork| fork.quote.clone());
             let tab = self.new_side_chat_tab(chat, false, cx);
+            if let Some(quote) = quote {
+                tab.composer.update(cx, |composer, cx| {
+                    composer.add_quote(&quote, cx);
+                });
+            }
             self.side_chats.insert(id, tab);
         } else if let Some(tab) = self.side_chats.get(&id) {
             // The parent went away meanwhile: close as a deleted side chat.
@@ -942,6 +1004,120 @@ mod tests {
             .fork
             .as_ref()
             .map(|fork| (fork, id))
+    }
+
+    #[gpui::test]
+    fn selection_side_chat_keeps_main_draft_and_quote_through_retry(cx: &mut TestAppContext) {
+        use crate::chat_selection::{ChatQuote, ChatSelectionAction, ChatSelectionEvent};
+        let dir = tempfile::tempdir().unwrap();
+        let (window, runtime, mut engine) = fork_shell(dir.path(), cx);
+        let _guard = runtime.enter();
+        let quote =
+            ChatQuote::new("main".into(), "Answer".into(), "selected detail".into()).unwrap();
+        let tab = window
+            .update(cx, |shell, _, cx| {
+                shell.composer.update(cx, |composer, cx| {
+                    composer
+                        .input
+                        .update(cx, |input, cx| input.set_text("Keep my draft", cx))
+                });
+                shell.on_chat_selection(
+                    &ChatSelectionEvent {
+                        quote: quote.clone(),
+                        action: ChatSelectionAction::AskInSideChat,
+                    },
+                    cx,
+                );
+                let (fork, tab) = pending_fork(shell).unwrap();
+                assert_eq!(fork.quote.as_ref(), Some(&quote));
+                tab
+            })
+            .unwrap();
+        let first = engine.fork_request(cx).expect("fork, not a prompt");
+        engine.reply(
+            &runtime,
+            &first,
+            serde_json::json!({"err":"host offline"}),
+            cx,
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                assert_eq!(pending_fork(shell).unwrap().0.quote.as_ref(), Some(&quote));
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "Keep my draft"
+                );
+                shell.retry_fork(tab, cx);
+            })
+            .unwrap();
+        let retry = engine.fork_request(cx).unwrap();
+        assert_eq!(first["params"], retry["params"]);
+        let fork_id = retry["params"]["chatId"].as_str().unwrap().to_owned();
+        engine.reply(
+            &runtime,
+            &retry,
+            serde_json::json!({"ok": {
+                "id":fork_id, "parentChatId":"main", "deviceId":"omarchy", "cwd":"/srv/main",
+                "archived":false, "createdAt":Utc::now()
+            }}),
+            cx,
+        );
+        window
+            .update(cx, |shell, _, cx| {
+                let side = &shell.side_chats[&tab];
+                assert!(side.fork.is_none());
+                assert!(
+                    side.composer
+                        .read(cx)
+                        .input
+                        .read(cx)
+                        .text()
+                        .contains("> selected detail")
+                );
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "Keep my draft"
+                );
+                // A selection in the side pane adds to that pane's draft only.
+                let side_quote =
+                    ChatQuote::new(fork_id.clone(), "Side answer".into(), "side detail".into())
+                        .unwrap();
+                shell.on_chat_selection(
+                    &ChatSelectionEvent {
+                        quote: side_quote,
+                        action: ChatSelectionAction::AddToChat,
+                    },
+                    cx,
+                );
+                assert!(
+                    shell.side_chats[&tab]
+                        .composer
+                        .read(cx)
+                        .input
+                        .read(cx)
+                        .text()
+                        .contains("> side detail")
+                );
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "Keep my draft"
+                );
+                let stale =
+                    ChatQuote::new("not-open".into(), "old".into(), "must not insert".into())
+                        .unwrap();
+                shell.on_chat_selection(
+                    &ChatSelectionEvent {
+                        quote: stale,
+                        action: ChatSelectionAction::AddToChat,
+                    },
+                    cx,
+                );
+                assert_eq!(
+                    shell.composer.read(cx).input.read(cx).text(),
+                    "Keep my draft"
+                );
+            })
+            .unwrap();
     }
 
     /// On a slow host the fork used to show nothing until it answered (the

@@ -293,6 +293,11 @@ impl Shell {
                             surface.update(cx, |files, cx| files.hold_mutation(paths.clone(), cx));
                         }
                     }
+                    FilesEvent::Selection { event, origin } => {
+                        if source.read(cx).accepts_origin(origin, cx) {
+                            this.on_chat_selection(event, cx);
+                        }
+                    }
                     FilesEvent::AddToChat {
                         path,
                         is_directory,

@@ -291,6 +291,93 @@ mod tests {
     }
 
     #[gpui::test]
+    fn editor_selection_actions_snapshot_unsaved_text_and_reject_stale_origins(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (files, cx) = super::super::test_support::setup(cx);
+        let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let recorded = events.clone();
+        let _subscription = cx.update(|_, cx| {
+            cx.subscribe(&files, move |_, event, _| {
+                recorded.borrow_mut().push(event.clone())
+            })
+        });
+        cx.update(|window, cx| {
+            files.update(cx, |files, cx| {
+                let editor = super::super::editor::new_file_editor(
+                    "first\nunsaved 中文\nlast",
+                    "a.txt",
+                    false,
+                    &Theme::of(cx).clone(),
+                    window,
+                    cx,
+                );
+                editor.update(cx, |input, cx| {
+                    input.set_selected_range(6.."first\nunsaved 中文\n".len(), cx)
+                });
+                let mut doc = super::super::document::FileDocument::loading(
+                    super::super::document::DocumentKey {
+                        chat_id: "chat".into(),
+                        checkout_id: Some("checkout".into()),
+                        path: "a.txt".into(),
+                    },
+                );
+                doc.editor = Some(editor.clone());
+                files.preview.documents.insert("a.txt".into(), doc);
+                let availability = super::super::editor::EditorMenuAvailability {
+                    cut: true,
+                    copy: true,
+                    paste: false,
+                };
+                files.open_editor_context_menu(
+                    editor.clone(),
+                    availability,
+                    gpui::point(px(20.), px(20.)),
+                    cx,
+                );
+                // Edits or selection changes after opening must not alter the captured quote.
+                editor.update(cx, |input, cx| input.set_value("new contents", window, cx));
+                files.dispatch_editor_context_action(
+                    editor.clone(),
+                    super::super::editor::EditorContextAction::AddToChat,
+                    window,
+                    cx,
+                );
+                editor.update(cx, |input, cx| input.set_selected_range(0..3, cx));
+                files.open_editor_context_menu(
+                    editor.clone(),
+                    availability,
+                    gpui::point(px(20.), px(20.)),
+                    cx,
+                );
+                files.interaction_generation += 1;
+                files.dispatch_editor_context_action(
+                    editor,
+                    super::super::editor::EditorContextAction::AskInSideChat,
+                    window,
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+        let quotes: Vec<_> = events
+            .borrow()
+            .iter()
+            .filter_map(|event| match event {
+                FilesEvent::Selection { event, .. } => Some(event.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            quotes.len(),
+            1,
+            "stale workspace actions cannot target a different checkout"
+        );
+        assert_eq!(quotes[0].quote.text, "unsaved 中文\n");
+        assert_eq!(quotes[0].quote.source, "a.txt:2-2 (workspace file)");
+    }
+
+    #[gpui::test]
     fn copy_uses_the_remote_workspace_root(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_base::init(cx);
