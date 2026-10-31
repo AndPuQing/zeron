@@ -1693,11 +1693,7 @@ pub(super) fn palette_overlay(
 /// are icons, which sit optically centered on the cap where font glyphs
 /// don't; other keys ("Esc") are text.
 pub(super) fn command_key_hint(theme: &Theme, keys: &str, label: &'static str) -> gpui::Div {
-    let glyph = |path: &'static str| {
-        crate::icons::icon(path)
-            .size(px(12.5))
-            .text_color(theme.text_muted)
-    };
+    let glyph = |path: &'static str| popover::key_glyph(theme, path);
     let cap = popover::key_cap(theme);
     let cap = match keys {
         "↵" => cap.child(glyph(crate::icons::RETURN)),
