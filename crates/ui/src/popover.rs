@@ -1076,6 +1076,24 @@ pub fn key_cap(_theme: &Theme) -> gpui::Div {
         .bg(ink(0.05))
 }
 
+/// An icon glyph sized for a key-cap.
+pub fn key_glyph(theme: &Theme, icon_path: &'static str) -> gpui::Svg {
+    crate::icons::icon(icon_path)
+        .size(px(12.5))
+        .text_color(theme.text_muted)
+}
+
+/// A filled key-cap followed by its verb.
+fn key_legend(theme: &Theme, cap: gpui::Div, label: &'static str) -> gpui::Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(5.0))
+        .child(cap)
+        .child(key_hint_label(theme, label))
+}
+
 /// The tiny verb after a key-cap.
 fn key_hint_label(theme: &Theme, label: &'static str) -> gpui::Div {
     let theme = &theme.for_popup();
@@ -1089,38 +1107,26 @@ fn key_hint_label(theme: &Theme, label: &'static str) -> gpui::Div {
 /// footer voice, shared by the pickers).
 pub fn key_hint(theme: &Theme, icon_path: &'static str, label: &'static str) -> gpui::Div {
     let theme = &theme.for_popup();
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(5.0))
-        .child(
-            key_cap(theme).child(
-                crate::icons::icon(icon_path)
-                    .size(px(12.5))
-                    .text_color(theme.text_muted),
-            ),
-        )
-        .child(key_hint_label(theme, label))
+    key_legend(
+        theme,
+        key_cap(theme).child(key_glyph(theme, icon_path)),
+        label,
+    )
 }
 
 /// A footer legend whose cap holds a WORD ("tab", "esc") instead of a glyph
 /// — for keys with no icon in the set.
 pub fn key_hint_text(theme: &Theme, cap: &'static str, label: &'static str) -> gpui::Div {
     let theme = &theme.for_popup();
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(5.0))
-        .child(
-            key_cap(theme)
-                .text_size(px(11.0))
-                .font_family(theme.font_mono.clone())
-                .text_color(theme.text_muted)
-                .child(SharedString::from(cap)),
-        )
-        .child(key_hint_label(theme, label))
+    key_legend(
+        theme,
+        key_cap(theme)
+            .text_size(px(11.0))
+            .font_family(theme.font_mono.clone())
+            .text_color(theme.text_muted)
+            .child(SharedString::from(cap)),
+        label,
+    )
 }
 
 /// A footer legend whose cap holds TWO glyphs split by a hairline
@@ -1132,26 +1138,14 @@ pub fn key_hint_pair(
     label: &'static str,
 ) -> gpui::Div {
     let theme = &theme.for_popup();
-    div()
-        .flex()
-        .flex_row()
-        .items_center()
-        .gap(px(5.0))
-        .child(
-            key_cap(theme)
-                .child(
-                    crate::icons::icon(first)
-                        .size(px(12.5))
-                        .text_color(theme.text_muted),
-                )
-                .child(div().w(px(1.0)).h(px(11.0)).bg(hairline(0.10)))
-                .child(
-                    crate::icons::icon(second)
-                        .size(px(12.5))
-                        .text_color(theme.text_muted),
-                ),
-        )
-        .child(key_hint_label(theme, label))
+    key_legend(
+        theme,
+        key_cap(theme)
+            .child(key_glyph(theme, first))
+            .child(div().w(px(1.0)).h(px(11.0)).bg(hairline(0.10)))
+            .child(key_glyph(theme, second)),
+        label,
+    )
 }
 
 /// The face shortcut glyphs are set in. The UI font has no ⇧ ⌥ ↵ (they fell

@@ -1788,7 +1788,7 @@ impl Tools {
 /// claude-code when it is ready here, else the first ready harness — a
 /// provider that is installed but signed out only when nothing else is.
 fn default_harness(harnesses: &[HarnessInfo]) -> anyhow::Result<HarnessId> {
-    let real = |h: &&HarnessInfo| h.id != HarnessId::Mock;
+    let real = |h: &&HarnessInfo| !h.id.is_test_rig();
     harnesses
         .iter()
         .find(|h| h.id == HarnessId::ClaudeCode && h.connected())
@@ -1801,7 +1801,7 @@ fn default_harness(harnesses: &[HarnessInfo]) -> anyhow::Result<HarnessId> {
         .or_else(|| {
             harnesses
                 .iter()
-                .find(|h| h.available() && h.id != HarnessId::Mock)
+                .find(|h| h.available() && !h.id.is_test_rig())
         })
         .map(|h| h.id)
         .ok_or_else(|| {

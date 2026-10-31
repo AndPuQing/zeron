@@ -2799,7 +2799,7 @@ impl RpcService for EngineRpc {
                     .registry
                     .descriptors()
                     .iter()
-                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                    .any(|descriptor| descriptor.id == p.harness && !p.harness.is_test_rig())
                 {
                     return Err(RpcError::BadParams("Unknown production provider".into()));
                 }
@@ -2820,7 +2820,7 @@ impl RpcService for EngineRpc {
                     .registry
                     .descriptors()
                     .iter()
-                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                    .any(|descriptor| descriptor.id == p.harness && !p.harness.is_test_rig())
                 {
                     return Err(RpcError::BadParams("Unknown production provider".into()));
                 }
@@ -2841,7 +2841,7 @@ impl RpcService for EngineRpc {
                     .registry
                     .descriptors()
                     .iter()
-                    .any(|descriptor| descriptor.id == p.harness && p.harness != HarnessId::Mock)
+                    .any(|descriptor| descriptor.id == p.harness && !p.harness.is_test_rig())
                 {
                     return Err(RpcError::BadParams("Unknown production provider".into()));
                 }

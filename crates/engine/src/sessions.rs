@@ -224,6 +224,22 @@ fn binary_identity(harness: &dyn Harness) -> Option<String> {
     ))
 }
 
+/// Where one dispatch sits in a turn's start attempts.
+#[derive(Debug, Default, Clone, Copy)]
+struct DispatchAttempt {
+    /// The startup-crash retry: this attempt is final, so its own startup
+    /// death surfaces instead of retrying again.
+    startup_retry: bool,
+    /// The transient start failures retried so far.
+    spawn_attempt: u8,
+    /// A retry's user Stop count its failed run started under (see
+    /// `Inner::user_stops`): a Stop since, or a shutdown, ends the turn
+    /// instead of starting it again.
+    stops_seen: Option<u64>,
+    /// An idle start: the runtime comes up with no prompt.
+    idle: bool,
+}
+
 /// One accepted-but-unconfirmed steer: enough to re-dispatch it verbatim.
 #[derive(Debug, Clone)]
 struct RoutedSteer {
@@ -817,10 +833,10 @@ impl SessionsEngine {
             HarnessId::Codex,
             request,
             None,
-            false,
-            0,
-            None,
-            true,
+            DispatchAttempt {
+                idle: true,
+                ..DispatchAttempt::default()
+            },
         )
         .await
     }
@@ -855,54 +871,54 @@ impl SessionsEngine {
         request: RunRequest,
         message_id: Option<String>,
     ) -> Result<String, EngineError> {
-        self.dispatch_with(chat_id, harness_id, request, message_id, false, 0, None)
-            .await
+        self.dispatch_with(
+            chat_id,
+            harness_id,
+            request,
+            message_id,
+            DispatchAttempt::default(),
+        )
+        .await
     }
 
-    /// [`Self::dispatch`] with the retry markers: the startup-crash retry
-    /// re-dispatches with `startup_retry = true`, which makes that attempt
-    /// final (its own startup death surfaces instead of retrying again);
-    /// `spawn_attempt` counts the transient start failures retried so far.
-    /// A retry passes `stops_seen`, the user's Stop count its failed run
-    /// started under (see `Inner::user_stops`): a Stop since, or a shutdown,
-    /// ends the turn instead of starting it again.
+    /// [`Self::dispatch`] with the retry markers (see [`DispatchAttempt`]).
+    /// Never an idle start: `attempt.idle` is ignored.
     /// Boxed future: `drive_run` re-enters this for those retries, and the
     /// erasure breaks the opaque-type cycle the recursion would otherwise form.
-    #[allow(clippy::too_many_arguments)]
     fn dispatch_with<'a>(
         &'a self,
         chat_id: &'a str,
         harness_id: HarnessId,
         request: RunRequest,
         message_id: Option<String>,
-        startup_retry: bool,
-        spawn_attempt: u8,
-        stops_seen: Option<u64>,
+        attempt: DispatchAttempt,
     ) -> futures::future::BoxFuture<'a, Result<String, EngineError>> {
         Box::pin(self.dispatch_inner(
             chat_id,
             harness_id,
             request,
             message_id,
-            startup_retry,
-            spawn_attempt,
-            stops_seen,
-            false,
+            DispatchAttempt {
+                idle: false,
+                ..attempt
+            },
         ))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn dispatch_inner(
         &self,
         chat_id: &str,
         harness_id: HarnessId,
         mut request: RunRequest,
         mut message_id: Option<String>,
-        startup_retry: bool,
-        spawn_attempt: u8,
-        stops_seen: Option<u64>,
-        idle: bool,
+        attempt: DispatchAttempt,
     ) -> Result<String, EngineError> {
+        let DispatchAttempt {
+            startup_retry,
+            spawn_attempt,
+            stops_seen,
+            idle,
+        } = attempt;
         // Config and command travel on separate docs. Keep restrictions from
         // both: neither an old client nor a late config sync may relax a send.
         if let Some(config) = self
@@ -1171,7 +1187,7 @@ impl SessionsEngine {
                 .environment_changed(harness_id, &revision)
             {
                 return self
-                    .dispatch_with(chat_id, harness_id, request, message_id, startup_retry, spawn_attempt, stops_seen)
+                    .dispatch_with(chat_id, harness_id, request, message_id, attempt)
                     .await;
             }
             if !same_runtime {
@@ -4275,9 +4291,12 @@ async fn drive_run(
                         harness_id,
                         retry,
                         Some(message_id),
-                        startup_retry,
-                        attempt,
-                        Some(stops_seen),
+                        DispatchAttempt {
+                            startup_retry,
+                            spawn_attempt: attempt,
+                            stops_seen: Some(stops_seen),
+                            idle: false,
+                        },
                     )
                     .await
                 {
@@ -5207,9 +5226,12 @@ async fn drive_run(
                         harness_id,
                         retry,
                         Some(message_id),
-                        true,
-                        0,
-                        Some(stops_seen),
+                        DispatchAttempt {
+                            startup_retry: true,
+                            spawn_attempt: 0,
+                            stops_seen: Some(stops_seen),
+                            idle: false,
+                        },
                     )
                     .await
                 {

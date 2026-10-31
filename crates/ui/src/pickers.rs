@@ -1465,7 +1465,7 @@ impl Pickers {
     fn offered(&self, list: &[HarnessDescriptor]) -> Vec<HarnessDescriptor> {
         let mut offered = offered_harnesses(list);
         if self.title.is_some() {
-            offered.retain(|d| zeron_harness::supports_titles(d.id) && d.id != HarnessId::Mock);
+            offered.retain(|d| zeron_harness::supports_titles(d.id) && !d.id.is_test_rig());
         }
         offered
     }
@@ -6945,7 +6945,7 @@ fn visible_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
     }
     let real: Vec<HarnessDescriptor> = list
         .iter()
-        .filter(|d| d.id != HarnessId::Mock)
+        .filter(|d| !d.id.is_test_rig())
         .cloned()
         .collect();
     if real.is_empty() { list.to_vec() } else { real }
@@ -6970,7 +6970,7 @@ fn offered_harnesses_impl(list: &[HarnessDescriptor], allow_mock: bool) -> Vec<H
         .filter(|d| {
             d.installed
                 && (zeron_engine::registry::descriptor_enabled(d)
-                    || (allow_mock && d.id == HarnessId::Mock))
+                    || (allow_mock && d.id.is_test_rig()))
         })
         .collect()
 }

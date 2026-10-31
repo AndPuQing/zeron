@@ -1,9 +1,11 @@
-// Per-run Zeron delegation bridge for OMP. No global settings or packages are modified.
+// Per-run Zeron delegation bridge for Pi-style extension hosts (Pi, OMP). No
+// global settings or packages are modified. OMP's copy swaps the env key and
+// client name below; see `extension_mcp.rs`.
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
-export default function (omp) {
-  const config = JSON.parse(process.env.ZERON_OMP_MCP);
+export default function (host) {
+  const config = JSON.parse(process.env.ZERON_PI_MCP);
   let child, lines, nextId = 0;
   const pending = new Map();
   function fail(error) {
@@ -45,7 +47,7 @@ export default function (omp) {
       });
     });
   }
-  omp.on("session_start", async () => {
+  host.on("session_start", async () => {
     close();
     child = spawn(config.command, config.args, {
       env: {...process.env, ...config.env}, stdio: ["pipe", "pipe", "inherit"],
@@ -65,11 +67,11 @@ export default function (omp) {
       else request.resolve(message.result);
     });
     try {
-      await rpc("initialize", {protocolVersion: "2024-11-05", capabilities: {}, clientInfo: {name: "zeron-omp", version: "1"}});
+      await rpc("initialize", {protocolVersion: "2024-11-05", capabilities: {}, clientInfo: {name: "zeron-pi", version: "1"}});
       child.stdin.write(JSON.stringify({jsonrpc: "2.0", method: "notifications/initialized"}) + "\n");
       const {tools} = await rpc("tools/list", {});
       for (const tool of tools) {
-        omp.registerTool({
+        host.registerTool({
           name: `${config.name}_${tool.name}`, label: `Zeron: ${tool.name}`,
           description: tool.description, parameters: tool.inputSchema,
           async execute(_id, args, signal) {
@@ -84,6 +86,6 @@ export default function (omp) {
       throw error;
     }
   });
-  omp.on("session_shutdown", close);
+  host.on("session_shutdown", close);
   process.once("exit", close);
 }

@@ -102,6 +102,12 @@ impl HarnessId {
         }
     }
 
+    /// The test harness: never offered, installed, auto-enabled or configured
+    /// as a real agent.
+    pub fn is_test_rig(self) -> bool {
+        self == HarnessId::Mock
+    }
+
     /// Inverse of [`Self::as_str`]; `None` for a slug this build does not know.
     pub fn from_slug(slug: &str) -> Option<HarnessId> {
         Self::ALL.into_iter().find(|id| id.as_str() == slug)
