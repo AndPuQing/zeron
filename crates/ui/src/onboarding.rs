@@ -137,7 +137,7 @@ pub fn agents_summary(harnesses: &Loadable<Vec<HarnessDescriptor>>) -> AgentsSum
         Loadable::Ready(list) => {
             let names: Vec<String> = crate::pickers::visible_harnesses(list)
                 .into_iter()
-                .filter(|descriptor| descriptor.installed && descriptor.id != HarnessId::Mock)
+                .filter(|descriptor| descriptor.installed && !descriptor.id.is_test_rig())
                 .map(|descriptor| descriptor.name)
                 .collect();
             if names.is_empty() {

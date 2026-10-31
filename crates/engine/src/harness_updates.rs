@@ -653,7 +653,7 @@ impl HarnessUpdateCoordinator {
         let order: Vec<_> = registry
             .descriptors()
             .into_iter()
-            .filter(|descriptor| descriptor.id != HarnessId::Mock)
+            .filter(|descriptor| !descriptor.id.is_test_rig())
             .map(|descriptor| descriptor.id)
             .collect();
         let enabled = registry.enabled_set();

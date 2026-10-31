@@ -72,7 +72,7 @@ const UPDATE_POLICIES: [(HarnessUpdatePolicy, &str, &str); 3] = [
 ];
 
 fn offers_install(harness: HarnessId, installed: bool, can_install: bool) -> bool {
-    harness != HarnessId::Mock && !installed && can_install
+    !harness.is_test_rig() && !installed && can_install
 }
 
 fn install_hint(harness: HarnessId, enabled: bool, can_install: bool) -> String {
@@ -405,7 +405,7 @@ impl HarnessesPage {
                 // The mock harness is never expandable; any other agent opens,
                 // disabled ones included — that row is where its preferences
                 // and (on a Cloud device) its accounts live.
-                .any(|item| item.id == harness && item.id != HarnessId::Mock)
+                .any(|item| item.id == harness && !item.id.is_test_rig())
         }) {
             return;
         }
@@ -1401,7 +1401,7 @@ impl HarnessesPage {
                             .flex_row()
                             .items_center()
                             .gap(px(12.0))
-                            .when(harness != HarnessId::Mock, |el| {
+                            .when(!harness.is_test_rig(), |el| {
                                 el.role(gpui::Role::Button)
                                     .aria_label(format!("{} preferences", descriptor.name))
                                     .aria_expanded(expanded)
@@ -1485,7 +1485,7 @@ impl HarnessesPage {
                                 .size(px(14.0))
                                 .flex_none()
                                 .when_else(
-                                    harness != HarnessId::Mock,
+                                    !harness.is_test_rig(),
                                     |caret| {
                                         caret
                                             .text_color(theme.text_muted)
@@ -2221,7 +2221,7 @@ fn install_visibility_and_hint_follow_target_capabilities() {
             for available in [false, true] {
                 assert_eq!(
                     offers_install(id, installed, available),
-                    id != HarnessId::Mock && !installed && available
+                    !id.is_test_rig() && !installed && available
                 );
             }
         }
