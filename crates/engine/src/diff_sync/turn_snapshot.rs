@@ -728,10 +728,29 @@ mod tests {
             .expect("sized file");
     }
 
-    fn store_dirs(data_dir: &Path) -> Vec<PathBuf> {
+    fn store_dirs(data_dir: &Path) -> BTreeSet<PathBuf> {
         std::fs::read_dir(data_dir.join(STORE_DIR).join(run_id()))
             .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
             .unwrap_or_default()
+    }
+
+    async fn wait_for_store_dirs(data_dir: &Path, expected: BTreeSet<PathBuf>) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let actual = store_dirs(data_dir);
+            assert!(
+                expected.is_subset(&actual),
+                "a live snapshot store was deleted: expected {expected:?}, actual {actual:?}"
+            );
+            if actual == expected {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "snapshot cleanup did not settle: expected {expected:?}, actual {actual:?}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
     }
 
     /// The incident this module exists for: snapshot blobs written into the
@@ -773,18 +792,12 @@ mod tests {
             .expect("git cat-file spawns");
         assert!(!plain.status.success());
 
-        // The store lives exactly as long as the snapshot.
-        assert_eq!(store_dirs(&data_dir).len(), 1);
+        // capture_turn_diff drops its temporary snapshot, but its store is
+        // removed on the blocking pool. Wait for that cleanup while verifying
+        // the turn's own store stays alive, then verify it is also removed.
+        wait_for_store_dirs(&data_dir, BTreeSet::from([turn.store.dir.clone()])).await;
         drop(turn);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !store_dirs(&data_dir).is_empty() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "snapshot store was not deleted: {:?}",
-                store_dirs(&data_dir)
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
+        wait_for_store_dirs(&data_dir, BTreeSet::new()).await;
     }
 
     #[tokio::test]
