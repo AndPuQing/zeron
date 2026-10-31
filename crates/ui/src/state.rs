@@ -3204,16 +3204,29 @@ impl AppState {
     /// flight ([`Self::begin_pending_send`]) reads as Working — the queued
     /// command is as good as running.
     pub fn display_status_for(&self, chat: &Chat, now: DateTime<Utc>) -> ChatIndicator {
-        if self.send_pending(&chat.id, now) {
-            return ChatIndicator::Working;
-        }
-        display_status(chat, self.session_for(&chat.id), now)
+        let children = zeron_proto::view::descendant_activity(&self.chats, &self.sessions, now);
+        self.display_status_with_descendants(chat, now, &children)
+    }
+
+    fn display_status_with_descendants(
+        &self,
+        chat: &Chat,
+        now: DateTime<Utc>,
+        children: &HashMap<&str, Indicator>,
+    ) -> ChatIndicator {
+        let own = if self.send_pending(&chat.id, now) {
+            ChatIndicator::Working
+        } else {
+            display_status(chat, self.session_for(&chat.id), now)
+        };
+        zeron_proto::view::with_descendant_activity(own, children.get(chat.id.as_str()).copied())
     }
 
     /// The sidebar's Sessions list: every non-archived chat of a LIVE space,
     /// on any device — idle included — in pure recency order (status drives
     /// the dot, never the position; see [`sort_active`]).
     pub fn overview_chats(&self, now: DateTime<Utc>) -> Vec<(ChatIndicator, &Chat)> {
+        let children = zeron_proto::view::descendant_activity(&self.chats, &self.sessions, now);
         let mut rows: Vec<(ChatIndicator, &Chat)> = self
             .visible_chats()
             .filter(|c| match c.space_id.as_deref() {
@@ -3221,7 +3234,7 @@ impl AppState {
                 None => true,
                 Some(id) => self.space_row(id).is_some(),
             })
-            .map(|c| (self.display_status_for(c, now), c))
+            .map(|c| (self.display_status_with_descendants(c, now, &children), c))
             .collect();
         sort_active(&mut rows);
         rows
@@ -6699,6 +6712,32 @@ mod tests {
         let mut chats = vec![chat("z", 0, Some(10)), chat("a", 0, Some(10))];
         sort_chats(&mut chats);
         assert_eq!(chats[0].id, "a");
+    }
+
+    #[test]
+    fn side_chat_activity_updates_sidebar_without_making_parent_composer_busy() {
+        let now = Utc::now();
+        let mut state = AppState::new();
+        let parent = chat("main", 0, None);
+        let mut side = chat("side", 0, None);
+        side.parent_chat_id = Some(parent.id.clone());
+        state.chats = vec![parent.clone(), side];
+        state.sessions = vec![session("side", SessionStatus::Working, 0, now)];
+        assert_eq!(
+            state.display_status_for(&parent, now),
+            ChatIndicator::Working
+        );
+        assert_eq!(state.overview_chats(now)[0].0, ChatIndicator::Working);
+        assert_eq!(state.indicator_for("main", now), Indicator::None);
+        assert_eq!(state.selected_chat, None, "no open side pane is required");
+        state.sessions[0].status = SessionStatus::AwaitingInput;
+        assert_eq!(
+            state.display_status_for(&parent, now),
+            ChatIndicator::AwaitingInput
+        );
+        assert_eq!(state.indicator_for("main", now), Indicator::None);
+        state.chats[1].archived = true;
+        assert_eq!(state.display_status_for(&parent, now), ChatIndicator::Idle);
     }
 
     #[test]
