@@ -65,6 +65,15 @@ pub async fn stage(
     manifest: &super::Manifest,
     directory: &Path,
 ) -> anyhow::Result<PathBuf> {
+    stage_with_progress(edge_url, manifest, directory, None).await
+}
+
+pub(super) async fn stage_with_progress(
+    edge_url: &str,
+    manifest: &super::Manifest,
+    directory: &Path,
+    progress: Option<&tokio::sync::watch::Sender<super::DownloadProgress>>,
+) -> anyhow::Result<PathBuf> {
     ensure!(
         manifest
             .version
@@ -86,7 +95,8 @@ pub async fn stage(
         .prefix(".zerun-update-")
         .tempdir_in(directory)?;
     let staged = temporary.path().join("zerun.exe");
-    super::download_release_file(edge_url, manifest, &file, &staged).await?;
+    super::download_release_file_with_progress(edge_url, manifest, &file, &staged, progress)
+        .await?;
     std::fs::write(temporary.path().join("sha256"), expected)?;
     std::fs::write(temporary.path().join("version"), &manifest.version)?;
     verify(&staged)?;

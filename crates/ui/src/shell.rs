@@ -10440,6 +10440,41 @@ impl Shell {
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(tone)
             .child(div().flex_1().min_w_0().child(label));
+        if let crate::app_update::Flow::Downloading { progress, .. } = update.read(cx).flow() {
+            let (indicator, label) = if progress.finished {
+                (
+                    crate::loaders::ring_spinner("update-preparing", 18.0, tone).into_any_element(),
+                    "Verifying and preparing update…".to_owned(),
+                )
+            } else if let Some(percent) = progress.percent() {
+                let mib = 1024.0 * 1024.0;
+                (
+                    crate::loaders::upload_progress_arc(percent, 18.0, tone.opacity(0.2), tone),
+                    format!(
+                        "Downloaded {:.1} / {:.1} MiB ({percent}%)",
+                        progress.downloaded_bytes as f64 / mib,
+                        progress.total_bytes.unwrap_or_default() as f64 / mib
+                    ),
+                )
+            } else {
+                (
+                    crate::loaders::ring_spinner("update-downloading", 18.0, tone)
+                        .into_any_element(),
+                    "Downloading update…".to_owned(),
+                )
+            };
+            strip = strip.child(
+                div()
+                    .id("update-download-progress")
+                    .flex_none()
+                    .ml(px(8.0))
+                    .size(px(18.0))
+                    .role(gpui::Role::ProgressIndicator)
+                    .aria_label(label.clone())
+                    .tooltip(crate::settings::widgets::text_tooltip(label))
+                    .child(indicator),
+            );
+        }
         if action != crate::app_update::StripAction::None {
             strip = strip
                 .cursor_pointer()
