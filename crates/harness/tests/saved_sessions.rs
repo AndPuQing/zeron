@@ -30,6 +30,41 @@ fn assistant(parent: &str, id: &str, content: Value, stop: &str) -> Value {
 }
 
 #[tokio::test]
+async fn claude_history_displays_server_tools_without_exposing_encrypted_results() {
+    let (_root, harness, _path) = claude_fixture(vec![
+        user(None, USER, json!("Use the server tools")),
+        assistant(
+            USER,
+            ASSISTANT,
+            json!([
+                {"type":"server_tool_use","id":"advisor","name":"advisor","input":{}},
+                {"type":"advisor_tool_result","tool_use_id":"advisor","content":{"type":"advisor_redacted_result","encrypted_content":"private-advice"}},
+                {"type":"server_tool_use","id":"search","name":"web_search","input":{"query":"example"}},
+                {"type":"web_search_tool_result","tool_use_id":"search","content":{"type":"web_search_tool_result_error","error_code":"unavailable"}},
+                {"type":"text","text":"Done"}
+            ]),
+            "end_turn",
+        ),
+    ]);
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let history = harness.saved_session_history(&source).await.unwrap();
+    assert!(
+        matches!(&history.messages[1].parts[0], SavedHistoryPart::Tool { call: zeron_proto::ToolCall::Unknown { name, .. }, is_error: false, .. } if name == "Advising")
+    );
+    assert!(matches!(
+        &history.messages[1].parts[1],
+        SavedHistoryPart::Tool { is_error: true, .. }
+    ));
+    assert!(!format!("{history:?}").contains("private-advice"));
+    assert!(history.notice.is_none());
+}
+
+#[tokio::test]
 async fn claude_offline_copy_preserves_context_and_remaps_native_identity_without_writing_source() {
     let progress = "33333333-1111-2222-3333-444444444444";
     let (root, harness, path) = claude_fixture(vec![
