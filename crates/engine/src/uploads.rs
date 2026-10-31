@@ -1009,7 +1009,9 @@ mod tests {
         {
             let via = elsewhere.path().join("chat-folder");
             std::os::unix::fs::symlink(folder.path(), &via).unwrap();
-            for path in [via.join("shots").join("before.png"), inside.clone()] {
+            // The other accepted spelling is canonical, not a third alias
+            // such as macOS's /var (whose canonical spelling is /private/var).
+            for path in [via.join("shots").join("before.png"), inside.canonicalize().unwrap()] {
                 let chunk = read_chat_image_chunk(path.to_str().unwrap(), 0, &via)
                     .unwrap_or_else(|e| panic!("{path:?}: {e}"));
                 assert_eq!(BASE64.decode(&chunk.data).unwrap(), png);
@@ -1531,5 +1533,32 @@ mod generated_image_tests {
         // All locks must be released after the operation.
         std::fs::write(&source, b"changed").unwrap();
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    #[test]
+    fn shown_image_is_sniffed_idempotent_and_readable_from_uploads() {
+        let store = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(store.path());
+        let png = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .unwrap();
+        let first = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
+        let again = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
+        assert_eq!(first, again);
+        assert_eq!(first.mime_type, "image/png");
+        assert!(first.path.ends_with("-image.png"));
+        let chunk = uploads.read_chunk(&first.path, 0, &[]).unwrap();
+        assert!(chunk.done);
+        assert_eq!(BASE64.decode(chunk.data).unwrap(), png);
+        assert!(
+            uploads
+                .store_shown_image("text", "x.bin", b"hello")
+                .is_err()
+        );
+        assert!(
+            uploads
+                .store_shown_image("bad-png", "x.png", b"\x89PNG\r\n\x1a\nnot a png")
+                .is_err()
+        );
     }
 }

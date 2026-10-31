@@ -1884,6 +1884,16 @@ impl Client {
     /// Attachment bytes (LRU-cached). Accepts host paths and this device's
     /// own `pending://` refs.
     pub async fn read_attachment(&self, device_id: &str, path: &str) -> Result<Arc<Vec<u8>>> {
+        // Reply images must never fall back to the broader attachment jail,
+        // including when an older host does not implement ReadChatImageChunk.
+        if zeron_proto::chat_images::ChatImage::is_reference(path) {
+            let image = zeron_proto::chat_images::ChatImage::parse(path)
+                .ok_or_else(|| ClientError::HostError("Invalid reply image reference".into()))?;
+            return match self.inner.backend() {
+                Backend::Live(live) => Ok(Arc::new(live.relay.read_chat_image(device_id, &image).await?)),
+                Backend::Demo(_) => Err(ClientError::HostError("Reply image unavailable in demo".into())),
+            };
+        }
         if let Some(hit) = self.inner.attachment_cache.get(device_id, path) {
             return Ok(hit);
         }

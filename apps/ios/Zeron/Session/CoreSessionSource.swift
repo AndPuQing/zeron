@@ -1,4 +1,5 @@
 import UIKit
+import ImageIO
 
 /// A live session backed by the Rust core. The transcript flows Rust→Rust
 /// (`TranscriptView.attach`); this maps the composer-facing state.
@@ -405,39 +406,14 @@ final class CoreSessionSource: SessionSource {
         (try? await client.searchFiles(deviceId: hostDevice, chatId: chatId, spaceId: nil, query: query)) ?? []
     }
 
-    private static let images = NSCache<NSString, UIImage>()
-
     func image(_ reference: String) async -> UIImage? {
-        if let hit = Self.images.object(forKey: reference as NSString) { return hit }
-        guard let data = try? await client.readAttachment(deviceId: hostDevice, path: reference),
-              let image = await UIImage(data: data)?.byPreparingForDisplay()
-        else { return nil }
-        Self.images.setObject(image, forKey: reference as NSString)
-        return image
+        await TranscriptImages.image(client: client, device: hostDevice, reference: reference)
     }
 
     func loadImage(_ reference: String, into view: UIImageView) {
-        // Claim the view first: a slower load for a row it used to show
-        // must not land on top of this one.
-        view.accessibilityIdentifier = reference
-        if let hit = Self.images.object(forKey: reference as NSString) {
-            view.image = hit
-            return
-        }
-        let device = hostDevice
-        let client = self.client
-        view.accessibilityIdentifier = reference
-        Task.detached(priority: .userInitiated) {
-            guard let data = try? await client.readAttachment(deviceId: device, path: reference),
-                  let image = UIImage(data: data)?.preparingForDisplay()
-            else { return }
-            Self.images.setObject(image, forKey: reference as NSString)
-            await MainActor.run {
-                guard view.accessibilityIdentifier == reference else { return }
-                UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
-            }
-        }
+        TranscriptImages.load(client: client, device: hostDevice, reference: reference, into: view)
     }
+
 }
 
 func accessModeLabel(_ mode: String) -> String {
@@ -480,4 +456,50 @@ func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool,
         actions.append(UIAction(title: reason, attributes: .disabled) { _ in })
     }
     return UIMenu(title: showPlan ? "Plan · applies next turn" : "Permissions · applies next turn", children: actions)
+}
+
+@MainActor
+enum TranscriptImages {
+    private static let images: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
+
+    nonisolated private static func decodeImage(_ data: Data) -> UIImage? {
+        guard data.count <= 10 * 1024 * 1024,
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              (1...4096).contains(width), (1...4096).contains(height)
+        else { return nil }
+        return UIImage(data: data)?.preparingForDisplay()
+    }
+
+    static func image(client: CoreClient, device: String, reference: String) async -> UIImage? {
+        let key = "\(device):\(reference)" as NSString
+        if let hit = Self.images.object(forKey: key) { return hit }
+        guard let data = try? await client.readAttachment(deviceId: device, path: reference),
+              let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
+        else { return nil }
+        Self.images.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
+        return image
+    }
+
+    static func load(client: CoreClient, device: String, reference: String, into view: UIImageView) {
+        view.accessibilityIdentifier = reference
+        (view as? TranscriptImageView)?.loading()
+        let key = "\(device):\(reference)" as NSString
+        if let hit = images.object(forKey: key) { view.image = hit; return }
+        Task { [weak view] in
+            let image = await Self.image(client: client, device: device, reference: reference)
+            guard let view, view.accessibilityIdentifier == reference else { return }
+            if let image {
+                UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
+            } else {
+                (view as? TranscriptImageView)?.unavailable()
+            }
+        }
+    }
 }

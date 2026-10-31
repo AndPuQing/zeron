@@ -35,6 +35,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -133,10 +135,17 @@ fun SubagentScreen(
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "header",
     )
-    val actions = remember(docId) {
+    val imageScope = rememberCoroutineScope()
+    var viewing by remember(docId) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    val imageHost = model.row(rootChatId)?.deviceId
+    val actions = remember(docId, imageHost, core) {
+        suspend fun load(reference: String) = imageHost?.let { loadTranscriptImage(core, it, reference) }
+
         TranscriptActions(
+            imageCacheScope = "$imageHost:$rootChatId",
             openUrl = {},
-            loadImage = { null },
+            loadImage = ::load,
+            openImage = { reference -> imageScope.launch { load(reference)?.let { viewing = it } } },
             showText = { _, _, _ -> },
             openSubagent = { doc, t, r -> onOpenSubagent(docId, doc, t, r) },
         )
@@ -164,6 +173,7 @@ fun SubagentScreen(
         }
         SubagentStatusBar(state, detail, spawn?.startedAtMs, Modifier.navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp))
     }
+    viewing?.let { ImageViewer(it) { viewing = null } }
 }
 
 /** The subagent page's bottom bar: status glyph, what it's doing, how long. */

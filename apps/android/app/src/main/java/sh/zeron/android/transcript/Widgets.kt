@@ -311,12 +311,20 @@ object IconAssets {
     }
 }
 
-private val images = LruCache<String, ImageBitmap>(48)
+private val images = object : LruCache<String, ImageBitmap>(64 * 1024 * 1024) {
+    override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
+}
 
 @Composable
 private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions, progress: () -> Double?) {
-    val image by produceState(images.get(reference), reference) {
-        if (value == null) value = actions.loadImage(reference)?.also { images.put(reference, it) }
+    val cacheKey = "${actions.imageCacheScope}:$reference"
+    var attempt by remember(cacheKey) { mutableStateOf(0) }
+    var failed by remember(cacheKey, attempt) { mutableStateOf(false) }
+    val image by produceState(images.get(cacheKey), cacheKey, actions, attempt) {
+        if (value == null) {
+            value = actions.loadImage(reference)?.also { images.put(cacheKey, it) }
+            failed = value == null
+        }
     }
     val radius = if (minOf(w.w, w.h) > 120) 14.dp else 12.dp
     val pending = reference.startsWith("pending://")
@@ -324,11 +332,17 @@ private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions
         Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(radius))
-            .clickable(enabled = image != null && !pending, onClickLabel = "Open image") { actions.openImage(reference) },
+            .clickable(enabled = !pending && (image != null || failed), onClickLabel = if (failed) "Retry image" else "Open image") {
+                if (failed) attempt++ else actions.openImage(reference)
+            },
         contentAlignment = Alignment.Center,
     ) {
-        image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
-            ?: Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh))
+        image?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit) }
+            ?: Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHigh), contentAlignment = Alignment.Center) {
+                Text(if (failed) "Image unavailable · Tap to retry" else "Loading image…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall)
+            }
         // Still being escorted to the host: a scrim and a progress ring that fills with the transfer.
         val p = if (pending) progress() else null
         androidx.compose.animation.AnimatedVisibility(p != null, enter = fadeIn(), exit = fadeOut()) {

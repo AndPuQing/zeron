@@ -309,6 +309,13 @@ pub(crate) struct PTable {
     pub cols: Vec<f32>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ReplyImageContext {
+    pub chat_id: String,
+    pub cwd: Option<String>,
+    pub host: String,
+}
+
 pub(crate) enum PBlock {
     Text(PText),
     Heading(PText),
@@ -318,6 +325,8 @@ pub(crate) enum PBlock {
     List { items: Vec<PItem>, marker_w: f32 },
     Table(Box<PTable>),
     Rule,
+    Sequence(Vec<PBlock>),
+    Image { reference: String, caption: PText },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,8 +519,33 @@ pub(crate) fn prepare_plain(
 }
 
 pub(crate) fn prepare_block(ctx: &mut Ctx, block: &Block, depth: usize, muted: bool) -> PBlock {
+    prepare_reply_block(ctx, block, depth, muted, None)
+}
+
+/// Only settled primary replies get local image widgets. Other Markdown
+/// (user messages, thoughts, tables and subagent replies) keeps its links.
+pub(crate) fn prepare_reply_block(ctx: &mut Ctx, block: &Block, depth: usize, muted: bool, chat: Option<&ReplyImageContext>) -> PBlock {
     match block {
-        Block::Paragraph { runs } => PBlock::Text(prepare_runs(ctx, runs, TextKind::Body, muted)),
+        Block::Paragraph { runs } => {
+            let Some(chat) = chat else {
+                return PBlock::Text(prepare_runs(ctx, runs, TextKind::Body, muted));
+            };
+            let mut blocks = Vec::new();
+            let mut start = 0;
+            for (i, run) in runs.iter().enumerate() {
+                let Some(image) = &run.style.image else { continue };
+                let Some((path, _)) = zeron_proto::chat_images::markdown_image(&image.source, chat.cwd.as_deref()) else { continue };
+                if start < i {
+                    blocks.push(PBlock::Text(prepare_runs(ctx, &runs[start..i], TextKind::Body, muted)));
+                }
+                let reference = zeron_proto::chat_images::ChatImage { chat_id: chat.chat_id.clone(), path }.reference();
+                blocks.push(PBlock::Image { reference, caption: prepare_runs(ctx, &runs[i..i + 1], TextKind::Body, muted) });
+                start = i + 1;
+            }
+            if blocks.is_empty() { return PBlock::Text(prepare_runs(ctx, runs, TextKind::Body, muted)); }
+            if start < runs.len() { blocks.push(PBlock::Text(prepare_runs(ctx, &runs[start..], TextKind::Body, muted))); }
+            PBlock::Sequence(blocks)
+        },
         Block::Heading { level, runs } => {
             PBlock::Heading(prepare_runs(ctx, runs, TextKind::Heading(*level), muted))
         }
@@ -536,7 +570,7 @@ pub(crate) fn prepare_block(ctx: &mut Ctx, block: &Block, depth: usize, muted: b
             }
         }
         Block::BlockQuote { children } => PBlock::Quote(
-            children.iter().map(|b| prepare_block(ctx, b, depth, true)).collect(),
+            children.iter().map(|b| prepare_reply_block(ctx, b, depth, true, chat)).collect(),
         ),
         Block::List { ordered_start, items } => {
             let (size, lh) = TYPE.body;
@@ -566,7 +600,7 @@ pub(crate) fn prepare_block(ctx: &mut Ctx, block: &Block, depth: usize, muted: b
                     PItem {
                         marker,
                         task,
-                        children: children.iter().map(|b| prepare_block(ctx, b, depth + 1, muted)).collect(),
+                        children: children.iter().map(|b| prepare_reply_block(ctx, b, depth + 1, muted, chat)).collect(),
                     }
                 })
                 .collect();
@@ -946,6 +980,23 @@ pub(crate) fn place_stack(
 pub(crate) fn place(block: &PBlock, px: Px, x: f32, y: f32, width: f32, out: Option<&mut DisplayBuilder>) -> f32 {
     use geom::*;
     match block {
+        PBlock::Image { reference, caption } => {
+            let side = px.v(super::rows::geom::IMAGE).min(width).max(1.0);
+            let mut out = out;
+            if let Some(o) = out.as_deref_mut() {
+                o.widget(WidgetKind::Image { reference: reference.clone() }, (x, y, side, side), None);
+            }
+            side + px.v(4.0) + place_text(caption, x, y + side + px.v(4.0), width, out)
+        }
+        PBlock::Sequence(children) => {
+            let mut out = out;
+            let mut height = 0.0;
+            for (i, child) in children.iter().enumerate() {
+                if i > 0 { height += px.v(8.0); }
+                height += place(child, px, x, y + height, width, out.as_deref_mut());
+            }
+            height
+        }
         PBlock::Text(t) | PBlock::Heading(t) => place_text(t, x, y, width, out),
         PBlock::Code(c) => place_code(c, px, x, y, width, out),
         PBlock::Math(m) => place_math(m, px, x, y, width, out),

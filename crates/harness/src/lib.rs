@@ -394,6 +394,7 @@ pub(crate) mod adapter_install;
 pub mod approval;
 pub mod archive_install;
 mod background;
+mod tool_images;
 pub use background::OutputSource;
 mod catalog;
 mod catalog_failure;

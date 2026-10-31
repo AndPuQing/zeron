@@ -3,6 +3,7 @@ package sh.zeron.android.ui
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Image
@@ -145,4 +146,28 @@ private suspend fun share(context: Context, image: ImageBitmap) {
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     send.clipData = ClipData.newRawUri(null, uri)
     context.startActivity(Intent.createChooser(send, null))
+}
+
+
+private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
+
+/** The same bounded host image reader for main and subagent transcripts. */
+internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, reference: String): ImageBitmap? {
+    imageReads.acquire()
+    try {
+        val bytes = core.readAttachment(device, reference)
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            if (bytes.size > 10 * 1024 * 1024) return@withContext null
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth !in 1..4096 || bounds.outHeight !in 1..4096) return@withContext null
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Exception) {
+        return null
+    } finally {
+        imageReads.release()
+    }
 }

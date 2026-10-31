@@ -71,6 +71,7 @@ import kotlin.math.pow
 
 /** What the transcript asks of its host (links, images, text sheets). */
 class TranscriptActions(
+    val imageCacheScope: String = "",
     val openUrl: (String) -> Unit,
     val loadImage: suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?,
     val showText: (title: String, text: String, mono: Boolean) -> Unit,

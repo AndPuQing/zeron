@@ -394,6 +394,7 @@ impl zeron_client::SubagentSink for SubagentInput {
     fn transcript(&self, entries: Vec<Arc<SessionMessageEntry>>) {
         let live = entries.last().is_some_and(|e| e.status == Some(MessageStatus::Streaming));
         let input = TranscriptInput {
+            chat_id: None,
             entries,
             pending: Vec::new(),
             working: live,
@@ -466,6 +467,7 @@ impl TranscriptView {
         let workspace = client.clone();
         let guard = handle.watch(move |snap| {
             let input = TranscriptInput {
+                chat_id: Some(snap.chat_id.clone()),
                 entries: snap.transcript_messages(),
                 pending: snap
                     .pending
@@ -564,6 +566,7 @@ impl Drop for TranscriptView {
 
 pub(crate) fn debug_input(entries: Vec<DebugEntry>, working: bool) -> TranscriptInput {
     TranscriptInput {
+        chat_id: None,
         entries: entries
             .into_iter()
             .map(|e| {

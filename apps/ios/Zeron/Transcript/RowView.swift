@@ -244,8 +244,8 @@ final class RowView: UIView {
             case let .toolStatus(running, failed):
                 view = ToolStatusView(running: running, failed: failed)
             case let .image(reference):
-                let iv = UIImageView()
-                iv.contentMode = .scaleAspectFill
+                let iv = TranscriptImageView()
+                iv.contentMode = .scaleAspectFit
                 iv.clipsToBounds = true
                 iv.layer.cornerRadius = min(rect.width, rect.height) > 120 ? 14 : 12
                 iv.layer.cornerCurve = .continuous
@@ -370,8 +370,12 @@ final class RowView: UIView {
     }
 
     @objc private func openImage(_ tap: UITapGestureRecognizer) {
-        guard let iv = tap.view as? UIImageView, let image = iv.image, let vc = findViewController() else { return }
-        vc.present(ImageViewer(image: image, source: iv), animated: true)
+        guard let iv = tap.view as? UIImageView else { return }
+        if let image = iv.image, let vc = findViewController() {
+            vc.present(ImageViewer(image: image, source: iv), animated: true)
+        } else if let reference = iv.accessibilityIdentifier {
+            delegate?.rowView(self, imageFor: reference, into: iv)
+        }
     }
 
     /// Link at a point in row coordinates.
@@ -578,4 +582,28 @@ final class UploadRingView: UIView {
         label.frame = r
         label.font = Fonts.ui(.sansSemibold, d < 30 ? 9 : 10.5)
     }
+}
+
+/// A failed remote read stays visible and can be retried without reopening the chat.
+final class TranscriptImageView: UIImageView {
+    private let status = UILabel()
+    override var image: UIImage? { didSet { status.isHidden = image != nil } }
+
+    init() {
+        super.init(frame: .zero)
+        backgroundColor = .secondarySystemBackground
+        status.text = "Loading image…"
+        status.textAlignment = .center
+        status.numberOfLines = 0
+        status.font = .preferredFont(forTextStyle: .caption1)
+        status.textColor = .secondaryLabel
+        addSubview(status)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        status.frame = bounds.insetBy(dx: 12, dy: 12)
+    }
+    func loading() { status.text = "Loading image…"; status.isHidden = image != nil }
+    func unavailable() { status.text = "Image unavailable · Tap to retry"; status.isHidden = false }
 }

@@ -329,6 +329,8 @@ fn tool_lifecycle(phase: Phase, id: String, call: ToolCall, is_error: bool) -> V
                 is_error,
                 output: None,
                 diff: None,
+                preview_paths: Vec::new(),
+                image_payloads: Vec::new(),
             },
         ],
     }
@@ -466,6 +468,8 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                     is_error: error.is_some(),
                     output: None,
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 },
             ];
             if let Some(message) = error {
@@ -503,6 +507,8 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                     is_error: status == "failed" || exit_code != 0,
                     output: None,
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 }]
             }
         },
@@ -558,6 +564,8 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 is_error: status == "failed",
                 output: None,
                 diff: None,
+                preview_paths: Vec::new(),
+                image_payloads: crate::tool_images::images_in_content(item.pointer("/result/content"), "image.png"),
             }],
         },
         "webSearch" | "web_search" => tool_lifecycle(
@@ -1004,6 +1012,8 @@ mod tests {
                 is_error: true,
                 output: None,
                 diff: None,
+                preview_paths: Vec::new(),
+                image_payloads: Vec::new(),
             }]
         );
     }
@@ -1045,6 +1055,8 @@ mod tests {
                     is_error: true,
                     output: None,
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 },
             ]
         );
@@ -1089,6 +1101,8 @@ mod tests {
                         is_error: false,
                         output: None,
                         diff: None,
+                        preview_paths: Vec::new(),
+                        image_payloads: Vec::new(),
                     },
                 ]
             );
@@ -1123,6 +1137,8 @@ mod tests {
                     is_error: false,
                     output: None,
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 },
             ]
         );

@@ -27,43 +27,7 @@ pub(crate) const MAX_LOADS: usize = 4;
 
 /// The host path and type of an image a reply names, when it may be drawn
 /// (see the module docs). `cwd` is the chat's folder on its host.
-pub(crate) fn markdown_image(source: &str, cwd: Option<&str>) -> Option<(String, &'static str)> {
-    let source = source.trim();
-    if source.is_empty()
-        || source.starts_with('~')
-        || has_scheme(source)
-        || crate::tool_images::is_remote_or_device_path(source)
-    {
-        return None;
-    }
-    let mime = raster_mime(source)?;
-    let path = crate::tool_images::resolve_path(source, cwd);
-    // A relative path needs a folder to resolve against; a home-relative
-    // folder (a projectless chat's) can't be expanded here.
-    crate::tool_images::is_host_absolute(&path).then_some((path, mime))
-}
-
-/// `http:`, `file:`, `data:`, `javascript:`…; a drive letter (`C:\`) is not one.
-fn has_scheme(source: &str) -> bool {
-    source.split_once(':').is_some_and(|(scheme, _)| {
-        scheme.len() > 1
-            && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-            && scheme
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
-    })
-}
-
-fn raster_mime(path: &str) -> Option<&'static str> {
-    let (_, ext) = path.rsplit_once('.')?;
-    match ext.to_ascii_lowercase().as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "webp" => Some("image/webp"),
-        "gif" => Some("image/gif"),
-        _ => None,
-    }
-}
+pub(crate) use zeron_proto::chat_images::markdown_image;
 
 /// The open chat, as the Markdown image closure (which has no `cx`) needs it.
 #[derive(Clone, Debug, PartialEq)]

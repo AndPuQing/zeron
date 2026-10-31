@@ -20,7 +20,7 @@ use zeron_text::WhiteSpace;
 
 use super::display::{ColorRole, DisplayBuilder, FadeEdge, TextRun, WidgetKind};
 use super::file_icons::file_icon_asset;
-use super::markdown::{Ctx, PBlock, PText, Px, place, place_text, prepare_block, prepare_plain};
+use super::markdown::{Ctx, PBlock, PText, Px, ReplyImageContext, place, place_text, prepare_reply_block, prepare_plain};
 use super::style::{Family, TYPE, Weight};
 use super::tools::{ThoughtState, ToolGroup, place_tools};
 
@@ -47,6 +47,8 @@ pub struct PendingUser {
 /// What the row builder reads from a session snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct TranscriptInput {
+    /// None for subagent transcripts: never borrow their parent's folder.
+    pub chat_id: Option<String>,
     pub entries: Vec<Arc<SessionMessageEntry>>,
     pub pending: Vec<PendingUser>,
     /// A turn is running (drives the tail working indicator).
@@ -206,6 +208,7 @@ struct EntryState {
 /// Builds rows incrementally across snapshots.
 #[derive(Default)]
 pub(crate) struct RowBuilder {
+    reply_chat: Option<ReplyImageContext>,
     parts: HashMap<String, PartState>,
     /// Reasoning parts' parse + prepared detail, keyed `{entry}#{part}`.
     pub(crate) thoughts: HashMap<String, ThoughtState>,
@@ -234,6 +237,13 @@ pub(crate) fn quick_hash(s: &str) -> u64 {
 impl RowBuilder {
     /// Rows for `input`, reusing every row whose source is unchanged.
     pub fn build(&mut self, ctx: &mut Ctx, input: &TranscriptInput) -> Vec<Placed> {
+        let chat = input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
+            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone() });
+        if self.reply_chat != chat {
+            self.parts.clear();
+            self.entries.clear();
+            self.reply_chat = chat;
+        }
         let mut out: Vec<Placed> = Vec::with_capacity(self.entries.len() * 2 + 4);
         let mut live_entries: HashSet<&str> = HashSet::with_capacity(input.entries.len());
         let mut live_parts: HashSet<String> = HashSet::new();
@@ -591,6 +601,7 @@ impl RowBuilder {
         if state.source_len == text.len() && state.source_hash == hash && state.streaming == streaming {
             return state.blocks.clone();
         }
+        let was_streaming = state.streaming;
         state.parser.set_text(text);
         state.source_len = text.len();
         state.source_hash = hash;
@@ -604,13 +615,15 @@ impl RowBuilder {
             let reuse = state
                 .blocks
                 .get(bi)
+                .filter(|_| (!was_streaming && !streaming) || (bi + 1 < state.blocks.len() && bi + 1 < tree.blocks.len()))
                 .filter(|(b, core)| (Arc::ptr_eq(b, block) || b.block == block.block) && core.copy_text == copy)
                 .map(|(_, core)| core.clone());
             let core = reuse.unwrap_or_else(|| {
                 let id = format!("{pkey}.{bi}");
                 // Each block is its own row: its formulas share one budget.
                 ctx.math_area = 0.0;
-                let content = prepare_block(ctx, &block.block, 0, false);
+                let chat = self.reply_chat.as_ref().filter(|_| !streaming || bi + 1 < tree.blocks.len());
+                let content = prepare_reply_block(ctx, &block.block, 0, false, chat);
                 Arc::new(RowCore {
                     key: row_key(&id),
                     version: next_version(),
@@ -1340,6 +1353,8 @@ pub(crate) fn content_heap_bytes(content: &Content) -> usize {
                 .sum(),
             PBlock::Table(t) => t.cells.iter().flatten().map(|c| c.p.heap_bytes() + math_bytes(c)).sum(),
             PBlock::Rule => 0,
+            PBlock::Sequence(children) => children.iter().map(block).sum(),
+            PBlock::Image { reference, caption } => reference.len() + caption.p.heap_bytes(),
         }
     }
     match content {
@@ -1351,5 +1366,67 @@ pub(crate) fn content_heap_bytes(content: &Content) -> usize {
         Content::Notice(n) => n.text.p.heap_bytes(),
         Content::Image { reference } => reference.len(),
         Content::Working { .. } | Content::Visual(_) => 0,
+    }
+}
+
+#[cfg(test)]
+mod reply_image_tests {
+    use super::*;
+
+    #[test]
+    fn mobile_reply_images_preserve_text_and_measure_their_widgets() {
+        let mut w = super::super::tests::worker(390.0);
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        let mut ctx = Ctx {
+            typo: &mut w.typo, cache: &mut w.cache, math: w.math,
+            math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
+        };
+        let text = "Before ![screenshot](shots/a.png) after\n\n> ![nested](b.jpg)\n\n- ![list](c.webp)\n\n![remote](https://example.com/a.png)\n\n```\n![code](d.png)\n```";
+        let blocks = w.builder.text_blocks(&mut ctx, "a#t", text, false);
+        for width in [200.0, 354.0, 768.0] {
+            let mut painted = DisplayBuilder::default();
+            let mut height = 0.0;
+            for (_, row) in &blocks {
+                let Content::Block(block) = &row.content else { panic!("block") };
+                let measured = place(block, Px(1.0), 0.0, height, width, None);
+                let actual = place(block, Px(1.0), 0.0, height, width, Some(&mut painted));
+                assert_eq!(actual, measured);
+                height += actual;
+            }
+            let images: Vec<_> = painted.widgets.iter().filter_map(|widget| match &widget.kind {
+                WidgetKind::Image { reference } => {
+                    assert!(widget.w <= width && widget.y + widget.h <= height);
+                    Some(zeron_proto::chat_images::ChatImage::parse(reference).unwrap())
+                }
+                _ => None,
+            }).collect();
+            assert_eq!(images.len(), 3);
+            assert_eq!(images[0].path, "/repo/shots/a.png");
+            assert!(images.iter().all(|image| image.chat_id == "chat"));
+            assert!(painted.text.contains("Before") && painted.text.contains("after") && painted.text.contains("remote"));
+        }
+    }
+
+    #[test]
+    fn mobile_reply_images_wait_for_a_settled_block_and_stay_out_of_subagents() {
+        let mut w = super::super::tests::worker(390.0);
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        let mut ctx = Ctx {
+            typo: &mut w.typo, cache: &mut w.cache, math: w.math,
+            math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
+        };
+        let count = |blocks: Vec<(Arc<TopBlock>, Arc<RowCore>)>| {
+            let mut display = DisplayBuilder::default();
+            for (_, row) in blocks {
+                if let Content::Block(block) = &row.content { place(block, Px(1.0), 0.0, 0.0, 350.0, Some(&mut display)); }
+            }
+            display.widgets.iter().filter(|w| matches!(w.kind, WidgetKind::Image { .. })).count()
+        };
+        let source = "![shot](a.png)";
+        assert_eq!(count(w.builder.text_blocks(&mut ctx, "a#t", source, true)), 0);
+        assert_eq!(count(w.builder.text_blocks(&mut ctx, "a#t", source, false)), 1);
+        w.builder.parts.clear();
+        w.builder.reply_chat = None;
+        assert_eq!(count(w.builder.text_blocks(&mut ctx, "a#t", source, false)), 0);
     }
 }

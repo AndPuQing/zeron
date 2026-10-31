@@ -166,16 +166,15 @@ fun SessionScreen(
     val scope = rememberCoroutineScope()
     var sheet by remember { mutableStateOf<TextSheet?>(null) }
     var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
-    val actions = remember(chatId) {
+    val imageDevice = handle.composer().host.deviceId
+    val actions = remember(chatId, imageDevice, core) {
         suspend fun load(ref: String): ImageBitmap? {
             val device = handle.composer().host.deviceId
-            return runCatching {
-                val bytes = core.readAttachment(device, ref)
-                withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
-            }.getOrNull()
+            return loadTranscriptImage(core, device, ref)
         }
         val open: (String) -> Unit = { ref -> scope.launch { load(ref)?.let { viewing = it } } }
         TranscriptActions(
+            imageCacheScope = "$imageDevice:$chatId",
             openUrl = { url ->
                 val uri = Uri.parse(url)
                 when (uri.scheme) {

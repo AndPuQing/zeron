@@ -78,6 +78,7 @@ pub(crate) struct ToolGroup {
 }
 
 pub(crate) enum DetailBlock {
+    Image(String),
     /// Mono lines (invocation / output), single-line each, scrolling sideways.
     Lines { lines: Vec<PText>, more: Option<PText> },
     /// Thought markdown flattened to styled lines, wrapped at width.
@@ -871,6 +872,9 @@ impl RowBuilder {
                         if open {
                             body.extend(lines_block(ctx, &st, &call_text(call), Some(CALL_WRAP_COLS)));
                             body.extend(result_block(ctx, &st, part));
+                            if let MessagePart::Tool { preview_paths, .. } = part {
+                                body.extend(preview_paths.iter().take(4).cloned().map(DetailBlock::Image));
+                            }
                         }
                         lines.push(ToolLine {
                             icon: tool_icon(call).to_owned(),
@@ -1036,6 +1040,13 @@ fn place_block(block: &DetailBlock, px: Px, bx: f32, by: f32, bw: f32, out: Opti
     let pad = d(px, BODY_PAD);
     let lh = d(px, OUT_LH);
     match block {
+        DetailBlock::Image(reference) => {
+            let side = px.v(super::rows::geom::IMAGE).min(bw).max(1.0);
+            if let Some(o) = out {
+                o.widget(WidgetKind::Image { reference: reference.clone() }, (bx, by + pad, side, side), None);
+            }
+            side + pad * 2.0
+        }
         DetailBlock::Lines { lines, more } => {
             let n = lines.len() + more.is_some() as usize;
             let h = pad * 2.0 + n as f32 * lh;
@@ -1213,6 +1224,7 @@ pub(crate) fn heap_bytes(t: &ToolGroup) -> usize {
                     + l.body
                         .iter()
                         .map(|b| match b {
+                            DetailBlock::Image(reference) => reference.len(),
                             DetailBlock::Lines { lines, .. } => lines.iter().map(|p| p.p.heap_bytes()).sum(),
                             DetailBlock::Thought(t) => t
                                 .lines
