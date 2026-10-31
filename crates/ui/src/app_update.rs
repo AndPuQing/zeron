@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use gpui::{App, AppContext as _, Context, Entity, Global, SharedString, Task};
 use gpui_tokio::Tokio;
-use zeron_update::{InstallKind, UpdateBlocker, UpdateStatus, Updater};
+use zeron_update::{DownloadProgress, InstallKind, UpdateBlocker, UpdateStatus, Updater};
 
 /// Download/install lifecycle of the newest release in this process.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,7 @@ pub enum Flow {
     Idle,
     Downloading {
         version: String,
+        progress: DownloadProgress,
     },
     /// Staged and verified: "restart to apply", or installed on quit.
     Ready {
@@ -79,6 +80,7 @@ pub struct AppUpdate {
     dismissed: Option<String>,
     _status_watch: Task<()>,
     download: Option<Task<()>>,
+    download_progress: Option<Task<()>>,
     user_check: Option<Task<()>>,
 }
 
@@ -135,6 +137,7 @@ impl AppUpdate {
             dismissed: None,
             _status_watch: status_watch,
             download: None,
+            download_progress: None,
             user_check: None,
         }
     }
@@ -215,7 +218,33 @@ impl AppUpdate {
         let install = self.install.clone();
         self.flow = Flow::Downloading {
             version: version.clone(),
+            progress: DownloadProgress::default(),
         };
+        let (progress_tx, mut progress_rx) =
+            tokio::sync::watch::channel(DownloadProgress::default());
+        self.download_progress = Some(cx.spawn(async move |this, cx| {
+            while progress_rx.changed().await.is_ok() {
+                let next = progress_rx.borrow_and_update().clone();
+                if this
+                    .update(cx, |this, cx| {
+                        if let Flow::Downloading { version, progress } = &mut this.flow {
+                            if !next.version.is_empty() {
+                                *version = next.version.clone();
+                            }
+                            *progress = next;
+                            cx.notify();
+                        }
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+                // Bound repaint frequency even on a fast local network.
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(100))
+                    .await;
+            }
+        }));
         let stage = Tokio::spawn(cx, async move {
             // Re-read the manifest so a long-lived status still downloads the
             // newest release, with that release's checksums.
@@ -225,7 +254,7 @@ impl AppUpdate {
                 "the release feed no longer offers a newer version"
             );
             let staged = install
-                .stage_desktop(&edge_url, &manifest, &data_dir)
+                .stage_desktop_with_progress(&edge_url, &manifest, &data_dir, Some(&progress_tx))
                 .await?;
             anyhow::Ok((manifest.version, staged))
         });
@@ -236,6 +265,7 @@ impl AppUpdate {
                 Err(join) => Err(join.to_string()),
             };
             this.update(cx, |this, cx| {
+                this.download_progress = None;
                 this.flow = match outcome {
                     Ok((version, staged)) => {
                         tracing::info!(%version, staged = %staged.display(), "update staged");
@@ -397,8 +427,13 @@ pub fn strip_for(
                 format!("Update available — v{latest}").into(),
                 StripAction::Download,
             ),
-            Flow::Downloading { version } => {
-                (format!("Downloading v{version}…").into(), StripAction::None)
+            Flow::Downloading { version, progress } => {
+                let verb = if progress.finished {
+                    "Preparing"
+                } else {
+                    "Downloading"
+                };
+                (format!("{verb} v{version}…").into(), StripAction::None)
             }
             Flow::Ready { .. } => (
                 "Update ready — restart to apply".into(),
@@ -448,6 +483,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn completed_download_is_preparing_until_staging_succeeds() {
+        let install = InstallKind::MacApp {
+            bundle: PathBuf::from("Zerun.app"),
+        };
+        let flow = Flow::Downloading {
+            version: "1.2.3".into(),
+            progress: DownloadProgress {
+                downloaded_bytes: 100,
+                total_bytes: Some(100),
+                finished: true,
+                version: "1.2.3".into(),
+            },
+        };
+        let (label, action) = strip_for(&install, false, &flow, "1.2.3");
+        assert_eq!(label.as_ref(), "Preparing v1.2.3…");
+        assert_eq!(action, StripAction::None);
+    }
+
+    #[test]
     fn strip_follows_the_flow_on_self_updating_installs() {
         let mac_app = InstallKind::MacApp {
             bundle: PathBuf::from("/Applications/Zerun.app"),
@@ -461,6 +515,7 @@ mod tests {
         );
         let downloading = Flow::Downloading {
             version: "0.2.86".into(),
+            progress: DownloadProgress::default(),
         };
         assert_eq!(
             strip_for(&mac_app, false, &downloading, "0.2.86"),

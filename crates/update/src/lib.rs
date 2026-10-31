@@ -429,14 +429,27 @@ impl InstallKind {
         manifest: &Manifest,
         data_dir: &Path,
     ) -> anyhow::Result<PathBuf> {
+        self.stage_desktop_with_progress(edge_url, manifest, data_dir, None)
+            .await
+    }
+
+    pub async fn stage_desktop_with_progress(
+        &self,
+        edge_url: &str,
+        manifest: &Manifest,
+        data_dir: &Path,
+        progress: Option<&tokio::sync::watch::Sender<DownloadProgress>>,
+    ) -> anyhow::Result<PathBuf> {
         match self {
-            Self::MacApp { .. } => stage_mac_app(edge_url, manifest, data_dir).await,
+            Self::MacApp { .. } => {
+                stage_mac_app_with_progress(edge_url, manifest, data_dir, progress).await
+            }
             Self::Managed { app_root } if self.supports_desktop_update() => {
-                stage_headless(edge_url, manifest, app_root).await
+                stage_headless_with_progress(edge_url, manifest, app_root, progress).await
             }
             #[cfg(windows)]
             Self::WindowsPortable { directory } => {
-                windows::stage(edge_url, manifest, directory).await
+                windows::stage_with_progress(edge_url, manifest, directory, progress).await
             }
             _ => bail!("this installation does not support desktop updates"),
         }
@@ -605,6 +618,24 @@ fn bundle_short_version(plist: &str) -> Option<String> {
 // Download + verify
 // ---------------------------------------------------------------------------
 
+/// Transfer state for one update artifact. The watch channel coalesces chunks;
+/// consumers need not queue one UI event for every network read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DownloadProgress {
+    pub version: String,
+    pub downloaded_bytes: u64,
+    pub total_bytes: Option<u64>,
+    /// The body has arrived; verification and staging may still fail.
+    pub finished: bool,
+}
+
+impl DownloadProgress {
+    pub fn percent(&self) -> Option<u8> {
+        let total = self.total_bytes.filter(|total| *total > 0)?;
+        Some(((u128::from(self.downloaded_bytes) * 100 / u128::from(total)).min(100)) as u8)
+    }
+}
+
 /// Stream `{edge}/releases/<file>` to `dest`, verifying the manifest sha256 when
 /// present. Writes through a `.partial` sidecar so an interrupted download never
 /// leaves a plausible-looking artifact behind.
@@ -613,6 +644,16 @@ pub async fn download_release_file(
     manifest: &Manifest,
     file: &str,
     dest: &Path,
+) -> anyhow::Result<()> {
+    download_release_file_with_progress(edge_url, manifest, file, dest, None).await
+}
+
+async fn download_release_file_with_progress(
+    edge_url: &str,
+    manifest: &Manifest,
+    file: &str,
+    dest: &Path,
+    progress: Option<&tokio::sync::watch::Sender<DownloadProgress>>,
 ) -> anyhow::Result<()> {
     let url = format!("{}/{file}", release_base(edge_url)?);
     let expected = manifest.files.get(file).and_then(|m| m.sha256.as_deref());
@@ -625,6 +666,12 @@ pub async fn download_release_file(
     let partial = dest.with_extension("partial");
     let client = http_client()?;
     'download: for attempt in 0..2 {
+        if let Some(progress) = progress {
+            progress.send_replace(DownloadProgress {
+                version: manifest.version.clone(),
+                ..Default::default()
+            });
+        }
         let resp = client
             .get(&url)
             .send_routed()
@@ -633,6 +680,10 @@ pub async fn download_release_file(
             .error_for_status()
             .with_context(|| format!("downloading {url}"))?;
         let used_origin = resp.url().origin().ascii_serialization();
+        if let Some(progress) = progress {
+            let total = resp.content_length().filter(|total| *total > 0);
+            progress.send_modify(|state| state.total_bytes = total);
+        }
         let mut out = tokio::fs::File::create(&partial)
             .await
             .with_context(|| format!("creating {}", partial.display()))?;
@@ -657,6 +708,15 @@ pub async fn download_release_file(
             };
             hasher.update(&chunk);
             out.write_all(&chunk).await.context("writing download")?;
+            if let Some(progress) = progress {
+                progress.send_modify(|state| {
+                    state.downloaded_bytes =
+                        state.downloaded_bytes.saturating_add(chunk.len() as u64)
+                });
+            }
+        }
+        if let Some(progress) = progress {
+            progress.send_modify(|state| state.finished = true);
         }
         out.flush().await.context("flushing download")?;
         drop(out);
@@ -726,6 +786,15 @@ pub async fn stage_headless(
     manifest: &Manifest,
     app_root: &Path,
 ) -> anyhow::Result<PathBuf> {
+    stage_headless_with_progress(edge_url, manifest, app_root, None).await
+}
+
+async fn stage_headless_with_progress(
+    edge_url: &str,
+    manifest: &Manifest,
+    app_root: &Path,
+    progress: Option<&tokio::sync::watch::Sender<DownloadProgress>>,
+) -> anyhow::Result<PathBuf> {
     // Reject unsupported targets before creating a stage or making a request.
     require_managed_update_platform()?;
     let version = &manifest.version;
@@ -743,7 +812,7 @@ pub async fn stage_headless(
     std::fs::create_dir_all(&stage).with_context(|| format!("creating {}", stage.display()))?;
     let result = async {
         let tarball = stage.join(&file);
-        download_release_file(edge_url, manifest, &file, &tarball).await?;
+        download_release_file_with_progress(edge_url, manifest, &file, &tarball, progress).await?;
         let unpacked = stage.join("unpacked");
         std::fs::create_dir_all(&unpacked)?;
         // Tarball root is the versioned stage dir (see scripts/package-linux.sh);
@@ -889,6 +958,15 @@ pub async fn stage_mac_app(
     manifest: &Manifest,
     data_dir: &Path,
 ) -> anyhow::Result<PathBuf> {
+    stage_mac_app_with_progress(edge_url, manifest, data_dir, None).await
+}
+
+async fn stage_mac_app_with_progress(
+    edge_url: &str,
+    manifest: &Manifest,
+    data_dir: &Path,
+    progress: Option<&tokio::sync::watch::Sender<DownloadProgress>>,
+) -> anyhow::Result<PathBuf> {
     // Reject unsupported targets before creating a stage or making a request.
     require_mac_app_update_platform()?;
     let version = &manifest.version;
@@ -910,7 +988,7 @@ pub async fn stage_mac_app(
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     let file = mac_app_artifact(version);
     let tarball = dir.join(&file);
-    download_release_file(edge_url, manifest, &file, &tarball).await?;
+    download_release_file_with_progress(edge_url, manifest, &file, &tarball, progress).await?;
     let unpack = dir.join(".unpack");
     std::fs::create_dir_all(&unpack)?;
     let unpacked = run(
@@ -1517,6 +1595,96 @@ fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_progress_handles_unknown_sizes_and_large_counters() {
+        let mut progress = DownloadProgress::default();
+        assert_eq!(progress.percent(), None);
+        progress.total_bytes = Some(0);
+        assert_eq!(progress.percent(), None);
+        progress.total_bytes = Some(200);
+        progress.downloaded_bytes = 75;
+        assert_eq!(progress.percent(), Some(37));
+        progress.downloaded_bytes = 300;
+        assert_eq!(progress.percent(), Some(100));
+        progress.total_bytes = Some(u64::MAX);
+        progress.downloaded_bytes = u64::MAX;
+        assert_eq!(progress.percent(), Some(100));
+    }
+
+    #[tokio::test]
+    async fn download_progress_reports_streamed_bytes_and_unknown_lengths() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for known_size in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let (release_body, wait_for_progress) = tokio::sync::oneshot::channel();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                socket.read(&mut request).await.unwrap();
+                let length = if known_size {
+                    "Content-Length: 6\r\n"
+                } else {
+                    ""
+                };
+                socket
+                    .write_all(
+                        format!("HTTP/1.1 200 OK\r\n{length}Connection: close\r\n\r\nabc")
+                            .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                wait_for_progress.await.unwrap();
+                socket.write_all(b"def").await.unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let dest = dir.path().join("package.tar.gz");
+            let manifest = Manifest {
+                version: "9.9.9".into(),
+                files: BTreeMap::from([(
+                    "package.tar.gz".into(),
+                    FileMeta {
+                        sha256: Some(format!("{:x}", Sha256::digest(b"abcdef"))),
+                    },
+                )]),
+            };
+            let (tx, mut rx) = watch::channel(DownloadProgress::default());
+            let transfer = download_release_file_with_progress(
+                &origin,
+                &manifest,
+                "package.tar.gz",
+                &dest,
+                Some(&tx),
+            );
+            let observe = async {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        rx.changed().await.unwrap();
+                        let progress = rx.borrow_and_update().clone();
+                        if progress.downloaded_bytes == 3 {
+                            assert_eq!(progress.version, "9.9.9");
+                            assert_eq!(progress.total_bytes, known_size.then_some(6));
+                            assert_eq!(progress.percent(), known_size.then_some(50));
+                            assert!(!progress.finished);
+                            break;
+                        }
+                    }
+                })
+                .await
+                .unwrap();
+                release_body.send(()).unwrap();
+            };
+            let (result, ()) = tokio::join!(transfer, observe);
+            result.unwrap();
+            server.await.unwrap();
+            let final_progress = rx.borrow().clone();
+            assert_eq!(final_progress.downloaded_bytes, 6);
+            assert!(final_progress.finished);
+            assert_eq!(final_progress.percent(), known_size.then_some(100));
+            assert_eq!(std::fs::read(dest).unwrap(), b"abcdef");
+        }
+    }
 
     #[tokio::test]
     async fn interrupted_or_corrupt_download_never_replaces_an_existing_artifact() {
