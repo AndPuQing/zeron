@@ -107,6 +107,13 @@ until it is tapped. Concurrent requests for one image share a read. Decoded
 caches are bounded and scoped by device. Tapping a loaded image opens the viewer
 from the decoded cache.
 
+iOS shares an image read between its visible consumers. Hidden pooled rows and
+views removed from the window release their demand; queued reads with no remaining
+consumers are discarded. The final consumer leaving cancels an active read, while
+other visible copies keep their shared read. Cancelled reads do not mark an image
+as unavailable, so returning to it can load normally. Read/decode concurrency stays
+bounded even while cancelled operations wind down.
+
 Tool results carrying inline images are extracted by Claude, Codex MCP, ACP,
 Pi and OMP adapters and saved by the engine before publication. The document
 syncs optional `previewPaths`, never base64 payloads. Expanded tool details in

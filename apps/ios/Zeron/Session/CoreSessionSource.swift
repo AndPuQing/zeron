@@ -460,10 +460,7 @@ func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool,
 
 @MainActor
 enum TranscriptImages {
-    private static var activeReads = 0
-    private static var waiting: [CheckedContinuation<Void, Never>] = []
-    /// One read per image, however many rows or relayouts ask for it.
-    private static var reads: [NSString: Task<UIImage?, Never>] = [:]
+    private static let reads = TranscriptImageReads()
     /// Failed images stay failed until tapped, so relayouts don't queue
     /// reads that will fail again ahead of visible thumbnails.
     private static var failed: Set<String> = []
@@ -493,38 +490,42 @@ enum TranscriptImages {
     }
 
     static func image(client: CoreClient, device: String, ref: TranscriptImageRef) async -> UIImage? {
-        let key = "\(device):\(ref.id)" as NSString
-        if let hit = Self.images.object(forKey: key) { return hit }
-        if let running = reads[key] { return await running.value }
-        let read = Task { await Self.read(client: client, device: device, ref: ref, key: key) }
-        reads[key] = read
-        let image = await read.value
-        reads[key] = nil
-        if image == nil { failed.insert(key as String) } else { failed.remove(key as String) }
-        return image
+        let key = "\(device):\(ref.id)"
+        let consumer = UUID()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: nil); return }
+                reads.request(key: key, consumer: consumer, operation: {
+                    await read(client: client, device: device, ref: ref, key: key)
+                }, completion: { result in
+                    switch result {
+                    case let .loaded(image): continuation.resume(returning: image)
+                    case .cancelled: continuation.resume(returning: nil)
+                    }
+                })
+            }
+        }, onCancel: {
+            Task { @MainActor in reads.cancel(key: key, consumer: consumer) }
+        })
     }
 
-    private static func read(client: CoreClient, device: String, ref: TranscriptImageRef, key: NSString) async -> UIImage? {
-        // A row can contain several full-size screenshots. Bound the complete
-        // read/decode operation, not just the retained cache, as on Android.
-        if activeReads < 4 {
-            activeReads += 1
-        } else {
-            await withCheckedContinuation { waiting.append($0) }
-        }
-        defer {
-            if waiting.isEmpty { activeReads -= 1 }
-            else { waiting.removeFirst().resume() }
-        }
-        if let hit = Self.images.object(forKey: key) { return hit }
+    private static func read(client: CoreClient, device: String, ref: TranscriptImageRef, key: String) async -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        if let hit = images.object(forKey: key as NSString) { return hit }
         let bytes: Data? = switch ref {
         case let .attachment(reference): try? await client.readAttachment(deviceId: device, path: reference)
         case let .chat(chatId, path): try? await client.readChatImage(deviceId: device, chatId: chatId, path: path)
         }
+        guard !Task.isCancelled else { return nil }
         guard let data = bytes,
               let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
-        else { return nil }
-        Self.images.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
+        else {
+            if !Task.isCancelled { failed.insert(key) }
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        failed.remove(key)
+        images.setObject(image, forKey: key as NSString, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
         return image
     }
 
@@ -534,19 +535,27 @@ enum TranscriptImages {
     }
 
     static func load(client: CoreClient, device: String, ref: TranscriptImageRef, into view: UIImageView) {
-        view.accessibilityIdentifier = ref.id
-        (view as? TranscriptImageView)?.loading()
-        let key = "\(device):\(ref.id)" as NSString
-        if let hit = images.object(forKey: key) { view.image = hit; return }
-        if failed.contains(key as String) { (view as? TranscriptImageView)?.unavailable(); return }
-        Task { [weak view] in
-            let image = await Self.image(client: client, device: device, ref: ref)
-            guard let view, view.accessibilityIdentifier == ref.id else { return }
-            if let image {
-                UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
-            } else {
-                (view as? TranscriptImageView)?.unavailable()
-            }
+        guard let view = view as? TranscriptImageView else { return }
+        let key = "\(device):\(ref.id)"
+        view.bindImageLoad { view in
+            view.accessibilityIdentifier = key
+            view.loading()
+            if let hit = images.object(forKey: key as NSString) { view.image = hit; return {} }
+            if failed.contains(key) { view.unavailable(); return {} }
+            let consumer = UUID()
+            reads.request(key: key, consumer: consumer, operation: {
+                await read(client: client, device: device, ref: ref, key: key)
+            }, completion: { [weak view] result in
+                guard let view, view.accessibilityIdentifier == key else { return }
+                switch result {
+                case let .loaded(image):
+                    if let image {
+                        UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
+                    } else { view.unavailable() }
+                case .cancelled: break
+                }
+            })
+            return { reads.cancel(key: key, consumer: consumer) }
         }
     }
 }

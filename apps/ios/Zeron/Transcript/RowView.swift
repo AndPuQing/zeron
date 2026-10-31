@@ -118,6 +118,9 @@ final class RowView: UIView {
         for case let visual as VisualView in widgetViews where visual.superview === self {
             visual.active = !isHidden
         }
+        for case let image as TranscriptImageView in widgetViews {
+            image.active = !isHidden
+        }
     }
 
     var key: UInt64 { model?.display.key ?? 0 }
@@ -354,6 +357,7 @@ final class RowView: UIView {
 
     private func transcriptImage(_ ref: TranscriptImageRef, in rect: CGRect) -> UIView {
         let iv = TranscriptImageView()
+        iv.active = !isHidden
         iv.ref = ref
         iv.contentMode = .scaleAspectFit
         iv.clipsToBounds = true
@@ -611,6 +615,9 @@ enum TranscriptImageRef: Hashable, Sendable {
 /// A failed remote read stays visible and can be retried without reopening the chat.
 final class TranscriptImageView: UIImageView {
     var ref: TranscriptImageRef?
+    var active = true { didSet { if active != oldValue { updateRead() } } }
+    private var startRead: ((TranscriptImageView) -> (() -> Void))?
+    private var cancelRead: (() -> Void)?
     private let status = UILabel()
     override var image: UIImage? { didSet { status.isHidden = image != nil } }
 
@@ -625,6 +632,25 @@ final class TranscriptImageView: UIImageView {
         addSubview(status)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// Rows configure their widgets before attaching them. Do not spend a read
+    /// slot until the widget belongs to a window; leaving releases its consumer.
+    func bindImageLoad(_ start: @escaping (TranscriptImageView) -> (() -> Void)) {
+        cancelRead?(); cancelRead = nil
+        image = nil
+        startRead = start
+        updateRead()
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateRead()
+    }
+    private func updateRead() {
+        if window == nil || !active {
+            cancelRead?(); cancelRead = nil
+        } else if image == nil && cancelRead == nil {
+            cancelRead = startRead?(self)
+        }
+    }
     override func layoutSubviews() {
         super.layoutSubviews()
         status.frame = bounds.insetBy(dx: 12, dy: 12)
