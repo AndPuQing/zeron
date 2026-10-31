@@ -1061,6 +1061,7 @@ impl Shell {
         ix: usize,
         active: bool,
         query: &str,
+        statuses: &std::collections::HashMap<String, zeron_proto::ChatIndicator>,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -1234,7 +1235,7 @@ impl Shell {
                     branch,
                     pr,
                     harness,
-                    state.display_status_for(chat, Utc::now()),
+                    statuses[&chat.id],
                     active,
                     chat.archived,
                     false,
@@ -1383,6 +1384,24 @@ impl Shell {
         let current_tab = palette.tab;
         let files_loading = palette.files.loading || palette.files.indexing;
         let theme = Theme::of(cx).for_popup();
+        let chat_ids: std::collections::HashSet<_> = sections
+            .iter()
+            .flat_map(|section| &section.rows)
+            .filter_map(|row| match &row.kind {
+                RowKind::Chat(id) => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let statuses = {
+            let state = self.state.read(cx);
+            state.display_statuses(
+                state
+                    .chats
+                    .iter()
+                    .filter(|chat| chat_ids.contains(chat.id.as_str())),
+                Utc::now(),
+            )
+        };
         let mut children = Vec::new();
         let mut ix = 0;
         for (section_ix, section) in sections.iter().enumerate() {
@@ -1405,7 +1424,8 @@ impl Shell {
             );
             for row in &section.rows {
                 let key = row.key();
-                let content = self.render_palette_row(row, ix, ix == active, &query, &theme, cx);
+                let content =
+                    self.render_palette_row(row, ix, ix == active, &query, &statuses, &theme, cx);
                 let Some(content) = content else {
                     ix += 1;
                     continue;
