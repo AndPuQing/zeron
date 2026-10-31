@@ -43,21 +43,8 @@ pub(crate) fn is_image_path(path: &str) -> bool {
     })
 }
 
-/// UNC (`\\host\share`, `//host/share`), device and verbatim (`\\.\`,
-/// `\\?\`, `\??\`) and drive-relative (`C:x.png`) forms. Agent output names
-/// them freely, and merely opening one can reach another host (on Windows
-/// with the user's NTLM credentials), so they are never previewed. The
-/// engine's jail refuses them as well.
-pub(crate) fn is_remote_or_device_path(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    let separator = |b: Option<&u8>| matches!(b, Some(b'/' | b'\\'));
-    (separator(bytes.first()) && separator(bytes.get(1)))
-        || path.starts_with(r"\??\")
-        || (bytes.len() >= 2
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && !separator(bytes.get(2)))
-}
+// One path policy for tool previews and reply images, on every client.
+pub(crate) use zeron_proto::chat_images::{is_remote_or_device_path, resolve_path};
 
 fn push_path(out: &mut Vec<SharedString>, path: &str) {
     if out.len() < MAX_IMAGES_PER_TOOL
@@ -115,6 +102,24 @@ fn push_json_paths(out: &mut Vec<SharedString>, value: &serde_json::Value) {
     }
 }
 
+/// Paths the chip previews. A tool result that embedded image bytes names the
+/// uploads copies here; those replace paths the call printed, which may sit
+/// outside the attachment jail. An empty list keeps the call and output paths.
+pub(crate) fn chip_images(
+    call: &ToolCall,
+    output: Option<&str>,
+    preview_paths: &[String],
+) -> Arc<[SharedString]> {
+    if !preview_paths.is_empty() {
+        let mut out = Vec::new();
+        for path in preview_paths {
+            push_path(&mut out, path);
+        }
+        return out.into();
+    }
+    image_paths(call, output)
+}
+
 /// The image files a tool call touched, as reported (possibly relative to the
 /// chat's working directory). Computed once per row build, never per paint.
 pub(crate) fn image_paths(call: &ToolCall, output: Option<&str>) -> Arc<[SharedString]> {
@@ -137,36 +142,6 @@ pub(crate) fn image_paths(call: &ToolCall, output: Option<&str>) -> Arc<[SharedS
         push_text_paths(&mut out, output);
     }
     out.into()
-}
-
-/// Whether `path` is absolute on its host, whichever OS that is (`/a`, `\a`,
-/// `C:\a`, `C:/a`).
-pub(crate) fn is_host_absolute(path: &str) -> bool {
-    let bytes = path.as_bytes();
-    path.starts_with(['/', '\\'])
-        || (bytes.len() >= 3
-            && bytes[0].is_ascii_alphabetic()
-            && bytes[1] == b':'
-            && matches!(bytes[2], b'/' | b'\\'))
-}
-
-/// Absolute path on the owning host. Relative paths join the chat's cwd in
-/// that host's separator style (the UI may run on another OS).
-pub(crate) fn resolve_path(path: &str, cwd: Option<&str>) -> String {
-    let absolute = is_host_absolute(path);
-    match cwd.filter(|_| !absolute) {
-        Some(cwd) if cwd.contains('\\') => format!(
-            "{}\\{}",
-            cwd.trim_end_matches(['/', '\\']),
-            path.trim_start_matches("./").replace('/', "\\")
-        ),
-        Some(cwd) => format!(
-            "{}/{}",
-            cwd.trim_end_matches('/'),
-            path.trim_start_matches("./")
-        ),
-        None => path.to_owned(),
-    }
 }
 
 /// One file on one device.
@@ -654,6 +629,33 @@ mod tests {
         assert_eq!(
             paths(ToolCall::Exec { command: many }, None).len(),
             MAX_IMAGES_PER_TOOL
+        );
+    }
+
+    #[test]
+    fn stored_preview_paths_replace_the_named_file() {
+        let call = ToolCall::ReadFile {
+            path: "/tmp/shots/1.png".into(),
+        };
+        let stored = chip_images(
+            &call,
+            Some("also /tmp/other.png"),
+            &["/uploads/abc-image.png".into()],
+        );
+        assert_eq!(
+            stored
+                .iter()
+                .map(|path| path.to_string())
+                .collect::<Vec<_>>(),
+            vec!["/uploads/abc-image.png".to_string()]
+        );
+        let named = chip_images(&call, Some("also /tmp/other.png"), &[]);
+        assert_eq!(
+            named
+                .iter()
+                .map(|path| path.to_string())
+                .collect::<Vec<_>>(),
+            vec!["/tmp/shots/1.png".to_string(), "/tmp/other.png".to_string()]
         );
     }
 

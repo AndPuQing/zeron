@@ -712,6 +712,14 @@ impl CoreClient {
         .await
     }
 
+    /// An image a reply in `chat_id` names (`WidgetKind::ChatImage`), read
+    /// only from inside that chat's folder on `device_id` (LRU-cached).
+    pub async fn read_chat_image(&self, device_id: String, chat_id: String, path: String) -> CoreResult<Vec<u8>> {
+        let client = self.client.clone();
+        let bytes = on_runtime(async move { client.read_chat_image(&device_id, &chat_id, &path).await }).await?;
+        Ok(bytes.as_ref().clone())
+    }
+
     /// Attachment bytes (LRU-cached): host paths and own `pending://` refs.
     pub async fn read_attachment(&self, device_id: String, path: String) -> CoreResult<Vec<u8>> {
         let client = self.client.clone();

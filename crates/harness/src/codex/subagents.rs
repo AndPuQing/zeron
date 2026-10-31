@@ -156,7 +156,9 @@ impl Subagents {
         // A child's output may beat both thread/started and the spawn result.
         // Bound the aggregate backlog for threads that never acquire a spawn.
         for event in events {
-            let bytes = serde_json::to_vec(&event).map_or(MAX_PENDING_BYTES, |v| v.len());
+            let bytes = serde_json::to_vec(&event)
+                .map_or(MAX_PENDING_BYTES, |v| v.len())
+                .saturating_add(image_payload_bytes(&event));
             if self.pending_bytes.saturating_add(bytes) > MAX_PENDING_BYTES {
                 if !self.warned_overflow {
                     tracing::warn!("Codex unbound child backlog full; dropping excess events");
@@ -173,6 +175,20 @@ impl Subagents {
     }
 }
 
+// Image payloads intentionally skip serialization until the engine stores
+// them, but they still occupy memory while waiting for a spawn binding.
+fn image_payload_bytes(event: &AgentEvent) -> usize {
+    match event {
+        AgentEvent::ToolResult { image_payloads, .. } => {
+            image_payloads.iter().fold(0usize, |bytes, image| {
+                bytes.saturating_add(image.data_base64.len())
+            })
+        }
+        AgentEvent::Subagent { event, .. } => image_payload_bytes(event),
+        _ => 0,
+    }
+}
+
 fn tag(spawn: &str, event: AgentEvent) -> AgentEvent {
     AgentEvent::Subagent {
         parent_tool_use_id: spawn.to_owned(),
@@ -183,9 +199,66 @@ fn tag(spawn: &str, event: AgentEvent) -> AgentEvent {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn text(text: &str) -> AgentEvent {
         AgentEvent::TextDelta { text: text.into() }
+    }
+
+    fn screenshot(id: &str, data: &str) -> Value {
+        json!({"item": {
+            "type": "mcpToolCall", "id": id, "status": "completed",
+            "result": {"content": [{"type": "image", "data": data, "mimeType": "image/png"}]}
+        }})
+    }
+
+    #[test]
+    fn unbound_images_count_towards_the_backlog_limit() {
+        let mut children = Subagents::new("root".into());
+        let image = screenshot("screenshot", &"A".repeat(MAX_PENDING_BYTES + 16 * 1024));
+        assert!(
+            children
+                .notification("unknown", "item/completed", &image)
+                .is_empty()
+        );
+        assert!(children.pending.is_empty());
+        assert_eq!(children.pending_bytes, 0);
+
+        // Known children bypass this backlog and keep their full image.
+        children.bind("known", "spawn");
+        let events = children.notification("known", "item/completed", &image);
+        assert!(
+            matches!(events.as_slice(), [AgentEvent::Subagent { event, .. }]
+            if matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. }
+                if image_payloads.len() == 1 && image_payloads[0].data_base64.len() > MAX_PENDING_BYTES))
+        );
+    }
+
+    #[test]
+    fn buffered_image_bytes_are_aggregated_and_released_after_binding() {
+        let mut children = Subagents::new("root".into());
+        let data = "A".repeat(MAX_PENDING_BYTES / 4);
+        for index in 0..4 {
+            children.notification(
+                "early",
+                "item/completed",
+                &screenshot(&index.to_string(), &data),
+            );
+        }
+        assert_eq!(children.pending["early"].events.len(), 3);
+        assert!(children.pending_bytes > data.len() * 3);
+        assert!(children.pending_bytes <= MAX_PENDING_BYTES);
+        let events = children.bind("early", "spawn");
+        assert_eq!(events.len(), 3);
+        assert!(
+            events
+                .iter()
+                .all(|event| image_payload_bytes(event) == data.len())
+        );
+        assert!(children.pending.is_empty());
+        assert_eq!(children.pending_bytes, 0);
+        children.notification("other", "item/completed", &screenshot("new", &data));
+        assert_eq!(children.pending["other"].events.len(), 1);
     }
 
     #[test]

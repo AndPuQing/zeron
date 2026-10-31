@@ -35,6 +35,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +56,8 @@ import sh.zeron.android.design.ZIcons
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
+import sh.zeron.android.transcript.TranscriptImageRef
+import sh.zeron.android.transcript.cachedTranscriptImage
 import sh.zeron.android.transcript.elapsed
 import uniffi.zeron_core.SubagentRow
 import uniffi.zeron_core.SubagentState
@@ -133,10 +137,21 @@ fun SubagentScreen(
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "header",
     )
-    val actions = remember(docId) {
+    val imageScope = rememberCoroutineScope()
+    var viewing by remember(docId) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    val imageHost = model.row(rootChatId)?.deviceId
+    val actions = remember(docId, imageHost, core) {
+        suspend fun load(ref: TranscriptImageRef) = imageHost?.let { loadTranscriptImage(core, it, ref) }
+        val imageCacheScope = "$imageHost:$rootChatId"
+
         TranscriptActions(
+            imageCacheScope = imageCacheScope,
             openUrl = {},
-            loadImage = { null },
+            loadImage = ::load,
+            openImage = { ref ->
+                val shown = cachedTranscriptImage(imageCacheScope, ref)
+                if (shown != null) viewing = shown else imageScope.launch { load(ref)?.let { viewing = it } }
+            },
             showText = { _, _, _ -> },
             openSubagent = { doc, t, r -> onOpenSubagent(docId, doc, t, r) },
         )
@@ -164,6 +179,7 @@ fun SubagentScreen(
         }
         SubagentStatusBar(state, detail, spawn?.startedAtMs, Modifier.navigationBarsPadding().padding(horizontal = 12.dp, vertical = 8.dp))
     }
+    viewing?.let { ImageViewer(it) { viewing = null } }
 }
 
 /** The subagent page's bottom bar: status glyph, what it's doing, how long. */

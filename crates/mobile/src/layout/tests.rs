@@ -39,7 +39,7 @@ pub(crate) fn text_system() -> Arc<TextSystem> {
     TextSystem::new(faces, Some(Arc::new(FixedFallback)))
 }
 
-fn worker(width: f32) -> Worker {
+pub(super) fn worker(width: f32) -> Worker {
     let ts = text_system();
     let mut w = Worker::new(&ts, Arc::new(Shared { frame: Mutex::new(Arc::new(LayoutFrame::empty())) }), Arc::new(Quiet), None);
     w.width = width;
@@ -161,6 +161,7 @@ fn messages_the_agent_sent_show_as_one_line_naming_the_recipient() {
         subagent_ref: None,
         subagent_status: None,
         subagent_tail: None,
+        preview_paths: Vec::new(),
     };
     let mut w = worker(390.0);
     w.input = TranscriptInput {
@@ -681,7 +682,7 @@ fn bench_layout_passes() {
             continuation_of: None,
             duration_ms: None,
         }));
-        w.input = TranscriptInput { entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, workspace: None };
+        w.input = TranscriptInput { chat_id: None, entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, workspace: None };
         let t = Instant::now();
         w.pass();
         total += t.elapsed();
@@ -800,6 +801,7 @@ fn running_subagent_shows_a_spinner_after_its_spawn_resolves() {
         subagent_ref: Some("sub-1".into()),
         subagent_status: Some(status),
         subagent_tail: None,
+        preview_paths: Vec::new(),
     };
     let frame_for = |status: SubagentStatus| {
         let mut w = worker(390.0);
@@ -1672,4 +1674,34 @@ fn message_search_locates_stable_message_after_layout() {
     let second = frame.message_placement("second".into()).unwrap();
     assert!(second.y > first.y);
     assert_ne!(first.key, second.key);
+}
+
+#[test]
+fn tool_result_images_only_load_in_expanded_details() {
+    use zeron_doc::parts::MessagePart;
+    let mut w = worker(390.0);
+    w.input = transcript_one("done");
+    Arc::make_mut(&mut w.input.entries[0]).parts = vec![MessagePart::Tool {
+        id: "tool".into(),
+        call: zeron_proto::ToolCall::ReadFile { path: "/outside/shot.png".into() },
+        resolved: true, is_error: false, output: None, diff: None,
+        output_ref: None, output_bytes: None, diff_ref: None, diff_stats: None,
+        subagent_ref: None, subagent_status: None, subagent_tail: None,
+        preview_paths: vec!["/uploads/stored-image.png".into()],
+    }];
+    let images = |frame: Arc<LayoutFrame>| {
+        (0..frame.row_count()).flat_map(|i| frame.display(i).unwrap().widgets.clone()).filter_map(|w| match w.kind {
+            display::WidgetKind::Image { reference } => Some(reference), _ => None,
+        }).collect::<Vec<_>>()
+    };
+    let folded = w.pass();
+    assert!(images(folded.clone()).is_empty());
+    let key = folded.placement(0).unwrap().key;
+    w.builder.expanded.insert(key);
+    w.builder.detail_open.insert(rows::row_key("a#g0/tool"), true);
+    w.builder.invalidate(key);
+    assert_eq!(images(w.pass()), vec!["/uploads/stored-image.png"]);
+    w.builder.detail_open.insert(rows::row_key("a#g0/tool"), false);
+    w.builder.invalidate(key);
+    assert!(images(w.pass()).is_empty());
 }

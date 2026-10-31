@@ -149,6 +149,8 @@ impl Normalizer {
                     }
                 });
                 events.push(AgentEvent::ToolResult {
+                    preview_paths: Vec::new(),
+                    image_payloads: crate::tool_images::images_in_content(frame.pointer("/result/content")),
                     id,
                     is_error: frame["isError"].as_bool().unwrap_or(false),
                     output: output.map(|s| cap(&s, 16384)),

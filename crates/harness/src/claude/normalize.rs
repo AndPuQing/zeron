@@ -1,6 +1,8 @@
 //! Frame → [`AgentEvent`] normalization (init dedupe, subagent tagging, tool
 //! decoding, error-code mapping).
 
+use crate::tool_images::{compact_base64, images_in_content};
+use serde::Deserialize as _;
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
 
@@ -319,13 +321,16 @@ fn subagent_message(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
                     text: format!("{}\n\n", b.thinking.trim_end()),
                 },
             )),
-            "tool_use" => Some(tag(
-                parent,
-                AgentEvent::ToolCall {
-                    id: b.id.clone(),
-                    call: decode_tool_use(&b.name, &b.input),
-                },
-            )),
+            "tool_use" => {
+                let call = decode_tool_use(&b.name, &b.input);
+                Some(tag(
+                    parent,
+                    AgentEvent::ToolCall {
+                        id: b.id.clone(),
+                        call,
+                    },
+                ))
+            }
             _ => None,
         })
         .collect();
@@ -340,23 +345,16 @@ fn subagent_message(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
     out
 }
 
-/// A subagent's tool results, attributed like its calls.
-fn subagent_results(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
-    f.message
-        .blocks()
-        .filter(|b: &ContentBlock| b.kind == "tool_result")
-        .map(|b| {
-            tag(
-                parent,
-                AgentEvent::ToolResult {
-                    id: b.tool_use_id.clone(),
-                    is_error: b.is_error.unwrap_or(false),
-                    output: None,
-                    diff: None,
-                },
-            )
-        })
-        .collect()
+
+fn empty_tool_result(id: impl Into<String>, is_error: bool) -> AgentEvent {
+    AgentEvent::ToolResult {
+        id: id.into(),
+        is_error,
+        output: None,
+        diff: None,
+        preview_paths: Vec::new(),
+        image_payloads: Vec::new(),
+    }
 }
 
 /// An id the CLI minted, safe in a path.
@@ -380,8 +378,26 @@ fn path_safe(id: &str) -> bool {
 /// Prefix-matched: the CLI ships at least two spellings of the marker
 /// (`…by user]` and `…by user for tool use]`).
 fn is_synthetic_user_text(text: &str) -> bool {
-    let text = text.trim_start();
-    text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted")
+    let text = text.trim();
+    if text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted") {
+        return true;
+    }
+    let Some(rest) = text.strip_prefix("[Image: ") else {
+        return false;
+    };
+    let Some(rest) = rest.strip_suffix(']') else {
+        return false;
+    };
+    let rest = rest.trim_start();
+    rest.starts_with("source: ") || rest.starts_with("original ")
+}
+
+/// `toolUseResult` image, used only when the content blocks had none.
+fn image_from_tool_use_result(
+    result: &crate::claude::wire::ToolUseResult,
+) -> Option<zeron_proto::ToolResultImage> {
+    let data_base64 = compact_base64(result.image_base64.as_deref()?)?;
+    Some(zeron_proto::ToolResultImage { data_base64 })
 }
 
 struct CompactionState {
@@ -502,6 +518,57 @@ impl Normalizer {
             turn_error_shown: false,
             retry_noticed: false,
         }
+    }
+
+    /// Tool results on a user frame. Image bytes ride the result's content
+    /// blocks (or `toolUseResult` when those blocks have none) and stay off
+    /// the journal: only `image_payloads` carries them, and the engine strips
+    /// that before publish.
+    fn tool_result_events(
+        &mut self,
+        frame: &MessageFrame,
+        clear_inline_skills: bool,
+    ) -> Vec<AgentEvent> {
+        let Some(blocks) = frame.message.content.as_array() else {
+            return Vec::new();
+        };
+        let mut pending = Vec::new();
+        for block in blocks {
+            // Parsed for the result's id and error flag, borrowing the raw
+            // value: the nested image bytes are not on that struct, so they
+            // are read from the value and never copied for this.
+            let Ok(parsed) = ContentBlock::deserialize(block) else {
+                continue;
+            };
+            if parsed.kind != "tool_result" {
+                continue;
+            }
+            let id = parsed.tool_use_id;
+            if clear_inline_skills {
+                self.skill_calls.remove(&id);
+            }
+            let is_error = parsed.is_error.unwrap_or(false);
+            let images = images_in_content(block.get("content"));
+            pending.push((id, is_error, images));
+        }
+        if pending.len() == 1 && pending[0].2.is_empty() {
+            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result) {
+                pending[0].2.push(image);
+            }
+        }
+        pending
+            .into_iter()
+            .map(
+                |(id, is_error, image_payloads)| AgentEvent::ToolResult {
+                    id,
+                    is_error,
+                    output: None,
+                    diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads,
+                },
+            )
+            .collect()
     }
 
     /// The CLI reported its session (`system:init`).
@@ -696,12 +763,7 @@ impl Normalizer {
                     session_id: None,
                 },
             ),
-            AgentEvent::ToolResult {
-                id: fork.chip,
-                is_error: status == DoneStatus::Errored,
-                output: None,
-                diff: None,
-            },
+            empty_tool_result(&fork.chip, status == DoneStatus::Errored),
         ]
     }
 
@@ -731,10 +793,11 @@ impl Normalizer {
     /// records) are not conversation. Once the replay has begun, it brings
     /// the rest.
     pub(crate) fn fork_record(&mut self, record: Value) -> Vec<AgentEvent> {
-        let Some(fork) = self
+        let Some(chip) = self
             .typed_fork
-            .as_mut()
+            .as_ref()
             .filter(|fork| fork.replayed.is_none())
+            .map(|fork| fork.chip.clone())
         else {
             return Vec::new();
         };
@@ -747,12 +810,18 @@ impl Normalizer {
             return Vec::new();
         };
         let events = if assistant {
-            subagent_message(&fork.chip, &f)
+            subagent_message(&chip, &f)
         } else {
-            subagent_results(&fork.chip, &f)
+            // Disk replay shows tool results only, the same as before. Image
+            // bytes on those results are kept; a scale note is not a message.
+            self.tool_result_events(&f, false)
+                .into_iter()
+                .map(|event| tag(&chip, event))
+                .collect()
         };
         if !events.is_empty()
             && let Some(uuid) = f.uuid
+            && let Some(fork) = self.typed_fork.as_mut()
         {
             fork.seen.insert(uuid);
         }
@@ -1133,9 +1202,10 @@ impl Normalizer {
                     .blocks()
                     .filter(|b: &ContentBlock| b.kind == "tool_use")
                     .flat_map(|b| {
+                        let decoded = decode_tool_use(&b.name, &b.input);
                         let call = AgentEvent::ToolCall {
                             id: b.id.clone(),
-                            call: decode_tool_use(&b.name, &b.input),
+                            call: decoded,
                         };
                         // A spawn's `prompt` is the subagent's opening user
                         // message — the wire never echoes it on the child
@@ -1225,7 +1295,16 @@ impl Normalizer {
                     }
                     // A subagent's tool results echo on the main channel too;
                     // they belong to its transcript, attributed like its calls.
-                    let mut out = subagent_results(parent, &f);
+                    let mut out = self
+                        .tool_result_events(&f, false)
+                        .into_iter()
+                        .map(|event| tag(parent, event))
+                        .collect::<Vec<_>>();
+                    // A meta frame's text is bookkeeping (the image scale note
+                    // is one). It must not read as a steer.
+                    if f.is_meta {
+                        return out;
+                    }
                     // A tagged user frame's TEXT blocks are the parent
                     // steering its subagent (SendMessage-style follow-ups —
                     // tool results ride their own blocks, filtered above).
@@ -1256,21 +1335,10 @@ impl Normalizer {
                     );
                     return out;
                 }
-                f.message
-                    .blocks()
-                    .filter(|b: &ContentBlock| b.kind == "tool_result")
-                    .map(|b| {
-                        // A skill whose result came back without a task
-                        // start ran inline: it never forks now.
-                        self.skill_calls.remove(&b.tool_use_id);
-                        AgentEvent::ToolResult {
-                            id: b.tool_use_id.clone(),
-                            is_error: b.is_error.unwrap_or(false),
-                            output: None,
-                            diff: None,
-                        }
-                    })
-                    .collect()
+                // A skill whose result came back without a task start ran
+                // inline: it never forks now. `tool_result_events` drops that
+                // pending skill when asked.
+                self.tool_result_events(&f, true)
             }
 
             // A claude.ai plan window was hit. A hard `rejected` blocks the
@@ -1715,12 +1783,7 @@ mod tests {
             ev,
             vec![AgentEvent::Subagent {
                 parent_tool_use_id: "toolu_sub".into(),
-                event: Box::new(AgentEvent::ToolResult {
-                    id: "t1".into(),
-                    is_error: false,
-                    output: None,
-                    diff: None,
-                }),
+                event: Box::new(empty_tool_result("t1", false)),
             }]
         );
     }
@@ -1788,6 +1851,138 @@ mod tests {
             )),
             "a real steer must still reach the subagent"
         );
+    }
+
+    /// A tool that returns an image puts the pixels on the result. The
+    /// following note about the displayed size is bookkeeping, not a steer,
+    /// on the main feed and on a subagent feed.
+    #[test]
+    fn image_tool_results_keep_bytes_and_the_scale_note_is_not_a_steer() {
+        const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+        let scale = "[Image: original 1884x2066, displayed at 1824x2000. Multiply coordinates by 1.03 to map to original image.]";
+        let source = "[Image: source: /tmp/shots/1.png]";
+        let combined = "[Image: source: /tmp/shots/1.png, original 10x10, displayed at 10x10.]";
+
+        let mut norm = Normalizer::new();
+        let read = crate::claude::wire::parse_frame(
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_read","name":"Read","input":{"file_path":"/tmp/shots/1.png"}}]}}"#,
+        )
+        .expect("parses");
+        norm.normalize(read, false);
+        let result = crate::claude::wire::parse_frame(&format!(
+            r#"{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_read","content":[{{"type":"image","source":{{"type":"base64","media_type":"image/png","data":"{PNG}"}}}}]}}]}}}}"#,
+            PNG = PNG
+        ))
+        .expect("parses");
+        let ev = norm.normalize(result, false);
+        let AgentEvent::ToolResult {
+            id,
+            image_payloads,
+            preview_paths,
+            ..
+        } = &ev[0]
+        else {
+            panic!("expected a tool result, got {ev:?}");
+        };
+        assert_eq!(id, "toolu_read");
+        assert!(preview_paths.is_empty());
+        assert_eq!(image_payloads.len(), 1);
+        assert_eq!(image_payloads[0].data_base64, PNG);
+        let journaled = serde_json::to_string(&ev[0]).unwrap();
+        assert!(
+            !journaled.contains(PNG),
+            "image bytes must not be serialized"
+        );
+        assert!(!journaled.contains("imagePayloads"));
+
+        // The same bytes on a subagent feed stay on the tool result.
+        let mut norm = Normalizer::new();
+        let read = crate::claude::wire::parse_frame(
+            r#"{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"tool_use","id":"toolu_child","name":"Read","input":{"file_path":"/tmp/shots/00.png"}}]}}"#,
+        )
+        .expect("parses");
+        norm.normalize(read, false);
+        let result = crate::claude::wire::parse_frame(&format!(
+            r#"{{"type":"user","parent_tool_use_id":"toolu_sub","message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_child","content":[{{"type":"image","source":{{"type":"base64","data":"{PNG}"}}}}]}}]}}}}"#,
+            PNG = PNG
+        ))
+        .expect("parses");
+        let ev = norm.normalize(result, false);
+        assert!(matches!(
+            &ev[..],
+            [AgentEvent::Subagent { parent_tool_use_id, event }]
+                if parent_tool_use_id == "toolu_sub"
+                    && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. } if image_payloads.len() == 1)
+        ));
+
+        for note in [scale, source, combined] {
+            let frame = format!(
+                r#"{{"type":"user","parent_tool_use_id":"toolu_sub","message":{{"content":[{{"type":"text","text":{text}}}]}}}}"#,
+                text = serde_json::to_string(note).unwrap()
+            );
+            assert!(
+                !normalize_one(&frame)
+                    .iter()
+                    .any(|event| matches!(event, AgentEvent::Subagent { .. })),
+                "{note} leaked as a steer"
+            );
+            let meta = format!(
+                r#"{{"type":"user","isMeta":true,"parent_tool_use_id":"toolu_sub","message":{{"content":{text}}}}}"#,
+                text = serde_json::to_string(note).unwrap()
+            );
+            assert!(
+                normalize_one(&meta).is_empty(),
+                "string meta note leaked: {note}"
+            );
+        }
+        // A meta frame cannot resurrect a settled chip, even with ordinary wording.
+        let meta_steer = r#"{"type":"user","isMeta":true,"parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"Keep going."}]}}"#;
+        assert!(normalize_one(meta_steer).is_empty());
+        // A real steer on the same frame shape still arrives.
+        let real = r#"{"type":"user","parent_tool_use_id":"toolu_sub","message":{"content":[{"type":"text","text":"Keep going."}]}}"#;
+        assert!(normalize_one(real).iter().any(|event| matches!(
+            event,
+            AgentEvent::Subagent { event: inner, .. }
+                if matches!(inner.as_ref(), AgentEvent::UserMessage { text } if text == "Keep going.")
+        )));
+
+        // Fallback when the content block has no image and the frame has one result.
+        let fallback = crate::claude::wire::parse_frame(&format!(
+            r#"{{"type":"user","toolUseResult":{{"type":"image","file":{{"base64":"{PNG}","type":"image/png"}}}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_fb","content":"ok"}}]}}}}"#,
+            PNG = PNG
+        ))
+        .expect("parses");
+        let ev = Normalizer::new().normalize(fallback, false);
+        assert!(matches!(
+            &ev[..],
+            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1
+        ));
+        // A result that already has the image does not take the fallback as a second copy.
+        let both = crate::claude::wire::parse_frame(&format!(
+            r#"{{"type":"user","toolUseResult":{{"type":"image","file":{{"base64":"{PNG}"}}}},"message":{{"content":[{{"type":"tool_result","tool_use_id":"toolu_both","content":[{{"type":"image","source":{{"type":"base64","data":"{PNG}"}}}}]}}]}}}}"#,
+            PNG = PNG
+        ))
+        .expect("parses");
+        let ev = Normalizer::new().normalize(both, false);
+        assert!(matches!(
+            &ev[..],
+            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1
+        ));
+
+        // Not an image, or too large to be one: no payload.
+        let junk = crate::claude::wire::parse_frame(
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_junk","content":[{"type":"image","source":{"type":"base64","data":"!!!!"}}]}]}}"#,
+        )
+        .expect("parses");
+        let ev = Normalizer::new().normalize(junk, false);
+        assert!(matches!(
+            &ev[..],
+            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.is_empty()
+        ));
+        let mut huge = "A".repeat(zeron_proto::IMAGE_MAX_BYTES.div_ceil(3) * 4 + 1);
+        assert!(compact_base64(&huge).is_none());
+        huge.clear();
+        assert_eq!(compact_base64("aGVs\nbG8=").as_deref(), Some("aGVsbG8="));
     }
 
     #[test]
@@ -2219,12 +2414,7 @@ mod tests {
                     session_id: None,
                 },
             ),
-            AgentEvent::ToolResult {
-                id: TYPED_CHIP.into(),
-                is_error: status == DoneStatus::Errored,
-                output: None,
-                diff: None,
-            },
+            empty_tool_result(TYPED_CHIP, status == DoneStatus::Errored),
         ]
     }
 

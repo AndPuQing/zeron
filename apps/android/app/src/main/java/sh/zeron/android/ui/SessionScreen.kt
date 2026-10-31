@@ -83,6 +83,8 @@ import sh.zeron.android.design.GeistMono
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
+import sh.zeron.android.transcript.TranscriptImageRef
+import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
@@ -166,23 +168,27 @@ fun SessionScreen(
     val scope = rememberCoroutineScope()
     var sheet by remember { mutableStateOf<TextSheet?>(null) }
     var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
-    val actions = remember(chatId) {
-        suspend fun load(ref: String): ImageBitmap? {
+    val imageDevice = handle.composer().host.deviceId
+    val actions = remember(chatId, imageDevice, core) {
+        suspend fun load(ref: TranscriptImageRef): ImageBitmap? {
             val device = handle.composer().host.deviceId
-            return runCatching {
-                val bytes = core.readAttachment(device, ref)
-                withContext(Dispatchers.Default) { BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
-            }.getOrNull()
+            return loadTranscriptImage(core, device, ref)
         }
-        val open: (String) -> Unit = { ref -> scope.launch { load(ref)?.let { viewing = it } } }
+        val imageCacheScope = "$imageDevice:$chatId"
+        // A thumbnail already on screen opens at once instead of reading the host again.
+        val open: (TranscriptImageRef) -> Unit = { ref ->
+            val shown = cachedTranscriptImage(imageCacheScope, ref)
+            if (shown != null) viewing = shown else scope.launch { load(ref)?.let { viewing = it } }
+        }
         TranscriptActions(
+            imageCacheScope = imageCacheScope,
             openUrl = { url ->
                 val uri = Uri.parse(url)
                 when (uri.scheme) {
                     "zerun" -> if (uri.host == "chat") uri.pathSegments.singleOrNull()?.let(onOpen)
                     "http", "https" -> CustomTabsIntent.Builder().build().launchUrl(context, uri)
                     // An image chip opens its upload full size, as its thumbnail did.
-                    "zeron-preview" -> uri.getQueryParameter("ref")?.let(open)
+                    "zeron-preview" -> uri.getQueryParameter("ref")?.let { open(TranscriptImageRef.Attachment(it)) }
                     // A sender caption opens the chat that sent the message.
                     "zeron-chat" -> uri.getQueryParameter("id")?.takeIf { it != chatId }?.let(onOpenChat)
                     else -> runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }

@@ -23,7 +23,7 @@ Each Files image surface admits at most 64 MiB of retained image resources, incl
 
 ## Tool-call image previews
 
-A tool chip whose call or output names an image file (PNG, JPEG, GIF, WebP, BMP, SVG, TIFF; at most four per chip) previews it when the chip is expanded. Relative paths resolve against the chat's cwd on the owning host. Bytes arrive through `ReadAttachmentChunk`, so its jail applies: the owning host's uploads directory (plus any read-only legacy uploads roots) and the working directory of every chat in the workspace on that host, not just the chat that ran the tool. A projectless chat's working directory is the home directory, so any image under home on that host is readable. Other paths show *Image unavailable*. Network and device paths (UNC `\\host\share`, `//host/share`, `\\?\UNC\…`, `\\.\…`) and drive-relative paths (`C:x.png`) are never previewed. The engine also jails each path lexically, resolving `.`/`..` without touching the filesystem, before it canonicalizes the path, so a path outside every root is refused without being opened.
+A tool chip whose call or output names an image file (PNG, JPEG, GIF, WebP, BMP, SVG, TIFF; at most four per chip) previews it when the chip is expanded. Relative paths resolve against the chat's cwd on the owning host. Bytes arrive through `ReadAttachmentChunk`, so its jail applies: the owning host's uploads directory (plus any read-only legacy uploads roots) and the working directory of every chat in the workspace on that host, not just the chat that ran the tool. A projectless chat's working directory is the home directory, so any image under home on that host is readable. When the tool result itself embeds image bytes, the engine stores a copy in the profile uploads directory and the chip previews that copy, so a scratch path named by the call does not have to be readable. A note that only describes the image's displayed size is not shown as a subagent message. Paths with no embedded bytes, and bytes the store rejects, still show *Image unavailable*. Network and device paths (UNC `\\host\share`, `//host/share`, `\\?\UNC\…`, `\\.\…`) and drive-relative paths (`C:x.png`) are never previewed. The engine also jails each path lexically, resolving `.`/`..` without touching the filesystem, before it canonicalizes the path, so a path outside every root is refused without being opened.
 
 `tool_images.rs` decodes one static frame on the background executor within the shared raster limits (4096 pixels per side, 64 MiB decoder allocation), downsamples it to at most 1120×440 and hands BGRA pixels straight to GPUI as a `RenderImage` (no re-encode, no asset cache). Nothing is read or decoded for collapsed chips or hidden groups. Collapsing starts a 600 ms grace; then the CPU frame and the sprite-atlas tiles are released. Reopening inside the grace reuses the texture, so rapid toggling never re-reads or re-decodes. Previews that are expanded but unpainted for 2 s count against a 64 MiB budget; painted ones are never evicted. Chat switches and transcript disposal release everything.
 
@@ -74,3 +74,63 @@ Physical-device validation is separate from these automated tests. This implemen
 - A second physical remote device: open images, switch files during loading, modify/rename/delete them, and switch workspace/device while requests are pending.
 
 No zui dependency changes are required. Zeron uses `on_pinch` and `on_scroll_wheel` from its existing pinned revision.
+
+
+## Mobile chat images
+
+Android and iOS show local raster images in settled assistant reply paragraphs,
+including paragraphs inside lists and blockquotes. Markdown captions remain
+available below the preview; tables, headings, user messages, reasoning and
+subagent Markdown keep their text links. The streaming tail becomes an image
+only after its block settles. URLs are never fetched. Both desktop and mobile
+use the same PNG/JPEG/WebP/GIF path-selection policy; `..` is kept for the host's
+lexical jail to reject rather than silently rewritten. Because a laid-out
+mobile widget can't fall back to its link, mobile additionally keeps the link
+for any path that doesn't lie lexically inside the chat's own folder (no
+folder, the home folder, `/tmp/…`, `../…`): those are paths
+`ReadChatImageChunk` always refuses. A `~/…` folder, such as a projectless
+chat's scratch folder, is matched by its whole path below some home directory,
+since the phone doesn't know the host's home.
+
+Mobile lays these out as `WidgetKind::ChatImage { chatId, path }` and reads
+them with the typed `readChatImage(deviceId, chatId, path)` FFI call, never
+through `readAttachment`. The client routes them exclusively to
+`ReadChatImageChunk` on the owning host, caches them apart from attachment
+reads of the same path (so neither jail serves the other), validates contiguous chunks, MIME and
+name, and bounds the bytes to 10 MiB. The host sends `CHAT_IMAGE_CHUNK_BYTES`
+(45,000) per chunk; the client allows enough chunks for a full-size image, each
+under its own call deadline. There is no fallback to `ReadAttachmentChunk` if
+an old host lacks the stricter RPC. Native decoders downsample anything larger
+than 4096 pixels on a side instead of refusing it. Images preserve their aspect
+ratio; failed reads show a retry action, and a failed image is not read again
+until it is tapped. Concurrent requests for one image share a read. Decoded
+caches are bounded and scoped by device. Tapping a loaded image opens the viewer
+from the decoded cache.
+
+iOS shares an image read between its visible consumers. Hidden pooled rows and
+views removed from the window release their demand; queued reads with no remaining
+consumers are discarded. The final consumer leaving cancels an active read, while
+other visible copies keep their shared read. Cancelled reads do not mark an image
+as unavailable, so returning to it can load normally. Read/decode concurrency stays
+bounded even while cancelled operations wind down.
+
+Tool results carrying inline images are extracted by Claude, Codex MCP, ACP,
+Pi and OMP adapters and saved by the engine before publication. The document
+syncs optional `previewPaths`, never base64 payloads. Expanded tool details in
+both main and subagent transcripts show these copies on Android and iOS, as
+on desktop. The uploads key includes content as well as chat/subagent/tool
+identity, so a reused tool ID cannot overwrite a historical image. At most
+four images per result are saved. Rejected payloads do not fail the turn.
+A copy that is already stored is not written again. Deleting a chat (or its
+space) deletes the copies its own transcript showed, once no other transcript
+on that device shows them: a fork copies its source's entries, and subagent
+transcripts are kept. Only content-keyed copies in the uploads directory are
+removed; attachments and `show_image` copies stay.
+Old documents default to no stored previews; previously discarded pixels
+cannot be recovered. Mobile does not infer arbitrary file previews from tool
+text; desktop retains its existing path-based fallback.
+
+Regression coverage: shared path policy and reference round trips, bounded
+chunk transfer, adapter extraction, uploads retention under reused tool IDs,
+document round trips and mobile layout measurement/streaming behavior. Mobile
+builds and Rust mobile-core tests run in CI; no local mobile SDK is required.

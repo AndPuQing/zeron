@@ -7,6 +7,42 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// Visitor methods that read every non-map, non-string JSON shape as
+/// `$empty`, draining arrays without copying them.
+macro_rules! ignore_scalars_and_seqs {
+    ($de:lifetime, $empty:expr) => {
+        fn visit_seq<A: serde::de::SeqAccess<$de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+            while seq.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok($empty)
+        }
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+    };
+}
+
+/// [`ignore_scalars_and_seqs`] plus strings.
+macro_rules! ignore_non_maps {
+    ($de:lifetime, $empty:expr) => {
+        ignore_scalars_and_seqs!($de, $empty);
+        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+            Ok($empty)
+        }
+    };
+}
+
 /// One parsed stdout line.
 #[derive(Debug)]
 pub(crate) enum Frame {
@@ -200,6 +236,104 @@ pub(crate) struct MessageFrame {
     /// Terse assistant-level error code (`rate_limit`, `billing_error`, …).
     #[serde(default)]
     pub error: Option<String>,
+    /// Bookkeeping frame, not a person typing. Image scale notes ride this.
+    #[serde(default, rename = "isMeta")]
+    pub is_meta: bool,
+    /// Structured tool outcome. An image result repeats its bytes here when
+    /// the content blocks do not. The live stream spells it in snake case,
+    /// transcripts in camel case.
+    #[serde(default, rename = "toolUseResult", alias = "tool_use_result")]
+    pub tool_use_result: ToolUseResult,
+}
+
+/// `toolUseResult`, read only for an image result's base64. It is often a
+/// whole file's text, a long command output or a subagent report: every
+/// other field and shape is skipped while parsing, never copied.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct ToolUseResult {
+    pub image_base64: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ToolUseResult {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Fields;
+        impl<'de> serde::de::Visitor<'de> for Fields {
+            type Value = ToolUseResult;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a tool result")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let (mut image, mut base64) = (false, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "type" => image = map.next_value::<OnlyText>()?.0.as_deref() == Some("image"),
+                        "file" => base64 = map.next_value::<ImageFile>()?.0,
+                        _ => {
+                            map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+                Ok(ToolUseResult { image_base64: base64.filter(|_| image) })
+            }
+            ignore_non_maps!('de, ToolUseResult::default());
+        }
+        deserializer.deserialize_any(Fields)
+    }
+}
+
+/// A string value, or `None` for any other shape (skipped, not copied).
+struct OnlyText(Option<String>);
+
+impl<'de> Deserialize<'de> for OnlyText {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Text;
+        impl<'de> serde::de::Visitor<'de> for Text {
+            type Value = OnlyText;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a string")
+            }
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                Ok(OnlyText(Some(v.to_owned())))
+            }
+            fn visit_string<E: serde::de::Error>(self, v: String) -> Result<Self::Value, E> {
+                Ok(OnlyText(Some(v)))
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                while map.next_entry::<serde::de::IgnoredAny, serde::de::IgnoredAny>()?.is_some() {}
+                Ok(OnlyText(None))
+            }
+            ignore_scalars_and_seqs!('de, OnlyText(None));
+        }
+        deserializer.deserialize_any(Text)
+    }
+}
+
+/// `file.base64` of an image result; a text result's `file.content` is skipped.
+struct ImageFile(Option<String>);
+
+impl<'de> Deserialize<'de> for ImageFile {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct File;
+        impl<'de> serde::de::Visitor<'de> for File {
+            type Value = ImageFile;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a file")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+                let mut base64 = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "base64" {
+                        base64 = map.next_value::<OnlyText>()?.0;
+                    } else {
+                        map.next_value::<serde::de::IgnoredAny>()?;
+                    }
+                }
+                Ok(ImageFile(base64))
+            }
+            ignore_non_maps!('de, ImageFile(None));
+        }
+        deserializer.deserialize_any(File)
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -747,6 +881,41 @@ pub(crate) fn interrupt_request_line(request_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_use_results_keep_only_an_image_and_never_fail_a_frame() {
+        let result = |value: &str| {
+            let line = format!(
+                r#"{{"type":"user","toolUseResult":{value},"message":{{"content":[{{"type":"tool_result","tool_use_id":"t"}}]}}}}"#
+            );
+            match parse_frame(&line).expect("parses") {
+                Frame::User(f) => f.tool_use_result,
+                other => panic!("{other:?}"),
+            }
+        };
+        let none = ToolUseResult::default();
+        assert_eq!(result(r#""Error: blocked""#), none);
+        assert_eq!(result(r#"[{"type":"text","text":"report"}]"#), none);
+        assert_eq!(result("null"), none);
+        assert_eq!(result("42"), none);
+        assert_eq!(
+            result(r#"{"type":"text","file":{"filePath":"/a.rs","content":"fn main() {}"}}"#),
+            none
+        );
+        assert_eq!(result(r#"{"agentId":"a1","usage":{"input_tokens":2},"content":[1,2]}"#), none);
+        assert_eq!(result(r#"{"type":["odd"],"file":"odd"}"#), none);
+        let image = ToolUseResult { image_base64: Some("YWJj".into()) };
+        assert_eq!(
+            result(r#"{"file":{"type":"image/png","base64":"YWJj"},"type":"image"}"#),
+            image
+        );
+        // The live stream spells the field in snake case.
+        let live = r#"{"type":"user","tool_use_result":{"type":"image","file":{"base64":"YWJj"}},"message":{"content":[]}}"#;
+        match parse_frame(live).expect("parses") {
+            Frame::User(f) => assert_eq!(f.tool_use_result, image),
+            other => panic!("{other:?}"),
+        }
+    }
 
     #[test]
     fn steer_priority_follows_tool_state() {

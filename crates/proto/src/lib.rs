@@ -10,6 +10,7 @@ pub mod annotation;
 pub mod attachment_mentions;
 pub mod change_request_assessment;
 pub mod chat_attribution;
+pub mod chat_images;
 pub mod chat_mentions;
 pub mod cloud;
 pub mod completion;

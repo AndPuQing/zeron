@@ -1,4 +1,5 @@
 import UIKit
+import ImageIO
 
 /// A live session backed by the Rust core. The transcript flows Rust→Rust
 /// (`TranscriptView.attach`); this maps the composer-facing state.
@@ -405,39 +406,14 @@ final class CoreSessionSource: SessionSource {
         (try? await client.searchFiles(deviceId: hostDevice, chatId: chatId, spaceId: nil, query: query)) ?? []
     }
 
-    private static let images = NSCache<NSString, UIImage>()
-
-    func image(_ reference: String) async -> UIImage? {
-        if let hit = Self.images.object(forKey: reference as NSString) { return hit }
-        guard let data = try? await client.readAttachment(deviceId: hostDevice, path: reference),
-              let image = await UIImage(data: data)?.byPreparingForDisplay()
-        else { return nil }
-        Self.images.setObject(image, forKey: reference as NSString)
-        return image
+    func image(_ ref: TranscriptImageRef) async -> UIImage? {
+        await TranscriptImages.image(client: client, device: hostDevice, ref: ref)
     }
 
-    func loadImage(_ reference: String, into view: UIImageView) {
-        // Claim the view first: a slower load for a row it used to show
-        // must not land on top of this one.
-        view.accessibilityIdentifier = reference
-        if let hit = Self.images.object(forKey: reference as NSString) {
-            view.image = hit
-            return
-        }
-        let device = hostDevice
-        let client = self.client
-        view.accessibilityIdentifier = reference
-        Task.detached(priority: .userInitiated) {
-            guard let data = try? await client.readAttachment(deviceId: device, path: reference),
-                  let image = UIImage(data: data)?.preparingForDisplay()
-            else { return }
-            Self.images.setObject(image, forKey: reference as NSString)
-            await MainActor.run {
-                guard view.accessibilityIdentifier == reference else { return }
-                UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
-            }
-        }
+    @MainActor func loadImage(_ ref: TranscriptImageRef, into view: UIImageView) {
+        TranscriptImages.load(client: client, device: hostDevice, ref: ref, into: view)
     }
+
 }
 
 func accessModeLabel(_ mode: String) -> String {
@@ -480,4 +456,106 @@ func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool,
         actions.append(UIAction(title: reason, attributes: .disabled) { _ in })
     }
     return UIMenu(title: showPlan ? "Plan · applies next turn" : "Permissions · applies next turn", children: actions)
+}
+
+@MainActor
+enum TranscriptImages {
+    private static let reads = TranscriptImageReads()
+    /// Failed images stay failed until tapped, so relayouts don't queue
+    /// reads that will fail again ahead of visible thumbnails.
+    private static var failed: Set<String> = []
+
+    private static let images: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.totalCostLimit = 64 * 1024 * 1024
+        return cache
+    }()
+
+    nonisolated private static func decodeImage(_ data: Data) -> UIImage? {
+        // Preserve the existing attachment limit; chat-image RPC reads are capped at 10 MiB.
+        guard data.count <= 24 * 1024 * 1024,
+              let source = CGImageSourceCreateWithData(data as CFData, nil)
+        else { return nil }
+        // Larger images are downsampled to 4096 px on the longer side, never
+        // refused. One decode at the target size, with EXIF orientation applied
+        // as UIImage(data:) did.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 4096,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
+    }
+
+    static func image(client: CoreClient, device: String, ref: TranscriptImageRef) async -> UIImage? {
+        let key = "\(device):\(ref.id)"
+        let consumer = UUID()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                guard !Task.isCancelled else { continuation.resume(returning: nil); return }
+                reads.request(key: key, consumer: consumer, operation: {
+                    await read(client: client, device: device, ref: ref, key: key)
+                }, completion: { result in
+                    switch result {
+                    case let .loaded(image): continuation.resume(returning: image)
+                    case .cancelled: continuation.resume(returning: nil)
+                    }
+                })
+            }
+        }, onCancel: {
+            Task { @MainActor in reads.cancel(key: key, consumer: consumer) }
+        })
+    }
+
+    private static func read(client: CoreClient, device: String, ref: TranscriptImageRef, key: String) async -> UIImage? {
+        guard !Task.isCancelled else { return nil }
+        if let hit = images.object(forKey: key as NSString) { return hit }
+        let bytes: Data? = switch ref {
+        case let .attachment(reference): try? await client.readAttachment(deviceId: device, path: reference)
+        case let .chat(chatId, path): try? await client.readChatImage(deviceId: device, chatId: chatId, path: path)
+        }
+        guard !Task.isCancelled else { return nil }
+        guard let data = bytes,
+              let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
+        else {
+            if !Task.isCancelled { failed.insert(key) }
+            return nil
+        }
+        guard !Task.isCancelled else { return nil }
+        failed.remove(key)
+        images.setObject(image, forKey: key as NSString, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
+        return image
+    }
+
+    /// A tapped "unavailable" image is read again.
+    static func retry(_ ref: TranscriptImageRef) {
+        failed = failed.filter { !$0.hasSuffix(":\(ref.id)") }
+    }
+
+    static func load(client: CoreClient, device: String, ref: TranscriptImageRef, into view: UIImageView) {
+        guard let view = view as? TranscriptImageView else { return }
+        let key = "\(device):\(ref.id)"
+        view.bindImageLoad { view in
+            view.accessibilityIdentifier = key
+            view.loading()
+            if let hit = images.object(forKey: key as NSString) { view.image = hit; return {} }
+            if failed.contains(key) { view.unavailable(); return {} }
+            let consumer = UUID()
+            reads.request(key: key, consumer: consumer, operation: {
+                await read(client: client, device: device, ref: ref, key: key)
+            }, completion: { [weak view] result in
+                guard let view, view.accessibilityIdentifier == key else { return }
+                switch result {
+                case let .loaded(image):
+                    if let image {
+                        UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
+                    } else { view.unavailable() }
+                case .cancelled: break
+                }
+            })
+            return { reads.cancel(key: key, consumer: consumer) }
+        }
+    }
 }

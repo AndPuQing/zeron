@@ -424,6 +424,24 @@ fn chat_image_folder(
     Ok(folder)
 }
 
+/// Delete the tool-result image copies deleted chats showed, once no other
+/// transcript on this device shows them (a fork copies its source's
+/// entries). Scans every stored transcript, so it runs in the background;
+/// a store error keeps every file.
+fn release_tool_images(doc_host: &DocHost, uploads: &Uploads, images: Vec<String>) {
+    if images.is_empty() {
+        return;
+    }
+    let (doc_host, uploads) = (doc_host.clone(), uploads.clone());
+    tokio::task::spawn_blocking(move || {
+        let images: HashSet<String> = images.into_iter().collect();
+        match doc_host.tool_images_in_use(&images) {
+            Ok(used) => uploads.release_tool_images(images.difference(&used)),
+            Err(error) => tracing::warn!(%error, "tool images kept: transcripts unreadable"),
+        }
+    });
+}
+
 /// A cwd the user (or a project-less chat) meant as "host home", not a folder.
 fn meaningful_cwd(cwd: Option<String>) -> Option<String> {
     cwd.filter(|cwd| {
@@ -1954,7 +1972,8 @@ impl EngineRpc {
                     if let Err(err) = self.workspace.delete_chat(orphan) {
                         tracing::warn!(chat = %orphan, error = %err, "deleting a Cloud chat's child failed");
                     }
-                    self.doc_host.purge_chat(orphan);
+                    let images = self.doc_host.purge_chat(orphan);
+                    release_tool_images(&self.doc_host, &self.uploads, images);
                 }
                 cloud_chats.extend(orphans);
                 self.delete_cloud_machines(cloud_chats);
@@ -1963,14 +1982,17 @@ impl EngineRpc {
                 // write into an orphaned session doc).
                 let sessions = self.sessions.clone();
                 let doc_host = self.doc_host.clone();
+                let uploads = self.uploads.clone();
                 let chat_ids = deleted.chat_ids;
                 tokio::spawn(async move {
+                    let mut images = Vec::new();
                     for chat_id in chat_ids {
                         if let Err(err) = sessions.terminate(&chat_id).await {
                             tracing::debug!(chat = %chat_id, error = %err, "deleteSpace teardown skipped");
                         }
-                        doc_host.purge_chat(&chat_id);
+                        images.extend(doc_host.purge_chat(&chat_id));
                     }
+                    release_tool_images(&doc_host, &uploads, images);
                 });
                 Ok(())
             }
@@ -2070,14 +2092,15 @@ impl EngineRpc {
                 };
                 self.voice.retire_chat(&chat_id);
                 self.workspace.delete_chat(&chat_id).map_err(failed)?;
-                self.doc_host.purge_chat(&chat_id);
+                let mut images = self.doc_host.purge_chat(&chat_id);
                 for child in &children {
                     self.voice.retire_chat(child);
                     if let Err(err) = self.workspace.delete_chat(child) {
                         tracing::warn!(chat = %child, error = %err, "deleting a Cloud chat's child failed");
                     }
-                    self.doc_host.purge_chat(child);
+                    images.extend(self.doc_host.purge_chat(child));
                 }
+                release_tool_images(&self.doc_host, &self.uploads, images);
                 if on_cloud {
                     self.delete_cloud_machines(std::iter::once(chat_id).chain(children).collect());
                 }

@@ -516,7 +516,8 @@ pub fn read_chat_image_chunk(
     }
     let size = meta.len();
     let start = offset.min(size);
-    let next_offset = (start + READ_CHUNK_BYTES).min(size);
+    // Clients size their read budget from this constant.
+    let next_offset = (start + zeron_proto::chat_images::CHAT_IMAGE_CHUNK_BYTES as u64).min(size);
     file.seek(std::io::SeekFrom::Start(start))?;
     let mut buf = Vec::with_capacity((next_offset - start) as usize);
     file.take(next_offset - start).read_to_end(&mut buf)?;
@@ -1009,7 +1010,9 @@ mod tests {
         {
             let via = elsewhere.path().join("chat-folder");
             std::os::unix::fs::symlink(folder.path(), &via).unwrap();
-            for path in [via.join("shots").join("before.png"), inside.clone()] {
+            // The other accepted spelling is canonical, not a third alias
+            // such as macOS's /var (whose canonical spelling is /private/var).
+            for path in [via.join("shots").join("before.png"), inside.canonicalize().unwrap()] {
                 let chunk = read_chat_image_chunk(path.to_str().unwrap(), 0, &via)
                     .unwrap_or_else(|e| panic!("{path:?}: {e}"));
                 assert_eq!(BASE64.decode(&chunk.data).unwrap(), png);
@@ -1081,6 +1084,15 @@ pub struct ImportedImage {
 }
 
 const MAX_GENERATED_IMAGE_BYTES: u64 = 24 * 1024 * 1024;
+
+/// `{sha256 hex}-image.{png,jpg,webp,gif}`: a tool-result image copy.
+fn is_tool_image_name(name: &str) -> bool {
+    name.split_once("-image.").is_some_and(|(key, ext)| {
+        key.len() == 64
+            && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            && matches!(ext, "png" | "jpg" | "webp" | "gif")
+    })
+}
 
 fn raster_signature(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -1320,18 +1332,49 @@ impl Uploads {
         }
         std::fs::create_dir_all(self.dir())?;
         let destination = self.dir().join(format!("{}-image.{ext}", sanitize(id)));
-        let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
-        temporary.write_all(bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(&destination)
-            .map_err(|e| EngineError::Io(e.error))?;
+        // Ids are unique or content-keyed, and the file only ever appears by
+        // an atomic rename: one already in place holds these exact bytes.
+        // Echoed and replayed results skip the rewrite and its fsync.
+        let stored = std::fs::metadata(&destination)
+            .is_ok_and(|meta| meta.is_file() && meta.len() == bytes.len() as u64);
+        if !stored {
+            let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
+            temporary.write_all(bytes)?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist(&destination)
+                .map_err(|e| EngineError::Io(e.error))?;
+        }
         Ok(ImportedImage {
             path: destination.to_string_lossy().into_owned(),
             name: sanitize(name),
             mime_type: mime.into(),
             size: bytes.len() as u64,
         })
+    }
+
+    /// Delete tool-result image copies a deleted chat showed and nothing else
+    /// does. Only files directly in this uploads dir named by a content key
+    /// (`{64 hex}-image.{ext}`, as `store_tool_result_images` writes them)
+    /// are touched: attachments, `show_image` copies and anything elsewhere
+    /// stay.
+    pub fn release_tool_images<'a>(&self, paths: impl IntoIterator<Item = &'a String>) {
+        for path in paths {
+            let path = Path::new(path);
+            let tool_image = path.parent() == Some(self.dir())
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_tool_image_name);
+            if !tool_image {
+                continue;
+            }
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => tracing::warn!(path = %path.display(), error = %err, "tool image not released"),
+            }
+        }
     }
 
     /// Copy a Codex-owned raster into the active profile without exposing the
@@ -1531,5 +1574,63 @@ mod generated_image_tests {
         // All locks must be released after the operation.
         std::fs::write(&source, b"changed").unwrap();
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    #[test]
+    fn only_content_keyed_tool_images_in_uploads_are_released() {
+        let store = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(store.path());
+        let png = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .unwrap();
+        let key = "ab".repeat(32);
+        let tool = uploads.store_shown_image(&key, "image", &png).unwrap().path;
+        let shown = uploads.store_shown_image("img:abc", "shot.png", &png).unwrap().path;
+        let outside = elsewhere.path().join(format!("{key}-image.png"));
+        std::fs::write(&outside, &png).unwrap();
+        let outside = outside.to_string_lossy().into_owned();
+        let missing = uploads.dir().join(format!("{}-image.png", "cd".repeat(32)));
+        let missing = missing.to_string_lossy().into_owned();
+        uploads.release_tool_images([&tool, &shown, &outside, &missing]);
+        assert!(!Path::new(&tool).exists(), "the tool image copy is released");
+        assert!(Path::new(&shown).exists(), "a show_image copy is not a tool image");
+        assert!(Path::new(&outside).exists(), "only the uploads dir is touched");
+        assert!(!is_tool_image_name(&format!("{key}-image.svg")));
+        assert!(!is_tool_image_name(&format!("{}-image.png", "AB".repeat(32))));
+    }
+
+    #[test]
+    fn shown_image_is_sniffed_idempotent_and_readable_from_uploads() {
+        let store = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(store.path());
+        let png = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .unwrap();
+        let first = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
+        #[cfg(unix)]
+        let inode = |path: &str| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
+        #[cfg(unix)]
+        let written = inode(&first.path);
+        let again = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
+        assert_eq!(first, again);
+        // The copy already in place is kept, not rewritten.
+        #[cfg(unix)]
+        assert_eq!(inode(&again.path), written);
+        assert_eq!(first.mime_type, "image/png");
+        assert!(first.path.ends_with("-image.png"));
+        let chunk = uploads.read_chunk(&first.path, 0, &[]).unwrap();
+        assert!(chunk.done);
+        assert_eq!(BASE64.decode(chunk.data).unwrap(), png);
+        assert!(
+            uploads
+                .store_shown_image("text", "x.bin", b"hello")
+                .is_err()
+        );
+        assert!(
+            uploads
+                .store_shown_image("bad-png", "x.png", b"\x89PNG\r\n\x1a\nnot a png")
+                .is_err()
+        );
     }
 }

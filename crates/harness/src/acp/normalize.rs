@@ -8,8 +8,12 @@
 //! tagged `sessionUpdate`/snake_case; structs are camelCase; tool kinds and
 //! statuses are snake_case).
 
+use std::collections::HashMap;
+
 use serde_json::Value;
-use zeron_proto::{AgentEvent, SlashCommand, TodoItem, TodoStatus, ToolCall, ToolDiff};
+use zeron_proto::{
+    AgentEvent, SlashCommand, TodoItem, TodoStatus, ToolCall, ToolDiff, ToolResultImage,
+};
 
 /// Byte cap applied to tool output text at the harness boundary. The doc-side
 /// fold applies its own (smaller) cap before anything persists; this one only
@@ -18,6 +22,92 @@ pub(crate) const OUTPUT_CAP: usize = 16 * 1024;
 
 /// Byte cap for each side of an inline diff crossing the event stream.
 pub(crate) const DIFF_TEXT_CAP: usize = 64 * 1024;
+
+// Partial ACP tool updates may precede the terminal status. Keep their images
+// within one session-wide budget, including Devin's nested agents.
+const MAX_PENDING_IMAGE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PENDING_IMAGE_CALLS: usize = 128;
+
+#[derive(Default)]
+pub(super) struct Normalizer {
+    images: HashMap<(String, String), Vec<ToolResultImage>>,
+    image_bytes: usize,
+}
+
+impl Normalizer {
+    pub(super) fn map(&mut self, update: &Value) -> Vec<AgentEvent> {
+        self.map_scoped("", update)
+    }
+
+    pub(super) fn map_scoped(&mut self, scope: &str, update: &Value) -> Vec<AgentEvent> {
+        let mut events = map_update(update);
+        let kind = update.get("sessionUpdate").and_then(Value::as_str);
+        if !matches!(kind, Some("tool_call" | "tool_call_update")) {
+            return events;
+        }
+        let Some(id) = update
+            .get("toolCallId")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            return events;
+        };
+        let key = (scope.to_owned(), id.to_owned());
+        if kind == Some("tool_call") {
+            self.take_images(&key);
+        }
+        if let Some(images) = events.iter_mut().find_map(|event| match event {
+            AgentEvent::ToolResult { image_payloads, .. } => Some(image_payloads),
+            _ => None,
+        }) {
+            let previous = self.take_images(&key);
+            // ACP content arrays replace the previous collection; omission
+            // (or null) leaves it unchanged, even on the terminal update.
+            if !update.get("content").is_some_and(Value::is_array) {
+                *images = previous;
+            }
+        } else if update.get("status").and_then(Value::as_str) == Some("cancelled") {
+            self.take_images(&key);
+        } else if update.get("content").is_some_and(Value::is_array) {
+            self.take_images(&key);
+            let images = crate::tool_images::images_in_content(update.get("content"));
+            let bytes = pending_image_bytes(&key, &images);
+            if !images.is_empty()
+                && self.images.len() < MAX_PENDING_IMAGE_CALLS
+                && self.image_bytes.saturating_add(bytes) <= MAX_PENDING_IMAGE_BYTES
+            {
+                self.image_bytes += bytes;
+                self.images.insert(key, images);
+            }
+        }
+        events
+    }
+
+    fn take_images(&mut self, key: &(String, String)) -> Vec<ToolResultImage> {
+        let Some(images) = self.images.remove(key) else {
+            return Vec::new();
+        };
+        self.image_bytes -= pending_image_bytes(key, &images);
+        images
+    }
+
+    pub(super) fn clear_scope(&mut self, scope: &str) {
+        self.images.retain(|(owner, _), _| owner != scope);
+        self.image_bytes = self
+            .images
+            .iter()
+            .map(|(key, images)| pending_image_bytes(key, images))
+            .sum();
+    }
+}
+
+fn pending_image_bytes(key: &(String, String), images: &[ToolResultImage]) -> usize {
+    images
+        .iter()
+        .fold(key.0.len().saturating_add(key.1.len()), |bytes, image| {
+            bytes.saturating_add(image.data_base64.len())
+        })
+}
 
 fn str_field(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_owned()
@@ -422,6 +512,8 @@ pub(crate) fn map_update(update: &Value) -> Vec<AgentEvent> {
                     is_error: false,
                     output: None,
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 },
             ]
         }
@@ -460,6 +552,8 @@ fn resolved_result(update: &Value, id: String) -> Option<AgentEvent> {
         is_error,
         output: tool_output(update),
         diff: tool_diff(update),
+        preview_paths: Vec::new(),
+        image_payloads: crate::tool_images::images_in_content(update.get("content")),
     })
 }
 
@@ -505,6 +599,187 @@ pub(crate) fn preferred_allow_option(options: &[Value]) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn image_content(data: &str) -> Value {
+        json!([{"type": "content", "content": {
+            "type": "image", "data": data, "mimeType": "image/png"
+        }}])
+    }
+
+    #[test]
+    fn tool_images_wait_for_a_terminal_status() {
+        let mut normalizer = Normalizer::default();
+        normalizer.map(&json!({
+            "sessionUpdate": "tool_call", "toolCallId": "screenshot",
+            "kind": "read", "status": "in_progress"
+        }));
+        assert!(
+            normalizer
+                .map(&json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": "screenshot",
+                    "content": image_content("YWJj")
+                }))
+                .is_empty()
+        );
+        assert!(
+            normalizer
+                .map(&json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": "screenshot",
+                    "status": "in_progress"
+                }))
+                .is_empty()
+        );
+        let done = json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "screenshot",
+            "status": "completed"
+        });
+        assert!(
+            matches!(normalizer.map(&done).as_slice(), [AgentEvent::ToolResult {
+            image_payloads, is_error: false, ..
+        }] if image_payloads.len() == 1 && image_payloads[0].data_base64 == "YWJj")
+        );
+        assert!(normalizer.images.is_empty());
+        assert_eq!(normalizer.image_bytes, 0);
+        assert!(
+            matches!(normalizer.map(&done).as_slice(), [AgentEvent::ToolResult {
+            image_payloads, ..
+        }] if image_payloads.is_empty())
+        );
+    }
+
+    #[test]
+    fn tool_image_content_is_replaced_only_by_an_explicit_array() {
+        for (replacement, expected) in [
+            (image_content("ZGVm"), Some("ZGVm")),
+            (json!([]), None),
+            (
+                json!([{"type": "content", "content": {"type": "text", "text": "done"}}]),
+                None,
+            ),
+            (Value::Null, Some("YWJj")),
+        ] {
+            // Exercise replacement both before and on a terminal failure.
+            for terminal in [false, true] {
+                let mut normalizer = Normalizer::default();
+                normalizer.map(&json!({
+                    "sessionUpdate": "tool_call", "toolCallId": "read",
+                    "status": "in_progress", "content": image_content("YWJj")
+                }));
+                let update = json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": "read",
+                    "status": if terminal { "failed" } else { "in_progress" },
+                    "content": replacement
+                });
+                let mut events = normalizer.map(&update);
+                if !terminal {
+                    assert!(events.is_empty());
+                    events = normalizer.map(&json!({
+                        "sessionUpdate": "tool_call_update", "toolCallId": "read", "status": "failed"
+                    }));
+                }
+                let [
+                    AgentEvent::ToolResult {
+                        image_payloads,
+                        is_error: true,
+                        ..
+                    },
+                ] = events.as_slice()
+                else {
+                    panic!("expected a failed tool result: {events:?}");
+                };
+                assert_eq!(
+                    image_payloads
+                        .iter()
+                        .map(|image| image.data_base64.as_str())
+                        .collect::<Vec<_>>(),
+                    expected.into_iter().collect::<Vec<_>>()
+                );
+                assert!(normalizer.images.is_empty());
+                assert_eq!(normalizer.image_bytes, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn pending_tool_images_are_isolated_by_call_and_agent() {
+        let mut normalizer = Normalizer::default();
+        let calls = [
+            ("", "read", "YWJj"),
+            ("child", "read", "ZGVm"),
+            ("child", "other", "Z2hp"),
+        ];
+        for (scope, id, data) in calls {
+            normalizer.map_scoped(
+                scope,
+                &json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": id,
+                    "content": image_content(data)
+                }),
+            );
+        }
+        for (scope, id, data) in calls {
+            let events = normalizer.map_scoped(
+                scope,
+                &json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": id, "status": "completed"
+                }),
+            );
+            assert!(
+                matches!(events.as_slice(), [AgentEvent::ToolResult { image_payloads, .. }]
+                if image_payloads.len() == 1 && image_payloads[0].data_base64 == data)
+            );
+        }
+        assert_eq!(normalizer.image_bytes, 0);
+    }
+
+    #[test]
+    fn abandoned_tool_images_are_released_without_reusing_stale_content() {
+        let mut normalizer = Normalizer::default();
+        for (scope, id) in [("", "reused"), ("", "cancelled"), ("child", "open")] {
+            normalizer.map_scoped(
+                scope,
+                &json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": id,
+                    "content": image_content("YWJj")
+                }),
+            );
+        }
+        normalizer.map(&json!({"sessionUpdate": "tool_call", "toolCallId": "reused"}));
+        normalizer.map(&json!({"sessionUpdate": "tool_call_update", "toolCallId": "cancelled", "status": "cancelled"}));
+        normalizer.clear_scope("child");
+        assert!(normalizer.images.is_empty());
+        assert_eq!(normalizer.image_bytes, 0);
+        assert!(matches!(normalizer.map(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "reused", "status": "completed"
+        })).as_slice(), [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.is_empty()));
+    }
+
+    #[test]
+    fn pending_tool_images_have_a_shared_byte_and_call_budget() {
+        for (calls, data) in [
+            (MAX_PENDING_IMAGE_CALLS + 1, "YWJj".to_owned()),
+            (9, "A".repeat(MAX_PENDING_IMAGE_BYTES / 8)),
+        ] {
+            let mut normalizer = Normalizer::default();
+            let content = image_content(&data);
+            for call in 0..calls {
+                normalizer.map_scoped(
+                    if call % 2 == 0 { "" } else { "child" },
+                    &json!({
+                        "sessionUpdate": "tool_call_update", "toolCallId": call.to_string(),
+                        "content": content
+                    }),
+                );
+                assert!(normalizer.image_bytes <= MAX_PENDING_IMAGE_BYTES);
+                assert!(normalizer.images.len() <= MAX_PENDING_IMAGE_CALLS);
+            }
+            assert!(normalizer.images.len() < calls);
+            assert!(!normalizer.images.is_empty());
+            normalizer.clear_scope("");
+            normalizer.clear_scope("child");
+            assert_eq!(normalizer.image_bytes, 0);
+        }
+    }
 
     #[test]
     fn message_and_thought_chunks_map_to_deltas() {
@@ -561,6 +836,8 @@ mod tests {
                     is_error: false,
                     output: Some("total 0".into()),
                     diff: None,
+                    preview_paths: Vec::new(),
+                    image_payloads: Vec::new(),
                 },
             ]
         );
@@ -604,6 +881,8 @@ mod tests {
                     old_text: Some("fn old() {}".into()),
                     new_text: "fn new() {}".into(),
                 }),
+                preview_paths: Vec::new(),
+                image_payloads: Vec::new(),
             }
         );
     }
@@ -642,6 +921,8 @@ mod tests {
                 is_error: true,
                 output: None,
                 diff: None,
+                preview_paths: Vec::new(),
+                image_payloads: Vec::new(),
             }]
         );
     }

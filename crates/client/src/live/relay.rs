@@ -318,6 +318,22 @@ impl Relay {
         lock(&self.unsupported).clear();
     }
 
+    pub(crate) async fn read_chat_image(&self, device_id: &str, image: &zeron_proto::chat_images::ChatImage) -> Result<Vec<u8>> {
+        use zeron_proto::chat_images::CHAT_IMAGE_CHUNK_BYTES;
+        let (_, mime) = zeron_proto::chat_images::markdown_image(&image.path, None)
+            .ok_or_else(|| ClientError::HostError("Unsupported reply image".into()))?;
+        let mut chunks = ChatImageChunks::new(mime);
+        // Enough reads for a full-size image at the host's chunk size. Each
+        // read has its own `call` deadline, so a large image on a slow link
+        // still lands instead of racing one budget for the whole file.
+        for _ in 0..zeron_proto::IMAGE_MAX_BYTES.div_ceil(CHAT_IMAGE_CHUNK_BYTES) {
+            let reply = self.call(device_id, methods::READ_CHAT_IMAGE_CHUNK,
+                json!({"chatId": image.chat_id, "path": image.path, "offset": chunks.bytes.len()})).await?;
+            if chunks.push(&reply)? { return Ok(chunks.bytes); }
+        }
+        Err(ClientError::HostError("Too many reply image chunks".into()))
+    }
+
     /// Converge the running PR-status streams onto `targets`.
     pub(crate) fn reconcile_watches(&self, inner: &Arc<ClientInner>, targets: HashSet<WatchKey>) {
         let unsupported = lock(&self.unsupported).clone();
@@ -410,4 +426,77 @@ fn spawn_watch(weak: Weak<ClientInner>, key: WatchKey, cancel: CancellationToken
             backoff = (backoff * 2).min(Duration::from_secs(5));
         }
     });
+}
+
+/// Bound and validate every reply before a native decoder sees it.
+struct ChatImageChunks {
+    mime: &'static str,
+    name: Option<String>,
+    bytes: Vec<u8>,
+}
+
+impl ChatImageChunks {
+    fn new(mime: &'static str) -> Self { Self { mime, name: None, bytes: Vec::new() } }
+
+    fn push(&mut self, reply: &Value) -> Result<bool> {
+        let invalid = || ClientError::HostError("Invalid reply image chunk".into());
+        let mime = reply["mimeType"].as_str().ok_or_else(invalid)?;
+        let name = reply["name"].as_str().ok_or_else(invalid)?;
+        let data = reply["data"].as_str().ok_or_else(invalid)?;
+        let next = reply["nextOffset"].as_u64().ok_or_else(invalid)?;
+        let done = reply["done"].as_bool().ok_or_else(invalid)?;
+        let cap = zeron_proto::IMAGE_MAX_BYTES;
+        if mime != self.mime || self.name.as_deref().is_some_and(|old| old != name)
+            || data.len() > (cap - self.bytes.len()).div_ceil(3) * 4 {
+            return Err(invalid());
+        }
+        let bytes = b64::decode(data).ok_or_else(invalid)?;
+        if bytes.is_empty() || self.bytes.len() + bytes.len() > cap
+            || next != (self.bytes.len() + bytes.len()) as u64 {
+            return Err(invalid());
+        }
+        self.name = Some(name.to_owned());
+        self.bytes.extend(bytes);
+        Ok(done)
+    }
+}
+
+#[cfg(test)]
+mod image_chunk_tests {
+    use super::*;
+
+    fn chunk(data: &str, offset: u64, done: bool) -> Value {
+        json!({"name":"a.png", "mimeType":"image/png", "data":data, "nextOffset":offset, "done":done})
+    }
+
+    #[test]
+    fn reply_image_chunks_are_bounded_and_contiguous() {
+        let mut chunks = ChatImageChunks::new("image/png");
+        assert!(!chunks.push(&chunk("YWJj", 3, false)).unwrap());
+        assert!(chunks.push(&chunk("ZA==", 4, true)).unwrap());
+        assert_eq!(chunks.bytes, b"abcd");
+        for bad in [chunk("ZA==", 4, true), chunk("", 4, false), chunk("!", 5, true),
+            json!({"name":"a.jpg","mimeType":"image/jpeg","data":"ZA==","nextOffset":5,"done":true})] {
+            assert!(chunks.push(&bad).is_err());
+        }
+        chunks.bytes.resize(zeron_proto::IMAGE_MAX_BYTES, 0);
+        assert!(chunks.push(&chunk("ZA==", zeron_proto::IMAGE_MAX_BYTES as u64 + 1, true)).is_err());
+    }
+
+    #[test]
+    fn a_full_size_reply_image_fits_the_read_budget() {
+        use zeron_proto::{IMAGE_MAX_BYTES, chat_images::CHAT_IMAGE_CHUNK_BYTES};
+        let mut chunks = ChatImageChunks::new("image/png");
+        let mut done = false;
+        for _ in 0..IMAGE_MAX_BYTES.div_ceil(CHAT_IMAGE_CHUNK_BYTES) {
+            let next = (chunks.bytes.len() + CHAT_IMAGE_CHUNK_BYTES).min(IMAGE_MAX_BYTES);
+            let data = b64::encode(&vec![7; next - chunks.bytes.len()]);
+            if chunks.push(&chunk(&data, next as u64, next == IMAGE_MAX_BYTES)).unwrap() {
+                done = true;
+                break;
+            }
+        }
+        assert!(done);
+        assert_eq!(chunks.bytes.len(), IMAGE_MAX_BYTES);
+    }
 }

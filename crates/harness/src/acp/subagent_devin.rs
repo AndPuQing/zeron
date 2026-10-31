@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus};
 
-use super::normalize::map_update;
+use super::normalize::Normalizer;
 
 #[derive(Debug)]
 struct PendingSpawn {
@@ -23,6 +23,7 @@ struct PendingSpawn {
 
 #[derive(Default)]
 pub(crate) struct DevinTracker {
+    normalizer: Normalizer,
     pending: VecDeque<PendingSpawn>,
     /// Devin child agent id -> the parent's run_subagent tool-call id.
     bound: HashMap<String, String>,
@@ -66,6 +67,7 @@ impl DevinTracker {
             if !self.settled.insert(agent_id.to_owned()) {
                 return Vec::new();
             }
+            self.normalizer.clear_scope(agent_id);
             let parent = self
                 .bound
                 .get(agent_id)
@@ -106,7 +108,7 @@ impl DevinTracker {
         let child_id = meta(update, "cognition.ai/subagent_context")
             .and_then(|ctx| nonempty(ctx, "parentAgentId"));
         let Some(child_id) = child_id else {
-            return map_update(update);
+            return self.normalizer.map(update);
         };
         if self.settled.contains(child_id) {
             return Vec::new();
@@ -116,7 +118,7 @@ impl DevinTracker {
             .get(child_id)
             .cloned()
             .unwrap_or_else(|| child_id.to_owned());
-        let events = map_update(update);
+        let events = self.normalizer.map_scoped(child_id, update);
         if events
             .iter()
             .any(|event| matches!(event, AgentEvent::TextDelta { .. }))
@@ -210,6 +212,55 @@ mod tests {
     use zeron_proto::{AgentEvent, DoneStatus, ToolCall};
 
     use super::DevinTracker;
+
+    #[test]
+    fn partial_images_stay_with_their_parent_or_child_tool() {
+        let mut tracker = DevinTracker::default();
+        let context = json!({"cognition.ai/subagent_context": {"parentAgentId": "child"}});
+        for (meta, data) in [(json!({}), "YWJj"), (context.clone(), "ZGVm")] {
+            assert!(tracker.map(&json!({
+                "sessionUpdate": "tool_call_update", "toolCallId": "same-id",
+                "content": [{"type": "content", "content": {"type": "image", "data": data}}],
+                "_meta": meta
+            })).is_empty());
+        }
+        let events = tracker.map(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "same-id",
+            "status": "completed", "_meta": context
+        }));
+        assert!(
+            matches!(events.as_slice(), [AgentEvent::Subagent { parent_tool_use_id, event }]
+            if parent_tool_use_id == "child" && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. }
+                if image_payloads.len() == 1 && image_payloads[0].data_base64 == "ZGVm"))
+        );
+        let events = tracker.map(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "same-id", "status": "completed"
+        }));
+        assert!(
+            matches!(events.as_slice(), [AgentEvent::ToolResult { image_payloads, .. }]
+            if image_payloads.len() == 1 && image_payloads[0].data_base64 == "YWJj")
+        );
+
+        tracker.map(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "open",
+            "content": [{"type": "content", "content": {"type": "image", "data": "YWJj"}}],
+            "_meta": context
+        }));
+        tracker.map(&json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "child",
+            "_meta": {"cognition.ai/subagent_completed": {"agentId": "child", "success": true}}
+        }));
+        let events = tracker.normalizer.map_scoped(
+            "child",
+            &json!({
+                "sessionUpdate": "tool_call_update", "toolCallId": "open", "status": "completed"
+            }),
+        );
+        assert!(
+            matches!(events.as_slice(), [AgentEvent::ToolResult { image_payloads, .. }]
+            if image_payloads.is_empty())
+        );
+    }
 
     #[test]
     fn correlates_spawn_child_traffic_and_completion() {

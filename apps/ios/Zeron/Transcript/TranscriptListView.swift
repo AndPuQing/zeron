@@ -124,9 +124,9 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     /// A subagent card was tapped (doc id, title, still running).
     var onSubagent: ((String, String, Bool) -> Void)?
     var onDistanceFromBottom: ((CGFloat) -> Void)?
-    var imageLoader: ((String, UIImageView) -> Void)?
+    var imageLoader: ((TranscriptImageRef, UIImageView) -> Void)?
     /// An attachment's picture, for an image chip opened full size.
-    var imageFetcher: ((String) async -> UIImage?)?
+    var imageFetcher: ((TranscriptImageRef) async -> UIImage?)?
     /// A sender caption or fork seam opens its chat through the shell.
     var onOpenChat: ((String) -> Void)?
 
@@ -716,7 +716,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
                 .queryItems?.first(where: { $0.name == "ref" })?.value
             else { return }
             Task { @MainActor [weak self, weak view, weak vc] in
-                guard let image = await self?.imageFetcher?(reference), let view, let vc else { return }
+                guard let image = await self?.imageFetcher?(.attachment(reference)), let view, let vc else { return }
                 vc.present(ImageViewer(image: image, source: view), animated: true)
             }
             return
@@ -738,8 +738,8 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         }
     }
 
-    func rowView(_ view: RowView, imageFor reference: String, into imageView: UIImageView) {
-        imageLoader?(reference, imageView)
+    func rowView(_ view: RowView, imageFor ref: TranscriptImageRef, into imageView: UIImageView) {
+        imageLoader?(ref, imageView)
     }
 
     func rowView(_ view: RowView, visualFor id: String) -> UIView? {

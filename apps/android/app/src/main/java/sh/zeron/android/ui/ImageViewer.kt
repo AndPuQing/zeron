@@ -3,6 +3,7 @@ package sh.zeron.android.ui
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.Image
@@ -145,4 +146,39 @@ private suspend fun share(context: Context, image: ImageBitmap) {
         .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     send.clipData = ClipData.newRawUri(null, uri)
     context.startActivity(Intent.createChooser(send, null))
+}
+
+
+private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
+
+/** Longest decoded side; larger images are downsampled, never refused. */
+private const val MAX_DECODED_SIDE = 4096
+
+/** The same bounded host image reader for main and subagent transcripts. */
+internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, ref: sh.zeron.android.transcript.TranscriptImageRef): ImageBitmap? {
+    imageReads.acquire()
+    try {
+        val bytes = when (ref) {
+            is sh.zeron.android.transcript.TranscriptImageRef.Attachment -> core.readAttachment(device, ref.reference)
+            is sh.zeron.android.transcript.TranscriptImageRef.Chat -> core.readChatImage(device, ref.chatId, ref.path)
+        }
+        return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            // Existing attachments allow 24 MiB; reply images are capped at 10 MiB by the Rust reader.
+            if (bytes.size > 24 * 1024 * 1024) return@withContext null
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > MAX_DECODED_SIDE) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+        }
+    } catch (error: kotlinx.coroutines.CancellationException) {
+        throw error
+    } catch (_: Throwable) {
+        // Includes OutOfMemoryError: an image that can't be decoded shows as unavailable.
+        return null
+    } finally {
+        imageReads.release()
+    }
 }

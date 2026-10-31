@@ -35,7 +35,7 @@ protocol RowViewDelegate: AnyObject {
     func rowView(_ view: RowView, toggle key: UInt64)
     func rowView(_ view: RowView, toggleDetail detail: UInt64, open: Bool)
     func rowView(_ view: RowView, open url: URL)
-    func rowView(_ view: RowView, imageFor reference: String, into imageView: UIImageView)
+    func rowView(_ view: RowView, imageFor ref: TranscriptImageRef, into imageView: UIImageView)
     /// The live view for an agent visual (kept across row reuse).
     func rowView(_ view: RowView, visualFor id: String) -> UIView?
     /// A row's button (`sign-in` on an error card).
@@ -117,6 +117,9 @@ final class RowView: UIView {
     private func updateVisuals() {
         for case let visual as VisualView in widgetViews where visual.superview === self {
             visual.active = !isHidden
+        }
+        for case let image as TranscriptImageView in widgetViews {
+            image.active = !isHidden
         }
     }
 
@@ -244,26 +247,9 @@ final class RowView: UIView {
             case let .toolStatus(running, failed):
                 view = ToolStatusView(running: running, failed: failed)
             case let .image(reference):
-                let iv = UIImageView()
-                iv.contentMode = .scaleAspectFill
-                iv.clipsToBounds = true
-                iv.layer.cornerRadius = min(rect.width, rect.height) > 120 ? 14 : 12
-                iv.layer.cornerCurve = .continuous
-                iv.isUserInteractionEnabled = true
-                iv.accessibilityTraits = .image
-                iv.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openImage(_:))))
-                delegate?.rowView(self, imageFor: reference, into: iv)
-                if reference.hasPrefix("pending://") {
-                    // Size the thumbnail first: autoresizing from a zero frame
-                    // would double the ring when the widget frame lands.
-                    iv.frame = rect
-                    let ring = UploadRingView(frame: CGRect(origin: .zero, size: rect.size))
-                    ring.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                    ring.progress = uploadProgress
-                    iv.addSubview(ring)
-                    uploadRings.append(ring)
-                }
-                view = iv
+                view = transcriptImage(.attachment(reference), in: rect)
+            case let .chatImage(chatId, path):
+                view = transcriptImage(.chat(chatId: chatId, path: path), in: rect)
             case .spinner:
                 view = StatusGlyph(.spinner)
             case let .working(sinceMs, streaming):
@@ -369,9 +355,39 @@ final class RowView: UIView {
         return image
     }
 
+    private func transcriptImage(_ ref: TranscriptImageRef, in rect: CGRect) -> UIView {
+        let iv = TranscriptImageView()
+        iv.active = !isHidden
+        iv.ref = ref
+        iv.contentMode = .scaleAspectFit
+        iv.clipsToBounds = true
+        iv.layer.cornerRadius = min(rect.width, rect.height) > 120 ? 14 : 12
+        iv.layer.cornerCurve = .continuous
+        iv.isUserInteractionEnabled = true
+        iv.accessibilityTraits = .image
+        iv.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openImage(_:))))
+        delegate?.rowView(self, imageFor: ref, into: iv)
+        if case let .attachment(reference) = ref, reference.hasPrefix("pending://") {
+            // Size the thumbnail first: autoresizing from a zero frame
+            // would double the ring when the widget frame lands.
+            iv.frame = rect
+            let ring = UploadRingView(frame: CGRect(origin: .zero, size: rect.size))
+            ring.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            ring.progress = uploadProgress
+            iv.addSubview(ring)
+            uploadRings.append(ring)
+        }
+        return iv
+    }
+
     @objc private func openImage(_ tap: UITapGestureRecognizer) {
-        guard let iv = tap.view as? UIImageView, let image = iv.image, let vc = findViewController() else { return }
-        vc.present(ImageViewer(image: image, source: iv), animated: true)
+        guard let iv = tap.view as? TranscriptImageView else { return }
+        if let image = iv.image, let vc = findViewController() {
+            vc.present(ImageViewer(image: image, source: iv), animated: true)
+        } else if let ref = iv.ref {
+            TranscriptImages.retry(ref)
+            delegate?.rowView(self, imageFor: ref, into: iv)
+        }
     }
 
     /// Link at a point in row coordinates.
@@ -578,4 +594,67 @@ final class UploadRingView: UIView {
         label.frame = r
         label.font = Fonts.ui(.sansSemibold, d < 30 ? 9 : 10.5)
     }
+}
+
+/// What a transcript image reads: an attachment or upload by host path (or
+/// this device's `pending://` ref), or an image a reply names, read only
+/// from inside that chat's folder (`readChatImage`), never as an attachment.
+enum TranscriptImageRef: Hashable, Sendable {
+    case attachment(String)
+    case chat(chatId: String, path: String)
+
+    /// Identity for caches, retries and stale-load checks; never parsed.
+    var id: String {
+        switch self {
+        case let .attachment(reference): "attachment:\(reference)"
+        case let .chat(chatId, path): "chat:\(chatId):\(path)"
+        }
+    }
+}
+
+/// A failed remote read stays visible and can be retried without reopening the chat.
+final class TranscriptImageView: UIImageView {
+    var ref: TranscriptImageRef?
+    var active = true { didSet { if active != oldValue { updateRead() } } }
+    private var startRead: ((TranscriptImageView) -> (() -> Void))?
+    private var cancelRead: (() -> Void)?
+    private let status = UILabel()
+    override var image: UIImage? { didSet { status.isHidden = image != nil } }
+
+    init() {
+        super.init(frame: .zero)
+        backgroundColor = .secondarySystemBackground
+        status.text = "Loading image…"
+        status.textAlignment = .center
+        status.numberOfLines = 0
+        status.font = .preferredFont(forTextStyle: .caption1)
+        status.textColor = .secondaryLabel
+        addSubview(status)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    /// Rows configure their widgets before attaching them. Do not spend a read
+    /// slot until the widget belongs to a window; leaving releases its consumer.
+    func bindImageLoad(_ start: @escaping (TranscriptImageView) -> (() -> Void)) {
+        cancelRead?(); cancelRead = nil
+        image = nil
+        startRead = start
+        updateRead()
+    }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        updateRead()
+    }
+    private func updateRead() {
+        if window == nil || !active {
+            cancelRead?(); cancelRead = nil
+        } else if image == nil && cancelRead == nil {
+            cancelRead = startRead?(self)
+        }
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        status.frame = bounds.insetBy(dx: 12, dy: 12)
+    }
+    func loading() { status.text = "Loading image…"; status.isHidden = image != nil }
+    func unavailable() { status.text = "Image unavailable · Tap to retry"; status.isHidden = false }
 }

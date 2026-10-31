@@ -54,6 +54,18 @@ final class SubagentViewController: UIViewController {
         list.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         list.accessibilityIdentifier = "subagent-transcript"
         list.onSubagent = { [weak self] doc, title, running in self?.openNested(doc, title: title, running: running) }
+        list.imageFetcher = { [weak self] ref in
+            guard let self, let client = self.app.client, let host = self.app.row(self.rootChatId)?.deviceId else { return nil }
+            return await TranscriptImages.image(client: client, device: host, ref: ref)
+        }
+        list.imageLoader = { [weak self] ref, imageView in
+            guard let self, let client = self.app.client, let host = self.app.row(self.rootChatId)?.deviceId else {
+                // No host to read from right now: offer the retry, don't spin forever.
+                (imageView as? TranscriptImageView)?.unavailable()
+                return
+            }
+            TranscriptImages.load(client: client, device: host, ref: ref, into: imageView)
+        }
         list.alpha = 0
         view.addSubview(list)
         setContentScrollView(list, for: .top)

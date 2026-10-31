@@ -69,15 +69,34 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.pow
 
+/**
+ * What a transcript image reads: an attachment or upload by host path (or this
+ * device's `pending://` ref), or an image a reply names, read only from inside
+ * that chat's folder (`readChatImage`), never as an attachment.
+ */
+sealed interface TranscriptImageRef {
+    /** Identity for caches and recomposition; never parsed. */
+    val id: String
+
+    data class Attachment(val reference: String) : TranscriptImageRef {
+        override val id get() = "attachment:$reference"
+    }
+
+    data class Chat(val chatId: String, val path: String) : TranscriptImageRef {
+        override val id get() = "chat:$chatId:$path"
+    }
+}
+
 /** What the transcript asks of its host (links, images, text sheets). */
 class TranscriptActions(
+    val imageCacheScope: String = "",
     val openUrl: (String) -> Unit,
-    val loadImage: suspend (String) -> androidx.compose.ui.graphics.ImageBitmap?,
+    val loadImage: suspend (TranscriptImageRef) -> androidx.compose.ui.graphics.ImageBitmap?,
     val showText: (title: String, text: String, mono: Boolean) -> Unit,
     /** A widget button (`WidgetKind.Action`): `action` names what, `label` is its title. */
     val perform: (action: String, label: String) -> Unit = { _, _ -> },
     /** Open an attachment full size (a tapped image, or an image chip's upload). */
-    val openImage: (String) -> Unit = {},
+    val openImage: (TranscriptImageRef) -> Unit = {},
     /** A subagent card was tapped: its transcript doc, title, and whether it still runs. */
     val openSubagent: (docId: String, title: String, running: Boolean) -> Unit = { _, _, _ -> },
     /** An in-transcript button (`sign-in` on an error card). */
