@@ -406,12 +406,12 @@ final class CoreSessionSource: SessionSource {
         (try? await client.searchFiles(deviceId: hostDevice, chatId: chatId, spaceId: nil, query: query)) ?? []
     }
 
-    func image(_ reference: String) async -> UIImage? {
-        await TranscriptImages.image(client: client, device: hostDevice, reference: reference)
+    func image(_ ref: TranscriptImageRef) async -> UIImage? {
+        await TranscriptImages.image(client: client, device: hostDevice, ref: ref)
     }
 
-    @MainActor func loadImage(_ reference: String, into view: UIImageView) {
-        TranscriptImages.load(client: client, device: hostDevice, reference: reference, into: view)
+    @MainActor func loadImage(_ ref: TranscriptImageRef, into view: UIImageView) {
+        TranscriptImages.load(client: client, device: hostDevice, ref: ref, into: view)
     }
 
 }
@@ -492,11 +492,11 @@ enum TranscriptImages {
         return UIImage(cgImage: image)
     }
 
-    static func image(client: CoreClient, device: String, reference: String) async -> UIImage? {
-        let key = "\(device):\(reference)" as NSString
+    static func image(client: CoreClient, device: String, ref: TranscriptImageRef) async -> UIImage? {
+        let key = "\(device):\(ref.id)" as NSString
         if let hit = Self.images.object(forKey: key) { return hit }
         if let running = reads[key] { return await running.value }
-        let read = Task { await Self.read(client: client, device: device, reference: reference, key: key) }
+        let read = Task { await Self.read(client: client, device: device, ref: ref, key: key) }
         reads[key] = read
         let image = await read.value
         reads[key] = nil
@@ -504,7 +504,7 @@ enum TranscriptImages {
         return image
     }
 
-    private static func read(client: CoreClient, device: String, reference: String, key: NSString) async -> UIImage? {
+    private static func read(client: CoreClient, device: String, ref: TranscriptImageRef, key: NSString) async -> UIImage? {
         // A row can contain several full-size screenshots. Bound the complete
         // read/decode operation, not just the retained cache, as on Android.
         if activeReads < 4 {
@@ -517,7 +517,11 @@ enum TranscriptImages {
             else { waiting.removeFirst().resume() }
         }
         if let hit = Self.images.object(forKey: key) { return hit }
-        guard let data = try? await client.readAttachment(deviceId: device, path: reference),
+        let bytes: Data? = switch ref {
+        case let .attachment(reference): try? await client.readAttachment(deviceId: device, path: reference)
+        case let .chat(chatId, path): try? await client.readChatImage(deviceId: device, chatId: chatId, path: path)
+        }
+        guard let data = bytes,
               let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
         else { return nil }
         Self.images.setObject(image, forKey: key, cost: (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0))
@@ -525,19 +529,19 @@ enum TranscriptImages {
     }
 
     /// A tapped "unavailable" image is read again.
-    static func retry(_ reference: String) {
-        failed = failed.filter { !$0.hasSuffix(":\(reference)") }
+    static func retry(_ ref: TranscriptImageRef) {
+        failed = failed.filter { !$0.hasSuffix(":\(ref.id)") }
     }
 
-    static func load(client: CoreClient, device: String, reference: String, into view: UIImageView) {
-        view.accessibilityIdentifier = reference
+    static func load(client: CoreClient, device: String, ref: TranscriptImageRef, into view: UIImageView) {
+        view.accessibilityIdentifier = ref.id
         (view as? TranscriptImageView)?.loading()
-        let key = "\(device):\(reference)" as NSString
+        let key = "\(device):\(ref.id)" as NSString
         if let hit = images.object(forKey: key) { view.image = hit; return }
         if failed.contains(key as String) { (view as? TranscriptImageView)?.unavailable(); return }
         Task { [weak view] in
-            let image = await Self.image(client: client, device: device, reference: reference)
-            guard let view, view.accessibilityIdentifier == reference else { return }
+            let image = await Self.image(client: client, device: device, ref: ref)
+            guard let view, view.accessibilityIdentifier == ref.id else { return }
             if let image {
                 UIView.transition(with: view, duration: 0.2, options: .transitionCrossDissolve) { view.image = image }
             } else {

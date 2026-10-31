@@ -83,6 +83,7 @@ import sh.zeron.android.design.GeistMono
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
+import sh.zeron.android.transcript.TranscriptImageRef
 import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
 import uniffi.zeron_core.ConnectivityState
@@ -169,13 +170,13 @@ fun SessionScreen(
     var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
     val imageDevice = handle.composer().host.deviceId
     val actions = remember(chatId, imageDevice, core) {
-        suspend fun load(ref: String): ImageBitmap? {
+        suspend fun load(ref: TranscriptImageRef): ImageBitmap? {
             val device = handle.composer().host.deviceId
             return loadTranscriptImage(core, device, ref)
         }
         val imageCacheScope = "$imageDevice:$chatId"
         // A thumbnail already on screen opens at once instead of reading the host again.
-        val open: (String) -> Unit = { ref ->
+        val open: (TranscriptImageRef) -> Unit = { ref ->
             val shown = cachedTranscriptImage(imageCacheScope, ref)
             if (shown != null) viewing = shown else scope.launch { load(ref)?.let { viewing = it } }
         }
@@ -187,7 +188,7 @@ fun SessionScreen(
                     "zerun" -> if (uri.host == "chat") uri.pathSegments.singleOrNull()?.let(onOpen)
                     "http", "https" -> CustomTabsIntent.Builder().build().launchUrl(context, uri)
                     // An image chip opens its upload full size, as its thumbnail did.
-                    "zeron-preview" -> uri.getQueryParameter("ref")?.let(open)
+                    "zeron-preview" -> uri.getQueryParameter("ref")?.let { open(TranscriptImageRef.Attachment(it)) }
                     // A sender caption opens the chat that sent the message.
                     "zeron-chat" -> uri.getQueryParameter("id")?.takeIf { it != chatId }?.let(onOpenChat)
                     else -> runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, uri)) }

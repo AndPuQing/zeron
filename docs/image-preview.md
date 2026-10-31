@@ -92,9 +92,11 @@ folder, the home folder, `/tmp/…`, `../…`): those are paths
 chat's scratch folder, is matched by its whole path below some home directory,
 since the phone doesn't know the host's home.
 
-Mobile uses an internal chat-qualified image reference through the existing
-attachment FFI. The client routes these references exclusively to
-`ReadChatImageChunk` on the owning host, validates contiguous chunks, MIME and
+Mobile lays these out as `WidgetKind::ChatImage { chatId, path }` and reads
+them with the typed `readChatImage(deviceId, chatId, path)` FFI call, never
+through `readAttachment`. The client routes them exclusively to
+`ReadChatImageChunk` on the owning host, caches them apart from attachment
+reads of the same path (so neither jail serves the other), validates contiguous chunks, MIME and
 name, and bounds the bytes to 10 MiB. The host sends `CHAT_IMAGE_CHUNK_BYTES`
 (45,000) per chunk; the client allows enough chunks for a full-size image, each
 under its own call deadline. There is no fallback to `ReadAttachmentChunk` if

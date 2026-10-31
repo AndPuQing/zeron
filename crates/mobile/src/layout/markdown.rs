@@ -326,7 +326,7 @@ pub(crate) enum PBlock {
     Table(Box<PTable>),
     Rule,
     Sequence(Vec<PBlock>),
-    Image { reference: String, caption: PText },
+    Image { image: zeron_proto::chat_images::ChatImage, caption: PText },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -541,8 +541,8 @@ pub(crate) fn prepare_reply_block(ctx: &mut Ctx, block: &Block, depth: usize, mu
                 if start < i {
                     blocks.push(PBlock::Text(prepare_runs(ctx, &runs[start..i], TextKind::Body, muted)));
                 }
-                let reference = zeron_proto::chat_images::ChatImage { chat_id: chat.chat_id.clone(), path }.reference();
-                blocks.push(PBlock::Image { reference, caption: prepare_runs(ctx, &runs[i..i + 1], TextKind::Body, muted) });
+                let image = zeron_proto::chat_images::ChatImage { chat_id: chat.chat_id.clone(), path };
+                blocks.push(PBlock::Image { image, caption: prepare_runs(ctx, &runs[i..i + 1], TextKind::Body, muted) });
                 start = i + 1;
             }
             if blocks.is_empty() { return PBlock::Text(prepare_runs(ctx, runs, TextKind::Body, muted)); }
@@ -983,11 +983,12 @@ pub(crate) fn place_stack(
 pub(crate) fn place(block: &PBlock, px: Px, x: f32, y: f32, width: f32, out: Option<&mut DisplayBuilder>) -> f32 {
     use geom::*;
     match block {
-        PBlock::Image { reference, caption } => {
+        PBlock::Image { image, caption } => {
             let side = px.v(super::rows::geom::IMAGE).min(width).max(1.0);
             let mut out = out;
             if let Some(o) = out.as_deref_mut() {
-                o.widget(WidgetKind::Image { reference: reference.clone() }, (x, y, side, side), None);
+                let kind = WidgetKind::ChatImage { chat_id: image.chat_id.clone(), path: image.path.clone() };
+                o.widget(kind, (x, y, side, side), None);
             }
             side + px.v(4.0) + place_text(caption, x, y + side + px.v(4.0), width, out)
         }

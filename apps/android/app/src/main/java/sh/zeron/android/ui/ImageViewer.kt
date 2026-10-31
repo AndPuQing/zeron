@@ -155,10 +155,13 @@ private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
 private const val MAX_DECODED_SIDE = 4096
 
 /** The same bounded host image reader for main and subagent transcripts. */
-internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, reference: String): ImageBitmap? {
+internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, ref: sh.zeron.android.transcript.TranscriptImageRef): ImageBitmap? {
     imageReads.acquire()
     try {
-        val bytes = core.readAttachment(device, reference)
+        val bytes = when (ref) {
+            is sh.zeron.android.transcript.TranscriptImageRef.Attachment -> core.readAttachment(device, ref.reference)
+            is sh.zeron.android.transcript.TranscriptImageRef.Chat -> core.readChatImage(device, ref.chatId, ref.path)
+        }
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             // Existing attachments allow 24 MiB; reply images are capped at 10 MiB by the Rust reader.
             if (bytes.size > 24 * 1024 * 1024) return@withContext null

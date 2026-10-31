@@ -3,36 +3,18 @@
 
 use serde::{Deserialize, Serialize};
 
-const PREFIX: &str = "zeron-chat-image:";
-
 /// Bytes per `ReadChatImageChunk` reply. A multiple of 3 so independent
 /// base64 chunks concatenate losslessly; readers derive their chunk budget
 /// from it and [`crate::IMAGE_MAX_BYTES`].
 pub const CHAT_IMAGE_CHUNK_BYTES: usize = 45_000;
 const _: () = assert!(CHAT_IMAGE_CHUNK_BYTES % 3 == 0);
 
+/// An image a reply in `chat_id` names: a host path that only
+/// `ReadChatImageChunk`, under that chat's folder jail, may read.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatImage {
     pub chat_id: String,
     pub path: String,
-}
-
-impl ChatImage {
-    pub fn reference(&self) -> String {
-        format!(
-            "{PREFIX}{}",
-            serde_json::to_string(self).expect("image reference")
-        )
-    }
-
-    pub fn is_reference(value: &str) -> bool {
-        value.starts_with(PREFIX)
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        let image: Self = serde_json::from_str(value.strip_prefix(PREFIX)?).ok()?;
-        (!image.chat_id.is_empty() && markdown_image(&image.path, None).is_some()).then_some(image)
-    }
 }
 
 /// UNC (`\\host\share`, `//host/share`), device and verbatim (`\\.\`,
@@ -238,15 +220,5 @@ mod tests {
         ] {
             assert!(!in_chat_folder(path, scratch), "{path}");
         }
-    }
-
-    #[test]
-    fn references_round_trip_without_confusing_paths_and_urls() {
-        let image = ChatImage {
-            chat_id: "chat#1".into(),
-            path: "/repo/截图 #1.png".into(),
-        };
-        assert_eq!(ChatImage::parse(&image.reference()), Some(image));
-        assert!(ChatImage::parse("zeron-chat-image:bad").is_none());
     }
 }

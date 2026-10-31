@@ -242,6 +242,10 @@ pub enum WidgetKind {
     ToolStatus { running: bool, failed: bool },
     /// A remote image to load into the rect (generated images, attachments).
     Image { reference: String },
+    /// An image a settled reply names in Markdown: read with
+    /// `CoreClient::read_chat_image`, only from inside `chat_id`'s folder on
+    /// its host, never as an attachment.
+    ChatImage { chat_id: String, path: String },
     /// Working indicator at the tail of a live turn. The painter ticks the
     /// elapsed label itself so time never forces a relayout.
     Working { since_ms: Option<i64>, streaming: bool },

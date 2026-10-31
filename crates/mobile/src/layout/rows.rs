@@ -1357,7 +1357,7 @@ pub(crate) fn content_heap_bytes(content: &Content) -> usize {
             PBlock::Table(t) => t.cells.iter().flatten().map(|c| c.p.heap_bytes() + math_bytes(c)).sum(),
             PBlock::Rule => 0,
             PBlock::Sequence(children) => children.iter().map(block).sum(),
-            PBlock::Image { reference, caption } => reference.len() + caption.p.heap_bytes(),
+            PBlock::Image { image, caption } => image.chat_id.len() + image.path.len() + caption.p.heap_bytes(),
         }
     }
     match content {
@@ -1397,9 +1397,9 @@ mod reply_image_tests {
                 height += actual;
             }
             let images: Vec<_> = painted.widgets.iter().filter_map(|widget| match &widget.kind {
-                WidgetKind::Image { reference } => {
+                WidgetKind::ChatImage { chat_id, path } => {
                     assert!(widget.w <= width && widget.y + widget.h <= height);
-                    Some(zeron_proto::chat_images::ChatImage::parse(reference).unwrap())
+                    Some(zeron_proto::chat_images::ChatImage { chat_id: chat_id.clone(), path: path.clone() })
                 }
                 _ => None,
             }).collect();
@@ -1440,7 +1440,7 @@ mod reply_image_tests {
             for (_, row) in blocks {
                 if let Content::Block(block) = &row.content { place(block, Px(1.0), 0.0, 0.0, 350.0, Some(&mut display)); }
             }
-            display.widgets.iter().filter(|w| matches!(w.kind, WidgetKind::Image { .. })).count()
+            display.widgets.iter().filter(|w| matches!(w.kind, WidgetKind::ChatImage { .. })).count()
         };
         let source = "![shot](a.png)";
         assert_eq!(count(w.builder.text_blocks(&mut ctx, "a#t", source, true)), 0);

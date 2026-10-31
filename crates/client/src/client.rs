@@ -1881,19 +1881,32 @@ impl Client {
         }
     }
 
+    /// An image a reply in `chat_id` names in Markdown (LRU-cached), read
+    /// with `ReadChatImageChunk` from strictly inside that chat's folder. It
+    /// never falls back to the broader attachment jail, including when an
+    /// older host lacks that RPC, and its cache entries are kept apart from
+    /// attachment reads of the same path, so neither serves the other.
+    pub async fn read_chat_image(&self, device_id: &str, chat_id: &str, path: &str) -> Result<Arc<Vec<u8>>> {
+        let image = zeron_proto::chat_images::ChatImage { chat_id: chat_id.to_owned(), path: path.to_owned() };
+        if image.chat_id.is_empty() || zeron_proto::chat_images::markdown_image(path, None).is_none() {
+            return Err(ClientError::HostError("Unsupported reply image".into()));
+        }
+        // Device ids never contain NUL: a key no attachment read can produce.
+        let scope = format!("{device_id}\0{chat_id}");
+        if let Some(hit) = self.inner.attachment_cache.get(&scope, path) {
+            return Ok(hit);
+        }
+        let bytes = match self.inner.backend() {
+            Backend::Live(live) => Arc::new(live.relay.read_chat_image(device_id, &image).await?),
+            Backend::Demo(_) => return Err(ClientError::HostError("Reply image unavailable in demo".into())),
+        };
+        self.inner.attachment_cache.put(&scope, path, bytes.clone());
+        Ok(bytes)
+    }
+
     /// Attachment bytes (LRU-cached). Accepts host paths and this device's
     /// own `pending://` refs.
     pub async fn read_attachment(&self, device_id: &str, path: &str) -> Result<Arc<Vec<u8>>> {
-        // Reply images must never fall back to the broader attachment jail,
-        // including when an older host does not implement ReadChatImageChunk.
-        if zeron_proto::chat_images::ChatImage::is_reference(path) {
-            let image = zeron_proto::chat_images::ChatImage::parse(path)
-                .ok_or_else(|| ClientError::HostError("Invalid reply image reference".into()))?;
-            return match self.inner.backend() {
-                Backend::Live(live) => Ok(Arc::new(live.relay.read_chat_image(device_id, &image).await?)),
-                Backend::Demo(_) => Err(ClientError::HostError("Reply image unavailable in demo".into())),
-            };
-        }
         if let Some(hit) = self.inner.attachment_cache.get(device_id, path) {
             return Ok(hit);
         }
@@ -2087,6 +2100,38 @@ mod tests {
             unchanged,
             "identical configs do not churn revisions"
         );
+    }
+
+    #[tokio::test]
+    async fn reply_images_and_attachments_never_share_cached_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ClientConfig::new("https://edge.invalid", dir.path());
+        config.device_id = "ios-test".into();
+        let client = Client::new(
+            config,
+            Credentials::Demo(Default::default()),
+            Arc::new(crate::events::NullListener),
+        )
+        .unwrap();
+        // Bytes the broader attachment jail allowed for this path.
+        client
+            .inner
+            .attachment_cache
+            .put("host", "/repo/a.png", Arc::new(b"attachment".to_vec()));
+        // The reply image is not served from them (the demo can't read it at all).
+        assert!(client.read_chat_image("host", "chat", "/repo/a.png").await.is_err());
+        assert!(client.read_chat_image("host", "", "/repo/a.png").await.is_err());
+        assert!(client.read_chat_image("host", "chat", "/repo/a.svg").await.is_err());
+        // A cached reply image is not an attachment either.
+        client
+            .inner
+            .attachment_cache
+            .put("host\0chat", "/repo/b.png", Arc::new(b"reply".to_vec()));
+        assert_eq!(
+            client.read_chat_image("host", "chat", "/repo/b.png").await.unwrap().as_slice(),
+            b"reply"
+        );
+        assert!(client.inner.attachment_cache.get("host", "/repo/b.png").is_none());
     }
 
     #[test]

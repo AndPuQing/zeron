@@ -35,7 +35,7 @@ protocol RowViewDelegate: AnyObject {
     func rowView(_ view: RowView, toggle key: UInt64)
     func rowView(_ view: RowView, toggleDetail detail: UInt64, open: Bool)
     func rowView(_ view: RowView, open url: URL)
-    func rowView(_ view: RowView, imageFor reference: String, into imageView: UIImageView)
+    func rowView(_ view: RowView, imageFor ref: TranscriptImageRef, into imageView: UIImageView)
     /// The live view for an agent visual (kept across row reuse).
     func rowView(_ view: RowView, visualFor id: String) -> UIView?
     /// A row's button (`sign-in` on an error card).
@@ -244,26 +244,9 @@ final class RowView: UIView {
             case let .toolStatus(running, failed):
                 view = ToolStatusView(running: running, failed: failed)
             case let .image(reference):
-                let iv = TranscriptImageView()
-                iv.contentMode = .scaleAspectFit
-                iv.clipsToBounds = true
-                iv.layer.cornerRadius = min(rect.width, rect.height) > 120 ? 14 : 12
-                iv.layer.cornerCurve = .continuous
-                iv.isUserInteractionEnabled = true
-                iv.accessibilityTraits = .image
-                iv.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openImage(_:))))
-                delegate?.rowView(self, imageFor: reference, into: iv)
-                if reference.hasPrefix("pending://") {
-                    // Size the thumbnail first: autoresizing from a zero frame
-                    // would double the ring when the widget frame lands.
-                    iv.frame = rect
-                    let ring = UploadRingView(frame: CGRect(origin: .zero, size: rect.size))
-                    ring.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-                    ring.progress = uploadProgress
-                    iv.addSubview(ring)
-                    uploadRings.append(ring)
-                }
-                view = iv
+                view = transcriptImage(.attachment(reference), in: rect)
+            case let .chatImage(chatId, path):
+                view = transcriptImage(.chat(chatId: chatId, path: path), in: rect)
             case .spinner:
                 view = StatusGlyph(.spinner)
             case let .working(sinceMs, streaming):
@@ -369,13 +352,37 @@ final class RowView: UIView {
         return image
     }
 
+    private func transcriptImage(_ ref: TranscriptImageRef, in rect: CGRect) -> UIView {
+        let iv = TranscriptImageView()
+        iv.ref = ref
+        iv.contentMode = .scaleAspectFit
+        iv.clipsToBounds = true
+        iv.layer.cornerRadius = min(rect.width, rect.height) > 120 ? 14 : 12
+        iv.layer.cornerCurve = .continuous
+        iv.isUserInteractionEnabled = true
+        iv.accessibilityTraits = .image
+        iv.addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(openImage(_:))))
+        delegate?.rowView(self, imageFor: ref, into: iv)
+        if case let .attachment(reference) = ref, reference.hasPrefix("pending://") {
+            // Size the thumbnail first: autoresizing from a zero frame
+            // would double the ring when the widget frame lands.
+            iv.frame = rect
+            let ring = UploadRingView(frame: CGRect(origin: .zero, size: rect.size))
+            ring.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            ring.progress = uploadProgress
+            iv.addSubview(ring)
+            uploadRings.append(ring)
+        }
+        return iv
+    }
+
     @objc private func openImage(_ tap: UITapGestureRecognizer) {
-        guard let iv = tap.view as? UIImageView else { return }
+        guard let iv = tap.view as? TranscriptImageView else { return }
         if let image = iv.image, let vc = findViewController() {
             vc.present(ImageViewer(image: image, source: iv), animated: true)
-        } else if let reference = iv.accessibilityIdentifier {
-            TranscriptImages.retry(reference)
-            delegate?.rowView(self, imageFor: reference, into: iv)
+        } else if let ref = iv.ref {
+            TranscriptImages.retry(ref)
+            delegate?.rowView(self, imageFor: ref, into: iv)
         }
     }
 
@@ -585,8 +592,25 @@ final class UploadRingView: UIView {
     }
 }
 
+/// What a transcript image reads: an attachment or upload by host path (or
+/// this device's `pending://` ref), or an image a reply names, read only
+/// from inside that chat's folder (`readChatImage`), never as an attachment.
+enum TranscriptImageRef: Hashable, Sendable {
+    case attachment(String)
+    case chat(chatId: String, path: String)
+
+    /// Identity for caches, retries and stale-load checks; never parsed.
+    var id: String {
+        switch self {
+        case let .attachment(reference): "attachment:\(reference)"
+        case let .chat(chatId, path): "chat:\(chatId):\(path)"
+        }
+    }
+}
+
 /// A failed remote read stays visible and can be retried without reopening the chat.
 final class TranscriptImageView: UIImageView {
+    var ref: TranscriptImageRef?
     private let status = UILabel()
     override var image: UIImage? { didSet { status.isHidden = image != nil } }
 

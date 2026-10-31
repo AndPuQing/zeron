@@ -87,9 +87,9 @@ protocol SessionSource: AnyObject {
     func modelPicker() -> UIViewController?
     /// Where this chat's provider signs in (an error card's "Log in").
     func signInTarget() -> AgentAccountsViewController.Target?
-    @MainActor func loadImage(_ reference: String, into view: UIImageView)
-    /// An attachment's picture, for opening it full size (an image chip).
-    func image(_ reference: String) async -> UIImage?
+    @MainActor func loadImage(_ ref: TranscriptImageRef, into view: UIImageView)
+    /// An image's picture, for opening it full size (an image chip, a reply image).
+    func image(_ ref: TranscriptImageRef) async -> UIImage?
     /// Workspace files for `@` mentions.
     func searchFiles(_ query: String) async -> [FileMatch]
     func commandCatalog() async throws -> ComposerCatalog
@@ -244,8 +244,8 @@ final class FixtureSessionSource: SessionSource {
             return nil
         }
     }
-    @MainActor func loadImage(_ reference: String, into view: UIImageView) {}
-    func image(_ reference: String) async -> UIImage? { nil }
+    @MainActor func loadImage(_ ref: TranscriptImageRef, into view: UIImageView) {}
+    func image(_ ref: TranscriptImageRef) async -> UIImage? { nil }
     func searchFiles(_ query: String) async -> [FileMatch] { [] }
     func commandCatalog() async throws -> ComposerCatalog { ComposerCatalog(commands: [], warning: nil) }
 }

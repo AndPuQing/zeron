@@ -117,9 +117,8 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
         }
         // Widgets compose by position, and produceState's value outlives its keys:
         // a slot reused for another image must start over, not keep the old bitmap.
-        is WidgetKind.Image -> androidx.compose.runtime.key(actions.imageCacheScope, kind.reference) {
-            RemoteImage(kind.reference, w, actions) { state.uploadProgress }
-        }
+        is WidgetKind.Image -> TranscriptImage(TranscriptImageRef.Attachment(kind.reference), w, actions) { state.uploadProgress }
+        is WidgetKind.ChatImage -> TranscriptImage(TranscriptImageRef.Chat(kind.chatId, kind.path), w, actions) { state.uploadProgress }
         WidgetKind.Spinner -> ActivityIndicator(Modifier.fillMaxSize().padding(1.dp), color = Color(palette[ColorRole.TEXT_TERTIARY]))
         is WidgetKind.Working -> WorkingIndicator(kind.sinceMs, kind.streaming, palette)
         is WidgetKind.Detail -> Tap("${kind.title} details") { actions.showText(kind.title, w.payload ?: "", true) }
@@ -320,27 +319,34 @@ private val images = object : LruCache<String, ImageBitmap>(64 * 1024 * 1024) {
 }
 
 /** A transcript image already decoded for [scope], so opening it skips the host read. */
-internal fun cachedTranscriptImage(scope: String, reference: String): ImageBitmap? = images.get("$scope:$reference")
+internal fun cachedTranscriptImage(scope: String, ref: TranscriptImageRef): ImageBitmap? = images.get("$scope:${ref.id}")
+
+// Widgets compose by position, and produceState's value outlives its keys:
+// a slot reused for another image must start over, not keep the old bitmap.
+@Composable
+private fun TranscriptImage(ref: TranscriptImageRef, w: Widget, actions: TranscriptActions, progress: () -> Double?) {
+    androidx.compose.runtime.key(actions.imageCacheScope, ref.id) { RemoteImage(ref, w, actions, progress) }
+}
 
 @Composable
-private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions, progress: () -> Double?) {
-    val cacheKey = "${actions.imageCacheScope}:$reference"
+private fun RemoteImage(ref: TranscriptImageRef, w: Widget, actions: TranscriptActions, progress: () -> Double?) {
+    val cacheKey = "${actions.imageCacheScope}:${ref.id}"
     var attempt by remember(cacheKey) { mutableStateOf(0) }
     var failed by remember(cacheKey, attempt) { mutableStateOf(false) }
     val image by produceState(images.get(cacheKey), cacheKey, actions, attempt) {
         if (value == null) {
-            value = actions.loadImage(reference)?.also { images.put(cacheKey, it) }
+            value = actions.loadImage(ref)?.also { images.put(cacheKey, it) }
             failed = value == null
         }
     }
     val radius = if (minOf(w.w, w.h) > 120) 14.dp else 12.dp
-    val pending = reference.startsWith("pending://")
+    val pending = ref is TranscriptImageRef.Attachment && ref.reference.startsWith("pending://")
     Box(
         Modifier
             .fillMaxSize()
             .clip(RoundedCornerShape(radius))
             .clickable(enabled = !pending && (image != null || failed), onClickLabel = if (failed) "Retry image" else "Open image") {
-                if (failed) attempt++ else actions.openImage(reference)
+                if (failed) attempt++ else actions.openImage(ref)
             },
         contentAlignment = Alignment.Center,
     ) {

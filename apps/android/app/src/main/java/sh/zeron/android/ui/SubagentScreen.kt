@@ -56,6 +56,7 @@ import sh.zeron.android.design.ZIcons
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
+import sh.zeron.android.transcript.TranscriptImageRef
 import sh.zeron.android.transcript.cachedTranscriptImage
 import sh.zeron.android.transcript.elapsed
 import uniffi.zeron_core.SubagentRow
@@ -140,16 +141,16 @@ fun SubagentScreen(
     var viewing by remember(docId) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val imageHost = model.row(rootChatId)?.deviceId
     val actions = remember(docId, imageHost, core) {
-        suspend fun load(reference: String) = imageHost?.let { loadTranscriptImage(core, it, reference) }
+        suspend fun load(ref: TranscriptImageRef) = imageHost?.let { loadTranscriptImage(core, it, ref) }
         val imageCacheScope = "$imageHost:$rootChatId"
 
         TranscriptActions(
             imageCacheScope = imageCacheScope,
             openUrl = {},
             loadImage = ::load,
-            openImage = { reference ->
-                val shown = cachedTranscriptImage(imageCacheScope, reference)
-                if (shown != null) viewing = shown else imageScope.launch { load(reference)?.let { viewing = it } }
+            openImage = { ref ->
+                val shown = cachedTranscriptImage(imageCacheScope, ref)
+                if (shown != null) viewing = shown else imageScope.launch { load(ref)?.let { viewing = it } }
             },
             showText = { _, _, _ -> },
             openSubagent = { doc, t, r -> onOpenSubagent(docId, doc, t, r) },
