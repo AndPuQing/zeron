@@ -157,7 +157,8 @@ internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, dev
     try {
         val bytes = core.readAttachment(device, reference)
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-            if (bytes.size > 10 * 1024 * 1024) return@withContext null
+            // Existing attachments allow 24 MiB; reply images are capped at 10 MiB by the Rust reader.
+            if (bytes.size > 24 * 1024 * 1024) return@withContext null
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth !in 1..4096 || bounds.outHeight !in 1..4096) return@withContext null

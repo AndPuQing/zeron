@@ -470,7 +470,8 @@ enum TranscriptImages {
     }()
 
     nonisolated private static func decodeImage(_ data: Data) -> UIImage? {
-        guard data.count <= 10 * 1024 * 1024,
+        // Preserve the existing attachment limit; chat-image RPC reads are capped at 10 MiB.
+        guard data.count <= 24 * 1024 * 1024,
               let source = CGImageSourceCreateWithData(data as CFData, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int,
