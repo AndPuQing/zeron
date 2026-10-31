@@ -11,9 +11,10 @@ name: release
 # `curl -fsSL https://edge.550w.host/install.sh | sh`), bumping latest.txt.
 # R2 keeps the newest two releases: install.sh reads latest.txt and both
 # updaters build their file names from manifest.json's version, so older
-# releases are never downloaded — scripts/prune-r2-releases.sh deletes them
-# after each publish. Manual downloads (dmg, portable zip, installer exe) stay
-# on GitHub Releases only.
+# releases are never downloaded — scripts/prune-r2-releases.sh deletes the
+# artifacts of the releases that just left that window after each publish.
+# Manual downloads (dmg, portable zip, installer exe) stay on GitHub Releases
+# only.
 #
 # Trigger: push a tag `v<version>` matching the workspace version in
 # Cargo.toml (bump it in the same commit), or run manually via
@@ -306,6 +307,9 @@ jobs:
             --file latest.txt --remote
       - name: prune old releases from R2
         if: env.CLOUDFLARE_API_TOKEN != ''
+        # The release is already published: a failed delete is reported as a
+        # warning on the run instead of failing it.
+        continue-on-error: true
         run: |
           # A publication-recovery run checks out the tagged commit, which may
           # predate this step. The upload above already succeeded at that point,
