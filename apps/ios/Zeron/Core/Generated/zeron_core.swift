@@ -1220,6 +1220,12 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func readAttachment(deviceId: String, path: String) async throws  -> Data
     
     /**
+     * An image a reply in `chat_id` names (`WidgetKind::ChatImage`), read
+     * only from inside that chat's folder on `device_id` (LRU-cached).
+     */
+    func readChatImage(deviceId: String, chatId: String, path: String) async throws  -> Data
+    
+    /**
      * Ask for session notifications on this device (APNs token as hex,
      * "production" | "sandbox", and which kinds).
      */
@@ -2152,6 +2158,26 @@ open func readAttachment(deviceId: String, path: String)async throws  -> Data  {
             rustFutureFunc: {
                 uniffi_zeron_mobile_fn_method_coreclient_read_attachment(
                         self.uniffiCloneHandle(),FfiConverterString.lower(deviceId),FfiConverterString.lower(path)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterData.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * An image a reply in `chat_id` names (`WidgetKind::ChatImage`), read
+     * only from inside that chat's folder on `device_id` (LRU-cached).
+     */
+open func readChatImage(deviceId: String, chatId: String, path: String)async throws  -> Data  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_read_chat_image(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(deviceId),FfiConverterString.lower(chatId),FfiConverterString.lower(path)
                 )
             },
             pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
@@ -20920,6 +20946,13 @@ public enum WidgetKind: Equatable, Hashable {
     case image(reference: String
     )
     /**
+     * An image a settled reply names in Markdown: read with
+     * `CoreClient::read_chat_image`, only from inside `chat_id`'s folder on
+     * its host, never as an attachment.
+     */
+    case chatImage(chatId: String, path: String
+    )
+    /**
      * Working indicator at the tail of a live turn. The painter ticks the
      * elapsed label itself so time never forces a relayout.
      */
@@ -21013,35 +21046,38 @@ public struct FfiConverterTypeWidgetKind: FfiConverterRustBuffer {
         case 4: return .image(reference: try FfiConverterString.read(from: &buf)
         )
         
-        case 5: return .working(sinceMs: try FfiConverterOptionInt64.read(from: &buf), streaming: try FfiConverterBool.read(from: &buf)
+        case 5: return .chatImage(chatId: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf)
         )
         
-        case 6: return .spinner
-        
-        case 7: return .detail(title: try FfiConverterString.read(from: &buf)
+        case 6: return .working(sinceMs: try FfiConverterOptionInt64.read(from: &buf), streaming: try FfiConverterBool.read(from: &buf)
         )
         
-        case 8: return .icon(name: try FfiConverterString.read(from: &buf), color: try FfiConverterTypeColorRole.read(from: &buf)
+        case 7: return .spinner
+        
+        case 8: return .detail(title: try FfiConverterString.read(from: &buf)
         )
         
-        case 9: return .chevron(expanded: try FfiConverterBool.read(from: &buf)
+        case 9: return .icon(name: try FfiConverterString.read(from: &buf), color: try FfiConverterTypeColorRole.read(from: &buf)
         )
         
-        case 10: return .toolRail(trunkX: try FfiConverterFloat.read(from: &buf), bend: try FfiConverterFloat.read(from: &buf), branchEnd: try FfiConverterFloat.read(from: &buf), rowMid: try FfiConverterFloat.read(from: &buf), tops: try FfiConverterSequenceFloat.read(from: &buf), heights: try FfiConverterSequenceFloat.read(from: &buf)
+        case 10: return .chevron(expanded: try FfiConverterBool.read(from: &buf)
         )
         
-        case 11: return .toolToggle(detail: try FfiConverterUInt64.read(from: &buf), open: try FfiConverterBool.read(from: &buf)
+        case 11: return .toolRail(trunkX: try FfiConverterFloat.read(from: &buf), bend: try FfiConverterFloat.read(from: &buf), branchEnd: try FfiConverterFloat.read(from: &buf), rowMid: try FfiConverterFloat.read(from: &buf), tops: try FfiConverterSequenceFloat.read(from: &buf), heights: try FfiConverterSequenceFloat.read(from: &buf)
         )
         
-        case 12: return .shimmer
-        
-        case 13: return .visual(id: try FfiConverterString.read(from: &buf)
+        case 12: return .toolToggle(detail: try FfiConverterUInt64.read(from: &buf), open: try FfiConverterBool.read(from: &buf)
         )
         
-        case 14: return .action(action: try FfiConverterString.read(from: &buf), label: try FfiConverterString.read(from: &buf)
+        case 13: return .shimmer
+        
+        case 14: return .visual(id: try FfiConverterString.read(from: &buf)
         )
         
-        case 15: return .subagent(docId: try FfiConverterOptionString.read(from: &buf), title: try FfiConverterString.read(from: &buf), running: try FfiConverterBool.read(from: &buf), failed: try FfiConverterBool.read(from: &buf)
+        case 15: return .action(action: try FfiConverterString.read(from: &buf), label: try FfiConverterString.read(from: &buf)
+        )
+        
+        case 16: return .subagent(docId: try FfiConverterOptionString.read(from: &buf), title: try FfiConverterString.read(from: &buf), running: try FfiConverterBool.read(from: &buf), failed: try FfiConverterBool.read(from: &buf)
         )
         
         default: throw UniffiInternalError.unexpectedEnumCase
@@ -21072,34 +21108,40 @@ public struct FfiConverterTypeWidgetKind: FfiConverterRustBuffer {
             FfiConverterString.write(reference, into: &buf)
             
         
-        case let .working(sinceMs,streaming):
+        case let .chatImage(chatId,path):
             writeInt(&buf, Int32(5))
+            FfiConverterString.write(chatId, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            
+        
+        case let .working(sinceMs,streaming):
+            writeInt(&buf, Int32(6))
             FfiConverterOptionInt64.write(sinceMs, into: &buf)
             FfiConverterBool.write(streaming, into: &buf)
             
         
         case .spinner:
-            writeInt(&buf, Int32(6))
+            writeInt(&buf, Int32(7))
         
         
         case let .detail(title):
-            writeInt(&buf, Int32(7))
+            writeInt(&buf, Int32(8))
             FfiConverterString.write(title, into: &buf)
             
         
         case let .icon(name,color):
-            writeInt(&buf, Int32(8))
+            writeInt(&buf, Int32(9))
             FfiConverterString.write(name, into: &buf)
             FfiConverterTypeColorRole.write(color, into: &buf)
             
         
         case let .chevron(expanded):
-            writeInt(&buf, Int32(9))
+            writeInt(&buf, Int32(10))
             FfiConverterBool.write(expanded, into: &buf)
             
         
         case let .toolRail(trunkX,bend,branchEnd,rowMid,tops,heights):
-            writeInt(&buf, Int32(10))
+            writeInt(&buf, Int32(11))
             FfiConverterFloat.write(trunkX, into: &buf)
             FfiConverterFloat.write(bend, into: &buf)
             FfiConverterFloat.write(branchEnd, into: &buf)
@@ -21109,28 +21151,28 @@ public struct FfiConverterTypeWidgetKind: FfiConverterRustBuffer {
             
         
         case let .toolToggle(detail,`open`):
-            writeInt(&buf, Int32(11))
+            writeInt(&buf, Int32(12))
             FfiConverterUInt64.write(detail, into: &buf)
             FfiConverterBool.write(`open`, into: &buf)
             
         
         case .shimmer:
-            writeInt(&buf, Int32(12))
+            writeInt(&buf, Int32(13))
         
         
         case let .visual(id):
-            writeInt(&buf, Int32(13))
+            writeInt(&buf, Int32(14))
             FfiConverterString.write(id, into: &buf)
             
         
         case let .action(action,label):
-            writeInt(&buf, Int32(14))
+            writeInt(&buf, Int32(15))
             FfiConverterString.write(action, into: &buf)
             FfiConverterString.write(label, into: &buf)
             
         
         case let .subagent(docId,title,running,failed):
-            writeInt(&buf, Int32(15))
+            writeInt(&buf, Int32(16))
             FfiConverterOptionString.write(docId, into: &buf)
             FfiConverterString.write(title, into: &buf)
             FfiConverterBool.write(running, into: &buf)
@@ -24216,6 +24258,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_read_attachment() != 50982) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_read_chat_image() != 13052) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_register_push_target() != 33942) {
