@@ -28,14 +28,26 @@ pub fn signs_in(harness: HarnessId) -> bool {
         .any(|(provider, _, _)| *provider == harness)
 }
 
+/// Display name for every harness, including those without an account sign-in.
+/// Keep this exhaustive so new harnesses cannot fall back to placeholder copy.
 pub fn provider_name(harness: HarnessId) -> &'static str {
-    if harness == HarnessId::Fx {
-        return "fx";
+    match harness {
+        HarnessId::ClaudeCode => "Claude Code",
+        HarnessId::Codex => "Codex",
+        HarnessId::Copilot => "GitHub Copilot",
+        HarnessId::Cursor => "Cursor",
+        HarnessId::Devin => "Devin",
+        HarnessId::Grok => "Grok",
+        HarnessId::Hermes => "Hermes",
+        HarnessId::Fx => "fx",
+        HarnessId::Pi => "Pi",
+        HarnessId::Omp => "Oh My Pi",
+        HarnessId::Opencode => "OpenCode",
+        HarnessId::Antigravity => "Antigravity",
+        HarnessId::Dsh => "DeepSeek Harness",
+        HarnessId::Muse => "Muse Code",
+        HarnessId::Mock => "Mock",
     }
-    PROVIDERS
-        .iter()
-        .find(|(provider, _, _)| *provider == harness)
-        .map_or("this provider", |(_, name, _)| name)
 }
 
 /// Whether the provider reports plan usage. One that doesn't shows no meters
@@ -53,7 +65,10 @@ pub fn keeps_one_login(harness: HarnessId) -> bool {
 /// Whether zeron switches this agent's logins. Hermes rotates through its
 /// own credential pool (listed, never reordered); Antigravity keeps one.
 pub fn switches_accounts(harness: HarnessId) -> bool {
-    !matches!(harness, HarnessId::Hermes | HarnessId::Antigravity | HarnessId::Fx)
+    !matches!(
+        harness,
+        HarnessId::Hermes | HarnessId::Antigravity | HarnessId::Fx
+    )
 }
 
 /// A standing note under a provider's Accounts label, for an agent whose
@@ -119,5 +134,36 @@ pub fn add_option_label(harness: HarnessId, option: LoginOption, empty: bool) ->
         None => add_account_label(harness, empty),
         Some(_) if empty => format!("Connect {}", option.label),
         Some(_) => format!("Add {} account", option.label),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_harness_has_a_distinct_display_name() {
+        let names: std::collections::HashSet<_> =
+            HarnessId::ALL.into_iter().map(provider_name).collect();
+        assert_eq!(names.len(), HarnessId::ALL.len());
+        assert!(!names.contains("this provider"));
+        assert!(!names.contains(""));
+        for (id, name, _) in PROVIDERS {
+            assert_eq!(provider_name(id), name);
+        }
+    }
+
+    #[test]
+    fn labels_do_not_grant_account_sign_in() {
+        for (id, name) in [
+            (HarnessId::Copilot, "GitHub Copilot"),
+            (HarnessId::Omp, "Oh My Pi"),
+            (HarnessId::Dsh, "DeepSeek Harness"),
+            (HarnessId::Mock, "Mock"),
+            (HarnessId::Fx, "fx"),
+        ] {
+            assert_eq!(provider_name(id), name);
+            assert!(!signs_in(id));
+        }
     }
 }
