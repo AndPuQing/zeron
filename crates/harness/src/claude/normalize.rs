@@ -2,6 +2,7 @@
 //! decoding, error-code mapping).
 
 use crate::tool_images::{compact_base64, images_in_content};
+use serde::Deserialize as _;
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
 
@@ -418,15 +419,10 @@ fn is_synthetic_user_text(text: &str) -> bool {
 
 /// `toolUseResult` image, used only when the content blocks had none.
 fn image_from_tool_use_result(
-    value: Option<&Value>,
+    result: &crate::claude::wire::ToolUseResult,
     name: &str,
 ) -> Option<zeron_proto::ToolResultImage> {
-    let value = value?;
-    if value.get("type").and_then(Value::as_str) != Some("image") {
-        return None;
-    }
-    let data = value.pointer("/file/base64").and_then(Value::as_str)?;
-    let data_base64 = compact_base64(data)?;
+    let data_base64 = compact_base64(result.image_base64.as_deref()?)?;
     Some(zeron_proto::ToolResultImage {
         name: name.to_owned(),
         data_base64,
@@ -578,9 +574,10 @@ impl Normalizer {
         };
         let mut pending = Vec::new();
         for block in blocks {
-            // Parsed for the result's id and error flag. Nested image bytes
-            // are not on that struct, so those still come from the raw value.
-            let Ok(parsed) = serde_json::from_value::<ContentBlock>(block.clone()) else {
+            // Parsed for the result's id and error flag, borrowing the raw
+            // value: the nested image bytes are not on that struct, so they
+            // are read from the value and never copied for this.
+            let Ok(parsed) = ContentBlock::deserialize(block) else {
                 continue;
             };
             if parsed.kind != "tool_result" {
@@ -600,7 +597,7 @@ impl Normalizer {
         }
         if pending.len() == 1 && pending[0].3.is_empty() {
             let name = pending[0].2.clone();
-            if let Some(image) = image_from_tool_use_result(frame.tool_use_result.as_ref(), &name) {
+            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result, &name) {
                 pending[0].3.push(image);
             }
         }
