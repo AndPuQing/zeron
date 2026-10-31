@@ -2577,6 +2577,46 @@ impl ComposerInput {
         true
     }
 
+    /// Append context without replacing the draft's selected range. One undo step.
+    pub(crate) fn append_quote(
+        &mut self,
+        quote: &crate::chat_selection::ChatQuote,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.read_only || self.marked_range.is_some() {
+            return false;
+        }
+        self.dismiss_prompt_suggestion(cx);
+        self.invalidate_mention_tooltip();
+        let end = self.content.len();
+        let inserted = format!(
+            "{}{}",
+            if self.content.is_empty() || self.content.ends_with("\n\n") {
+                ""
+            } else if self.content.ends_with('\n') {
+                "\n"
+            } else {
+                "\n\n"
+            },
+            quote.prompt()
+        );
+        self.record_edit(&(end..end), &inserted);
+        self.content.push_str(&inserted);
+        self.edit_revision = self.edit_revision.wrapping_add(1);
+        let end = self.content.len();
+        self.selected_range = end..end;
+        self.selection_reversed = false;
+        self.caret_affinity = CaretAffinity::Downstream;
+        self.preferred_column = None;
+        self.refresh_projection();
+        self.follow_cursor = true;
+        self.reset_blink();
+        self.needs_measure = true;
+        cx.emit(ComposerInputEvent::Edited);
+        cx.notify();
+        true
+    }
+
     /// Insert a browser annotation chip at the selection, numbered after the
     /// draft's existing annotations. One undo step, like a dropped mention.
     pub(crate) fn insert_annotation(
@@ -7163,6 +7203,26 @@ impl Composer {
 
     /// Mention another chat at the caret: a chip the agent receives as a
     /// reference it can read (dragged in from the sidebar).
+    pub(crate) fn add_quote(
+        &mut self,
+        quote: &crate::chat_selection::ChatQuote,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.on_state_changed(cx);
+        let inserted = self
+            .input
+            .update(cx, |input, cx| input.append_quote(quote, cx));
+        if inserted {
+            self.reset_mention(None, cx);
+            self.reset_slash(None, cx);
+            self.focus_pending = true;
+        } else {
+            self.show_error("Finish composing text before adding this selection.", cx);
+        }
+        cx.notify();
+        inserted
+    }
+
     pub(crate) fn add_chat_mention(
         &mut self,
         chat_id: &str,
@@ -14341,6 +14401,38 @@ mod tests {
             .collect();
         assert_eq!(catalogs.len(), 2);
         assert!(catalogs.iter().all(touches_side));
+    }
+
+    #[gpui::test]
+    fn selection_quote_preserves_draft_and_is_one_undo_step(cx: &mut gpui::TestAppContext) {
+        with_composer_input(cx, |input, window, cx| {
+            let original = "Keep this draft and [file](zeron-file:README.md)";
+            input.set_text(original, cx);
+            input.selected_range = 0..4;
+            let quote = crate::chat_selection::ChatQuote::new(
+                "chat".into(),
+                "Answer".into(),
+                "第一行\nsecond line".into(),
+            )
+            .unwrap();
+            cx.write_to_clipboard(ClipboardItem::new_string("clipboard stays".into()));
+            assert!(input.append_quote(&quote, cx));
+            assert_eq!(
+                cx.read_from_clipboard().unwrap().text().as_deref(),
+                Some("clipboard stays")
+            );
+            assert!(input.text().starts_with(original));
+            assert!(input.text().contains("> 第一行\n> second line"));
+            input.undo(&Undo, window, cx);
+            assert_eq!(input.text(), original);
+            assert_eq!(input.selected_range, 0..4);
+            input.marked_range = Some(0..4);
+            assert!(!input.append_quote(&quote, cx));
+            assert_eq!(input.text(), original);
+            input.marked_range = None;
+            input.read_only = true;
+            assert!(!input.append_quote(&quote, cx));
+        });
     }
 
     #[gpui::test]

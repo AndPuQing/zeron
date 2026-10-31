@@ -4350,6 +4350,11 @@ impl Shell {
                             surface.update(cx, |files, cx| files.hold_mutation(paths.clone(), cx));
                         }
                     }
+                    FilesEvent::Selection { event, origin } => {
+                        if source.read(cx).accepts_origin(origin, cx) {
+                            this.on_chat_selection(event, cx);
+                        }
+                    }
                     FilesEvent::AddToChat {
                         path,
                         is_directory,
@@ -4550,6 +4555,7 @@ impl Shell {
                 &changes,
                 window,
                 |this: &mut Self, _, event, window, cx| match event {
+                    ChangesEvent::Selection(event) => this.on_chat_selection(event, cx),
                     ChangesEvent::OpenCommit(commit) => {
                         this.add_commit_diff_surface(commit.clone(), window, cx);
                     }
@@ -4616,6 +4622,7 @@ impl Shell {
                     cx,
                 );
             }
+            TranscriptEvent::Selection(event) => self.on_chat_selection(event, cx),
             TranscriptEvent::SignIn { chat_id } => self.sign_in_for_chat(chat_id, cx),
             TranscriptEvent::OpenChat { chat_id } => self.open_chat(chat_id.clone(), cx),
         }

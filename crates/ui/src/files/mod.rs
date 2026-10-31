@@ -226,6 +226,7 @@ pub(crate) fn workspace_path_drag_ghost(
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilesEvent {
+    Selection { event: crate::chat_selection::ChatSelectionEvent, origin: mutations::WorkspaceInteractionOrigin },
     AddToChat {
         path: String,
         is_directory: bool,
@@ -276,6 +277,7 @@ impl FilesPresentation {
 impl EventEmitter<FilesEvent> for FilesSurface {}
 
 struct EditorContextMenu {
+    quote: Option<(crate::chat_selection::ChatQuote, mutations::WorkspaceInteractionOrigin)>,
     editor: Entity<editor::FileEditorState>,
     position: Point<Pixels>,
     availability: editor::EditorMenuAvailability,
@@ -725,7 +727,25 @@ impl FilesSurface {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        let quote = self.interaction_origin(cx).and_then(|origin| {
+            let chat_id = origin.context.target.chat_id.clone()?;
+            let path = self
+                .preview
+                .documents
+                .iter()
+                .find(|(_, doc)| doc.editor.as_ref() == Some(&editor))?
+                .0;
+            let input = editor.read(cx);
+            let quote = crate::chat_selection::ChatQuote::file(
+                chat_id,
+                path,
+                input.value().as_ref(),
+                input.selected_range(),
+            )?;
+            Some((quote, origin))
+        });
         self.editor_context_menu.open(EditorContextMenu {
+            quote,
             editor,
             position,
             availability,
@@ -747,8 +767,29 @@ impl FilesSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let quote = self
+            .editor_context_menu
+            .as_open()
+            .and_then(|menu| menu.quote.clone());
         self.close_editor_context_menu(cx);
-        editor::dispatch_context_action(&editor, action, window, cx);
+        match action {
+            editor::EditorContextAction::AddToChat | editor::EditorContextAction::AskInSideChat => {
+                if let Some((quote, origin)) =
+                    quote.filter(|(_, origin)| self.accepts_origin(origin, cx))
+                {
+                    let action = if action == editor::EditorContextAction::AddToChat {
+                        crate::chat_selection::ChatSelectionAction::AddToChat
+                    } else {
+                        crate::chat_selection::ChatSelectionAction::AskInSideChat
+                    };
+                    cx.emit(FilesEvent::Selection {
+                        event: crate::chat_selection::ChatSelectionEvent { quote, action },
+                        origin,
+                    });
+                }
+            }
+            _ => editor::dispatch_context_action(&editor, action, window, cx),
+        }
     }
 
     fn editor_context_menu_row(
@@ -782,13 +823,33 @@ impl FilesSurface {
         let editor = menu.editor.clone();
         let position = menu.position;
         let availability = menu.availability;
+        let can_quote = menu.quote.is_some();
         let closing = self.editor_context_menu.closing_since();
 
         let card = crate::popover::popover_card(theme)
-            .w(px(170.0))
+            .w(px(208.0))
             .on_mouse_down_out(cx.listener(|this, _, _, cx| this.close_editor_context_menu(cx)))
             .flex()
             .flex_col()
+            .child(Self::editor_context_menu_row(
+                theme,
+                "files-editor-context-add-to-chat",
+                "Add to chat",
+                can_quote,
+                editor.clone(),
+                editor::EditorContextAction::AddToChat,
+                cx,
+            ))
+            .child(Self::editor_context_menu_row(
+                theme,
+                "files-editor-context-side-chat",
+                "Ask in side chat",
+                can_quote,
+                editor.clone(),
+                editor::EditorContextAction::AskInSideChat,
+                cx,
+            ))
+            .child(crate::popover::menu_separator())
             .child(Self::editor_context_menu_row(
                 theme,
                 "files-editor-context-cut",

@@ -1899,7 +1899,7 @@ pub fn selection_frame_reset_for(surface: u64) -> impl IntoElement {
 }
 
 fn selection_scope(key: &str) -> &str {
-    if key.starts_with("md-preview-") {
+    if key.starts_with("md-preview-") || key.starts_with("diff-selection-") {
         key.split_once('|').map_or("", |(scope, _)| scope)
     } else {
         ""

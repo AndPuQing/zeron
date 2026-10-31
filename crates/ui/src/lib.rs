@@ -26,6 +26,7 @@ pub mod change_requests;
 pub mod changes;
 pub mod cloud;
 mod comment_ui;
+mod chat_selection;
 pub mod comments;
 pub mod composer;
 mod composer_dock;

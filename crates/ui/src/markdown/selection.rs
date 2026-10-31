@@ -299,6 +299,12 @@ pub fn wash_range(surface: u64, key: &str) -> Option<Range<usize>> {
         .map(|s| s.range.clone())
 }
 
+/// Snapshot the owning surface's selected spans, including virtualized rows.
+pub(crate) fn selected_spans_for(surface: u64) -> Vec<Span> {
+    state().lock().unwrap().as_ref().filter(|s| s.surface == surface)
+        .map(|s| s.spans.clone()).unwrap_or_default()
+}
+
 /// The full selected text (Cmd+C), spans joined in document order.
 pub fn selected_text() -> Option<String> {
     let guard = state().lock().unwrap();

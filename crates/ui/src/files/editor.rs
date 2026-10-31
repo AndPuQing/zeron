@@ -38,6 +38,8 @@ pub(super) enum EditorContextAction {
     Copy,
     Paste,
     SelectAll,
+    AddToChat,
+    AskInSideChat,
 }
 
 /// Creates a stable editor entity for an open workspace document.
@@ -70,16 +72,21 @@ pub(super) fn new_file_editor(
             let Some(menu_editor) = menu_editor.upgrade() else {
                 return;
             };
-            surface
-                .update(cx, |surface, cx| {
-                    surface.open_editor_context_menu(
-                        menu_editor,
-                        EditorMenuAvailability::new(capabilities, clipboard_has_text),
-                        position,
-                        cx,
-                    );
-                })
-                .ok();
+            // The editor still owns the callback's borrow. Read its buffer
+            // after returning to the app, not through a nested entity update.
+            let surface = surface.clone();
+            cx.defer(move |cx| {
+                surface
+                    .update(cx, |surface, cx| {
+                        surface.open_editor_context_menu(
+                            menu_editor,
+                            EditorMenuAvailability::new(capabilities, clipboard_has_text),
+                            position,
+                            cx,
+                        );
+                    })
+                    .ok();
+            });
         }));
     });
     editor
@@ -98,6 +105,7 @@ pub(super) fn dispatch_context_action(
         EditorContextAction::Copy => Box::new(gpui_base::input::Copy),
         EditorContextAction::Paste => Box::new(gpui_base::input::Paste),
         EditorContextAction::SelectAll => Box::new(gpui_base::input::SelectAll),
+        EditorContextAction::AddToChat | EditorContextAction::AskInSideChat => return,
     };
     window.dispatch_action(action, cx);
 }
