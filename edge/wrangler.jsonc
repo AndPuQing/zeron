@@ -37,7 +37,7 @@
       { "name": "PREVIEW_ROOMS", "class_name": "PreviewRoom" },
       { "name": "REGISTRY_ROOMS", "class_name": "RegistryRoom" },
       { "name": "CHAT_ROOMS", "class_name": "ChatRoom" },
-      // WorkOS profiles and join dates, independent of Cloud hosting.
+      // WorkOS user profiles, organizations and members, independent of Cloud hosting.
       { "name": "USER_DIRECTORY", "class_name": "UserDirectory" }
       // Cloud binds CLOUD_ACCOUNTS/CLOUD_INDEX here upstream; this fork keeps
       // them unbound (docs/fork-cloud.md), so /cloud answers available: false.
@@ -87,9 +87,11 @@
     // file's contents) and `wrangler secret put APNS_KEY_ID`. Unset ⇒ decided
     // and logged on /registry/:org/stats, not sent.
     // WorkOS user directory: configure https://edge.550w.host/workos/webhook
-    // for user.created/updated/deleted and set WORKOS_WEBHOOK_SECRET to the
-    // endpoint signing secret. Unset => webhooks answer 503 for retries.
-    // ADMIN_TOKEN protects GET /admin/users (JSON or ?format=csv); unset => 404.
+    // for created/updated/deleted events of user, organization and
+    // organization_membership. Set WORKOS_WEBHOOK_SECRET to the endpoint
+    // signing secret. Unset => webhooks answer 503 for retries.
+    // ADMIN_TOKEN protects GET /admin/users and /admin/organizations
+    // (JSON or ?format=csv); unset => 404.
     "WORKOS_CLIENT_ID": "client_01M4AN0G973H42GQJY8RAAC0RS",
     "AUTH_MODE": "workos"
     // Cloud and the credential vault stay unconfigured in this fork: no

@@ -8,15 +8,28 @@ vault service or billing cron. Its WorkOS user directory is separate from Cloud.
 
 The edge binds `USER_DIRECTORY` to `UserDirectory` with migration `v6`; upstream
 `v5` adds Cloud classes and is deliberately absent here. This directory records
-WorkOS profiles and join dates independently of sandbox hosting or billing.
+WorkOS profiles, join dates, organizations and memberships independently of
+sandbox hosting or billing. Each recorded user receives a stable user number;
+updates and deletion do not change or reuse it.
 
 To receive user events, configure `https://edge.550w.host/workos/webhook` in this
-fork's WorkOS environment for `user.created`, `user.updated` and `user.deleted`,
-then set the endpoint's signing secret as `WORKOS_WEBHOOK_SECRET` on
+fork's WorkOS environment for the created, updated and deleted events of
+`user`, `organization` and `organization_membership`, then set the endpoint's
+signing secret as `WORKOS_WEBHOOK_SECRET` on
 `zerun-edge`. Without that secret, webhook delivery answers 503 for retries.
-`GET /admin/users` (JSON or `?format=csv`) requires the operator's `ADMIN_TOKEN`;
+`GET /admin/users` and `GET /admin/organizations` (JSON or `?format=csv`)
+require the operator's `ADMIN_TOKEN`;
 without it, the endpoint answers 404. A deploy does not create the WorkOS webhook
 subscription or backfill existing users.
+
+Workspace creation at `POST /auth/orgs` is limited to one organization per
+account. Concurrent requests share a creation claim, and retries reuse an
+existing organization. An existing admin membership also counts; being a
+regular member of another organization does not prevent creating one. A
+request made while creation is still in progress asks the user to retry later.
+This protection uses the existing directory binding and does not require the
+optional webhook subscription or admin token. Admin exports include the
+recorded organization creator when available.
 
 The same optional admin token protects badge management: `GET`/`POST
 `/admin/badges` lists or defines badges; `POST /admin/badges/grant` and
