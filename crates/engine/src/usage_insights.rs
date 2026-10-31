@@ -366,6 +366,33 @@ mod tests {
     }
 
     #[test]
+    fn an_unwritable_cache_keeps_working_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let blocked = dir.path().join(CACHE_FILE);
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::write(blocked.join("keep"), "untouched").unwrap();
+
+        let conn = open_cache(dir.path()).unwrap();
+        let filename: String = conn
+            .query_row("PRAGMA database_list", [], |row| row.get(2))
+            .unwrap();
+        assert!(filename.is_empty(), "the fallback is an in-memory database");
+        conn.execute(
+            "INSERT INTO chats (chat_id, saved_at, harness, usage) VALUES ('c', 1, 'codex', '{}')",
+            [],
+        )
+        .unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM chats", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1);
+        assert_eq!(
+            std::fs::read_to_string(blocked.join("keep")).unwrap(),
+            "untouched"
+        );
+    }
+
+    #[test]
     fn the_latest_native_session_owner_beats_the_configured_harness() {
         let mut row = chat("c", HarnessId::Codex);
         assert_eq!(latest_harness(&row).as_deref(), Some("codex"));

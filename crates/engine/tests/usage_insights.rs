@@ -114,6 +114,36 @@ async fn eventually(client: &RpcClient, sessions: u32) -> UsageInsightsReport {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn usage_insights_remain_available_when_the_disk_cache_cannot_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let data = tmp.path().join("data");
+    let profile = zeron_engine::profile::EngineProfile::local(&data).unwrap();
+    std::fs::create_dir_all(profile.store_root().join("usage-insights.sqlite3")).unwrap();
+
+    let core = assemble(&data);
+    let client = zeron_rpc::memory_client(core.rpc_service());
+    let info: zeron_proto::EngineInfo = serde_json::from_value(
+        client
+            .call(methods::ENGINE_INFO, serde_json::Value::Null)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(info.supports(zeron_proto::capabilities::USAGE_INSIGHTS_V1));
+    create_chat(&client, &core, BUG).await;
+    run_turn(&client, BUG, "Fix the login crash").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while !turn_complete(&core, BUG) {
+        assert!(tokio::time::Instant::now() < deadline, "turn completes");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let usage = eventually(&client, 1).await;
+    assert_eq!(usage.total.turns, 1);
+    assert_eq!(usage.total.completed, 1);
+    core.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn usage_insights_count_turns_per_harness_and_task_type() {
     let tmp = tempfile::tempdir().unwrap();
     let data = tmp.path().join("data");
@@ -181,11 +211,14 @@ async fn usage_insights_count_turns_per_harness_and_task_type() {
 
     // Mark the cached row (its one turn, twice) so the restarted engine can
     // only report it by serving the cache, not by re-reading the transcript.
-    let cache = find(&data, "usage-insights.sqlite3").expect("the cache lives in the profile store");
+    let cache =
+        find(&data, "usage-insights.sqlite3").expect("the cache lives in the profile store");
     {
         let conn = rusqlite::Connection::open(&cache).unwrap();
         let usage: String = conn
-            .query_row("SELECT usage FROM chats WHERE chat_id = ?1", [BUG], |row| row.get(0))
+            .query_row("SELECT usage FROM chats WHERE chat_id = ?1", [BUG], |row| {
+                row.get(0)
+            })
             .unwrap();
         let mut usage: serde_json::Value = serde_json::from_str(&usage).unwrap();
         let turn = usage["turns"][0].clone();

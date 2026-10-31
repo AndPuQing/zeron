@@ -174,6 +174,13 @@ impl UsagePage {
     /// engine is still reading older sessions. A painted report stays up
     /// while a newer one loads.
     fn load(&mut self, cx: &mut Context<Self>) {
+        // A range change supersedes the old request even while disconnected.
+        // Leaving its loading flag set would block refresh_if_stale after
+        // another engine connects.
+        self.load_task = None;
+        self.loading = false;
+        self.unsupported = false;
+        self.loaded_at = None;
         let Some(engine) = self.state.read(cx).engine().cloned() else {
             self.report = Loadable::Error("Engine not connected".into());
             return;
@@ -185,7 +192,6 @@ impl UsagePage {
             self.unsupported = true;
             return;
         }
-        self.unsupported = false;
         if !matches!(self.report, Loadable::Ready(_)) {
             self.report = Loadable::Loading;
         }
@@ -365,7 +371,10 @@ impl UsagePage {
                         .px(px(8.0))
                         .text_size(crate::typography::ui_rems(12.0))
                         .text_color(theme.text_muted)
-                        .child(SharedString::from(format!("Loading {}…", self.range.label()))),
+                        .child(SharedString::from(format!(
+                            "Loading {}…",
+                            self.range.label()
+                        ))),
                 )
                 .child(div().opacity(0.45).child(self.render_report(theme, report)))
                 .into_any_element();
@@ -944,5 +953,112 @@ mod tests {
             .map(|a| a.id.as_str())
             .collect();
         assert_eq!(ids, ["c1", "c2"]);
+    }
+
+    #[gpui::test]
+    fn a_range_changed_while_disconnected_loads_after_reconnection(cx: &mut gpui::TestAppContext) {
+        use crate::state::EngineHandle;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let _runtime = runtime.enter();
+        let (out, mut requests) = tokio::sync::mpsc::channel(8);
+        let (_replies, inbound) = tokio::sync::mpsc::channel(8);
+        let state = cx.new(|_| {
+            let mut state = AppState::new();
+            state.set_test_engine(EngineHandle::from_test_client(zeron_rpc::RpcClient::new(
+                out, inbound,
+            )));
+            state
+        });
+        let page = cx.new(|cx| UsagePage::new(state.clone(), cx));
+        cx.run_until_parked();
+        let mut requested_usage = false;
+        while let Ok(frame) = requests.try_recv() {
+            let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            requested_usage |= frame["method"] == methods::GET_USAGE_INSIGHTS;
+        }
+        assert!(requested_usage, "the first report is still pending");
+
+        state.update(cx, |state, cx| state.prepare_runtime_replacement(cx));
+        page.update(cx, |page, cx| {
+            page.set_range(UsageRange::Week, cx);
+            assert!(!page.loading, "the old request cannot block a new engine");
+            assert!(page.load_task.is_none());
+            assert!(matches!(page.report, Loadable::Error(_)));
+        });
+
+        let (out, mut requests) = tokio::sync::mpsc::channel(8);
+        let (_replies, inbound) = tokio::sync::mpsc::channel(8);
+        state.update(cx, |state, _| {
+            state.set_test_engine(EngineHandle::from_test_client(zeron_rpc::RpcClient::new(
+                out, inbound,
+            )));
+        });
+        let before = chrono::Utc::now().timestamp_millis();
+        page.update(cx, |page, cx| page.refresh_if_stale(cx));
+        cx.run_until_parked();
+        let after = chrono::Utc::now().timestamp_millis();
+        let mut requested_week = false;
+        while let Ok(frame) = requests.try_recv() {
+            let frame: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            if frame["method"] == methods::GET_USAGE_INSIGHTS {
+                let since = frame["params"]["sinceMs"].as_i64().unwrap();
+                assert!(since >= UsageRange::Week.since_ms(before).unwrap());
+                assert!(since <= UsageRange::Week.since_ms(after).unwrap());
+                requested_week = true;
+            }
+        }
+        assert!(requested_week, "reconnection requests the selected range");
+    }
+
+    #[gpui::test]
+    fn populated_reports_and_range_refresh_states_render(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            crate::settings::init(Default::default(), dir.path(), cx);
+            gpui_base::init(cx);
+            cx.set_global(Theme::default());
+        });
+        let state = cx.new(|_| AppState::new());
+        let (page, cx) = cx.add_window_view(|_, cx| UsagePage::new(state.clone(), cx));
+        let report = aggregate(
+            &[
+                ChatUsage {
+                    category: TaskCategory::Bugfix,
+                    turns: turns("codex", 6, 0),
+                },
+                ChatUsage {
+                    category: TaskCategory::Bugfix,
+                    turns: turns("claude-code", 3, 3),
+                },
+            ],
+            Some(0),
+        );
+        for (range, indexing) in [
+            (UsageRange::Month, false),
+            (UsageRange::Month, true),
+            (UsageRange::Week, false),
+        ] {
+            page.update(cx, |page, cx| {
+                let mut report = report.clone();
+                report.indexing = indexing;
+                page.report = Loadable::Ready(report);
+                page.report_range = UsageRange::Month;
+                page.range = range;
+                page.loading = indexing || range != UsageRange::Month;
+                page.loaded_at = Some(Instant::now());
+                cx.notify();
+            });
+            cx.update(|window, cx| window.draw(cx).clear());
+        }
+        page.update(cx, |page, cx| {
+            page.report = Loadable::Error("engine disconnected".into());
+            page.loading = false;
+            page.loaded_at = Some(Instant::now());
+            cx.notify();
+        });
+        cx.update(|window, cx| window.draw(cx).clear());
     }
 }
