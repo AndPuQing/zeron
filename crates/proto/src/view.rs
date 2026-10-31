@@ -123,6 +123,65 @@ pub fn display_status(chat: &Chat, session: Option<&Session>, now: DateTime<Utc>
     crate::chat_indicator(chat, session)
 }
 
+/// Live activity of side chats, rolled up to their visible ancestors. This
+/// is display-only: never use it to decide whether a parent's turn can stop,
+/// accept a new message, or needs to queue one. Registry rows work even when
+/// the side pane is closed or the work runs on another device.
+pub fn descendant_activity<'a>(
+    chats: &'a [Chat],
+    sessions: &[Session],
+    now: DateTime<Utc>,
+) -> std::collections::HashMap<&'a str, Indicator> {
+    use std::collections::{HashMap, HashSet};
+    let rows: HashMap<_, _> = chats.iter().map(|chat| (chat.id.as_str(), chat)).collect();
+    let sessions: HashMap<_, _> = sessions
+        .iter()
+        .map(|session| (session.chat_id.as_str(), session))
+        .collect();
+    let mut activity = HashMap::new();
+    for chat in chats
+        .iter()
+        .filter(|chat| !chat.archived && !crate::voice::is_orchestrator_chat(&chat.id))
+    {
+        let status = effective_indicator(sessions.get(chat.id.as_str()).copied(), now);
+        if !matches!(status, Indicator::Working | Indicator::AwaitingInput) {
+            continue;
+        }
+        let mut visited = HashSet::from([chat.id.as_str()]);
+        let mut parent = chat.parent_chat_id.as_deref();
+        while let Some(id) = parent {
+            if !visited.insert(id) {
+                break;
+            }
+            let Some(row) = rows.get(id) else {
+                break;
+            };
+            if row.archived || crate::voice::is_orchestrator_chat(id) {
+                break;
+            }
+            let entry = activity.entry(id).or_insert(status);
+            if status == Indicator::AwaitingInput {
+                *entry = status;
+            }
+            parent = row.parent_chat_id.as_deref();
+        }
+    }
+    activity
+}
+
+/// Waiting for input remains actionable; a parent's own error remains visible.
+/// Historical child errors/completions do not replace the parent's seen state.
+pub fn with_descendant_activity(own: ChatIndicator, activity: Option<Indicator>) -> ChatIndicator {
+    match (own, activity) {
+        (ChatIndicator::AwaitingInput, _) | (_, Some(Indicator::AwaitingInput)) => {
+            ChatIndicator::AwaitingInput
+        }
+        (ChatIndicator::Errored, _) => ChatIndicator::Errored,
+        (_, Some(Indicator::Working)) => ChatIndicator::Working,
+        _ => own,
+    }
+}
+
 /// Same seen/outcome rules, restricted to native work for composer controls.
 pub fn native_display_status(
     chat: &Chat,
@@ -1347,5 +1406,112 @@ mod cloud_setup_tests {
             input: Some(serde_json::json!({"a": 1})),
         };
         assert_eq!(crate::cloud_setup_step(&other), None);
+    }
+}
+
+#[cfg(test)]
+mod descendant_activity_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn chat(id: &str, parent: Option<&str>) -> Chat {
+        serde_json::from_value(json!({"id":id,"parentChatId":parent,"deviceId":"host","archived":false,"createdAt":"2026-10-01T00:00:00Z"})).unwrap()
+    }
+    fn session(id: &str, status: SessionStatus, now: DateTime<Utc>) -> Session {
+        serde_json::from_value(
+            json!({"chatId":id,"deviceId":"host","status":status,"updatedAt":now}),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn child_activity_keeps_ancestors_working_without_changing_native_status() {
+        let now = Utc::now();
+        let chats = vec![
+            chat("main", None),
+            chat("side", Some("main")),
+            chat("nested", Some("side")),
+            chat("other", None),
+        ];
+        let sessions = vec![session("nested", SessionStatus::Working, now)];
+        let active = descendant_activity(&chats, &sessions, now);
+        assert_eq!(active.get("main"), Some(&Indicator::Working));
+        assert_eq!(active.get("side"), Some(&Indicator::Working));
+        assert!(!active.contains_key("other"));
+        assert_eq!(
+            with_descendant_activity(ChatIndicator::Completed, active.get("main").copied()),
+            ChatIndicator::Working
+        );
+        assert_eq!(native_indicator(None, now), Indicator::None);
+        assert!(
+            descendant_activity(&chats, &[session("nested", SessionStatus::Idle, now)], now)
+                .is_empty()
+        );
+        assert_eq!(
+            with_descendant_activity(ChatIndicator::Completed, None),
+            ChatIndicator::Completed
+        );
+    }
+
+    #[test]
+    fn stale_archived_and_dangling_children_do_not_keep_parents_working() {
+        let now = Utc::now();
+        let mut chats = vec![chat("main", None), chat("side", Some("main"))];
+        let sessions = vec![session("side", SessionStatus::Working, now)];
+        assert!(
+            descendant_activity(
+                &chats,
+                &sessions,
+                now + chrono::TimeDelta::milliseconds(SESSION_STALE_MS + 1)
+            )
+            .is_empty()
+        );
+        chats[1].archived = true;
+        assert!(descendant_activity(&chats, &sessions, now).is_empty());
+        chats[1].archived = false;
+        chats[0].archived = true;
+        assert!(descendant_activity(&chats, &sessions, now).is_empty());
+        chats.remove(0);
+        assert!(descendant_activity(&chats, &sessions, now).is_empty());
+        chats[0].parent_chat_id = Some("side".into());
+        assert!(descendant_activity(&chats, &sessions, now).is_empty());
+    }
+
+    #[test]
+    fn input_waits_win_and_historical_child_failures_do_not_propagate() {
+        let now = Utc::now();
+        let chats = vec![
+            chat("main", None),
+            chat("a", Some("main")),
+            chat("b", Some("main")),
+        ];
+        for sessions in [
+            vec![
+                session("a", SessionStatus::Working, now),
+                session("b", SessionStatus::AwaitingInput, now),
+            ],
+            vec![
+                session("a", SessionStatus::AwaitingInput, now),
+                session("b", SessionStatus::Working, now),
+            ],
+        ] {
+            let activity = descendant_activity(&chats, &sessions, now)["main"];
+            assert_eq!(
+                with_descendant_activity(ChatIndicator::Working, Some(activity)),
+                ChatIndicator::AwaitingInput
+            );
+        }
+        assert_eq!(
+            with_descendant_activity(ChatIndicator::Errored, Some(Indicator::Working)),
+            ChatIndicator::Errored
+        );
+        assert_eq!(
+            with_descendant_activity(ChatIndicator::AwaitingInput, Some(Indicator::Working)),
+            ChatIndicator::AwaitingInput
+        );
+        assert!(
+            descendant_activity(&chats, &[session("a", SessionStatus::Errored, now)], now)
+                .is_empty()
+        );
     }
 }

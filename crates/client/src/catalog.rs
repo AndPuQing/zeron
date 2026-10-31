@@ -162,24 +162,10 @@ pub fn fallback_harnesses() -> Vec<HarnessInfo> {
 
 /// Display name for any harness id the fleet can produce.
 pub fn harness_label(id: &str) -> String {
-    match id {
-        "claude-code" => "Claude Code",
-        "codex" => "Codex",
-        "copilot" => "GitHub Copilot",
-        "devin" => "Devin",
-        "grok" => "Grok",
-        "hermes" => "Hermes",
-        "pi" => "Pi",
-        "omp" => "Oh My Pi",
-        "cursor" => "Cursor",
-        "opencode" => "OpenCode",
-        "antigravity" => "Antigravity",
-        "dsh" => "DeepSeek Harness",
-        "muse" => "Muse Code",
-        "mock" => "Mock",
-        other => return other.to_owned(),
-    }
-    .to_owned()
+    zeron_proto::HarnessId::from_slug(id)
+        .map(zeron_proto::providers::provider_name)
+        .unwrap_or(id)
+        .to_owned()
 }
 
 /// Curated static models for a harness (first row = default).
@@ -699,6 +685,13 @@ mod tests {
         assert_eq!(model_label("codex", "some-new-model"), "some-new-model");
         assert_eq!(harness_label("opencode"), "OpenCode");
         assert_eq!(harness_label("copilot"), "GitHub Copilot");
+        for id in zeron_proto::HarnessId::ALL {
+            assert_eq!(
+                harness_label(id.as_str()),
+                zeron_proto::providers::provider_name(id)
+            );
+        }
+        assert_eq!(harness_label("future-agent"), "future-agent");
         assert_eq!(fallback_models("copilot")[0].id, "auto");
     }
 

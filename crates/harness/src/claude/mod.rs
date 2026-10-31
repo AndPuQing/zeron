@@ -57,6 +57,7 @@ mod fork_tail;
 mod normalize;
 pub mod refresh_lock;
 mod saved;
+mod server_tools;
 mod wire;
 
 use std::path::PathBuf;
@@ -1673,7 +1674,12 @@ async fn run_session(session: Session) {
                         }
                         match &ev {
                             AgentEvent::ToolCall { id, .. } => {
-                                open_tools.insert(id.clone());
+                                // Aggregate input can refresh an already completed
+                                // server tool. Keep its details without delaying
+                                // steering as though the tool were running again.
+                                if !norm.server_tool_completed(id) {
+                                    open_tools.insert(id.clone());
+                                }
                             }
                             AgentEvent::ToolResult { id, .. } => {
                                 open_tools.remove(id);
@@ -1895,7 +1901,9 @@ async fn run_session(session: Session) {
                     });
                     // No result came to settle a typed fork: it ends here,
                     // with the turn, or its chip runs on in the parked run.
-                    for ev in norm.settle_typed_fork(DoneStatus::Interrupted) {
+                    for ev in norm.settle_typed_fork(DoneStatus::Interrupted)
+                        .into_iter().chain(norm.settle_server_tools())
+                    {
                         if event_tx.send(Ok(ev)).await.is_err() {
                             break 'main;
                         }
@@ -1986,6 +1994,9 @@ async fn run_session(session: Session) {
     // Terminal bookkeeping: never end the stream without a Done unless the
     // consumer already hung up.
     if !event_tx.is_closed() {
+        for event in norm.settle_server_tools() {
+            let _ = event_tx.send(Ok(event)).await;
+        }
         if interrupted && !done_after_interrupt {
             let _ = event_tx
                 .send(Ok(AgentEvent::Done {

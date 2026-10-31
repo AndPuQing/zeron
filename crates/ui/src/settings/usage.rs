@@ -872,6 +872,15 @@ mod tests {
         assert_eq!(duration(Some(192_000)), "3m 12s");
         assert_eq!(duration(None), "—");
         assert_eq!(harness_name("claude-code"), "Claude Code");
+        assert_eq!(harness_name("copilot"), "GitHub Copilot");
+        assert_eq!(harness_name("omp"), "Oh My Pi");
+        assert_eq!(harness_name("dsh"), "DeepSeek Harness");
+        for id in HarnessId::ALL {
+            assert_eq!(
+                harness_name(id.as_str()),
+                zeron_proto::providers::provider_name(id)
+            );
+        }
         assert_eq!(harness_name("a-future-agent"), "a-future-agent");
         assert_eq!(count(1, "turn", "turns"), "1 turn");
         assert_eq!(count(3, "turn", "turns"), "3 turns");

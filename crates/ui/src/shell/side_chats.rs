@@ -1066,14 +1066,8 @@ mod tests {
             .update(cx, |shell, _, cx| {
                 let side = &shell.side_chats[&tab];
                 assert!(side.fork.is_none());
-                assert!(
-                    side.composer
-                        .read(cx)
-                        .input
-                        .read(cx)
-                        .text()
-                        .contains("> selected detail")
-                );
+                assert!(side.composer.read(cx).input.read(cx).text().is_empty());
+                assert_eq!(side.composer.read(cx).staged_selections(), &[quote.clone()]);
                 assert_eq!(
                     shell.composer.read(cx).input.read(cx).text(),
                     "Keep my draft"
@@ -1084,19 +1078,14 @@ mod tests {
                         .unwrap();
                 shell.on_chat_selection(
                     &ChatSelectionEvent {
-                        quote: side_quote,
+                        quote: side_quote.clone(),
                         action: ChatSelectionAction::AddToChat,
                     },
                     cx,
                 );
-                assert!(
-                    shell.side_chats[&tab]
-                        .composer
-                        .read(cx)
-                        .input
-                        .read(cx)
-                        .text()
-                        .contains("> side detail")
+                assert_eq!(
+                    shell.side_chats[&tab].composer.read(cx).staged_selections(),
+                    &[quote.clone(), side_quote]
                 );
                 assert_eq!(
                     shell.composer.read(cx).input.read(cx).text(),

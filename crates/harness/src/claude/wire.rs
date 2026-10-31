@@ -203,6 +203,9 @@ pub(crate) struct StreamEventFrame {
 pub(crate) struct StreamEventBody {
     #[serde(rename = "type", default)]
     pub kind: String,
+    /// Server tools run before the aggregate assistant message arrives.
+    #[serde(default)]
+    pub content_block: Option<ContentBlock>,
     #[serde(default)]
     pub delta: Delta,
     /// `message_start` carries the full message envelope, whose `usage` is the
@@ -362,6 +365,9 @@ impl MessageBody {
 pub(crate) struct ContentBlock {
     #[serde(rename = "type", default)]
     pub kind: String,
+    /// Server tool results are content blocks in assistant messages.
+    #[serde(default)]
+    pub content: Value,
     #[serde(default)]
     pub text: String,
     /// A `thinking` block's (summarized) text.

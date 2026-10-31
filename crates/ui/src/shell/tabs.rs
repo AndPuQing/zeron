@@ -448,15 +448,14 @@ impl Shell {
             let state = self.state.read(cx);
             let now = Utc::now();
             state.selected_chat.as_deref().map_or(0, |chat| {
-                let side_chats = state
+                let sides = state
                     .chats
                     .iter()
-                    .filter(|side| {
-                        !side.archived
-                            && side.parent_chat_id.as_deref() == Some(chat)
-                            && state.display_status_for(side, now)
-                                == zeron_proto::ChatIndicator::Working
-                    })
+                    .filter(|side| !side.archived && side.parent_chat_id.as_deref() == Some(chat));
+                let side_chats = state
+                    .display_statuses(sides, now)
+                    .values()
+                    .filter(|&&status| status == zeron_proto::ChatIndicator::Working)
                     .count() as u32;
                 state.running_subagents_for(chat, now) + side_chats
             })

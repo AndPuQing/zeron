@@ -183,17 +183,21 @@ pub(super) fn child_chat_rows(
     chat_id: &str,
     now: DateTime<Utc>,
 ) -> Vec<ChildChatRow> {
-    let mut rows: Vec<ChildChatRow> = state
+    let chats: Vec<_> = state
         .chats
         .iter()
         .filter(|chat| !chat.archived && chat.parent_chat_id.as_deref() == Some(chat_id))
+        .collect();
+    let statuses = state.display_statuses(chats.iter().copied(), now);
+    let mut rows: Vec<ChildChatRow> = chats
+        .into_iter()
         .map(|chat| {
             let activity = chat.last_message_at.unwrap_or(chat.created_at);
             ChildChatRow {
                 chat_id: chat.id.clone(),
                 device_id: chat.device_id.clone(),
                 title: child_chat_title(chat).into(),
-                status: state.display_status_for(chat, now),
+                status: statuses[&chat.id],
                 time_ago: zeron_proto::view::format_time_ago(activity, now).into(),
                 change_request: state.change_request_for_chat(chat).cloned(),
                 harness: chat.config.as_ref().map(|config| config.harness),
