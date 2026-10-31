@@ -410,7 +410,7 @@ final class CoreSessionSource: SessionSource {
         await TranscriptImages.image(client: client, device: hostDevice, reference: reference)
     }
 
-    func loadImage(_ reference: String, into view: UIImageView) {
+    @MainActor func loadImage(_ reference: String, into view: UIImageView) {
         TranscriptImages.load(client: client, device: hostDevice, reference: reference, into: view)
     }
 

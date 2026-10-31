@@ -5863,7 +5863,7 @@ mod tests {
         let journal =
             serde_json::to_string(&sessions.inner.journal.replay("chat", 0).unwrap()).unwrap();
         assert!(!journal.contains(png_b64));
-        assert!(journal.contains(&preview_paths[0]));
+        assert!(journal.contains(&serde_json::to_string(&preview_paths[0]).unwrap()));
 
         let bad = AgentEvent::ToolResult {
             id: "tool-2".into(),
