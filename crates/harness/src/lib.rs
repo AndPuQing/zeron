@@ -406,6 +406,7 @@ pub mod codex;
 pub mod agent_ports;
 pub mod cursor;
 pub(crate) mod executable;
+mod extension_mcp;
 pub mod install;
 pub(crate) mod jsonl_tail;
 pub(crate) mod jsonrpc;

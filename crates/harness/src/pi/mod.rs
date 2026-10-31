@@ -1,6 +1,5 @@
 //! Native Pi JSONL RPC driver. See PROTOCOL.md for the legacy ACK barrier.
 mod catalog;
-mod mcp;
 mod normalize;
 mod rpc;
 mod saved;
@@ -176,7 +175,9 @@ impl PiHarness {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let scratch = mcp
-            .map(|config| self::mcp::configure(&mut cmd, config))
+            .map(|config| {
+                crate::extension_mcp::configure(&crate::extension_mcp::PI, &mut cmd, config)
+            })
             .transpose()?;
         let child = cmd.spawn().map_err(|e| {
             crate::executable::spawn_error(e, Some(cwd), || crate::executable::binary_hint(&exe))

@@ -3,7 +3,6 @@
 //! is a distinct product with its own store (`~/.omp`), session format and
 //! framing, so this driver never reuses Pi's discovery or session index.
 mod catalog;
-mod mcp;
 mod normalize;
 mod rpc;
 mod saved;
@@ -173,7 +172,9 @@ impl OmpHarness {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let scratch = mcp
-            .map(|config| self::mcp::configure(&mut cmd, config))
+            .map(|config| {
+                crate::extension_mcp::configure(&crate::extension_mcp::OMP, &mut cmd, config)
+            })
             .transpose()?;
         let mut child = Child::new(cmd.spawn()?);
         let tail = crate::StderrTail::default();
