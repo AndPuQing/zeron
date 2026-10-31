@@ -125,9 +125,11 @@ pub fn markdown_image(source: &str, cwd: Option<&str>) -> Option<(String, &'stat
 
 /// Whether `path` (as [`markdown_image`] resolved it) lies strictly inside
 /// `cwd` once `.` and `..` are resolved lexically: the only images
-/// `ReadChatImageChunk` can serve. Fails closed where the folder can't be
-/// judged from here: no folder, the host's home, or a `~`-relative one. The
-/// host still enforces its own jail (links, canonical spellings).
+/// `ReadChatImageChunk` can serve. A `~/…` folder (a projectless chat's
+/// scratch folder) is matched by its whole path below some home, since this
+/// client doesn't know the host's. Fails closed for no folder, the host's
+/// home itself, and network folders. The host still enforces its own jail
+/// (links, canonical spellings).
 pub fn in_chat_folder(path: &str, cwd: Option<&str>) -> bool {
     let Some(cwd) = cwd
         .map(str::trim)
@@ -135,7 +137,7 @@ pub fn in_chat_folder(path: &str, cwd: Option<&str>) -> bool {
     else {
         return false;
     };
-    if !is_host_absolute(cwd) || is_remote_or_device_path(cwd) || is_remote_or_device_path(path) {
+    if !is_host_absolute(path) || is_remote_or_device_path(cwd) || is_remote_or_device_path(path) {
         return false;
     }
     // Windows hosts compare case-insensitively.
@@ -154,10 +156,20 @@ pub fn in_chat_folder(path: &str, cwd: Option<&str>) -> bool {
         }
         Some(out)
     };
-    match (components(cwd), components(path)) {
-        (Some(folder), Some(file)) => file.len() > folder.len() && file.starts_with(&folder),
-        _ => false,
+    let Some(file) = components(path) else {
+        return false;
+    };
+    if let Some(below_home) = cwd.strip_prefix('~') {
+        let Some(folder) = components(below_home).filter(|folder| !folder.is_empty()) else {
+            return false;
+        };
+        // Some home before the folder, and the file inside it.
+        return (1..file.len().saturating_sub(folder.len())).any(|at| file[at..].starts_with(&folder));
     }
+    if !is_host_absolute(cwd) {
+        return false;
+    }
+    components(cwd).is_some_and(|folder| file.len() > folder.len() && file.starts_with(&folder))
 }
 
 #[cfg(test)]
@@ -213,6 +225,18 @@ mod tests {
         assert!(!in_chat_folder("/Repo/a.png", Some("/repo")));
         for cwd in [None, Some("~"), Some(""), Some("~/repo"), Some("~/.zerun/scratch/x"), Some("//host/share")] {
             assert!(!in_chat_folder("/repo/a.png", cwd), "{cwd:?}");
+        }
+        // A projectless chat's scratch folder sits below a home this client doesn't know.
+        let scratch = Some("~/.zerun/scratch/2026-10-25-a1b2c3d4");
+        assert!(in_chat_folder("/Users/u/.zerun/scratch/2026-10-25-a1b2c3d4/shot.png", scratch));
+        assert!(in_chat_folder(r"C:\Users\u\.zerun\scratch\2026-10-25-a1b2c3d4\a.png", scratch));
+        for path in [
+            "/Users/u/.zerun/scratch/2026-10-25-ffffffff/shot.png",
+            "/Users/u/.zerun/scratch/2026-10-25-a1b2c3d4",
+            "/.zerun/scratch/2026-10-25-a1b2c3d4/shot.png",
+            "/Users/u/.zerun/scratch/2026-10-25-a1b2c3d4/../shot.png",
+        ] {
+            assert!(!in_chat_folder(path, scratch), "{path}");
         }
     }
 

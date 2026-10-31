@@ -86,9 +86,11 @@ only after its block settles. URLs are never fetched. Both desktop and mobile
 use the same PNG/JPEG/WebP/GIF path-selection policy; `..` is kept for the host's
 lexical jail to reject rather than silently rewritten. Because a laid-out
 mobile widget can't fall back to its link, mobile additionally keeps the link
-for any path that doesn't lie lexically inside the chat's own absolute folder
-(no folder, the home folder, `~`-relative folders, `/tmp/…`, `../…`): those
-are paths `ReadChatImageChunk` always refuses.
+for any path that doesn't lie lexically inside the chat's own folder (no
+folder, the home folder, `/tmp/…`, `../…`): those are paths
+`ReadChatImageChunk` always refuses. A `~/…` folder, such as a projectless
+chat's scratch folder, is matched by its whole path below some home directory,
+since the phone doesn't know the host's home.
 
 Mobile uses an internal chat-qualified image reference through the existing
 attachment FFI. The client routes these references exclusively to
