@@ -179,28 +179,45 @@ async fn usage_insights_count_turns_per_harness_and_task_type() {
     drop(client);
     drop(core);
 
+    // Mark the cached row (its one turn, twice) so the restarted engine can
+    // only report it by serving the cache, not by re-reading the transcript.
+    let cache = find(&data, "usage-insights.sqlite3").expect("the cache lives in the profile store");
+    {
+        let conn = rusqlite::Connection::open(&cache).unwrap();
+        let usage: String = conn
+            .query_row("SELECT usage FROM chats WHERE chat_id = ?1", [BUG], |row| row.get(0))
+            .unwrap();
+        let mut usage: serde_json::Value = serde_json::from_str(&usage).unwrap();
+        let turn = usage["turns"][0].clone();
+        usage["turns"].as_array_mut().unwrap().push(turn);
+        conn.execute(
+            "UPDATE chats SET usage = ?1 WHERE chat_id = ?2",
+            rusqlite::params![usage.to_string(), BUG],
+        )
+        .unwrap();
+    }
+
     let core = assemble(&data);
     let client = zeron_rpc::memory_client(core.rpc_service());
     let restarted = eventually(&client, 1).await;
-    assert_eq!(restarted.total.turns, 1);
-    assert!(
-        walk_has(&data, "usage-insights.sqlite3"),
-        "the cache lives in the profile store"
+    assert_eq!(
+        restarted.total.turns, 2,
+        "the restarted engine serves the cached row instead of re-reading the transcript"
     );
     core.shutdown().await;
 }
 
-fn walk_has(dir: &std::path::Path, name: &str) -> bool {
+fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
     std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
-        .any(|entry| {
+        .find_map(|entry| {
             let path = entry.path();
             if path.is_dir() {
-                walk_has(&path, name)
+                find(&path, name)
             } else {
-                path.file_name().is_some_and(|n| n == name)
+                path.file_name().is_some_and(|n| n == name).then_some(path)
             }
         })
 }

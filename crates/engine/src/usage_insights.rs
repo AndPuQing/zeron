@@ -1,10 +1,12 @@
 //! Personal usage insights over the transcripts stored on this engine.
 //!
 //! Like transcript search, the cache is derived data. `usage-insights.sqlite3`
-//! holds one row per chat: its [`ChatUsage`] (`zeron_doc::usage`) and the
-//! snapshot `saved_at` it was read from. A request re-reads the chats whose
-//! snapshot changed since, within a time budget, then aggregates every row.
-//! Nothing leaves the device; deleting the file only costs a re-read.
+//! holds one row per chat: its [`ChatUsage`] (`zeron_doc::usage`), and the
+//! snapshot `saved_at` and harness attribution it was read with. A request
+//! re-reads the chats where either changed since, within a time budget, then
+//! aggregates every row. Nothing leaves the device; deleting the file only
+//! costs a re-read, so a cache that won't open is rebuilt rather than
+//! switching the feature off.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -21,8 +23,9 @@ use crate::EngineError;
 use crate::workspace_host::WorkspaceHost;
 
 /// Bump to re-read every chat when what a summary records changes.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const REFRESH_BUDGET: Duration = Duration::from_secs(2);
+const CACHE_FILE: &str = "usage-insights.sqlite3";
 
 #[derive(Clone)]
 pub struct UsageInsights {
@@ -34,6 +37,9 @@ struct Inner {
     refreshing: Mutex<()>,
     store: Arc<DocsStore>,
     workspace: WorkspaceHost,
+    /// Chats whose snapshot could not be loaded: tried after every other
+    /// chat, so one bad row neither fails the report nor delays the rest.
+    unloadable: Mutex<HashSet<String>>,
 }
 
 impl UsageInsights {
@@ -42,32 +48,13 @@ impl UsageInsights {
         store: Arc<DocsStore>,
         workspace: WorkspaceHost,
     ) -> Result<Self, EngineError> {
-        let conn = Connection::open(dir.join("usage-insights.sqlite3")).map_err(sql)?;
-        conn.pragma_update(None, "journal_mode", "WAL")
-            .map_err(sql)?;
-        conn.pragma_update(None, "synchronous", "NORMAL")
-            .map_err(sql)?;
-        let version: i64 = conn
-            .pragma_query_value(None, "user_version", |row| row.get(0))
-            .map_err(sql)?;
-        if version != SCHEMA_VERSION {
-            conn.execute_batch(&format!(
-                "DROP TABLE IF EXISTS chats;
-                 CREATE TABLE chats (
-                    chat_id  TEXT PRIMARY KEY,
-                    saved_at INTEGER NOT NULL,
-                    usage    TEXT NOT NULL
-                 ) STRICT;
-                 PRAGMA user_version = {SCHEMA_VERSION};"
-            ))
-            .map_err(sql)?;
-        }
         Ok(Self {
             inner: Arc::new(Inner {
-                cache: Mutex::new(conn),
+                cache: Mutex::new(open_cache(dir)?),
                 refreshing: Mutex::new(()),
                 store,
                 workspace,
+                unloadable: Mutex::new(HashSet::new()),
             }),
         })
     }
@@ -88,6 +75,50 @@ impl UsageInsights {
     }
 }
 
+/// The cache in `dir`. One that won't open (corrupt, not a database) is
+/// deleted and rebuilt from the transcripts; one that can't be written at
+/// all is kept in memory for this run.
+fn open_cache(dir: &Path) -> Result<Connection, EngineError> {
+    let path = dir.join(CACHE_FILE);
+    let error = match prepare_cache(Connection::open(&path)) {
+        Ok(conn) => return Ok(conn),
+        Err(error) => error,
+    };
+    tracing::warn!(%error, "usage insights cache unreadable; rebuilding it");
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(dir.join(format!("{CACHE_FILE}{suffix}")));
+    }
+    prepare_cache(Connection::open(&path)).or_else(|error| {
+        tracing::warn!(%error, "usage insights cache unwritable; keeping it in memory");
+        prepare_cache(Connection::open_in_memory())
+    })
+}
+
+fn prepare_cache(conn: rusqlite::Result<Connection>) -> Result<Connection, EngineError> {
+    let conn = conn.map_err(sql)?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(sql)?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(sql)?;
+    let version: i64 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(sql)?;
+    if version != SCHEMA_VERSION {
+        conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS chats;
+             CREATE TABLE chats (
+                chat_id  TEXT PRIMARY KEY,
+                saved_at INTEGER NOT NULL,
+                harness  TEXT,
+                usage    TEXT NOT NULL
+             ) STRICT;
+             PRAGMA user_version = {SCHEMA_VERSION};"
+        ))
+        .map_err(sql)?;
+    }
+    Ok(conn)
+}
+
 /// The chats the report covers: every session the person ran, archived ones
 /// included, but not the hidden voice orchestrators.
 fn counted(chat: &Chat) -> bool {
@@ -104,9 +135,10 @@ fn latest_harness(chat: &Chat) -> Option<String> {
 }
 
 impl Inner {
-    /// Re-read chats whose snapshot changed, newest first, within `budget`;
-    /// drop rows for chats that are gone. Returns whether any are left. A
-    /// refresh already in flight makes this a no-op that reports indexing.
+    /// Re-read chats whose snapshot or harness attribution changed, newest
+    /// first, within `budget`; drop rows for chats that are gone. Returns
+    /// whether any are left. A refresh already in flight makes this a no-op
+    /// that reports indexing.
     fn refresh(&self, budget: Duration) -> Result<bool, EngineError> {
         let Ok(_refreshing) = self.refreshing.try_lock() else {
             return Ok(true);
@@ -125,12 +157,12 @@ impl Inner {
             .into_iter()
             .filter(|(id, _)| chats.contains_key(id))
             .collect();
-        let cached: HashMap<String, i64> = {
+        let cached: HashMap<String, (i64, Option<String>)> = {
             let conn = self.conn();
             let mut stmt = conn
-                .prepare("SELECT chat_id, saved_at FROM chats")
+                .prepare("SELECT chat_id, saved_at, harness FROM chats")
                 .map_err(sql)?;
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            stmt.query_map([], |row| Ok((row.get(0)?, (row.get(1)?, row.get(2)?))))
                 .map_err(sql)?
                 .collect::<Result<_, _>>()
                 .map_err(sql)?
@@ -149,9 +181,24 @@ impl Inner {
             }
             tx.commit().map_err(sql)?;
         }
-        wanted.retain(|(id, saved_at)| cached.get(id) != Some(saved_at));
-        wanted
-            .sort_by_key(|(id, saved_at)| (cached.contains_key(id), std::cmp::Reverse(*saved_at)));
+        // A row is current while both inputs of `read_usage` are: the
+        // snapshot, and the chat's harness (metadata that can change alone).
+        wanted.retain(|(id, saved_at)| {
+            let harness = chats.get(id).and_then(latest_harness);
+            cached.get(id) != Some(&(*saved_at, harness))
+        });
+        let unloadable = self
+            .unloadable
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        wanted.sort_by_key(|(id, saved_at)| {
+            (
+                unloadable.contains(id),
+                cached.contains_key(id),
+                std::cmp::Reverse(*saved_at),
+            )
+        });
         let mut processed = 0;
         for (chat_id, saved_at) in wanted {
             // Always settle one chat before yielding, or a slow store could
@@ -168,15 +215,29 @@ impl Inner {
                     empty_usage()
                 }),
                 Ok(None) => continue,
-                Err(error) => return Err(error.into()),
+                // Left uncounted and tried again on a later request, after
+                // the rest: one bad row must not fail the whole report.
+                Err(error) => {
+                    tracing::warn!(chat = %chat_id, %error, "transcript snapshot unavailable; skipped");
+                    self.unloadable
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(chat_id);
+                    continue;
+                }
             };
+            self.unloadable
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .remove(&chat_id);
             let json =
                 serde_json::to_string(&usage).map_err(|e| EngineError::Other(e.to_string()))?;
             self.conn()
                 .execute(
-                    "INSERT INTO chats (chat_id, saved_at, usage) VALUES (?1, ?2, ?3)
-                     ON CONFLICT(chat_id) DO UPDATE SET saved_at = excluded.saved_at, usage = excluded.usage",
-                    params![chat_id, saved_at, json],
+                    "INSERT INTO chats (chat_id, saved_at, harness, usage) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(chat_id) DO UPDATE SET saved_at = excluded.saved_at,
+                        harness = excluded.harness, usage = excluded.usage",
+                    params![chat_id, saved_at, latest_harness(chat), json],
                 )
                 .map_err(sql)?;
             processed += 1;
@@ -282,6 +343,26 @@ mod tests {
             doc.push_message(entry).unwrap();
         }
         doc.export_snapshot().unwrap()
+    }
+
+    #[test]
+    fn an_unreadable_cache_is_rebuilt_not_left_off() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CACHE_FILE), vec![0xABu8; 4096]).unwrap();
+        let conn = open_cache(dir.path()).unwrap();
+        conn.execute(
+            "INSERT INTO chats (chat_id, saved_at, harness, usage) VALUES ('c', 1, 'codex', '{}')",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let rebuilt = std::fs::read(dir.path().join(CACHE_FILE)).unwrap();
+        assert!(rebuilt.starts_with(b"SQLite format 3\0"));
+        let reopened = open_cache(dir.path()).unwrap();
+        let rows: i64 = reopened
+            .query_row("SELECT count(*) FROM chats", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(rows, 1, "a healthy cache is kept across opens");
     }
 
     #[test]

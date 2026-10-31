@@ -850,10 +850,6 @@ impl EngineRpc {
         engine_info
             .capabilities
             .retain(|cap| cap != zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1);
-        // Advertised once the cache opens ([`Self::with_usage_insights`]).
-        engine_info
-            .capabilities
-            .retain(|cap| cap != zeron_proto::capabilities::USAGE_INSIGHTS_V1);
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
             voice: sessions.voice_manager(),
@@ -977,11 +973,12 @@ impl EngineRpc {
         self
     }
 
+    /// `usage-insights-v1` is in `capabilities::CURRENT` rather than added
+    /// here: the deferred desktop engine answers `EngineInfo` before any
+    /// profile (or cache) opens, and the cache rebuilds itself instead of
+    /// failing, so every engine of this build can answer the report.
     pub fn with_usage_insights(mut self, insights: crate::usage_insights::UsageInsights) -> Self {
         self.usage_insights = Some(insights);
-        self.engine_info
-            .capabilities
-            .push(zeron_proto::capabilities::USAGE_INSIGHTS_V1.into());
         self
     }
 
