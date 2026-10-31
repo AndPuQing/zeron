@@ -28,6 +28,7 @@ pub mod projectless;
 pub mod providers;
 pub mod run_errors;
 pub mod sidebar_pins;
+pub mod usage_insights;
 pub mod view;
 pub mod voice;
 pub mod workspace;

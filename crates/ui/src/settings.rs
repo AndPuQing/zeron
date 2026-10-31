@@ -33,6 +33,7 @@ pub mod notifications;
 pub mod search;
 pub mod shortcuts;
 pub mod thread_naming;
+pub mod usage;
 pub mod wallpaper;
 pub mod wallpaper_colors;
 pub mod widgets;

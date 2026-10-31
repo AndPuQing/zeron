@@ -590,10 +590,7 @@ impl Pump {
     async fn run(mut self, mut source: Source) {
         loop {
             let ended = match source {
-                Source::Direct(link) => {
-                    self.path.send_replace(TerminalPath::Direct);
-                    self.pump_direct(link).await
-                }
+                Source::Direct(link) => self.pump_direct(link).await,
                 Source::Relay(stream) => {
                     self.path.send_replace(TerminalPath::Relay);
                     self.pump_relay(stream).await
@@ -654,6 +651,7 @@ impl Pump {
             mut acks,
         } = link;
         self.hub.attach_writer(&self.key, self.id, outgoing);
+        self.path.send_replace(TerminalPath::Direct);
         let ended = loop {
             tokio::select! {
                 event = events.recv() => {
@@ -721,5 +719,106 @@ impl Pump {
                 _ = self.out.closed() => return Ended::Done,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoRelay;
+
+    #[async_trait]
+    impl Relay for NoRelay {
+        async fn call(
+            &self,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, RpcError> {
+            panic!("a direct write must not use the relay");
+        }
+
+        async fn subscribe(
+            &self,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<BoxStream<'static, serde_json::Value>, RpcError> {
+            panic!("the direct link stays open");
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn direct_path_is_announced_only_after_its_writer_is_attached() {
+        let hub = RemoteTerminals::default();
+        let key = ("host".to_string(), "terminal".to_string());
+        let relay: Arc<dyn Relay> = Arc::new(NoRelay);
+        let (out, events) = mpsc::unbounded_channel();
+        let (outgoing, mut writes) = mpsc::unbounded_channel();
+        let (_host_events, host_events) = mpsc::unbounded_channel();
+        let (_host_acks, host_acks) = mpsc::unbounded_channel();
+        let (path, mut path_rx) = watch::channel(TerminalPath::Relay);
+
+        // Hold writer installation so the status notification cannot race
+        // past it, even when a viewer immediately types after the wake.
+        let blocked = hub.clone();
+        let (locked, ready) = tokio::sync::oneshot::channel();
+        let (release, wait) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _entries = lock(&blocked.entries);
+            locked.send(()).unwrap();
+            let _ = wait.recv();
+        });
+        ready.await.unwrap();
+        let pump = tokio::spawn(
+            Pump {
+                id: 0,
+                hub: hub.clone(),
+                key: key.clone(),
+                relay: relay.clone(),
+                direct: None,
+                out,
+                last_seq: 0,
+                host_replies: true,
+                path,
+            }
+            .run(Source::Direct(Link {
+                outgoing,
+                events: host_events,
+                acks: host_acks,
+            })),
+        );
+        let announced_early = tokio::time::timeout(Duration::from_millis(100), path_rx.changed())
+            .await
+            .is_ok();
+        release.send(()).unwrap();
+        holder.join().unwrap();
+
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            path_rx.wait_for(|path| *path == TerminalPath::Direct),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(hub.direct_attached(&key.0, &key.1));
+        hub.send(&relay, &key.0, &key.1, Write::Input(b"x".to_vec()))
+            .unwrap();
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(3), writes.recv())
+                .await
+                .unwrap(),
+            Some(Outgoing::Input { seq: 1, bytes }) if bytes == b"x"
+        ));
+        drop(events);
+        tokio::time::timeout(Duration::from_secs(3), pump)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !announced_early,
+            "Direct was visible before its writer was installed"
+        );
     }
 }

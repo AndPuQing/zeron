@@ -132,6 +132,10 @@ pub mod methods {
     /// Full-text search over transcripts stored on this engine.
     /// `SearchTranscriptsRequest` → `TranscriptSearchHit[]`. Never relay-forwarded.
     pub const SEARCH_TRANSCRIPTS: &str = "SearchTranscripts";
+    /// Personal usage insights over this engine's own transcripts:
+    /// `UsageInsightsRequest` → `UsageInsightsReport`. Never relay-forwarded;
+    /// `indexing` asks the caller to come back for chats not read yet.
+    pub const GET_USAGE_INSIGHTS: &str = "GetUsageInsights";
     pub const WATCH_SIDEBAR_PREFERENCES: &str = "WatchSidebarPreferences";
     pub const WATCH_DEVICES: &str = "WatchDevices";
     pub const WATCH_SESSIONS: &str = "WatchSessions";

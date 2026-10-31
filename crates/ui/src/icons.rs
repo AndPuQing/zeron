@@ -242,6 +242,8 @@ icon_assets![
     (GITHUB_MARK, "github-mark"),
     // Settings → Billing (drawn to the Solar linear set's 1.5 stroke).
     (WALLET, "wallet"),
+    // Settings → Usage (drawn to the Solar linear set's 1.5 stroke).
+    (CHART, "chart"),
     (ANTIGRAVITY_MARK, "antigravity-mark"),
     (DSH_MARK, "dsh-mark"),
     // Muse Code's mark (Meta's infinity), tinted its brand blue at call sites.

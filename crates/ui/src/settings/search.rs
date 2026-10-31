@@ -374,6 +374,10 @@ fn page_terms(section: SettingsSection) -> &'static str {
             "harnesses agents cli claude code codex cursor devin grok hermes pi opencode \
              antigravity muse install enable disable update policy accounts sign in login"
         }
+        SettingsSection::Usage => {
+            "usage statistics stats insights success rate rework failures time spent \
+             task types best agent compare plan limits quota rate limits"
+        }
         SettingsSection::Devices => "machines computers remote this device other devices rename",
         SettingsSection::Cloud => "machine remote github repositories usage",
         SettingsSection::Billing => "plan credits subscription payment stripe",

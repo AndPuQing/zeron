@@ -40,6 +40,8 @@ pub mod capabilities {
     pub const BACKGROUND_TASKS_V1: &str = "background-tasks-v1";
 
     pub const EXECUTION_POLICY_V1: &str = "execution-policy-v1";
+    /// The engine answers `GetUsageInsights` over its own transcripts.
+    pub const USAGE_INSIGHTS_V1: &str = "usage-insights-v1";
 
     pub const CURRENT: &[&str] = &[
         EXECUTION_POLICY_V1,
@@ -58,6 +60,7 @@ pub mod capabilities {
         BACKGROUND_TASKS_V1,
         crate::voice::remote::CAPABILITY,
         EXTERNAL_SESSION_IMPORT_V1,
+        USAGE_INSIGHTS_V1,
     ];
 
     pub fn current() -> Vec<String> {
@@ -140,12 +143,14 @@ mod tests {
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
                     "harness-environment-v1",
+                    "harness-config-files-v1",
                     "projectless-scratch-v1",
                     "sidebar-section-order-v1",
                     "provider-switch-v1",
                     "background-tasks-v1",
                     "voice-client-media-v1",
-                    "external-session-import-v1"
+                    "external-session-import-v1",
+                    "usage-insights-v1"
                 ],
             })
         );
