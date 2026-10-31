@@ -238,7 +238,10 @@ impl RowBuilder {
     /// Rows for `input`, reusing every row whose source is unchanged.
     pub fn build(&mut self, ctx: &mut Ctx, input: &TranscriptInput) -> Vec<Placed> {
         let chat = input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
-            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone() });
+            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone() })
+            // A snapshot that briefly lacks the chat's row (reconnect, refresh)
+            // keeps the folder it had: only a real change re-lays out the transcript.
+            .or_else(|| self.reply_chat.clone().filter(|known| input.chat_id.as_ref() == Some(&known.chat_id)));
         if self.reply_chat != chat {
             self.parts.clear();
             self.entries.clear();
@@ -1381,7 +1384,7 @@ mod reply_image_tests {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
         };
-        let text = "Before ![screenshot](shots/a.png) after\n\n> ![nested](b.jpg)\n\n- ![list](c.webp)\n\n![remote](https://example.com/a.png)\n\n```\n![code](d.png)\n```";
+        let text = "Before ![screenshot](shots/a.png) after\n\n> ![nested](b.jpg)\n\n- ![list](c.webp)\n\n![remote](https://example.com/a.png)\n\n![outside](/tmp/e.png) ![above](../f.png)\n\n```\n![code](d.png)\n```";
         let blocks = w.builder.text_blocks(&mut ctx, "a#t", text, false);
         for width in [200.0, 354.0, 768.0] {
             let mut painted = DisplayBuilder::default();
@@ -1404,7 +1407,24 @@ mod reply_image_tests {
             assert_eq!(images[0].path, "/repo/shots/a.png");
             assert!(images.iter().all(|image| image.chat_id == "chat"));
             assert!(painted.text.contains("Before") && painted.text.contains("after") && painted.text.contains("remote"));
+            // Paths the host always refuses keep their links.
+            assert!(painted.text.contains("outside") && painted.text.contains("above"));
         }
+    }
+
+    #[test]
+    fn a_snapshot_missing_the_chat_row_keeps_its_folder() {
+        let mut w = super::super::tests::worker(390.0);
+        let known = ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() };
+        w.builder.reply_chat = Some(known.clone());
+        let mut ctx = Ctx {
+            typo: &mut w.typo, cache: &mut w.cache, math: w.math,
+            math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
+        };
+        w.builder.build(&mut ctx, &TranscriptInput { chat_id: Some("chat".into()), ..Default::default() });
+        assert_eq!(w.builder.reply_chat, Some(known));
+        w.builder.build(&mut ctx, &TranscriptInput { chat_id: Some("other".into()), ..Default::default() });
+        assert_eq!(w.builder.reply_chat, None);
     }
 
     #[test]

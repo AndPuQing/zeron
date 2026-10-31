@@ -84,16 +84,24 @@ available below the preview; tables, headings, user messages, reasoning and
 subagent Markdown keep their text links. The streaming tail becomes an image
 only after its block settles. URLs are never fetched. Both desktop and mobile
 use the same PNG/JPEG/WebP/GIF path-selection policy; `..` is kept for the host's
-lexical jail to reject rather than silently rewritten.
+lexical jail to reject rather than silently rewritten. Because a laid-out
+mobile widget can't fall back to its link, mobile additionally keeps the link
+for any path that doesn't lie lexically inside the chat's own absolute folder
+(no folder, the home folder, `~`-relative folders, `/tmp/…`, `../…`): those
+are paths `ReadChatImageChunk` always refuses.
 
 Mobile uses an internal chat-qualified image reference through the existing
 attachment FFI. The client routes these references exclusively to
 `ReadChatImageChunk` on the owning host, validates contiguous chunks, MIME and
-name, bounds the bytes to 10 MiB and the complete read to 30 seconds. There is
-no fallback to `ReadAttachmentChunk` if an old host lacks the stricter RPC.
-Native decoders check dimensions before decoding (at most 4096 pixels per side).
-Images preserve their aspect ratio; failed reads show a retry action. Decoded
-caches are bounded and scoped by device. Tapping a loaded image opens the viewer.
+name, and bounds the bytes to 10 MiB. The host sends `CHAT_IMAGE_CHUNK_BYTES`
+(45,000) per chunk; the client allows enough chunks for a full-size image, each
+under its own call deadline. There is no fallback to `ReadAttachmentChunk` if
+an old host lacks the stricter RPC. Native decoders downsample anything larger
+than 4096 pixels on a side instead of refusing it. Images preserve their aspect
+ratio; failed reads show a retry action, and a failed image is not read again
+until it is tapped. Concurrent requests for one image share a read. Decoded
+caches are bounded and scoped by device. Tapping a loaded image opens the viewer
+from the decoded cache.
 
 Tool results carrying inline images are extracted by Claude, Codex MCP, ACP,
 Pi and OMP adapters and saved by the engine before publication. The document

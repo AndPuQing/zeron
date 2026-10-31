@@ -535,6 +535,9 @@ pub(crate) fn prepare_reply_block(ctx: &mut Ctx, block: &Block, depth: usize, mu
             for (i, run) in runs.iter().enumerate() {
                 let Some(image) = &run.style.image else { continue };
                 let Some((path, _)) = zeron_proto::chat_images::markdown_image(&image.source, chat.cwd.as_deref()) else { continue };
+                // Mobile can't fall back to the link once a widget is laid out:
+                // anything the host is sure to refuse stays a link.
+                if !zeron_proto::chat_images::in_chat_folder(&path, chat.cwd.as_deref()) { continue }
                 if start < i {
                     blocks.push(PBlock::Text(prepare_runs(ctx, &runs[start..i], TextKind::Body, muted)));
                 }

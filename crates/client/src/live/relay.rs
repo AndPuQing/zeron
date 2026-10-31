@@ -319,18 +319,19 @@ impl Relay {
     }
 
     pub(crate) async fn read_chat_image(&self, device_id: &str, image: &zeron_proto::chat_images::ChatImage) -> Result<Vec<u8>> {
+        use zeron_proto::chat_images::CHAT_IMAGE_CHUNK_BYTES;
         let (_, mime) = zeron_proto::chat_images::markdown_image(&image.path, None)
             .ok_or_else(|| ClientError::HostError("Unsupported reply image".into()))?;
-        tokio::time::timeout(Duration::from_secs(30), async {
-            let mut chunks = ChatImageChunks::new(mime);
-            // Host chunks are 384 KiB, but retain a bounded margin for older hosts.
-            for _ in 0..128 {
-                let reply = self.call(device_id, methods::READ_CHAT_IMAGE_CHUNK,
-                    json!({"chatId": image.chat_id, "path": image.path, "offset": chunks.bytes.len()})).await?;
-                if chunks.push(&reply)? { return Ok(chunks.bytes); }
-            }
-            Err(ClientError::HostError("Too many reply image chunks".into()))
-        }).await.map_err(|_| ClientError::HostError("Reply image read timed out".into()))?
+        let mut chunks = ChatImageChunks::new(mime);
+        // Enough reads for a full-size image at the host's chunk size. Each
+        // read has its own `call` deadline, so a large image on a slow link
+        // still lands instead of racing one budget for the whole file.
+        for _ in 0..zeron_proto::IMAGE_MAX_BYTES.div_ceil(CHAT_IMAGE_CHUNK_BYTES) {
+            let reply = self.call(device_id, methods::READ_CHAT_IMAGE_CHUNK,
+                json!({"chatId": image.chat_id, "path": image.path, "offset": chunks.bytes.len()})).await?;
+            if chunks.push(&reply)? { return Ok(chunks.bytes); }
+        }
+        Err(ClientError::HostError("Too many reply image chunks".into()))
     }
 
     /// Converge the running PR-status streams onto `targets`.
@@ -480,5 +481,22 @@ mod image_chunk_tests {
         }
         chunks.bytes.resize(zeron_proto::IMAGE_MAX_BYTES, 0);
         assert!(chunks.push(&chunk("ZA==", zeron_proto::IMAGE_MAX_BYTES as u64 + 1, true)).is_err());
+    }
+
+    #[test]
+    fn a_full_size_reply_image_fits_the_read_budget() {
+        use zeron_proto::{IMAGE_MAX_BYTES, chat_images::CHAT_IMAGE_CHUNK_BYTES};
+        let mut chunks = ChatImageChunks::new("image/png");
+        let mut done = false;
+        for _ in 0..IMAGE_MAX_BYTES.div_ceil(CHAT_IMAGE_CHUNK_BYTES) {
+            let next = (chunks.bytes.len() + CHAT_IMAGE_CHUNK_BYTES).min(IMAGE_MAX_BYTES);
+            let data = b64::encode(&vec![7; next - chunks.bytes.len()]);
+            if chunks.push(&chunk(&data, next as u64, next == IMAGE_MAX_BYTES)).unwrap() {
+                done = true;
+                break;
+            }
+        }
+        assert!(done);
+        assert_eq!(chunks.bytes.len(), IMAGE_MAX_BYTES);
     }
 }

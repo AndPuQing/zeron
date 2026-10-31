@@ -516,7 +516,8 @@ pub fn read_chat_image_chunk(
     }
     let size = meta.len();
     let start = offset.min(size);
-    let next_offset = (start + READ_CHUNK_BYTES).min(size);
+    // Clients size their read budget from this constant.
+    let next_offset = (start + zeron_proto::chat_images::CHAT_IMAGE_CHUNK_BYTES as u64).min(size);
     file.seek(std::io::SeekFrom::Start(start))?;
     let mut buf = Vec::with_capacity((next_offset - start) as usize);
     file.take(next_offset - start).read_to_end(&mut buf)?;
@@ -1322,12 +1323,19 @@ impl Uploads {
         }
         std::fs::create_dir_all(self.dir())?;
         let destination = self.dir().join(format!("{}-image.{ext}", sanitize(id)));
-        let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
-        temporary.write_all(bytes)?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(&destination)
-            .map_err(|e| EngineError::Io(e.error))?;
+        // Ids are unique or content-keyed, and the file only ever appears by
+        // an atomic rename: one already in place holds these exact bytes.
+        // Echoed and replayed results skip the rewrite and its fsync.
+        let stored = std::fs::metadata(&destination)
+            .is_ok_and(|meta| meta.is_file() && meta.len() == bytes.len() as u64);
+        if !stored {
+            let mut temporary = tempfile::NamedTempFile::new_in(self.dir())?;
+            temporary.write_all(bytes)?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist(&destination)
+                .map_err(|e| EngineError::Io(e.error))?;
+        }
         Ok(ImportedImage {
             path: destination.to_string_lossy().into_owned(),
             name: sanitize(name),
@@ -1543,8 +1551,15 @@ mod generated_image_tests {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
             .unwrap();
         let first = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
+        #[cfg(unix)]
+        let inode = |path: &str| std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(path).unwrap());
+        #[cfg(unix)]
+        let written = inode(&first.path);
         let again = uploads.store_shown_image("same-id", "1.png", &png).unwrap();
         assert_eq!(first, again);
+        // The copy already in place is kept, not rewritten.
+        #[cfg(unix)]
+        assert_eq!(inode(&again.path), written);
         assert_eq!(first.mime_type, "image/png");
         assert!(first.path.ends_with("-image.png"));
         let chunk = uploads.read_chunk(&first.path, 0, &[]).unwrap();
