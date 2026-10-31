@@ -13,7 +13,6 @@ edge/dist/
 .agents
 .claude
 CLAUDE.md
-/AGENTS.md
 # Skill lockfile the agent harness writes at the repo root.
 skills-lock.json
 /scripts/**/__pycache__/
