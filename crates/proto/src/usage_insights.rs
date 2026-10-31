@@ -481,9 +481,13 @@ pub fn classify_task(prompt: &str) -> TaskCategory {
     }
 }
 
-/// Openings that reject the previous reply outright.
+/// Openings that reject the previous reply outright. Broad words live here,
+/// not in [`CORRECTION_PHRASES`]: anywhere in a message they also turn up
+/// in ordinary requests ("add an undo button", "0 failed", "tell me if
+/// anything's wrong").
 const CORRECTION_OPENINGS: &[&str] = &[
-    "no ", "no,", "no.", "no!", "nope", "wrong", "不对", "不是", "错了", "不行",
+    "no ", "no,", "no.", "no!", "nope", "wrong", "broken", "incorrect", "failed", "traceback",
+    "不对", "不是", "错了", "不行", "依然", "仍然", "撤销", "回滚", "撤回", "重写", "有问题",
 ];
 
 /// "No …" openings that wave something off instead of rejecting the reply.
@@ -496,7 +500,8 @@ const AGREEABLE_OPENINGS: &[&str] = &[
     "不是很急",
 ];
 
-/// Phrases that ask for the previous reply to be corrected.
+/// Phrases that ask for the previous reply to be corrected, wherever they
+/// occur. Each is specific enough that a new request rarely contains it.
 const CORRECTION_PHRASES: &[&str] = &[
     "still not",
     "still fail",
@@ -516,7 +521,10 @@ const CORRECTION_PHRASES: &[&str] = &[
     "not working",
     "isn't working",
     "no longer works",
-    "broken",
+    "is broken",
+    "it's broken",
+    "now broken",
+    "broken again",
     "you broke",
     "that's wrong",
     "that is wrong",
@@ -524,7 +532,9 @@ const CORRECTION_PHRASES: &[&str] = &[
     "was wrong",
     "not what i",
     "not quite",
-    "incorrect",
+    "is incorrect",
+    "that's incorrect",
+    "still incorrect",
     "revert that",
     "revert it",
     "revert this",
@@ -549,7 +559,11 @@ const CORRECTION_PHRASES: &[&str] = &[
     "same error",
     "same issue",
     "same problem",
-    "failed",
+    "it failed",
+    "build failed",
+    "test failed",
+    "tests failed",
+    "failed again",
     "it fails",
     "now fails",
     "test fails",
@@ -559,18 +573,37 @@ const CORRECTION_PHRASES: &[&str] = &[
     "are failing",
     "now failing",
     "error:",
-    "traceback",
     "panicked",
     "还是不行",
+    "还是不对",
     "还是有",
     "还是报",
     "还是没",
     "还是会",
     "还是一样",
-    "依然",
-    "仍然",
-    "不对",
-    "不行",
+    "依然不",
+    "依然报",
+    "依然有问题",
+    "依然没",
+    "依然失败",
+    "依然一样",
+    "仍然不",
+    "仍然报",
+    "仍然有问题",
+    "仍然没",
+    "仍然失败",
+    "仍然一样",
+    // Not bare 不对 / 不行: "对不对？" and "行不行？" only ask.
+    "也不对",
+    "都不对",
+    "还不对",
+    "结果不对",
+    "这样不对",
+    "不对劲",
+    "也不行",
+    "都不行",
+    "还不行",
+    "这样不行",
     "没用",
     "没有用",
     "报错了",
@@ -582,16 +615,31 @@ const CORRECTION_PHRASES: &[&str] = &[
     "失败了",
     "又失败",
     "还是失败",
-    "回滚",
-    "撤销",
-    "撤回",
+    "回滚刚才",
+    "回滚你",
+    "回滚这",
+    "回滚一下",
+    "回滚修改",
+    "回滚改动",
+    "撤销刚才",
+    "撤销你",
+    "撤销这",
+    "撤销一下",
+    "撤销修改",
+    "撤销改动",
+    "撤回刚才",
+    "撤回你",
+    "撤回这",
+    "撤回修改",
+    "撤回改动",
     "重新做",
     "重新改",
-    "重写",
     "不是这样",
     "不是我要",
     "不是我想",
-    "有问题",
+    "有问题了",
+    "又有问题",
+    "出问题了",
     "没生效",
     "没有生效",
     "不生效",
@@ -620,16 +668,16 @@ pub fn is_correction(text: &str) -> bool {
     if text.is_empty() {
         return false;
     }
-    if AGREEABLE_OPENINGS
+    // "No problem" doesn't reject the reply, but what follows it still can
+    // ("no problem, but it still crashes").
+    let agreeable = AGREEABLE_OPENINGS
         .iter()
-        .any(|opening| text.starts_with(opening))
-    {
-        return false;
-    }
-    text == "no"
+        .any(|opening| text.starts_with(opening));
+    let rejects = text == "no"
         || CORRECTION_OPENINGS
             .iter()
-            .any(|opening| text.starts_with(opening))
+            .any(|opening| text.starts_with(opening));
+    (rejects && !agreeable)
         || CORRECTION_PHRASES
             .iter()
             .any(|phrase| text.contains(phrase))
@@ -662,8 +710,6 @@ pub struct TurnRecord {
     /// The person's next message asked to correct this reply.
     #[serde(default)]
     pub reworked: bool,
-    #[serde(default)]
-    pub tool_calls: u32,
 }
 
 /// One session's usage, as read from its transcript.
@@ -695,7 +741,6 @@ pub struct UsageTally {
     pub failed: u32,
     pub interrupted: u32,
     pub reworked: u32,
-    pub tool_calls: u32,
     /// Sum of the recorded turn durations; turns without one add nothing.
     pub total_duration_ms: i64,
     /// Median recorded duration of the completed turns.
@@ -777,7 +822,6 @@ impl Accumulator {
     fn add(&mut self, turn: &TurnRecord) {
         let tally = &mut self.tally;
         tally.turns += 1;
-        tally.tool_calls += turn.tool_calls;
         match turn.outcome {
             TurnOutcome::Completed => {
                 tally.completed += 1;
@@ -943,7 +987,6 @@ mod tests {
             duration_ms: Some(duration),
             outcome,
             reworked,
-            tool_calls: 2,
         }
     }
 
@@ -1006,6 +1049,13 @@ mod tests {
             "测试失败了",
             "please undo that change",
             "the build failed again",
+            "No problem, but it still crashes on Windows",
+            "Traceback (most recent call last):",
+            "依然报错",
+            "撤销刚才的修改",
+            "回滚一下",
+            "还是有问题",
+            "这样不对，按钮应该在右边",
         ] {
             assert!(is_correction(text), "{text}");
         }
@@ -1024,6 +1074,14 @@ mod tests {
             "处理失败的情况",
             "继续",
             "好的，提交吧",
+            "test result: ok. 120 passed; 0 failed; 0 ignored",
+            "the old parser is fine, but add a broken-link checker",
+            "加一个撤销按钮",
+            "支持回滚到上一个版本",
+            "如果有问题告诉我",
+            "这样对不对？",
+            "行不行都告诉我一声",
+            "重新运行测试后提交",
             "",
         ] {
             assert!(!is_correction(text), "{text}");
@@ -1060,7 +1118,6 @@ mod tests {
         assert_eq!(report.total.failed, 1);
         assert_eq!(report.total.interrupted, 1);
         assert_eq!(report.total.reworked, 1);
-        assert_eq!(report.total.tool_calls, 10);
         assert_eq!(report.total.total_duration_ms, 660);
         assert_eq!(report.total.median_duration_ms, Some(200));
         assert_eq!(report.total.success_rate(), Some(0.6));

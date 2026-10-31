@@ -842,7 +842,6 @@ mod tests {
             duration_ms: Some(1_000),
             outcome,
             reworked: false,
-            tool_calls: 0,
         };
         (0..completed)
             .map(|_| turn(TurnOutcome::Completed))

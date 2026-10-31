@@ -19,38 +19,27 @@ struct Message {
     duration_ms: Option<i64>,
 }
 
-/// Fold continuation segments into their roots. The last segment speaks
-/// for how the turn ended and how long it ran, as in
-/// [`crate::join_continuation_entries`].
+/// Fold continuation segments into their roots with
+/// [`crate::join_continuation_entries`]. The last segment also speaks for
+/// how the turn ended, which the render-time join leaves on the root.
 fn messages(entries: Vec<SessionMessageEntry>) -> Vec<Message> {
-    let mut out: Vec<Message> = Vec::with_capacity(entries.len());
-    let mut roots: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for entry in entries {
-        if let Some(root) = entry
-            .continuation_of
-            .as_ref()
-            .and_then(|root| roots.get(root))
-        {
-            let message = &mut out[*root];
-            message.parts.extend(entry.parts);
-            if entry.status.is_some() {
-                message.status = entry.status;
-            }
-            if entry.duration_ms.is_some() {
-                message.duration_ms = entry.duration_ms;
-            }
-            continue;
+    let mut ended: std::collections::HashMap<String, MessageStatus> =
+        std::collections::HashMap::new();
+    for entry in &entries {
+        if let (Some(root), Some(status)) = (&entry.continuation_of, &entry.status) {
+            ended.insert(root.clone(), status.clone());
         }
-        roots.insert(entry.id, out.len());
-        out.push(Message {
+    }
+    crate::join_continuation_entries(entries)
+        .into_iter()
+        .map(|entry| Message {
+            status: ended.remove(&entry.id).or(entry.status),
             role: entry.role,
             parts: entry.parts,
             created_at: entry.created_at,
-            status: entry.status,
             duration_ms: entry.duration_ms,
-        });
-    }
-    out
+        })
+        .collect()
 }
 
 /// A seam's harness: its slug, else its frozen display label.
@@ -79,6 +68,16 @@ fn human_text(message: &Message) -> Option<String> {
     (zeron_proto::chat_attribution::attributed_message(&text).is_none()).then_some(text)
 }
 
+/// Whether a message holds a seam or a context operation (a compaction).
+fn has_context_operation(message: &Message) -> bool {
+    message.parts.iter().any(|part| {
+        matches!(
+            part,
+            MessagePart::Compaction { .. } | MessagePart::Switch { .. } | MessagePart::Fork { .. }
+        )
+    })
+}
+
 /// Whether an assistant message holds a reply rather than only a seam or a
 /// context operation.
 fn is_reply(message: &Message) -> bool {
@@ -100,9 +99,9 @@ fn is_reply(message: &Message) -> bool {
 /// `latest_harness` is the slug of the harness that runs the chat now. It
 /// owns every turn after the last provider-switch seam, and every turn when
 /// there is none. Turns before a switch belong to the seam's `from`
-/// harness; turns whose harness cannot be told are left out. History above
-/// a fork's seam was copied from the source chat and is counted there, not
-/// here. Live turns are skipped until they end.
+/// harness; turns between seams whose harness cannot be told are left out.
+/// History above a fork's seam was copied from the source chat and is
+/// counted there, not here. Live turns are skipped until they end.
 pub fn chat_usage(entries: Vec<SessionMessageEntry>, latest_harness: &str) -> ChatUsage {
     let mut messages = messages(entries);
     if let Some(fork) = messages.iter().rposition(|message| {
@@ -113,6 +112,10 @@ pub fn chat_usage(entries: Vec<SessionMessageEntry>, latest_harness: &str) -> Ch
     }) {
         messages.drain(..=fork);
     }
+    let is_switch = |part: &MessagePart| matches!(part, MessagePart::Switch { .. });
+    let last_switch = messages
+        .iter()
+        .rposition(|message| message.parts.iter().any(is_switch));
 
     // The harness before the first seam is that seam's `from`.
     let first_switch = messages
@@ -133,10 +136,16 @@ pub fn chat_usage(entries: Vec<SessionMessageEntry>, latest_harness: &str) -> Ch
     let mut turns: Vec<TurnRecord> = Vec::new();
     // The last completed reply the person has not answered yet.
     let mut answerable: Option<usize> = None;
-    for message in &messages {
-        for part in &message.parts {
-            if let MessagePart::Switch { to, to_harness, .. } = part {
-                harness = seam_harness(to_harness.as_deref(), to);
+    for (ix, message) in messages.iter().enumerate() {
+        if Some(ix) == last_switch {
+            // Whatever the last seam's label says, the harness running the
+            // chat now ran everything after it.
+            harness = Some(latest_harness.to_owned());
+        } else {
+            for part in &message.parts {
+                if let MessagePart::Switch { to, to_harness, .. } = part {
+                    harness = seam_harness(to_harness.as_deref(), to);
+                }
             }
         }
         match message.role {
@@ -170,7 +179,11 @@ pub fn chat_usage(entries: Vec<SessionMessageEntry>, latest_harness: &str) -> Ch
                     }
                     _ => TurnOutcome::Completed,
                 };
-                if outcome != TurnOutcome::Interrupted && !is_reply(message) {
+                // A turn stopped before it said anything is still a turn; a
+                // stopped compaction or seam never was one.
+                if !is_reply(message)
+                    && (outcome != TurnOutcome::Interrupted || has_context_operation(message))
+                {
                     continue;
                 }
                 let Some(harness) = harness.clone() else {
@@ -183,11 +196,6 @@ pub fn chat_usage(entries: Vec<SessionMessageEntry>, latest_harness: &str) -> Ch
                     duration_ms: message.duration_ms,
                     outcome,
                     reworked: false,
-                    tool_calls: message
-                        .parts
-                        .iter()
-                        .filter(|part| matches!(part, MessagePart::Tool { .. }))
-                        .count() as u32,
                 });
             }
         }
@@ -305,7 +313,6 @@ mod tests {
         assert_eq!(first.harness, "codex");
         assert_eq!(first.outcome, TurnOutcome::Completed);
         assert_eq!(first.duration_ms, Some(400));
-        assert_eq!(first.tool_calls, 1);
         assert!(first.reworked);
         assert_eq!(usage.turns[1].outcome, TurnOutcome::Failed);
         assert!(
@@ -348,7 +355,27 @@ mod tests {
         assert_eq!(usage.turns.len(), 1);
         assert_eq!(usage.turns[0].outcome, TurnOutcome::Interrupted);
         assert_eq!(usage.turns[0].duration_ms, Some(900));
-        assert_eq!(usage.turns[0].tool_calls, 2);
+    }
+
+    #[test]
+    fn the_running_harness_owns_turns_after_an_unreadable_last_seam() {
+        let mut unreadable = switch("claude-code", "codex");
+        if let MessagePart::Switch { to, to_harness, .. } = &mut unreadable.parts[0] {
+            *to = "A renamed provider".into();
+            *to_harness = None;
+        }
+        let usage = chat_usage(
+            vec![
+                user("u1", "Add a settings page"),
+                reply("a1", 100),
+                unreadable,
+                user("u2", "keep going"),
+                reply("a2", 200),
+            ],
+            "codex",
+        );
+        let harnesses: Vec<&str> = usage.turns.iter().map(|t| t.harness.as_str()).collect();
+        assert_eq!(harnesses, ["claude-code", "codex"]);
     }
 
     #[test]
@@ -392,8 +419,18 @@ mod tests {
                 status: zeron_proto::CompactionStatus::Completed,
             }],
         );
-        let usage = chat_usage(vec![compaction], "codex");
+        let mut stopped_compaction = compaction.clone();
+        stopped_compaction.id = "c2".into();
+        stopped_compaction.status = Some(MessageStatus::Aborted);
+        let usage = chat_usage(vec![compaction, stopped_compaction], "codex");
         assert!(usage.turns.is_empty());
         assert_eq!(usage.category, TaskCategory::Other);
+
+        // Stopped before saying anything: still a stopped turn.
+        let mut silent = entry("a", MessageRole::Assistant, Vec::new());
+        silent.status = Some(MessageStatus::Aborted);
+        let usage = chat_usage(vec![user("u", "Fix the build"), silent], "codex");
+        assert_eq!(usage.turns.len(), 1);
+        assert_eq!(usage.turns[0].outcome, TurnOutcome::Interrupted);
     }
 }

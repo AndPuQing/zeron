@@ -143,6 +143,7 @@ mod tests {
                     "message-queue-edit-lease-v1",
                     "harness-updates-v1",
                     "harness-environment-v1",
+                    "harness-config-files-v1",
                     "projectless-scratch-v1",
                     "sidebar-section-order-v1",
                     "provider-switch-v1",
