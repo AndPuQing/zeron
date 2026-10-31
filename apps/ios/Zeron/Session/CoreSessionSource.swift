@@ -462,6 +462,11 @@ func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool,
 enum TranscriptImages {
     private static var activeReads = 0
     private static var waiting: [CheckedContinuation<Void, Never>] = []
+    /// One read per image, however many rows or relayouts ask for it.
+    private static var reads: [NSString: Task<UIImage?, Never>] = [:]
+    /// Failed images stay failed until tapped, so relayouts don't queue
+    /// reads that will fail again ahead of visible thumbnails.
+    private static var failed: Set<String> = []
 
     private static let images: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
@@ -472,18 +477,34 @@ enum TranscriptImages {
     nonisolated private static func decodeImage(_ data: Data) -> UIImage? {
         // Preserve the existing attachment limit; chat-image RPC reads are capped at 10 MiB.
         guard data.count <= 24 * 1024 * 1024,
-              let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let width = properties[kCGImagePropertyPixelWidth] as? Int,
-              let height = properties[kCGImagePropertyPixelHeight] as? Int,
-              (1...4096).contains(width), (1...4096).contains(height)
+              let source = CGImageSourceCreateWithData(data as CFData, nil)
         else { return nil }
-        return UIImage(data: data)?.preparingForDisplay()
+        // Larger images are downsampled to 4096 px on the longer side, never
+        // refused. One decode at the target size, with EXIF orientation applied
+        // as UIImage(data:) did.
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 4096,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
     }
 
     static func image(client: CoreClient, device: String, reference: String) async -> UIImage? {
         let key = "\(device):\(reference)" as NSString
         if let hit = Self.images.object(forKey: key) { return hit }
+        if let running = reads[key] { return await running.value }
+        let read = Task { await Self.read(client: client, device: device, reference: reference, key: key) }
+        reads[key] = read
+        let image = await read.value
+        reads[key] = nil
+        if image == nil { failed.insert(key as String) } else { failed.remove(key as String) }
+        return image
+    }
+
+    private static func read(client: CoreClient, device: String, reference: String, key: NSString) async -> UIImage? {
         // A row can contain several full-size screenshots. Bound the complete
         // read/decode operation, not just the retained cache, as on Android.
         if activeReads < 4 {
@@ -495,7 +516,6 @@ enum TranscriptImages {
             if waiting.isEmpty { activeReads -= 1 }
             else { waiting.removeFirst().resume() }
         }
-        guard !Task.isCancelled else { return nil }
         if let hit = Self.images.object(forKey: key) { return hit }
         guard let data = try? await client.readAttachment(deviceId: device, path: reference),
               let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
@@ -504,11 +524,17 @@ enum TranscriptImages {
         return image
     }
 
+    /// A tapped "unavailable" image is read again.
+    static func retry(_ reference: String) {
+        failed = failed.filter { !$0.hasSuffix(":\(reference)") }
+    }
+
     static func load(client: CoreClient, device: String, reference: String, into view: UIImageView) {
         view.accessibilityIdentifier = reference
         (view as? TranscriptImageView)?.loading()
         let key = "\(device):\(reference)" as NSString
         if let hit = images.object(forKey: key) { view.image = hit; return }
+        if failed.contains(key as String) { (view as? TranscriptImageView)?.unavailable(); return }
         Task { [weak view] in
             let image = await Self.image(client: client, device: device, reference: reference)
             guard let view, view.accessibilityIdentifier == reference else { return }

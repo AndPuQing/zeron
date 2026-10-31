@@ -59,7 +59,12 @@ final class SubagentViewController: UIViewController {
             return await TranscriptImages.image(client: client, device: host, reference: reference)
         }
         list.imageLoader = { [weak self] reference, imageView in
-            guard let self, let client = self.app.client, let host = self.app.row(self.rootChatId)?.deviceId else { return }
+            guard let self, let client = self.app.client, let host = self.app.row(self.rootChatId)?.deviceId else {
+                // No host to read from right now: offer the retry, don't spin forever.
+                imageView.accessibilityIdentifier = reference
+                (imageView as? TranscriptImageView)?.unavailable()
+                return
+            }
             TranscriptImages.load(client: client, device: host, reference: reference, into: imageView)
         }
         list.alpha = 0

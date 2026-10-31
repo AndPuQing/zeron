@@ -374,6 +374,7 @@ final class RowView: UIView {
         if let image = iv.image, let vc = findViewController() {
             vc.present(ImageViewer(image: image, source: iv), animated: true)
         } else if let reference = iv.accessibilityIdentifier {
+            TranscriptImages.retry(reference)
             delegate?.rowView(self, imageFor: reference, into: iv)
         }
     }
