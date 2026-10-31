@@ -55,6 +55,7 @@ pub mod titles;
 mod transcript_history;
 pub mod transcript_search;
 pub mod uploads;
+pub mod usage_insights;
 pub mod voice;
 pub mod workspace_files;
 pub mod workspace_host;
@@ -171,6 +172,8 @@ pub struct EngineCore {
     pub external_sessions: external_sessions::ExternalSessionImporter,
     /// `None` when the index cannot open; search is then unavailable.
     pub transcript_search: Option<transcript_search::TranscriptSearch>,
+    /// `None` when the cache cannot open; usage insights are then unavailable.
+    pub usage_insights: Option<usage_insights::UsageInsights>,
     workspace_scope: WorkspaceScope,
     /// Auth service (attached by [`Engine::run`]; a lazy dev-mode instance otherwise).
     auth: std::sync::Mutex<Option<Auth>>,
@@ -253,6 +256,7 @@ impl EngineCore {
         let store = Arc::new(DocsStore::open(profile.store_root())?);
         let store_for_import = store.clone();
         let store_for_search = store.clone();
+        let store_for_usage = store.clone();
         let journal = Arc::new(RunJournal::open(profile.store_root().join("journals"))?);
         let sessions = SessionsEngine::new(device_id.clone(), journal, registry.clone());
         let doc_host = DocHost::new(
@@ -282,6 +286,13 @@ impl EngineCore {
             workspace.clone(),
         )
         .inspect_err(|error| tracing::warn!(%error, "transcript search unavailable"))
+        .ok();
+        let usage_insights = usage_insights::UsageInsights::open(
+            profile.store_root(),
+            store_for_usage,
+            workspace.clone(),
+        )
+        .inspect_err(|error| tracing::warn!(%error, "usage insights unavailable"))
         .ok();
         doc_host.set_workspace(workspace.clone());
         doc_host.set_sessions(sessions.clone());
@@ -407,6 +418,7 @@ impl EngineCore {
             local_import,
             external_sessions,
             transcript_search,
+            usage_insights,
             workspace_scope: profile.scope(),
             auth: std::sync::Mutex::new(None),
             links: std::sync::Mutex::new(None),
@@ -565,6 +577,9 @@ impl EngineCore {
         }
         if let Some(search) = self.transcript_search.clone() {
             rpc = rpc.with_transcript_search(search);
+        }
+        if let Some(insights) = self.usage_insights.clone() {
+            rpc = rpc.with_usage_insights(insights);
         }
         Arc::new(rpc)
     }

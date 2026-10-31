@@ -50,6 +50,7 @@ use crate::settings::files::{FilesSettingsEvent, FilesSettingsPage};
 use crate::settings::harnesses::HarnessesPage;
 use crate::settings::notifications::{NotificationsEvent, NotificationsPage};
 use crate::settings::shortcuts::{ShortcutsEvent, ShortcutsPage};
+use crate::settings::usage::UsagePage;
 use crate::settings::{
     self, CHAT_PANEL_MIN, ComposerSendBehavior, FILES_PANEL_MIN, JUMP_SLOTS, KeymapConfig,
     RIGHT_PANE_MIN, SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, SavePolicy, ShortcutId,
@@ -642,6 +643,9 @@ pub enum SettingsSection {
     Harnesses,
     /// Per-provider CLI accounts (login, usage) — labeled "Accounts".
     Agents,
+    /// How each agent has done on this computer's sessions, beside the
+    /// plan limits the agents report.
+    Usage,
     Appearance,
     Files,
     Notifications,
@@ -656,13 +660,14 @@ pub enum SettingsSection {
 
 impl SettingsSection {
     /// Sections shown in Settings. `Agents` is a legacy Accounts route alias.
-    pub const ALL: [SettingsSection; 12] = [
+    pub const ALL: [SettingsSection; 13] = [
         SettingsSection::General,
         SettingsSection::Appearance,
         SettingsSection::Notifications,
         SettingsSection::Voice,
         SettingsSection::Shortcuts,
         SettingsSection::Harnesses,
+        SettingsSection::Usage,
         SettingsSection::Devices,
         SettingsSection::Cloud,
         SettingsSection::Billing,
@@ -716,6 +721,7 @@ impl SettingsSection {
             SettingsSection::Billing => "billing",
             SettingsSection::Harnesses => "providers",
             SettingsSection::Agents => "agents",
+            SettingsSection::Usage => "usage",
             SettingsSection::Appearance => "appearance",
             SettingsSection::Files => "files",
             SettingsSection::Notifications => "notifications",
@@ -735,6 +741,7 @@ impl SettingsSection {
             "billing" => SettingsSection::Billing,
             "providers" | "harnesses" => SettingsSection::Harnesses,
             "agents" => SettingsSection::Agents,
+            "usage" => SettingsSection::Usage,
             "appearance" => SettingsSection::Appearance,
             "files" => SettingsSection::Files,
             "notifications" => SettingsSection::Notifications,
@@ -762,6 +769,7 @@ impl SettingsSection {
             SettingsSection::Billing => "Billing",
             SettingsSection::Harnesses => "Providers",
             SettingsSection::Agents => "Accounts",
+            SettingsSection::Usage => "Usage",
             SettingsSection::Appearance => "Appearance",
             SettingsSection::Files => "Files",
             SettingsSection::Notifications => "Notifications",
@@ -781,6 +789,7 @@ impl SettingsSection {
             SettingsSection::Billing => icons::WALLET,
             SettingsSection::Harnesses => icons::WIDGET,
             SettingsSection::Agents => icons::KEY_MINIMALISTIC,
+            SettingsSection::Usage => icons::CHART,
             SettingsSection::Appearance => icons::TUNING,
             SettingsSection::Files => icons::FOLDER,
             SettingsSection::Notifications => icons::BELL,
@@ -2238,6 +2247,7 @@ pub struct Shell {
     cloud_page: Option<Entity<CloudPage>>,
     billing_page: Option<Entity<BillingPage>>,
     archived_page: Option<Entity<ArchivedPage>>,
+    usage_page: Option<Entity<UsagePage>>,
     appearance_page: Option<Entity<AppearancePage>>,
     files_settings_page: Option<Entity<FilesSettingsPage>>,
     notifications_page: Option<Entity<NotificationsPage>>,
@@ -2812,6 +2822,7 @@ impl Shell {
             cloud_page: None,
             billing_page: None,
             archived_page: None,
+            usage_page: None,
             appearance_page: None,
             files_settings_page: None,
             notifications_page: None,
@@ -6209,6 +6220,16 @@ impl Shell {
                     self.archived_page = Some(cx.new(|cx| ArchivedPage::new(state, cx)));
                 }
                 match &self.archived_page {
+                    Some(page) => page.clone().into_any_element(),
+                    None => Empty.into_any_element(),
+                }
+            }
+            SettingsSection::Usage => {
+                if self.usage_page.is_none() {
+                    let state = self.state.clone();
+                    self.usage_page = Some(cx.new(|cx| UsagePage::new(state, cx)));
+                }
+                match &self.usage_page {
                     Some(page) => page.clone().into_any_element(),
                     None => Empty.into_any_element(),
                 }
@@ -19565,6 +19586,7 @@ mod settings_modal_regressions {
             ("settings/files", SettingsSection::Files),
             ("settings/appshots", SettingsSection::Appshots),
             ("settings/archived", SettingsSection::Archived),
+            ("settings/usage", SettingsSection::Usage),
         ] {
             assert_eq!(
                 settings_open_route(route, remembered),

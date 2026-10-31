@@ -812,6 +812,7 @@ pub struct EngineRpc {
     /// Viewports' window focus, for desktop banners.
     viewport_focus: crate::desktop_notify::ViewportFocus,
     transcript_search: Option<crate::transcript_search::TranscriptSearch>,
+    usage_insights: Option<crate::usage_insights::UsageInsights>,
     engine_info: EngineInfo,
 }
 
@@ -849,6 +850,10 @@ impl EngineRpc {
         engine_info
             .capabilities
             .retain(|cap| cap != zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1);
+        // Advertised once the cache opens ([`Self::with_usage_insights`]).
+        engine_info
+            .capabilities
+            .retain(|cap| cap != zeron_proto::capabilities::USAGE_INSIGHTS_V1);
         let github = GitHubCli::new().with_store(repos.data_dir());
         Self {
             voice: sessions.voice_manager(),
@@ -876,6 +881,7 @@ impl EngineRpc {
             credentials: None,
             viewport_focus: Default::default(),
             transcript_search: None,
+            usage_insights: None,
             engine_info,
         }
     }
@@ -968,6 +974,14 @@ impl EngineRpc {
         search: crate::transcript_search::TranscriptSearch,
     ) -> Self {
         self.transcript_search = Some(search);
+        self
+    }
+
+    pub fn with_usage_insights(mut self, insights: crate::usage_insights::UsageInsights) -> Self {
+        self.usage_insights = Some(insights);
+        self.engine_info
+            .capabilities
+            .push(zeron_proto::capabilities::USAGE_INSIGHTS_V1.into());
         self
     }
 
@@ -3551,6 +3565,22 @@ impl RpcService for EngineRpc {
                     .await
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&hits)
+            }
+            methods::GET_USAGE_INSIGHTS => {
+                use zeron_proto::usage_insights::UsageInsightsRequest;
+                let request: UsageInsightsRequest = match params {
+                    serde_json::Value::Null => UsageInsightsRequest::default(),
+                    params => parse_params(params)?,
+                };
+                let insights = self
+                    .usage_insights
+                    .as_ref()
+                    .ok_or_else(|| RpcError::Failed("usage insights unavailable".into()))?;
+                let report = insights
+                    .report(request.since_ms)
+                    .await
+                    .map_err(|e| RpcError::Failed(e.to_string()))?;
+                RpcReply::value(&report)
             }
             methods::WATCH_SIDEBAR_PREFERENCES => Ok(RpcReply::Stream(watch_stream(
                 self.workspace.watch_sidebar_preferences(),
