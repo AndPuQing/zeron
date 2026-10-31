@@ -123,7 +123,7 @@ impl ServerTools {
     pub fn finish(&mut self, parent: Option<&str>) -> Vec<AgentEvent> {
         let mut events = Vec::new();
         for ((scope, id), seen) in &mut self.seen {
-            if scope != parent.unwrap_or("") || seen.completed {
+            if scope != parent.unwrap_or("") || seen.completed || seen.call.is_none() {
                 continue;
             }
             seen.completed = true;
@@ -337,6 +337,15 @@ mod tests {
                 )
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn an_empty_result_without_a_call_cannot_create_an_orphan_on_turn_end() {
+        let mut tools = ServerTools::default();
+        let empty =
+            block(json!({"type":"advisor_tool_result","tool_use_id":"missing","content":null}));
+        assert!(tools.block(None, &empty).is_empty());
+        assert!(tools.finish(None).is_empty());
     }
 
     #[test]
