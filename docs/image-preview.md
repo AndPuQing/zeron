@@ -112,6 +112,11 @@ both main and subagent transcripts show these copies on Android and iOS, as
 on desktop. The uploads key includes content as well as chat/subagent/tool
 identity, so a reused tool ID cannot overwrite a historical image. At most
 four images per result are saved. Rejected payloads do not fail the turn.
+A copy that is already stored is not written again. Deleting a chat (or its
+space) deletes the copies its own transcript showed, once no other transcript
+on that device shows them: a fork copies its source's entries, and subagent
+transcripts are kept. Only content-keyed copies in the uploads directory are
+removed; attachments and `show_image` copies stay.
 Old documents default to no stored previews; previously discarded pixels
 cannot be recovered. Mobile does not infer arbitrary file previews from tool
 text; desktop retains its existing path-based fallback.

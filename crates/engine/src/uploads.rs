@@ -1085,6 +1085,15 @@ pub struct ImportedImage {
 
 const MAX_GENERATED_IMAGE_BYTES: u64 = 24 * 1024 * 1024;
 
+/// `{sha256 hex}-image.{png,jpg,webp,gif}`: a tool-result image copy.
+fn is_tool_image_name(name: &str) -> bool {
+    name.split_once("-image.").is_some_and(|(key, ext)| {
+        key.len() == 64
+            && key.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            && matches!(ext, "png" | "jpg" | "webp" | "gif")
+    })
+}
+
 fn raster_signature(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some(("png", "image/png"))
@@ -1344,6 +1353,30 @@ impl Uploads {
         })
     }
 
+    /// Delete tool-result image copies a deleted chat showed and nothing else
+    /// does. Only files directly in this uploads dir named by a content key
+    /// (`{64 hex}-image.{ext}`, as `store_tool_result_images` writes them)
+    /// are touched: attachments, `show_image` copies and anything elsewhere
+    /// stay.
+    pub fn release_tool_images<'a>(&self, paths: impl IntoIterator<Item = &'a String>) {
+        for path in paths {
+            let path = Path::new(path);
+            let tool_image = path.parent() == Some(self.dir())
+                && path
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_tool_image_name);
+            if !tool_image {
+                continue;
+            }
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => tracing::warn!(path = %path.display(), error = %err, "tool image not released"),
+            }
+        }
+    }
+
     /// Copy a Codex-owned raster into the active profile without exposing the
     /// original path to the journal, document, RPC readers, or relay.
     pub fn import_generated_image(
@@ -1541,6 +1574,30 @@ mod generated_image_tests {
         // All locks must be released after the operation.
         std::fs::write(&source, b"changed").unwrap();
         std::fs::rename(&parent, root.path().join("moved")).unwrap();
+    }
+
+    #[test]
+    fn only_content_keyed_tool_images_in_uploads_are_released() {
+        let store = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let uploads = Uploads::from_root(store.path());
+        let png = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .unwrap();
+        let key = "ab".repeat(32);
+        let tool = uploads.store_shown_image(&key, "image", &png).unwrap().path;
+        let shown = uploads.store_shown_image("img:abc", "shot.png", &png).unwrap().path;
+        let outside = elsewhere.path().join(format!("{key}-image.png"));
+        std::fs::write(&outside, &png).unwrap();
+        let outside = outside.to_string_lossy().into_owned();
+        let missing = uploads.dir().join(format!("{}-image.png", "cd".repeat(32)));
+        let missing = missing.to_string_lossy().into_owned();
+        uploads.release_tool_images([&tool, &shown, &outside, &missing]);
+        assert!(!Path::new(&tool).exists(), "the tool image copy is released");
+        assert!(Path::new(&shown).exists(), "a show_image copy is not a tool image");
+        assert!(Path::new(&outside).exists(), "only the uploads dir is touched");
+        assert!(!is_tool_image_name(&format!("{key}-image.svg")));
+        assert!(!is_tool_image_name(&format!("{}-image.png", "AB".repeat(32))));
     }
 
     #[test]

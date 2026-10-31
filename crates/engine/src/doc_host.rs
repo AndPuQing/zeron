@@ -697,6 +697,18 @@ impl Drop for ChatDocHandle {
 /// chat never switched, `Some(None)` for a seam naming no known harness.
 /// Seams above a fork's seam were copied from the source chat and don't
 /// count: the fork's own provider history starts there.
+/// Every tool-result image copy (`preview_paths`) a transcript shows.
+fn tool_preview_paths(entries: Vec<SessionMessageEntry>) -> Vec<String> {
+    entries
+        .into_iter()
+        .flat_map(|entry| entry.parts)
+        .flat_map(|part| match part {
+            MessagePart::Tool { preview_paths, .. } => preview_paths,
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
 pub(crate) fn latest_switch(entries: &[SessionMessageEntry]) -> Option<Option<HarnessId>> {
     for entry in entries.iter().rev() {
         for part in &entry.parts {
@@ -3567,12 +3579,62 @@ impl DocHost {
     /// Drop a chat's doc unconditionally and delete its local snapshot — the
     /// chat is gone (DeleteChat / DeleteSpace cascade). Watchers see the
     /// stream end; a racing writer keeps its orphaned doc until the run ends.
-    pub fn purge_chat(&self, chat_id: &str) {
+    ///
+    /// Returns the tool-result image copies the chat's own transcript showed
+    /// (`preview_paths`), read before the snapshot goes, for the caller to
+    /// release once [`Self::tool_images_in_use`] clears them.
+    pub fn purge_chat(&self, chat_id: &str) -> Vec<String> {
         let removed = lock(&self.inner.handles).remove(chat_id);
+        let entries = match &removed {
+            Some(handle) => handle.doc.read_entries().ok(),
+            None => self.snapshot_entries(chat_id).ok().flatten(),
+        };
         drop(removed);
         if let Err(err) = self.inner.store.delete_snapshot(chat_id) {
             tracing::warn!(chat = %chat_id, error = %err, "snapshot delete failed");
         }
+        tool_preview_paths(entries.unwrap_or_default())
+    }
+
+    /// Which of `paths` a transcript on this device still shows: every stored
+    /// snapshot (subagent transcripts included) and every doc open in memory,
+    /// since a fresh fork, which copies its source's entries, may not be saved
+    /// yet. Reads every snapshot, so call it off the runtime. A store error
+    /// fails closed: nothing may be released then.
+    pub fn tool_images_in_use(&self, paths: &HashSet<String>) -> Result<HashSet<String>, EngineError> {
+        let mut used = HashSet::new();
+        let mut note = |entries: Vec<SessionMessageEntry>| {
+            used.extend(tool_preview_paths(entries).into_iter().filter(|path| paths.contains(path)));
+        };
+        let open: Vec<Arc<ChatDocHandle>> = lock(&self.inner.handles).values().cloned().collect();
+        for handle in &open {
+            note(handle.doc.read_entries()?);
+        }
+        let open: HashSet<&str> = open.iter().map(|handle| handle.chat_id.as_str()).collect();
+        for doc_id in self.inner.store.snapshot_saved_at()?.into_keys() {
+            if open.contains(doc_id.as_str()) {
+                continue;
+            }
+            // A snapshot that doesn't decode as a transcript (the workspace
+            // doc, a corrupt one) can't show an image.
+            if let Some(entries) = self.snapshot_entries(&doc_id)? {
+                note(entries);
+            }
+        }
+        Ok(used)
+    }
+
+    /// A stored snapshot's entries; `None` when there is none or it isn't a
+    /// readable transcript.
+    fn snapshot_entries(&self, doc_id: &str) -> Result<Option<Vec<SessionMessageEntry>>, EngineError> {
+        let Some(bytes) = self.inner.store.load_snapshot(doc_id)? else {
+            return Ok(None);
+        };
+        let raw = loro::LoroDoc::new();
+        if raw.import(&bytes).is_err() {
+            return Ok(None);
+        }
+        Ok(SessionDoc::from_doc(raw).read_entries().ok())
     }
 
     /// Composer path: append an immutable pending command entry (rule 1). Durable by
@@ -6981,3 +7043,84 @@ mod sync_lifecycle_tests;
 
 #[path = "doc_host_delivery.rs"]
 mod remote_delivery;
+
+#[cfg(test)]
+mod tool_image_release_tests {
+    use super::*;
+
+    fn host() -> (tempfile::TempDir, DocHost) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = Arc::new(DocsStore::open(dir.path()).expect("store opens"));
+        let host = DocHost::new(
+            store,
+            DocHostConfig {
+                device_id: "dev-test".into(),
+                default_harness: HarnessId::Mock,
+                edge: None,
+            },
+        );
+        (dir, host)
+    }
+
+    fn showing(id: &str, paths: &[&str]) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.into(),
+            role: MessageRole::Assistant,
+            parts: vec![MessagePart::Tool {
+                id: format!("{id}-tool"),
+                call: zeron_proto::ToolCall::Unknown {
+                    name: "screenshot".into(),
+                    input: None,
+                },
+                is_error: false,
+                resolved: true,
+                output: None,
+                diff: None,
+                output_ref: None,
+                output_bytes: None,
+                diff_ref: None,
+                diff_stats: None,
+                subagent_ref: None,
+                subagent_status: None,
+                subagent_tail: None,
+                preview_paths: paths.iter().map(|path| path.to_string()).collect(),
+            }],
+            created_at: 1,
+            device_id: "dev-test".into(),
+            status: Some(MessageStatus::Complete),
+            continuation_of: None,
+            duration_ms: None,
+        }
+    }
+
+    fn save(host: &DocHost, doc_id: &str, entries: &[SessionMessageEntry]) {
+        let doc = SessionDoc::init(doc_id).unwrap();
+        for entry in entries {
+            doc.push_message(entry).unwrap();
+        }
+        host.inner
+            .store
+            .save_snapshot(doc_id, &doc.export_snapshot().unwrap())
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_deleted_chats_images_stay_while_a_fork_or_an_open_doc_shows_them() {
+        let (_dir, host) = host();
+        save(&host, "source", &[showing("a1", &["/u/a-image.png", "/u/b-image.png", "/u/c-image.png"])]);
+        save(&host, "fork", &[showing("a1", &["/u/a-image.png"])]);
+        save(&host, "unrelated", &[showing("x1", &["/u/x-image.png"])]);
+        let fresh = host.open("fresh").unwrap();
+        fresh.doc.push_message(&showing("a1", &["/u/b-image.png"])).unwrap();
+
+        let images = host.purge_chat("source");
+        assert_eq!(images, ["/u/a-image.png", "/u/b-image.png", "/u/c-image.png"]);
+        assert!(host.inner.store.load_snapshot("source").unwrap().is_none());
+        let images: HashSet<String> = images.into_iter().collect();
+        let used = host.tool_images_in_use(&images).unwrap();
+        let mut used: Vec<&str> = used.iter().map(String::as_str).collect();
+        used.sort();
+        assert_eq!(used, ["/u/a-image.png", "/u/b-image.png"], "only the fork-free image goes");
+        assert!(host.purge_chat("never-existed").is_empty());
+    }
+}
