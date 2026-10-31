@@ -7209,6 +7209,16 @@ impl Composer {
         cx: &mut Context<Self>,
     ) -> bool {
         self.on_state_changed(cx);
+        // Questions and queue edits borrow this input from the ordinary draft.
+        // Never turn an Add to chat action into an answer or queue mutation.
+        if self.wizard.is_some() {
+            self.show_error("Finish answering the current question before adding a selection.", cx);
+            return false;
+        }
+        if self.editing_queued.is_some() {
+            self.show_error("Finish or cancel editing the queued message before adding a selection.", cx);
+            return false;
+        }
         let inserted = self
             .input
             .update(cx, |input, cx| input.append_quote(quote, cx));
@@ -14432,6 +14442,53 @@ mod tests {
             input.marked_range = None;
             input.read_only = true;
             assert!(!input.append_quote(&quote, cx));
+        });
+    }
+
+    #[gpui::test]
+    fn selection_quote_rejects_a_borrowed_question_input(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        state.update(cx, |s, _| s.selected_chat = Some("chat".into()));
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
+            c.drafts.insert("chat".into(), "ordinary draft".into());
+            c.wizard = Some(Wizard::new("question".into(), vec![question("answer", &[], false)]));
+            c.input.update(cx, |input, cx| input.set_text("partial answer", cx));
+            let quote = crate::chat_selection::ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+            assert!(!c.add_quote(&quote, cx));
+            assert_eq!(c.input.read(cx).text(), "partial answer");
+            assert_eq!(c.drafts["chat"], "ordinary draft");
+            assert!(c.wizard.is_some());
+            c.wizard_dismiss(cx);
+            assert_eq!(c.input.read(cx).text(), "ordinary draft");
+            assert!(c.add_quote(&quote, cx));
+            assert!(c.input.read(cx).text().contains("> context"));
+        });
+    }
+
+    #[gpui::test]
+    fn selection_quote_rejects_a_borrowed_queue_editor(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        state.update(cx, |s, _| {
+            s.selected_chat = Some("chat".into());
+            s.queue = vec![serde_json::from_value(serde_json::json!({
+                "id":"queued", "text":"queued message", "issuedBy":"device", "issuedAt":0
+            })).unwrap()];
+        });
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
+            c.editing_queued = Some("queued".into());
+            c.queue_edit_draft = Some(("ordinary draft".into(), vec![], vec![]));
+            c.input.update(cx, |input, cx| input.set_text("edited queue text", cx));
+            let quote = crate::chat_selection::ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+            assert!(!c.add_quote(&quote, cx));
+            assert_eq!(c.input.read(cx).text(), "edited queue text");
+            assert_eq!(c.editing_queued.as_deref(), Some("queued"));
+            assert_eq!(c.queue_edit_draft.as_ref().unwrap().0, "ordinary draft");
+            assert_eq!(state.read(cx).queue[0].text, "queued message");
+            assert!(c.send_task.is_none());
         });
     }
 

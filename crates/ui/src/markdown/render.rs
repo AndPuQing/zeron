@@ -1882,7 +1882,10 @@ pub fn selection_frame_reset_for(surface: u64) -> impl IntoElement {
                 let cycle = painted.contains(&surface);
                 REGISTRY.with(|r| {
                     r.borrow_mut().retain(|e| {
-                        !selection_scope(&e.key).is_empty()
+                        // Markdown previews reset their own registry prefix.
+                        // Diff scopes only restrict cross-line selection; their
+                        // layouts must still expire with the painted surface.
+                        e.key.starts_with("md-preview-")
                             || (e.surface != surface && (!cycle || painted.contains(&e.surface)))
                     })
                 });
@@ -3421,6 +3424,7 @@ mod tests {
     struct TwoPaneSelectionHarness {
         prefixes: [&'static str; 2],
         second_pane: bool,
+        top: gpui::Pixels,
     }
 
     impl TwoPaneSelectionHarness {
@@ -3428,6 +3432,7 @@ mod tests {
             Self {
                 prefixes,
                 second_pane: true,
+                top: px(0.0),
             }
         }
     }
@@ -3440,6 +3445,7 @@ mod tests {
                 div()
                     .w(px(320.0))
                     .h_full()
+                    .pt(self.top)
                     .child(selection_frame_reset_for(surface))
                     .child(text_element(
                         &[InlineRun {
@@ -3462,6 +3468,38 @@ mod tests {
                 .child(pane(self.prefixes[0], 1))
                 .when(self.second_pane, |el| el.child(pane(self.prefixes[1], 2)))
         }
+    }
+
+    #[gpui::test]
+    fn diff_selection_registry_replaces_frames_and_retires_closed_panes(cx: &mut TestAppContext) {
+        let _selection = super::super::selection::test_state_lock();
+        cx.update(|cx| cx.set_global(Theme::dark()));
+        let (view, cx) = cx.add_window_view(|_, _| TwoPaneSelectionHarness::new([
+            "diff-selection-review-0-R|1", "diff-selection-review-0-L|1",
+        ]));
+        cx.simulate_resize(size(px(640.0), px(240.0)));
+        let entries = |surface| REGISTRY.with(|r| r.borrow().iter().filter(|e| e.surface == surface).count());
+        for _ in 0..8 {
+            cx.update(|window, cx| { window.refresh(); window.draw(cx).clear(); });
+            assert_eq!(entries(1), 1, "a repaint must replace the previous layout");
+            assert_eq!(entries(2), 1);
+        }
+        let key = "diff-selection-review-0-R|1:0";
+        let before = selection_test_bounds(key);
+        view.update(cx, |view, cx| { view.top = px(40.0); cx.notify(); });
+        cx.update(|window, cx| { window.refresh(); window.draw(cx).clear(); });
+        assert_eq!(selection_test_bounds(key).top(), before.top() + px(40.0), "hit testing must use the moved layout");
+        // A refreshed patch replaces its keys rather than retaining the old revision.
+        view.update(cx, |view, cx| { view.prefixes[0] = "diff-selection-new-0-R|1"; cx.notify(); });
+        cx.update(|window, cx| { window.refresh(); window.draw(cx).clear(); });
+        assert_eq!(entries(1), 1);
+        assert!(REGISTRY.with(|r| r.borrow().iter().all(|e| e.key.as_ref() != key)));
+        view.update(cx, |view, cx| { view.second_pane = false; cx.notify(); });
+        for _ in 0..2 {
+            cx.update(|window, cx| { window.refresh(); window.draw(cx).clear(); });
+        }
+        assert_eq!(entries(2), 0, "closed diff surfaces must not be retained");
+        assert_eq!(entries(1), 1);
     }
 
     #[gpui::test]
