@@ -355,7 +355,7 @@ pub trait Harness: Send + Sync {
         &self,
         cwd: &std::path::Path,
     ) -> Result<Option<Vec<zeron_proto::invocation::Skill>>, HarnessError> {
-        if self.id() == HarnessId::Mock {
+        if self.id().is_test_rig() {
             return Ok(None);
         }
         skills::discover(self.id(), cwd).await.map(Some)
