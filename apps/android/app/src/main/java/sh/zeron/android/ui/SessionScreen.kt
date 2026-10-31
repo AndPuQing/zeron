@@ -83,6 +83,7 @@ import sh.zeron.android.design.GeistMono
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
+import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
@@ -172,9 +173,14 @@ fun SessionScreen(
             val device = handle.composer().host.deviceId
             return loadTranscriptImage(core, device, ref)
         }
-        val open: (String) -> Unit = { ref -> scope.launch { load(ref)?.let { viewing = it } } }
+        val imageCacheScope = "$imageDevice:$chatId"
+        // A thumbnail already on screen opens at once instead of reading the host again.
+        val open: (String) -> Unit = { ref ->
+            val shown = cachedTranscriptImage(imageCacheScope, ref)
+            if (shown != null) viewing = shown else scope.launch { load(ref)?.let { viewing = it } }
+        }
         TranscriptActions(
-            imageCacheScope = "$imageDevice:$chatId",
+            imageCacheScope = imageCacheScope,
             openUrl = { url ->
                 val uri = Uri.parse(url)
                 when (uri.scheme) {

@@ -115,7 +115,11 @@ private fun Widget(state: TranscriptState, model: RowModel, w: Widget, palette: 
                 tint = Color(palette[if (kind.failed) ColorRole.DANGER else ColorRole.TEXT_TERTIARY]),
             )
         }
-        is WidgetKind.Image -> RemoteImage(kind.reference, w, actions) { state.uploadProgress }
+        // Widgets compose by position, and produceState's value outlives its keys:
+        // a slot reused for another image must start over, not keep the old bitmap.
+        is WidgetKind.Image -> androidx.compose.runtime.key(actions.imageCacheScope, kind.reference) {
+            RemoteImage(kind.reference, w, actions) { state.uploadProgress }
+        }
         WidgetKind.Spinner -> ActivityIndicator(Modifier.fillMaxSize().padding(1.dp), color = Color(palette[ColorRole.TEXT_TERTIARY]))
         is WidgetKind.Working -> WorkingIndicator(kind.sinceMs, kind.streaming, palette)
         is WidgetKind.Detail -> Tap("${kind.title} details") { actions.showText(kind.title, w.payload ?: "", true) }
@@ -314,6 +318,9 @@ object IconAssets {
 private val images = object : LruCache<String, ImageBitmap>(64 * 1024 * 1024) {
     override fun sizeOf(key: String, value: ImageBitmap) = value.width * value.height * 4
 }
+
+/** A transcript image already decoded for [scope], so opening it skips the host read. */
+internal fun cachedTranscriptImage(scope: String, reference: String): ImageBitmap? = images.get("$scope:$reference")
 
 @Composable
 private fun RemoteImage(reference: String, w: Widget, actions: TranscriptActions, progress: () -> Double?) {

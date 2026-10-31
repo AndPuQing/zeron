@@ -151,6 +151,9 @@ private suspend fun share(context: Context, image: ImageBitmap) {
 
 private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
 
+/** Longest decoded side; larger images are downsampled, never refused. */
+private const val MAX_DECODED_SIDE = 4096
+
 /** The same bounded host image reader for main and subagent transcripts. */
 internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, reference: String): ImageBitmap? {
     imageReads.acquire()
@@ -161,12 +164,16 @@ internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, dev
             if (bytes.size > 24 * 1024 * 1024) return@withContext null
             val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
             android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-            if (bounds.outWidth !in 1..4096 || bounds.outHeight !in 1..4096) return@withContext null
-            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / sample > MAX_DECODED_SIDE) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
         }
     } catch (error: kotlinx.coroutines.CancellationException) {
         throw error
-    } catch (_: Exception) {
+    } catch (_: Throwable) {
+        // Includes OutOfMemoryError: an image that can't be decoded shows as unavailable.
         return null
     } finally {
         imageReads.release()
