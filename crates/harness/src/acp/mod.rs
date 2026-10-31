@@ -73,7 +73,7 @@ use crate::{
     CancellationToken, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
 };
 use child::Child;
-use normalize::{map_update, parse_commands, preferred_allow_option};
+use normalize::{Normalizer, parse_commands, preferred_allow_option};
 use prompt::Prompt;
 use subagent::SubagentTracker;
 use subagent_devin::DevinTracker;
@@ -3420,27 +3420,30 @@ fn config_option_sets(
 /// [`AgentEvent::Subagent`] contract.
 enum SubagentObserver {
     Devin(DevinTracker),
-    Grok(SubagentTracker),
+    Grok {
+        tracker: SubagentTracker,
+        normalizer: Normalizer,
+    },
 }
 
 impl SubagentObserver {
     fn observe(&mut self, update: &Value) {
         match self {
             SubagentObserver::Devin(_) => {}
-            SubagentObserver::Grok(tracker) => tracker.observe(update),
+            SubagentObserver::Grok { tracker, .. } => tracker.observe(update),
         }
     }
 
     fn finish_open(&mut self, status: DoneStatus) -> Vec<AgentEvent> {
         match self {
             SubagentObserver::Devin(tracker) => tracker.finish_open(status),
-            SubagentObserver::Grok(_) => Vec::new(),
+            SubagentObserver::Grok { .. } => Vec::new(),
         }
     }
 }
 
 /// The events of one notification, session-filtered. `session/update` maps
-/// per [`map_update`]; `_x.ai/session_notification` is grok's extension
+/// per [`Normalizer`]; `_x.ai/session_notification` is grok's extension
 /// channel — same `{sessionId, update}` envelope, but its updates (the
 /// `subagent_*` lifecycle) render nothing directly. The subagent tracker sees
 /// both first (spawn/finished correlation + transcript tails); its tagged
@@ -3458,9 +3461,12 @@ fn session_update_events(
     match method {
         "session/update" => match subagents {
             SubagentObserver::Devin(tracker) => tracker.map(update),
-            _ => {
-                subagents.observe(update);
-                map_update(update)
+            SubagentObserver::Grok {
+                tracker,
+                normalizer,
+            } => {
+                tracker.observe(update);
+                normalizer.map(update)
             }
         },
         "_x.ai/session_notification" => {
@@ -5151,11 +5157,10 @@ async fn run_session(session: Session) {
     let mut subagents = if harness == HarnessId::Devin {
         SubagentObserver::Devin(DevinTracker::default())
     } else {
-        SubagentObserver::Grok(SubagentTracker::new(
-            session_id.clone(),
-            event_tx.clone(),
-            sessions_root,
-        ))
+        SubagentObserver::Grok {
+            tracker: SubagentTracker::new(session_id.clone(), event_tx.clone(), sessions_root),
+            normalizer: Normalizer::default(),
+        }
     };
 
     // ---- main loop --------------------------------------------------------
@@ -6348,6 +6353,41 @@ async fn run_session(session: Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_updates_preserve_partial_tool_images_for_each_agent_path() {
+        let (tx, _rx) = mpsc::channel(8);
+        for mut observer in [
+            SubagentObserver::Devin(DevinTracker::default()),
+            SubagentObserver::Grok {
+                tracker: SubagentTracker::new("session".into(), tx, None),
+                normalizer: Normalizer::default(),
+            },
+        ] {
+            let images = json!({"sessionId": "session", "update": {
+                "sessionUpdate": "tool_call_update", "toolCallId": "read",
+                "content": [{"type": "content", "content": {"type": "image", "data": "YWJj", "mimeType": "image/png"}}]
+            }});
+            assert!(
+                session_update_events("session/update", &images, "session", &mut observer)
+                    .is_empty()
+            );
+            let events = session_update_events(
+                "session/update",
+                &json!({
+                    "sessionId": "session", "update": {
+                        "sessionUpdate": "tool_call_update", "toolCallId": "read", "status": "completed"
+                    }
+                }),
+                "session",
+                &mut observer,
+            );
+            assert!(
+                matches!(events.as_slice(), [AgentEvent::ToolResult { image_payloads, .. }]
+                if image_payloads.len() == 1 && image_payloads[0].data_base64 == "YWJj")
+            );
+        }
+    }
 
     #[test]
     fn unix_browser_suppression_falls_back_to_zerons_noop_mode() {
