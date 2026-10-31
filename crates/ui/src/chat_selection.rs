@@ -70,8 +70,15 @@ pub(crate) fn with_selections(text: &str, selections: &[ChatQuote]) -> String {
     if selections.is_empty() {
         return text.to_owned();
     }
-    let mut prompt = selections.iter().map(ChatQuote::prompt).collect::<String>();
-    prompt.push_str(text);
+    // Native commands and selected skills dispatch from the prompt's beginning.
+    // Keep the user's prefix (including literal Markdown indentation) intact.
+    let mut prompt = text.to_owned();
+    if !text.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    for quote in selections {
+        prompt.push_str(&quote.prompt());
+    }
     prompt
 }
 
@@ -335,12 +342,52 @@ mod tests {
         assert_eq!(with_selections("", &[quote.clone()]), quote.prompt());
         assert_eq!(
             with_selections("question", &[quote.clone(), quote.clone()]),
-            format!("{}{}question", quote.prompt(), quote.prompt())
+            format!("question\n\n{}{}", quote.prompt(), quote.prompt())
         );
         assert!(
             with_selections("question", &[quote])
                 .contains("Quoted from Answer source:\n\n> 第一行\n> second line")
         );
+    }
+
+    #[test]
+    fn selection_cards_preserve_leading_commands_and_native_skills() {
+        use zeron_proto::{
+            HarnessId,
+            invocation::{
+                Invocation, SkillCommand, harness_prompt, invocation_prompt, leading_command,
+            },
+        };
+        let quote = ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+        for typed in [
+            "/review inspect tests".to_owned(),
+            Invocation::Command {
+                name: "review".into(),
+            }
+            .link(),
+        ] {
+            let prompt = invocation_prompt(&with_selections(&typed, &[quote.clone()]));
+            assert_eq!(leading_command(&prompt).map(|(name, _)| name), Some("review"));
+        }
+        for harness in [HarnessId::ClaudeCode, HarnessId::Opencode] {
+            let skill = Invocation::Skill {
+                name: "review".into(),
+                path: "/workspace/SKILL.md".into(),
+                command: Some(SkillCommand {
+                    name: "review".into(),
+                    harness,
+                }),
+            };
+            let typed = format!("{} inspect tests", skill.link());
+            let prompt = harness_prompt(&with_selections(&typed, &[quote.clone()]), harness);
+            assert_eq!(leading_command(&prompt).map(|(name, _)| name), Some("review"));
+            assert!(prompt.starts_with("/review inspect tests\n\n"));
+            assert!(prompt.ends_with(&quote.prompt()));
+        }
+        // Literal Markdown must keep its indentation, not become a command.
+        let prompt = with_selections("    /review example", &[quote]);
+        assert!(prompt.starts_with("    /review example"));
+        assert!(leading_command(&prompt).is_none());
     }
 
     #[test]

@@ -118,6 +118,12 @@ pub(super) struct ServerTools {
 }
 
 impl ServerTools {
+    pub fn completed(&self, parent: Option<&str>, id: &str) -> bool {
+        self.seen
+            .get(&(parent.unwrap_or("").to_owned(), id.to_owned()))
+            .is_some_and(|seen| seen.completed)
+    }
+
     /// A turn may stop or fail before its server result arrives. Resolve only
     /// this scope; background agents can outlive their parent's turn.
     pub fn finish(&mut self, parent: Option<&str>) -> Vec<AgentEvent> {

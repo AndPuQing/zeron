@@ -1674,7 +1674,12 @@ async fn run_session(session: Session) {
                         }
                         match &ev {
                             AgentEvent::ToolCall { id, .. } => {
-                                open_tools.insert(id.clone());
+                                // Aggregate input can refresh an already completed
+                                // server tool. Keep its details without delaying
+                                // steering as though the tool were running again.
+                                if !norm.server_tool_completed(id) {
+                                    open_tools.insert(id.clone());
+                                }
                             }
                             AgentEvent::ToolResult { id, .. } => {
                                 open_tools.remove(id);

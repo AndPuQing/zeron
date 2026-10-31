@@ -864,6 +864,11 @@ impl Normalizer {
         self.server_tools.finish(None)
     }
 
+    /// A root tool's input refresh must not reopen the driver's steering gate.
+    pub(crate) fn server_tool_completed(&self, id: &str) -> bool {
+        self.server_tools.completed(None, id)
+    }
+
     fn normalize_frame(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {

@@ -184,6 +184,34 @@ case "$first" in
   esac
   ;;
 
+*scenario:server-tool-steering*)
+  emit '{"type":"system","subtype":"init","session_id":"sess-server-tools"}'
+  probe_steer() {
+    emit '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"ready"}}}'
+    read -r steer || exit 1
+    case "$steer" in
+      *'"priority":"now"'*) priority=now ;;
+      *'"priority":"next"'*) priority=next ;;
+      *) priority=missing ;;
+    esac
+    emit "{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"priority:$priority\"}}}"
+  }
+  emit '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"server_tool_use","id":"search","name":"web_search","input":{}}}}'
+  probe_steer
+  emit '{"type":"stream_event","event":{"type":"content_block_start","content_block":{"type":"web_search_tool_result","tool_use_id":"search","content":[]}}}'
+  # Full input arrives after completion. This refresh must not reopen the tool.
+  emit '{"type":"assistant","message":{"content":[{"type":"server_tool_use","id":"search","name":"web_search","input":{"query":"Rust"}},{"type":"web_search_tool_result","tool_use_id":"search","content":[]}]}}'
+  # A background child's tool with the same id must not block the parent.
+  emit '{"type":"stream_event","parent_tool_use_id":"child","event":{"type":"content_block_start","content_block":{"type":"server_tool_use","id":"search","name":"web_search","input":{}}}}'
+  probe_steer
+  # Ordinary client tools still need protection from immediate interruption.
+  emit '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"client","name":"Bash","input":{"command":"true"}}]}}'
+  probe_steer
+  emit '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"client","content":"done"}]}}'
+  probe_steer
+  cat >/dev/null
+  ;;
+
 *scenario:steer*)
   emit '{"type":"system","subtype":"init","model":"claude-fable-5","tools":[],"cwd":"/tmp","session_id":"sess-steer"}'
   emit '{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"first"}}}'
