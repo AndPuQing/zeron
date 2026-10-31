@@ -565,7 +565,7 @@ pub(crate) fn map_item(phase: Phase, item: &Value) -> Vec<AgentEvent> {
                 output: None,
                 diff: None,
                 preview_paths: Vec::new(),
-                image_payloads: crate::tool_images::images_in_content(item.pointer("/result/content"), "image.png"),
+                image_payloads: crate::tool_images::images_in_content(item.pointer("/result/content")),
             }],
         },
         "webSearch" | "web_search" => tool_lifecycle(

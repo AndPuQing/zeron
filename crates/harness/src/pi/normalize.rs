@@ -147,7 +147,7 @@ impl Normalizer {
                     output: output.map(|s| cap(&s, 16384)),
                     diff,
                     preview_paths: Vec::new(),
-                    image_payloads: crate::tool_images::images_in_content(result.get("content"), "image.png"),
+                    image_payloads: crate::tool_images::images_in_content(result.get("content")),
                 });
             }
             "compaction_start" => {

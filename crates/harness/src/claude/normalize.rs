@@ -304,11 +304,7 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 /// arrive only as full blocks on its tagged assistant frames — emit them, in
 /// block order with the tool calls, or subagent transcripts are
 /// tool-chips-only.
-fn subagent_message(
-    paths: &mut std::collections::HashMap<String, String>,
-    parent: &str,
-    f: &MessageFrame,
-) -> Vec<AgentEvent> {
+fn subagent_message(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
     let mut out: Vec<AgentEvent> = f
         .message
         .blocks()
@@ -327,7 +323,6 @@ fn subagent_message(
             )),
             "tool_use" => {
                 let call = decode_tool_use(&b.name, &b.input);
-                remember_tool_file(paths, &b.id, &call);
                 Some(tag(
                     parent,
                     AgentEvent::ToolCall {
@@ -350,26 +345,6 @@ fn subagent_message(
     out
 }
 
-fn remember_tool_file(
-    paths: &mut std::collections::HashMap<String, String>,
-    id: &str,
-    call: &ToolCall,
-) {
-    if id.is_empty() {
-        return;
-    }
-    let path = match call {
-        ToolCall::ReadFile { path }
-        | ToolCall::WriteFile { path, .. }
-        | ToolCall::EditFile { path, .. } => path.as_str(),
-        _ => return,
-    };
-    let name = file_basename(path);
-    if name.is_empty() {
-        return;
-    }
-    paths.insert(id.to_owned(), name.to_owned());
-}
 
 fn empty_tool_result(id: impl Into<String>, is_error: bool) -> AgentEvent {
     AgentEvent::ToolResult {
@@ -420,19 +395,9 @@ fn is_synthetic_user_text(text: &str) -> bool {
 /// `toolUseResult` image, used only when the content blocks had none.
 fn image_from_tool_use_result(
     result: &crate::claude::wire::ToolUseResult,
-    name: &str,
 ) -> Option<zeron_proto::ToolResultImage> {
     let data_base64 = compact_base64(result.image_base64.as_deref()?)?;
-    Some(zeron_proto::ToolResultImage {
-        name: name.to_owned(),
-        data_base64,
-    })
-}
-
-fn file_basename(path: &str) -> &str {
-    path.rsplit(['/', '\\'])
-        .find(|part| !part.is_empty())
-        .unwrap_or("image.png")
+    Some(zeron_proto::ToolResultImage { data_base64 })
 }
 
 struct CompactionState {
@@ -516,10 +481,6 @@ pub(crate) struct Normalizer {
     /// which then opened as an empty, never-created subagent doc (user
     /// report 2026-08-20).
     agent_spawn_tools: std::collections::HashSet<String>,
-    /// tool_use id → file basename for Read/Write/Edit, so an image result
-    /// can be labeled with the file the tool named. Removed when the result
-    /// arrives.
-    tool_paths: std::collections::HashMap<String, String>,
     /// The typed fork of the turn under way (a turn runs one at most). Its
     /// replay feeds its chip only until the turn ends: a `forked-command-*`
     /// id after that stays the CLI's own, which no chip carries.
@@ -550,7 +511,6 @@ impl Normalizer {
             agent_tool_spawns: std::collections::HashMap::new(),
             skill_calls: std::collections::HashMap::new(),
             agent_spawn_tools: std::collections::HashSet::new(),
-            tool_paths: std::collections::HashMap::new(),
             typed_fork: None,
             fork_transcripts: true,
             assistant_message_id: new_message_id(),
@@ -588,23 +548,18 @@ impl Normalizer {
                 self.skill_calls.remove(&id);
             }
             let is_error = parsed.is_error.unwrap_or(false);
-            let name = self
-                .tool_paths
-                .remove(&id)
-                .unwrap_or_else(|| "image.png".into());
-            let images = images_in_content(block.get("content"), &name);
-            pending.push((id, is_error, name, images));
+            let images = images_in_content(block.get("content"));
+            pending.push((id, is_error, images));
         }
-        if pending.len() == 1 && pending[0].3.is_empty() {
-            let name = pending[0].2.clone();
-            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result, &name) {
-                pending[0].3.push(image);
+        if pending.len() == 1 && pending[0].2.is_empty() {
+            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result) {
+                pending[0].2.push(image);
             }
         }
         pending
             .into_iter()
             .map(
-                |(id, is_error, _name, image_payloads)| AgentEvent::ToolResult {
+                |(id, is_error, image_payloads)| AgentEvent::ToolResult {
                     id,
                     is_error,
                     output: None,
@@ -855,7 +810,7 @@ impl Normalizer {
             return Vec::new();
         };
         let events = if assistant {
-            subagent_message(&mut self.tool_paths, &chip, &f)
+            subagent_message(&chip, &f)
         } else {
             // Disk replay shows tool results only, the same as before. Image
             // bytes on those results are kept; a scale note is not a message.
@@ -1222,7 +1177,7 @@ impl Normalizer {
                     if self.fork_repeat(parent, f.uuid.as_deref()) {
                         return Vec::new();
                     }
-                    return subagent_message(&mut self.tool_paths, parent, &f);
+                    return subagent_message(parent, &f);
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
                 // them; a task may finish before a `task_started` arrives. A
@@ -1248,7 +1203,6 @@ impl Normalizer {
                     .filter(|b: &ContentBlock| b.kind == "tool_use")
                     .flat_map(|b| {
                         let decoded = decode_tool_use(&b.name, &b.input);
-                        remember_tool_file(&mut self.tool_paths, &b.id, &decoded);
                         let call = AgentEvent::ToolCall {
                             id: b.id.clone(),
                             call: decoded,
@@ -1933,7 +1887,6 @@ mod tests {
         assert_eq!(id, "toolu_read");
         assert!(preview_paths.is_empty());
         assert_eq!(image_payloads.len(), 1);
-        assert_eq!(image_payloads[0].name, "1.png");
         assert_eq!(image_payloads[0].data_base64, PNG);
         let journaled = serde_json::to_string(&ev[0]).unwrap();
         assert!(
@@ -1959,7 +1912,7 @@ mod tests {
             &ev[..],
             [AgentEvent::Subagent { parent_tool_use_id, event }]
                 if parent_tool_use_id == "toolu_sub"
-                    && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. } if image_payloads.len() == 1 && image_payloads[0].name == "00.png")
+                    && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. } if image_payloads.len() == 1)
         ));
 
         for note in [scale, source, combined] {
@@ -2002,7 +1955,7 @@ mod tests {
         let ev = Normalizer::new().normalize(fallback, false);
         assert!(matches!(
             &ev[..],
-            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1 && image_payloads[0].name == "image.png"
+            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1
         ));
         // A result that already has the image does not take the fallback as a second copy.
         let both = crate::claude::wire::parse_frame(&format!(

@@ -39,24 +39,18 @@ pub(crate) fn compact_base64(data: &str) -> Option<String> {
     )
 }
 
-fn push_tool_image(out: &mut Vec<zeron_proto::ToolResultImage>, name: &str, data: &str) {
+fn push_tool_image(out: &mut Vec<zeron_proto::ToolResultImage>, data: &str) {
     if out.len() >= MAX_TOOL_RESULT_IMAGES {
         return;
     }
     let Some(data_base64) = compact_base64(data) else {
         return;
     };
-    out.push(zeron_proto::ToolResultImage {
-        name: name.to_owned(),
-        data_base64,
-    });
+    out.push(zeron_proto::ToolResultImage { data_base64 });
 }
 
 /// Image blocks inside a tool result's `content` array.
-pub(crate) fn images_in_content(
-    content: Option<&Value>,
-    name: &str,
-) -> Vec<zeron_proto::ToolResultImage> {
+pub(crate) fn images_in_content(content: Option<&Value>) -> Vec<zeron_proto::ToolResultImage> {
     let mut out = Vec::new();
     let Some(blocks) = content.and_then(Value::as_array) else {
         return out;
@@ -86,7 +80,7 @@ pub(crate) fn images_in_content(
         else {
             continue;
         };
-        push_tool_image(&mut out, name, data);
+        push_tool_image(&mut out, data);
     }
     out
 }
@@ -105,7 +99,7 @@ mod tests {
             {"type":"image", "source":{"type":"url", "url":"https://example.com/a.png"}},
             {"type":"text", "text":"YWJj"}
         ]);
-        let images = images_in_content(Some(&content), "shot.png");
+        let images = images_in_content(Some(&content));
         assert_eq!(images.len(), 3);
         assert!(images.iter().all(|i| i.data_base64 == "YWJj"));
         let many = json!(
@@ -113,7 +107,7 @@ mod tests {
                 .map(|_| json!({"type":"image", "data":"YWJj"}))
                 .collect::<Vec<_>>()
         );
-        assert_eq!(images_in_content(Some(&many), "shot.png").len(), 4);
+        assert_eq!(images_in_content(Some(&many)).len(), 4);
         assert!(compact_base64("!").is_none());
         assert!(
             compact_base64(&"A".repeat(zeron_proto::IMAGE_MAX_BYTES.div_ceil(3) * 4 + 1)).is_none()

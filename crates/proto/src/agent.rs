@@ -797,7 +797,6 @@ pub struct SlashCommand {
 /// a copy under the profile uploads directory. Never journaled.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResultImage {
-    pub name: String,
     pub data_base64: String,
 }
 

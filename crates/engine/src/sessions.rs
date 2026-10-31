@@ -2284,7 +2284,7 @@ impl Inner {
                 hash.update([0]);
                 hash.update(&bytes);
                 let id = format!("{:x}", hash.finalize());
-                match uploads.store_shown_image(&id, &payload.name, &bytes) {
+                match uploads.store_shown_image(&id, "image", &bytes) {
                     Ok(image) => paths.push(image.path),
                     Err(err) => {
                         tracing::warn!(
@@ -5783,7 +5783,6 @@ mod tests {
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: vec![zeron_proto::ToolResultImage {
-                    name: "1.png".into(),
                     data_base64: png_b64.into(),
                 }],
             }),
@@ -5872,7 +5871,6 @@ mod tests {
             diff: None,
             preview_paths: Vec::new(),
             image_payloads: vec![zeron_proto::ToolResultImage {
-                name: "note.txt".into(),
                 data_base64: base64::engine::general_purpose::STANDARD
                     .encode(b"not an image")
                     .into(),
