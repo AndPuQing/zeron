@@ -116,6 +116,9 @@ pub struct UsagePage {
     scroll: widgets::PageScroll,
     range: UsageRange,
     report: Loadable<UsageInsightsReport>,
+    /// The range `report` counts when it is ready; it lags `range` while a
+    /// newly picked range loads.
+    report_range: UsageRange,
     /// The engine predates `GetUsageInsights`.
     unsupported: bool,
     loading: bool,
@@ -139,6 +142,7 @@ impl UsagePage {
             scroll: widgets::PageScroll::default(),
             range: UsageRange::default(),
             report: Loadable::Idle,
+            report_range: UsageRange::default(),
             unsupported: false,
             loading: false,
             loaded_at: None,
@@ -209,9 +213,17 @@ impl UsagePage {
                         }
                         let again = matches!(&result, Ok(report) if report.indexing);
                         match result {
-                            Ok(report) => page.report = Loadable::Ready(report),
-                            // A failed refresh keeps the painted numbers.
-                            Err(err) if matches!(page.report, Loadable::Ready(_)) => {
+                            Ok(report) => {
+                                page.report = Loadable::Ready(report);
+                                page.report_range = range;
+                            }
+                            // A failed refresh keeps the painted numbers, but
+                            // only this range's: another range's must not
+                            // stand in for them under this range's chip.
+                            Err(err)
+                                if matches!(page.report, Loadable::Ready(_))
+                                    && page.report_range == range =>
+                            {
                                 page.error = Some(format!("Usage refresh failed: {err}").into());
                             }
                             Err(err) => page.report = Loadable::Error(err),
@@ -341,10 +353,31 @@ impl UsagePage {
                 );
             }
         };
+        // Another range's numbers stay up while the picked one loads, dimmed
+        // and labeled so they never read as the picked range's.
+        if self.report_range != self.range {
+            return div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .mt(px(12.0))
+                        .px(px(8.0))
+                        .text_size(crate::typography::ui_rems(12.0))
+                        .text_color(theme.text_muted)
+                        .child(SharedString::from(format!("Loading {}…", self.range.label()))),
+                )
+                .child(div().opacity(0.45).child(self.render_report(theme, report)))
+                .into_any_element();
+        }
+        self.render_report(theme, report)
+    }
+
+    fn render_report(&self, theme: &Theme, report: &UsageInsightsReport) -> AnyElement {
         if report.total.turns == 0 {
             let detail = if report.indexing {
                 "Still reading older sessions on this computer."
-            } else if self.range == UsageRange::All {
+            } else if self.report_range == UsageRange::All {
                 "Finished agent replies on this computer will be counted here."
             } else {
                 "No agent replies finished in this period. Try a longer range."

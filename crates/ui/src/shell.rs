@@ -13727,6 +13727,10 @@ impl Render for Shell {
         if self.billing_page.is_some() && self.route != Route::Settings(SettingsSection::Billing) {
             self.billing_page = None;
         }
+        // Leaving Usage stops its re-asks while the engine is still indexing.
+        if self.usage_page.is_some() && self.route != Route::Settings(SettingsSection::Usage) {
+            self.usage_page = None;
+        }
         self.navigation_focus
             .remember(&self.shortcut_focus, window, cx);
         if let Some(command) = self.pending_workspace_command.take() {
