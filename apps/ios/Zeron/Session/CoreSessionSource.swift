@@ -460,6 +460,9 @@ func makeExecutionMenu(caps: ExecutionCapabilities?, access: String, plan: Bool,
 
 @MainActor
 enum TranscriptImages {
+    private static var activeReads = 0
+    private static var waiting: [CheckedContinuation<Void, Never>] = []
+
     private static let images: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.totalCostLimit = 64 * 1024 * 1024
@@ -479,6 +482,19 @@ enum TranscriptImages {
 
     static func image(client: CoreClient, device: String, reference: String) async -> UIImage? {
         let key = "\(device):\(reference)" as NSString
+        if let hit = Self.images.object(forKey: key) { return hit }
+        // A row can contain several full-size screenshots. Bound the complete
+        // read/decode operation, not just the retained cache, as on Android.
+        if activeReads < 4 {
+            activeReads += 1
+        } else {
+            await withCheckedContinuation { waiting.append($0) }
+        }
+        defer {
+            if waiting.isEmpty { activeReads -= 1 }
+            else { waiting.removeFirst().resume() }
+        }
+        guard !Task.isCancelled else { return nil }
         if let hit = Self.images.object(forKey: key) { return hit }
         guard let data = try? await client.readAttachment(deviceId: device, path: reference),
               let image = await Task.detached(priority: .userInitiated, operation: { Self.decodeImage(data) }).value
