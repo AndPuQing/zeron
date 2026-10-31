@@ -1330,6 +1330,37 @@ async fn a_replay_confirms_superseded_steers_and_the_turn_ends() {
     ));
 }
 
+/// Completed server-tool input refreshes must not reopen the driver's tool
+/// gate; unfinished server and client tools still defer steering safely.
+#[tokio::test]
+async fn server_tool_refreshes_preserve_steering_priority() {
+    let (controls, steer, token) = controls("A");
+    let mut stream = harness()
+        .run(request("scenario:server-tool-steering"), controls)
+        .await
+        .expect("run starts");
+    let priorities = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut priorities = Vec::new();
+        while let Some(event) = stream.next().await {
+            if let AgentEvent::TextDelta { text } = event.expect("stream event") {
+                if text == "ready" {
+                    steer.send(steer_msg("Follow up.")).await.unwrap();
+                } else if let Some(priority) = text.strip_prefix("priority:") {
+                    priorities.push(priority.to_owned());
+                    if priorities.len() == 4 {
+                        return priorities;
+                    }
+                }
+            }
+        }
+        panic!("stream ended before all steering probes: {priorities:?}");
+    })
+    .await
+    .expect("steering probes finish in time");
+    token.cancel();
+    assert_eq!(priorities, ["next", "now", "next", "now"]);
+}
+
 fn steer_msg(prompt: &str) -> SteerMessage {
     SteerMessage {
         prompt: prompt.into(),

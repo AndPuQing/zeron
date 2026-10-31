@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use zeron_proto::HarnessId;
 
-use super::{ClaudeHarness, normalize::decode_tool_use};
+use super::{ClaudeHarness, normalize::decode_tool_use, server_tools};
 use crate::HarnessError;
 use crate::saved_sessions::*;
 
@@ -816,7 +816,8 @@ fn normalize_history(
     for &index in &chain {
         if let Some(blocks) = records[index]["message"]["content"].as_array() {
             for b in blocks {
-                if b["type"] == "tool_result"
+                if (b["type"] == "tool_result"
+                    || b["type"].as_str().is_some_and(server_tools::is_result))
                     && let Some(id) = b["tool_use_id"].as_str()
                 {
                     results.insert(id, b);
@@ -853,7 +854,16 @@ fn normalize_history(
                         parts.push(SavedHistoryPart::Tool { call: decode_tool_use(block["name"].as_str().unwrap_or("Tool"), &block["input"]),
                             output: result.and_then(|b| message_text(&b["content"])), is_error: result.is_some_and(|b| b["is_error"] == true) });
                     }
+                    Some("server_tool_use") => {
+                        let result = block["id"].as_str().and_then(|id| results.get(id));
+                        let (is_error, output) = result.map(|b| server_tools::result(&b["content"])).unwrap_or_default();
+                        parts.push(SavedHistoryPart::Tool {
+                            call: server_tools::call(block["name"].as_str().unwrap_or("Tool"), &block["input"]),
+                            output, is_error: is_error || result.is_some_and(|b| b["is_error"] == true),
+                        });
+                    }
                     Some("tool_result") => {}
+                    Some(kind) if server_tools::is_result(kind) => {}
                     Some("image" | "document") => {
                         parts.push(SavedHistoryPart::Text("[Attachment retained in the native session]".into()));
                         history.add_notice("Historical attachments remain in the native copy; the history view shows placeholders.");

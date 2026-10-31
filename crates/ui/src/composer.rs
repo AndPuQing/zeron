@@ -2577,46 +2577,6 @@ impl ComposerInput {
         true
     }
 
-    /// Append context without replacing the draft's selected range. One undo step.
-    pub(crate) fn append_quote(
-        &mut self,
-        quote: &crate::chat_selection::ChatQuote,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if self.read_only || self.marked_range.is_some() {
-            return false;
-        }
-        self.dismiss_prompt_suggestion(cx);
-        self.invalidate_mention_tooltip();
-        let end = self.content.len();
-        let inserted = format!(
-            "{}{}",
-            if self.content.is_empty() || self.content.ends_with("\n\n") {
-                ""
-            } else if self.content.ends_with('\n') {
-                "\n"
-            } else {
-                "\n\n"
-            },
-            quote.prompt()
-        );
-        self.record_edit(&(end..end), &inserted);
-        self.content.push_str(&inserted);
-        self.edit_revision = self.edit_revision.wrapping_add(1);
-        let end = self.content.len();
-        self.selected_range = end..end;
-        self.selection_reversed = false;
-        self.caret_affinity = CaretAffinity::Downstream;
-        self.preferred_column = None;
-        self.refresh_projection();
-        self.follow_cursor = true;
-        self.reset_blink();
-        self.needs_measure = true;
-        cx.emit(ComposerInputEvent::Edited);
-        cx.notify();
-        true
-    }
-
     /// Insert a browser annotation chip at the selection, numbered after the
     /// draft's existing annotations. One undo step, like a dropped mention.
     pub(crate) fn insert_annotation(
@@ -6382,6 +6342,9 @@ pub struct Composer {
     /// path only at send time.
     pub(crate) appshots: HashMap<String, Vec<CapturedAppshot>>,
     appshot_entrances: HashMap<String, Instant>,
+    /// Ordinary draft context stays keyed to its chat even while a question
+    /// or queue editor temporarily borrows the input.
+    selections: HashMap<String, Vec<crate::chat_selection::ChatQuote>>,
     /// The staged attachment being viewed full-size (click a thumbnail).
     preview: Option<attachments::PreviewImage>,
     /// Focused while the lightbox is open so Escape reaches it; the input
@@ -6722,7 +6685,7 @@ impl Composer {
                     && composer_has_content(
                         this.input.read(cx).text(),
                         this.staged().len() + this.staged_appshots().len(),
-                        this.staged_comments(cx).len(),
+                        this.staged_comments(cx).len() + this.staged_selections().len(),
                     )
                 {
                     this.on_submit(cx);
@@ -6740,6 +6703,7 @@ impl Composer {
             attachments: HashMap::new(),
             attachment_drafts: HashMap::new(),
             appshots: HashMap::new(),
+            selections: HashMap::new(),
             appshot_entrances: HashMap::new(),
             preview: None,
             preview_focus: cx.focus_handle(),
@@ -7058,12 +7022,12 @@ impl Composer {
     }
 
     /// Whether the draft holds anything a close would lose: text, staged
-    /// attachments or appshots, or staged review comments.
+    /// attachments, appshots, selections, or staged review comments.
     pub(crate) fn has_draft(&self, cx: &App) -> bool {
         composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_comments(cx).len() + self.staged_selections().len(),
         )
     }
 
@@ -7212,25 +7176,157 @@ impl Composer {
         // Questions and queue edits borrow this input from the ordinary draft.
         // Never turn an Add to chat action into an answer or queue mutation.
         if self.wizard.is_some() {
-            self.show_error("Finish answering the current question before adding a selection.", cx);
+            self.show_error(
+                "Finish answering the current question before adding a selection.",
+                cx,
+            );
             return false;
         }
         if self.editing_queued.is_some() {
-            self.show_error("Finish or cancel editing the queued message before adding a selection.", cx);
+            self.show_error(
+                "Finish or cancel editing the queued message before adding a selection.",
+                cx,
+            );
             return false;
         }
-        let inserted = self
-            .input
-            .update(cx, |input, cx| input.append_quote(quote, cx));
-        if inserted {
-            self.reset_mention(None, cx);
-            self.reset_slash(None, cx);
-            self.focus_pending = true;
-        } else {
+        if self.input.read(cx).read_only {
             self.show_error("Finish composing text before adding this selection.", cx);
+            return false;
+        }
+        self.selections
+            .entry(self.current_key.clone())
+            .or_default()
+            .push(quote.clone());
+        self.input
+            .update(cx, |input, cx| input.dismiss_prompt_suggestion(cx));
+        self.reset_mention(None, cx);
+        self.reset_slash(None, cx);
+        self.focus_pending = true;
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn staged_selections(&self) -> &[crate::chat_selection::ChatQuote] {
+        if self.editing_queued.is_some() || self.wizard.is_some() {
+            return &[];
+        }
+        self.selections
+            .get(&self.current_key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    fn remove_selection(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.staged_selections().len() {
+            return;
+        }
+        if let Some(selections) = self.selections.get_mut(&self.current_key) {
+            selections.remove(index);
+            if selections.is_empty() {
+                self.selections.remove(&self.current_key);
+            }
         }
         cx.notify();
-        inserted
+    }
+
+    fn restore_failed_selections(
+        &mut self,
+        sent: Vec<crate::chat_selection::ChatQuote>,
+        failed_key: &str,
+        restore_key: &str,
+    ) {
+        if sent.is_empty() {
+            return;
+        }
+        let mut restored = sent;
+        for key in [failed_key, restore_key] {
+            restored.extend(self.selections.remove(key).unwrap_or_default());
+        }
+        self.selections.insert(restore_key.to_owned(), restored);
+    }
+
+    fn render_selection_strip(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let selections = self.staged_selections();
+        if selections.is_empty() {
+            return None;
+        }
+        Some(
+            div()
+                .id("composer-selections")
+                .flex_none()
+                .flex()
+                .gap(px(STRIP_GAP))
+                .px(px(STRIP_PAD_X))
+                .pt(px(STRIP_PAD_TOP))
+                .overflow_x_scroll()
+                .children(selections.iter().enumerate().map(|(index, quote)| {
+                    let preview = quote.clone();
+                    let composer = cx.entity().downgrade();
+                    div()
+                        .id(("composer-selection", index))
+                        .flex_none()
+                        .h(px(crate::badges::BADGE_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .px(px(8.0))
+                        .rounded(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .text_size(px(12.0))
+                        .text_color(theme.text_muted)
+                        .hoverable_tooltip(move |_, cx| {
+                            cx.new(|_| crate::chat_selection::SelectionPreview(preview.clone()))
+                                .into()
+                        })
+                        .child(crate::icons::icon(crate::icons::CHAT_ROUND_LINE).size(px(12.0)))
+                        .child(if selections.len() == 1 {
+                            "1 selection".to_string()
+                        } else {
+                            format!("Selection {}", index + 1)
+                        })
+                        .child(
+                            div()
+                                .id(("remove-selection", index))
+                                .size(px(16.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .rounded(px(4.0))
+                                .cursor_pointer()
+                                .hover(|style| style.bg(crate::theme::ink(0.08)))
+                                .role(gpui::Role::Button)
+                                .aria_label(format!("Remove selection {}", index + 1))
+                                .tab_index(0)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.remove_selection(index, cx);
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            cx.stop_propagation();
+                                            this.remove_selection(index, cx);
+                                        }
+                                    },
+                                ))
+                                .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                                    composer
+                                        .update(cx, |this, cx| this.remove_selection(index, cx))
+                                        .ok();
+                                })
+                                .child(crate::icons::icon(crate::icons::CLOSE).size(px(10.0))),
+                        )
+                }))
+                .into_any_element(),
+        )
     }
 
     pub(crate) fn add_chat_mention(
@@ -7464,6 +7560,7 @@ impl Composer {
         self.attachments.remove(chat_id);
         self.attachment_drafts.remove(chat_id);
         self.appshots.remove(chat_id);
+        self.selections.remove(chat_id);
         self.state.update(cx, |state, _| {
             state.purge_review_comments(chat_id);
         });
@@ -9277,7 +9374,7 @@ impl Composer {
             || composer_has_content(
                 self.input.read(cx).text(),
                 self.staged().len() + self.staged_appshots().len(),
-                self.staged_comments(cx).len(),
+                self.staged_comments(cx).len() + self.staged_selections().len(),
             );
         send_button_mode(self.run_live(cx), has_text)
     }
@@ -9332,7 +9429,7 @@ impl Composer {
         let no_content = !composer_has_content(
             &text,
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_comments(cx).len() + self.staged_selections().len(),
         );
         match self.button_mode(cx) {
             // Enter never stops a run: Stop mode implies an empty composer,
@@ -9371,7 +9468,7 @@ impl Composer {
         let has_content = composer_has_content(
             self.input.read(cx).text(),
             self.staged().len() + self.staged_appshots().len(),
-            self.staged_comments(cx).len(),
+            self.staged_comments(cx).len() + self.staged_selections().len(),
         );
         match modified_submit_target(has_content) {
             ModifiedSubmitTarget::SubmitContent => self.on_submit(cx),
@@ -9516,6 +9613,10 @@ impl Composer {
             .unwrap_or_default();
         self.attachment_drafts.remove(&self.current_key);
         let staged_appshots = self.appshots.remove(&self.current_key).unwrap_or_default();
+        let selections = self
+            .selections
+            .remove(&self.current_key)
+            .unwrap_or_default();
         let mut staged = ordinary_staged.clone();
         staged.extend(
             staged_appshots
@@ -9540,6 +9641,7 @@ impl Composer {
             .filter_map(|att| att.mention)
             .collect();
         let text = zeron_proto::attachment_mentions::demote_unattached_mentions(&text, &attached);
+        let text = crate::chat_selection::with_selections(&text, &selections);
         let text = crate::comments::with_comments(&text, &comments);
         self.preview = None;
         let message_id = uuid::Uuid::new_v4().to_string();
@@ -10292,6 +10394,7 @@ impl Composer {
                         composer.attachments.insert(restore_key.clone(), merged);
                     }
                     composer.restore_failed_appshots(&staged_appshots, &err_chat_id, &restore_key);
+                    composer.restore_failed_selections(selections, &err_chat_id, &restore_key);
                 }
                 cx.notify();
             })
@@ -11490,6 +11593,7 @@ impl Render for Composer {
                             .get(&self.current_key)
                             .is_none_or(Vec::is_empty)
                         && self.staged_appshots().is_empty()
+                        && self.staged_selections().is_empty()
                         && self.staged_comments(cx).is_empty()
                         && self.mention.token.is_none()
                         && self.slash.token.is_none()
@@ -11726,7 +11830,7 @@ impl Render for Composer {
             && !composer_has_content(
                 self.input.read(cx).text(),
                 self.staged().len() + self.staged_appshots().len(),
-                self.staged_comments(cx).len(),
+                self.staged_comments(cx).len() + self.staged_selections().len(),
             );
         // The checklist tray stacks above the queue (or directly above the
         // composer), one step narrower than what follows it; the background
@@ -11802,6 +11906,7 @@ impl Render for Composer {
         let appshot_count = self.staged_appshots().len();
         let strip_h = attachment_strip_height(staged_count, strip_width_hint);
         let comment_strip_h = comment_strip_height(self.staged_comments(cx).len());
+        let selection_strip_h = comment_strip_height(self.staged_selections().len());
         let base_height = if self.dock_frame.is_some() {
             dock_layout.height(dock_amount)
         } else if expanded {
@@ -11809,9 +11914,13 @@ impl Render for Composer {
         } else {
             COMPACT_TOTAL_HEIGHT
         };
-        let target_height =
-            base_height + strip_h + appshot_strip_height(appshot_count) + comment_strip_h;
-        dock_layout.extra_height = strip_h + appshot_strip_height(appshot_count) + comment_strip_h;
+        let target_height = base_height
+            + strip_h
+            + appshot_strip_height(appshot_count)
+            + comment_strip_h
+            + selection_strip_h;
+        dock_layout.extra_height =
+            strip_h + appshot_strip_height(appshot_count) + comment_strip_h + selection_strip_h;
         let dock_owns_layout = self.dock_frame.is_some_and(|frame| frame.active)
             || dock_height_changed
             || self.dock_reflow.active();
@@ -11900,6 +12009,7 @@ impl Render for Composer {
             - strip_h
             - appshot_strip_height(appshot_count)
             - comment_strip_h
+            - selection_strip_h
             - PILL_BORDER_V
             - ACTIONS_ROW_HEIGHT)
             .max(if route_to_single_line {
@@ -12059,6 +12169,7 @@ impl Render for Composer {
         let strip = self.render_attachment_strip(&theme, cx);
         let appshot_strip = self.render_appshot_strip(&theme, window, cx);
         let comments_chip = self.render_comments_chip(&theme, cx);
+        let selection_strip = self.render_selection_strip(&theme, cx);
 
         let pill_border = theme.composer_surface_border();
         // Compensate for the transcript canvas beneath the frosted surface.
@@ -12160,6 +12271,7 @@ impl Render for Composer {
                 .flex()
                 .flex_col()
                 .children(comments_chip)
+                .children(selection_strip)
                 .children(appshot_strip)
                 .children(strip)
                 .child(
@@ -12231,6 +12343,7 @@ impl Render for Composer {
                 .flex_col()
                 .justify_end()
                 .children(comments_chip)
+                .children(selection_strip)
                 .children(appshot_strip)
                 .children(strip)
                 .child(
@@ -12583,19 +12696,26 @@ mod tests {
     #[gpui::test]
     fn prompt_suggestion_enter_does_not_accept_or_send(cx: &mut gpui::TestAppContext) {
         let (_dir, window) = composer_focus_window(cx);
-        window.update(cx, |composer, _, cx| {
-            composer.input.update(cx, |input, cx| {
-                input.set_prompt_suggestion(Some(zeron_proto::PromptSuggestion {
-                    id: "enter".into(), text: "Do not send yet".into(), after_entry_id: "a1".into(),
-                }), cx);
-            });
-            composer.on_submit(cx);
-            assert_eq!(composer.input.read(cx).text(), "");
-            assert!(composer.input.read(cx).prompt_suggestion.is_some());
-            assert!(!composer.sending);
-            assert!(composer.send_task.is_none());
-            assert!(composer.failure.is_none());
-        }).unwrap();
+        window
+            .update(cx, |composer, _, cx| {
+                composer.input.update(cx, |input, cx| {
+                    input.set_prompt_suggestion(
+                        Some(zeron_proto::PromptSuggestion {
+                            id: "enter".into(),
+                            text: "Do not send yet".into(),
+                            after_entry_id: "a1".into(),
+                        }),
+                        cx,
+                    );
+                });
+                composer.on_submit(cx);
+                assert_eq!(composer.input.read(cx).text(), "");
+                assert!(composer.input.read(cx).prompt_suggestion.is_some());
+                assert!(!composer.sending);
+                assert!(composer.send_task.is_none());
+                assert!(composer.failure.is_none());
+            })
+            .unwrap();
     }
 
     #[gpui::test]
@@ -14347,8 +14467,16 @@ mod tests {
         composer.update(cx, |composer, cx| {
             composer
                 .input
-                .update(cx, |input, cx| input.set_text("hello", cx));
+                .update(cx, |input, cx| input.set_text("", cx));
+            let quote = crate::chat_selection::ChatQuote::new(
+                "main".into(),
+                "Answer".into(),
+                "Selected context".into(),
+            )
+            .unwrap();
+            assert!(composer.add_quote(&quote, cx));
             composer.on_submit(cx);
+            assert!(composer.staged_selections().is_empty());
         });
         cx.run_until_parked();
         let sent: Vec<_> = drain().into_iter().filter(touches_side).collect();
@@ -14386,6 +14514,10 @@ mod tests {
             assert_eq!(request[field], create.params["config"][field], "{field}");
         }
         assert_eq!(request["cwd"], "/tmp/main");
+        assert_eq!(
+            request["prompt"],
+            "Quoted from Answer:\n\n> Selected context\n\n"
+        );
         assert_eq!(request["resume"], serde_json::Value::Null);
         assert!(!after.iter().any(|f| f.params["op"] == "createChat"));
         assert!(!side.read_with(cx, |state, _| state.side_chat_unsaved()));
@@ -14414,11 +14546,18 @@ mod tests {
     }
 
     #[gpui::test]
-    fn selection_quote_preserves_draft_and_is_one_undo_step(cx: &mut gpui::TestAppContext) {
-        with_composer_input(cx, |input, window, cx| {
+    fn selection_cards_preserve_draft_selection_and_clipboard(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        state.update(cx, |s, _| s.selected_chat = Some("chat".into()));
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
             let original = "Keep this draft and [file](zeron-file:README.md)";
-            input.set_text(original, cx);
-            input.selected_range = 0..4;
+            c.input.update(cx, |input, cx| {
+                input.set_text(original, cx);
+                input.selected_range = 0..4;
+                input.marked_range = Some(0..4);
+            });
             let quote = crate::chat_selection::ChatQuote::new(
                 "chat".into(),
                 "Answer".into(),
@@ -14426,22 +14565,78 @@ mod tests {
             )
             .unwrap();
             cx.write_to_clipboard(ClipboardItem::new_string("clipboard stays".into()));
-            assert!(input.append_quote(&quote, cx));
+            assert!(c.add_quote(&quote, cx));
+            assert_eq!(c.input.read(cx).text(), original);
+            assert_eq!(c.input.read(cx).selected_range, 0..4);
+            assert_eq!(c.input.read(cx).marked_range, Some(0..4));
             assert_eq!(
                 cx.read_from_clipboard().unwrap().text().as_deref(),
                 Some("clipboard stays")
             );
-            assert!(input.text().starts_with(original));
-            assert!(input.text().contains("> 第一行\n> second line"));
-            input.undo(&Undo, window, cx);
-            assert_eq!(input.text(), original);
-            assert_eq!(input.selected_range, 0..4);
-            input.marked_range = Some(0..4);
-            assert!(!input.append_quote(&quote, cx));
-            assert_eq!(input.text(), original);
-            input.marked_range = None;
-            input.read_only = true;
-            assert!(!input.append_quote(&quote, cx));
+            assert_eq!(c.staged_selections(), &[quote]);
+            c.remove_selection(0, cx);
+            assert!(c.staged_selections().is_empty());
+            assert_eq!(c.input.read(cx).text(), original);
+        });
+    }
+
+    #[gpui::test]
+    fn selection_only_drafts_survive_navigation_and_can_be_removed(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let composer = cx.new(|cx| Composer::new(state.clone(), cx));
+        state.update(cx, |s, _| s.selected_chat = Some("chat".into()));
+        let quote =
+            crate::chat_selection::ChatQuote::new("chat".into(), "Answer".into(), "context".into())
+                .unwrap();
+        composer.update(cx, |c, cx| {
+            assert!(c.add_quote(&quote, cx));
+            assert!(c.has_draft(cx));
+            assert_eq!(c.button_mode(cx), SendButtonMode::Send);
+            // A synchronous send guard must not consume context.
+            c.on_submit(cx);
+            assert_eq!(c.staged_selections(), &[quote.clone()]);
+            assert!(c.failure.is_some());
+        });
+        state.update(cx, |s, _| s.selected_chat = Some("other".into()));
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
+            assert!(!c.has_draft(cx));
+            assert!(c.staged_selections().is_empty());
+        });
+        state.update(cx, |s, _| s.selected_chat = Some("chat".into()));
+        composer.update(cx, |c, cx| {
+            c.on_state_changed(cx);
+            assert_eq!(c.staged_selections(), &[quote]);
+            c.remove_selection(0, cx);
+            assert!(!c.has_draft(cx));
+            assert!(!c.selections.contains_key("chat"));
+        });
+    }
+
+    #[gpui::test]
+    fn failed_send_restores_selections_without_losing_new_context(cx: &mut gpui::TestAppContext) {
+        let state = cx.new(|_| AppState::new());
+        let composer = cx.new(|cx| Composer::new(state, cx));
+        composer.update(cx, |c, cx| {
+            let quote = crate::chat_selection::ChatQuote::new(
+                "chat".into(),
+                "Answer".into(),
+                "original".into(),
+            )
+            .unwrap();
+            let mut fresh = quote.clone();
+            fresh.text = "fresh".into();
+            c.selections.insert("chat".into(), vec![fresh.clone()]);
+            c.restore_failed_selections(vec![quote.clone()], "chat", "chat");
+            assert_eq!(c.selections["chat"], vec![quote.clone(), fresh.clone()]);
+            // A failed new chat returns to the canvas, preserving new cards in both slots.
+            c.selections.insert("chat".into(), vec![fresh.clone()]);
+            c.selections.insert("".into(), vec![fresh.clone()]);
+            c.restore_failed_selections(vec![quote.clone()], "chat", "");
+            assert_eq!(c.staged_selections(), &[quote, fresh.clone(), fresh]);
+            assert!(!c.selections.contains_key("chat"));
+            c.purge_chat("", cx);
+            assert!(c.staged_selections().is_empty());
         });
     }
 
@@ -14453,9 +14648,18 @@ mod tests {
         composer.update(cx, |c, cx| {
             c.on_state_changed(cx);
             c.drafts.insert("chat".into(), "ordinary draft".into());
-            c.wizard = Some(Wizard::new("question".into(), vec![question("answer", &[], false)]));
-            c.input.update(cx, |input, cx| input.set_text("partial answer", cx));
-            let quote = crate::chat_selection::ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+            c.wizard = Some(Wizard::new(
+                "question".into(),
+                vec![question("answer", &[], false)],
+            ));
+            c.input
+                .update(cx, |input, cx| input.set_text("partial answer", cx));
+            let quote = crate::chat_selection::ChatQuote::new(
+                "chat".into(),
+                "Answer".into(),
+                "context".into(),
+            )
+            .unwrap();
             assert!(!c.add_quote(&quote, cx));
             assert_eq!(c.input.read(cx).text(), "partial answer");
             assert_eq!(c.drafts["chat"], "ordinary draft");
@@ -14463,7 +14667,8 @@ mod tests {
             c.wizard_dismiss(cx);
             assert_eq!(c.input.read(cx).text(), "ordinary draft");
             assert!(c.add_quote(&quote, cx));
-            assert!(c.input.read(cx).text().contains("> context"));
+            assert_eq!(c.input.read(cx).text(), "ordinary draft");
+            assert_eq!(c.staged_selections(), &[quote]);
         });
     }
 
@@ -14473,22 +14678,41 @@ mod tests {
         let composer = cx.new(|cx| Composer::new(state.clone(), cx));
         state.update(cx, |s, _| {
             s.selected_chat = Some("chat".into());
-            s.queue = vec![serde_json::from_value(serde_json::json!({
-                "id":"queued", "text":"queued message", "issuedBy":"device", "issuedAt":0
-            })).unwrap()];
+            s.queue = vec![
+                serde_json::from_value(serde_json::json!({
+                    "id":"queued", "text":"queued message", "issuedBy":"device", "issuedAt":0
+                }))
+                .unwrap(),
+            ];
         });
         composer.update(cx, |c, cx| {
             c.on_state_changed(cx);
+            let saved = crate::chat_selection::ChatQuote::new(
+                "chat".into(),
+                "Answer".into(),
+                "saved context".into(),
+            )
+            .unwrap();
+            assert!(c.add_quote(&saved, cx));
             c.editing_queued = Some("queued".into());
+            assert!(c.staged_selections().is_empty());
             c.queue_edit_draft = Some(("ordinary draft".into(), vec![], vec![]));
-            c.input.update(cx, |input, cx| input.set_text("edited queue text", cx));
-            let quote = crate::chat_selection::ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+            c.input
+                .update(cx, |input, cx| input.set_text("edited queue text", cx));
+            let quote = crate::chat_selection::ChatQuote::new(
+                "chat".into(),
+                "Answer".into(),
+                "context".into(),
+            )
+            .unwrap();
             assert!(!c.add_quote(&quote, cx));
             assert_eq!(c.input.read(cx).text(), "edited queue text");
             assert_eq!(c.editing_queued.as_deref(), Some("queued"));
             assert_eq!(c.queue_edit_draft.as_ref().unwrap().0, "ordinary draft");
             assert_eq!(state.read(cx).queue[0].text, "queued message");
             assert!(c.send_task.is_none());
+            c.editing_queued = None;
+            assert_eq!(c.staged_selections(), &[saved]);
         });
     }
 
@@ -17832,6 +18056,7 @@ mod appshot_rebase_tests {
 impl Composer {
     pub fn fixture_clear_appshots(&mut self, cx: &mut Context<Self>) {
         self.appshots.clear();
+        self.selections.clear();
         cx.notify();
     }
     /// A typed draft, as the input holds it.

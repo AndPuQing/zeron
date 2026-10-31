@@ -1999,7 +1999,8 @@ pub async fn merge_base(root: &Path, base_ref: &str) -> Result<String, EngineErr
 /// would misreport it as entirely new).
 ///
 /// The fresh snapshot is layered on the turn's store, so it only writes the
-/// files that changed since, and it is deleted again when this returns.
+/// files that changed since. It is released when this returns, and its store
+/// is deleted asynchronously on the blocking pool.
 pub async fn capture_turn_diff(
     repos: &Repos,
     root: &Path,

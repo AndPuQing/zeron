@@ -6315,10 +6315,9 @@ impl Shell {
         }
         let rows: Vec<_> = {
             let state = self.state.read(cx);
+            let statuses = state.display_statuses(rows.iter(), now);
             rows.into_iter()
-                .map(|chat| {
-                    self.sidebar_chat_data(state.display_status_for(&chat, now), chat, state)
-                })
+                .map(|chat| self.sidebar_chat_data(statuses[&chat.id], chat, state))
                 .collect()
         };
         let total = rows.len();

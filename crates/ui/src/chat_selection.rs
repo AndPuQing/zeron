@@ -64,6 +64,54 @@ impl ChatQuote {
     }
 }
 
+/// Fold staged context into the wire prompt only when sending. The composer
+/// keeps the user's own text independently so a failed send can restore it.
+pub(crate) fn with_selections(text: &str, selections: &[ChatQuote]) -> String {
+    if selections.is_empty() {
+        return text.to_owned();
+    }
+    // Native commands and selected skills dispatch from the prompt's beginning.
+    // Keep the user's prefix (including literal Markdown indentation) intact.
+    let mut prompt = text.to_owned();
+    if !text.is_empty() {
+        prompt.push_str("\n\n");
+    }
+    for quote in selections {
+        prompt.push_str(&quote.prompt());
+    }
+    prompt
+}
+
+pub(crate) struct SelectionPreview(pub ChatQuote);
+
+impl Render for SelectionPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx).for_popup();
+        let card = popover::popover_card(&theme)
+            .w(px(360.0))
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                gpui::div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_muted)
+                    .child(self.0.source.clone()),
+            )
+            .child(
+                gpui::div()
+                    .id("selection-preview-body")
+                    .max_h(px(280.0))
+                    .overflow_y_scroll()
+                    .text_size(px(12.0))
+                    .text_color(theme.text)
+                    .child(self.0.text.clone()),
+            );
+        crate::frost::frosted(popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSelectionAction {
     AddToChat,
@@ -280,6 +328,66 @@ mod tests {
         assert_eq!(events.borrow().len(), 1);
         assert_eq!(events.borrow()[0].quote, quote);
         assert_eq!(events.borrow()[0].action, ChatSelectionAction::AddToChat);
+    }
+
+    #[test]
+    fn staged_selections_fold_into_the_prompt_without_changing_user_text() {
+        let quote = ChatQuote::new(
+            "chat".into(),
+            "Answer\nsource".into(),
+            "第一行\nsecond line".into(),
+        )
+        .unwrap();
+        assert_eq!(with_selections("question", &[]), "question");
+        assert_eq!(with_selections("", &[quote.clone()]), quote.prompt());
+        assert_eq!(
+            with_selections("question", &[quote.clone(), quote.clone()]),
+            format!("question\n\n{}{}", quote.prompt(), quote.prompt())
+        );
+        assert!(
+            with_selections("question", &[quote])
+                .contains("Quoted from Answer source:\n\n> 第一行\n> second line")
+        );
+    }
+
+    #[test]
+    fn selection_cards_preserve_leading_commands_and_native_skills() {
+        use zeron_proto::{
+            HarnessId,
+            invocation::{
+                Invocation, SkillCommand, harness_prompt, invocation_prompt, leading_command,
+            },
+        };
+        let quote = ChatQuote::new("chat".into(), "Answer".into(), "context".into()).unwrap();
+        for typed in [
+            "/review inspect tests".to_owned(),
+            Invocation::Command {
+                name: "review".into(),
+            }
+            .link(),
+        ] {
+            let prompt = invocation_prompt(&with_selections(&typed, &[quote.clone()]));
+            assert_eq!(leading_command(&prompt).map(|(name, _)| name), Some("review"));
+        }
+        for harness in [HarnessId::ClaudeCode, HarnessId::Opencode] {
+            let skill = Invocation::Skill {
+                name: "review".into(),
+                path: "/workspace/SKILL.md".into(),
+                command: Some(SkillCommand {
+                    name: "review".into(),
+                    harness,
+                }),
+            };
+            let typed = format!("{} inspect tests", skill.link());
+            let prompt = harness_prompt(&with_selections(&typed, &[quote.clone()]), harness);
+            assert_eq!(leading_command(&prompt).map(|(name, _)| name), Some("review"));
+            assert!(prompt.starts_with("/review inspect tests\n\n"));
+            assert!(prompt.ends_with(&quote.prompt()));
+        }
+        // Literal Markdown must keep its indentation, not become a command.
+        let prompt = with_selections("    /review example", &[quote]);
+        assert!(prompt.starts_with("    /review example"));
+        assert!(leading_command(&prompt).is_none());
     }
 
     #[test]

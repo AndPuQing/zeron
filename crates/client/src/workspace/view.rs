@@ -452,6 +452,7 @@ fn hash_row(row: &SessionRow) -> u64 {
 }
 
 struct RowContext<'a> {
+    descendant_activity: HashMap<&'a str, zeron_proto::view::Indicator>,
     all_spaces: &'a [Space],
     spaces: HashMap<&'a str, &'a Space>,
     devices: HashMap<&'a str, &'a Device>,
@@ -465,7 +466,10 @@ fn build_row(chat: &Chat, rc: &RowContext<'_>, cx: &DeriveContext<'_>) -> Arc<Se
     let session = rc.sessions.get(chat.id.as_str()).copied();
     let send_state = cx.send_states.get(&chat.id).copied();
     let host_indicator = zeron_proto::view::native_display_status(chat, session, cx.now);
-    let indicator = display_status(chat, session, cx.now);
+    let indicator = zeron_proto::view::with_descendant_activity(
+        display_status(chat, session, cx.now),
+        rc.descendant_activity.get(chat.id.as_str()).copied(),
+    );
     let working_since_ms = match host_indicator {
         ChatIndicator::Working | ChatIndicator::AwaitingInput => session
             .and_then(|s| s.started_at)
@@ -577,6 +581,11 @@ pub(crate) fn derive(
         }
     }
     let rc = RowContext {
+        descendant_activity: zeron_proto::view::descendant_activity(
+            &state.chats,
+            &state.sessions,
+            cx.now,
+        ),
         all_spaces: &state.spaces,
         spaces: state.spaces.iter().map(|s| (s.id.as_str(), s)).collect(),
         devices: state.devices.iter().map(|d| (d.id.as_str(), d)).collect(),
@@ -845,6 +854,42 @@ impl Hash for DeviceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_rows_roll_up_side_activity_but_keep_native_controls_idle() {
+        let now = Utc::now();
+        let mut state: WorkspaceState = serde_json::from_value(serde_json::json!({
+            "devices":[], "spaces":[],
+            "chats":[
+                {"id":"main","deviceId":"remote","archived":false,"createdAt":now},
+                {"id":"side","parentChatId":"main","deviceId":"remote","archived":false,"createdAt":now}
+            ],
+            "sessions":[{"chatId":"side","deviceId":"remote","status":"working","updatedAt":now}]
+        })).unwrap();
+        let presence = HashMap::new();
+        let sends = HashMap::new();
+        let mut cx = DeriveContext {
+            self_device_id: "phone",
+            now,
+            presence: &presence,
+            change_requests: &[],
+            send_states: &sends,
+            synced: true,
+            previous: None,
+        };
+        let first = derive(&state, None, &cx);
+        let parent = &first.sessions["main"];
+        assert_eq!(parent.indicator, ChatIndicator::Working);
+        assert_eq!(parent.host_indicator, ChatIndicator::Idle);
+        assert_eq!(parent.working_since_ms, None);
+        cx.previous = Some(&first);
+        let unchanged = derive(&state, None, &cx);
+        assert!(Arc::ptr_eq(parent, &unchanged.sessions["main"]));
+        state.sessions[0].status = zeron_proto::SessionStatus::Idle;
+        let completed = derive(&state, None, &cx);
+        assert_eq!(completed.sessions["main"].indicator, ChatIndicator::Idle);
+        assert!(!Arc::ptr_eq(parent, &completed.sessions["main"]));
+    }
 
     #[test]
     fn time_labels() {

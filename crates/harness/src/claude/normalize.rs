@@ -6,6 +6,7 @@ use serde::Deserialize as _;
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
 
+use super::server_tools::ServerTools;
 use super::wire::{ContentBlock, Frame, MessageFrame, ResultFrame};
 
 /// Human-readable text for the CLI's assistant-level error codes. These arrive
@@ -304,36 +305,32 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 /// arrive only as full blocks on its tagged assistant frames — emit them, in
 /// block order with the tool calls, or subagent transcripts are
 /// tool-chips-only.
-fn subagent_message(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
-    let mut out: Vec<AgentEvent> = f
-        .message
-        .blocks()
-        .filter_map(|b: ContentBlock| match b.kind.as_str() {
-            "text" if !b.text.is_empty() => Some(tag(
-                parent,
-                AgentEvent::TextDelta {
-                    text: format!("{}\n\n", b.text.trim_end()),
-                },
-            )),
-            "thinking" if !b.thinking.trim().is_empty() => Some(tag(
-                parent,
-                AgentEvent::ReasoningDelta {
-                    text: format!("{}\n\n", b.thinking.trim_end()),
-                },
-            )),
-            "tool_use" => {
-                let call = decode_tool_use(&b.name, &b.input);
-                Some(tag(
-                    parent,
-                    AgentEvent::ToolCall {
-                        id: b.id.clone(),
-                        call,
-                    },
-                ))
-            }
+fn subagent_message(
+    parent: &str,
+    f: &MessageFrame,
+    server_tools: &mut ServerTools,
+) -> Vec<AgentEvent> {
+    let mut out = Vec::new();
+    for b in f.message.blocks() {
+        let event = match b.kind.as_str() {
+            "text" if !b.text.is_empty() => Some(AgentEvent::TextDelta {
+                text: format!("{}\n\n", b.text.trim_end()),
+            }),
+            "thinking" if !b.thinking.trim().is_empty() => Some(AgentEvent::ReasoningDelta {
+                text: format!("{}\n\n", b.thinking.trim_end()),
+            }),
+            "tool_use" => Some(AgentEvent::ToolCall {
+                id: b.id.clone(),
+                call: decode_tool_use(&b.name, &b.input),
+            }),
             _ => None,
-        })
-        .collect();
+        };
+        if let Some(event) = event {
+            out.push(tag(parent, event));
+        } else {
+            out.extend(server_tools.block(Some(parent), &b));
+        }
+    }
     if let Some(code) = &f.error {
         out.push(tag(
             parent,
@@ -344,7 +341,6 @@ fn subagent_message(parent: &str, f: &MessageFrame) -> Vec<AgentEvent> {
     }
     out
 }
-
 
 fn empty_tool_result(id: impl Into<String>, is_error: bool) -> AgentEvent {
     AgentEvent::ToolResult {
@@ -459,6 +455,7 @@ struct TypedFork {
 /// resume turns them into the done→Working→done wake.
 pub(crate) struct Normalizer {
     saw_init: bool,
+    server_tools: ServerTools,
     compactions: std::collections::HashMap<String, CompactionState>,
     last_model: Option<String>,
     /// Background-agent ids (`task_started.task_id`) → the spawning Agent
@@ -505,6 +502,7 @@ impl Normalizer {
     pub fn new() -> Self {
         Self {
             saw_init: false,
+            server_tools: ServerTools::default(),
             compactions: std::collections::HashMap::new(),
             last_model: None,
             agent_tasks: std::collections::HashMap::new(),
@@ -558,16 +556,14 @@ impl Normalizer {
         }
         pending
             .into_iter()
-            .map(
-                |(id, is_error, image_payloads)| AgentEvent::ToolResult {
-                    id,
-                    is_error,
-                    output: None,
-                    diff: None,
-                    preview_paths: Vec::new(),
-                    image_payloads,
-                },
-            )
+            .map(|(id, is_error, image_payloads)| AgentEvent::ToolResult {
+                id,
+                is_error,
+                output: None,
+                diff: None,
+                preview_paths: Vec::new(),
+                image_payloads,
+            })
             .collect()
     }
 
@@ -753,7 +749,8 @@ impl Normalizer {
             self.fork_transcripts = false;
         }
         let status = fork.status.unwrap_or(turn);
-        vec![
+        let mut events = self.server_tools.finish(Some(&fork.chip));
+        events.extend([
             tag(
                 &fork.chip,
                 AgentEvent::Done {
@@ -764,7 +761,8 @@ impl Normalizer {
                 },
             ),
             empty_tool_result(&fork.chip, status == DoneStatus::Errored),
-        ]
+        ]);
+        events
     }
 
     /// The typed fork whose transcript the driver reads off disk, as
@@ -810,7 +808,7 @@ impl Normalizer {
             return Vec::new();
         };
         let events = if assistant {
-            subagent_message(&chip, &f)
+            subagent_message(&chip, &f, &mut self.server_tools)
         } else {
             // Disk replay shows tool results only, the same as before. Image
             // bytes on those results are kept; a scale note is not a message.
@@ -843,6 +841,35 @@ impl Normalizer {
     /// Normalize one stdout frame into 0+ unified events. `interrupted` folds
     /// a post-interrupt `result` into `Done { status: Interrupted }`.
     pub fn normalize(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
+        let events = self.normalize_frame(frame, interrupted);
+        let mut out = Vec::new();
+        for event in events {
+            match &event {
+                AgentEvent::Done { .. } => out.extend(self.server_tools.finish(None)),
+                AgentEvent::Subagent {
+                    parent_tool_use_id,
+                    event,
+                } if matches!(event.as_ref(), AgentEvent::Done { .. }) => {
+                    out.extend(self.server_tools.finish(Some(parent_tool_use_id)));
+                }
+                _ => {}
+            }
+            out.push(event);
+        }
+        out
+    }
+
+    /// Driver-generated stops and process exits can end without a result frame.
+    pub(crate) fn settle_server_tools(&mut self) -> Vec<AgentEvent> {
+        self.server_tools.finish(None)
+    }
+
+    /// A root tool's input refresh must not reopen the driver's steering gate.
+    pub(crate) fn server_tool_completed(&self, id: &str) -> bool {
+        self.server_tools.completed(None, id)
+    }
+
+    fn normalize_frame(&mut self, frame: Frame, interrupted: bool) -> Vec<AgentEvent> {
         match frame {
             Frame::System(f) => {
                 if f.subtype == "status" || f.subtype == "compact_boundary" {
@@ -1108,6 +1135,19 @@ impl Normalizer {
             // `AgentEvent::Subagent` instead — the engine routes them to the
             // subagent's own doc.
             Frame::StreamEvent(f) => {
+                if f.event.kind == "content_block_start" {
+                    let parent = f
+                        .parent_tool_use_id
+                        .as_deref()
+                        .map(|p| self.route(p).to_owned());
+                    return f
+                        .event
+                        .content_block
+                        .as_ref()
+                        .map_or_else(Vec::new, |block| {
+                            self.server_tools.block(parent.as_deref(), block)
+                        });
+                }
                 // Streamed usage is the input-side measurement on gateways
                 // whose aggregated `assistant` frame reports all zeros
                 // (upstream issue #786) — and the frame can arrive BEFORE
@@ -1177,7 +1217,7 @@ impl Normalizer {
                     if self.fork_repeat(parent, f.uuid.as_deref()) {
                         return Vec::new();
                     }
-                    return subagent_message(parent, &f);
+                    return subagent_message(parent, &f, &mut self.server_tools);
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
                 // them; a task may finish before a `task_started` arrives. A
@@ -1200,8 +1240,10 @@ impl Normalizer {
                 let mut out: Vec<AgentEvent> = f
                     .message
                     .blocks()
-                    .filter(|b: &ContentBlock| b.kind == "tool_use")
                     .flat_map(|b| {
+                        if b.kind != "tool_use" {
+                            return self.server_tools.block(None, &b);
+                        }
                         let decoded = decode_tool_use(&b.name, &b.input);
                         let call = AgentEvent::ToolCall {
                             id: b.id.clone(),
@@ -1248,7 +1290,10 @@ impl Normalizer {
                                 ))
                             })
                             .flatten();
-                        std::iter::once(call).chain(opening).chain(steer)
+                        std::iter::once(call)
+                            .chain(opening)
+                            .chain(steer)
+                            .collect::<Vec<_>>()
                     })
                     .collect();
                 self.last_model = f.message.model.clone().or(self.last_model.take());
@@ -1659,6 +1704,86 @@ mod tests {
             decode_tool_use("Mystery", &json!({})),
             ToolCall::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn server_tools_are_live_and_deduplicated_in_parent_and_child_messages() {
+        for parent in [None, Some("spawn")] {
+            let mut n = Normalizer::new();
+            let start =
+                json!({"type":"server_tool_use","id":"advisor-call","name":"advisor","input":{}});
+            let end = json!({"type":"advisor_tool_result","tool_use_id":"advisor-call","content":{"type":"advisor_redacted_result","encrypted_content":"private"}});
+            let mut map = |frame: Value| {
+                n.normalize(
+                    super::super::wire::parse_frame(&frame.to_string()).unwrap(),
+                    false,
+                )
+            };
+            let streamed = map(
+                json!({"type":"stream_event","parent_tool_use_id":parent,"event":{"type":"content_block_start","content_block":start}}),
+            );
+            assert_eq!(streamed.len(), 1);
+            let call = if let AgentEvent::Subagent { event, .. } = &streamed[0] {
+                event.as_ref()
+            } else {
+                &streamed[0]
+            };
+            assert!(
+                matches!(call, AgentEvent::ToolCall { call: ToolCall::Unknown { name, .. }, .. } if name == "Advising")
+            );
+            let finished = map(
+                json!({"type":"stream_event","parent_tool_use_id":parent,"event":{"type":"content_block_start","content_block":end}}),
+            );
+            assert_eq!(finished.len(), 1);
+            assert!(
+                !serde_json::to_string(&finished)
+                    .unwrap()
+                    .contains("encrypted_content")
+            );
+            let repeated = map(
+                json!({"type":"assistant","parent_tool_use_id":parent,"message":{"content":[start,end]}}),
+            );
+            assert!(
+                repeated
+                    .iter()
+                    .all(|event| matches!(event, AgentEvent::AssistantMessageCompleted { .. }))
+            );
+        }
+    }
+
+    #[test]
+    fn unfinished_server_tools_settle_on_turn_end_without_settling_background_agents() {
+        let mut n = Normalizer::new();
+        for parent in [None, Some("child")] {
+            let frame = json!({"type":"stream_event","parent_tool_use_id":parent,"event":{"type":"content_block_start","content_block":{"type":"server_tool_use","id":"pending","name":"advisor","input":{}}}});
+            assert_eq!(
+                n.normalize(
+                    super::super::wire::parse_frame(&frame.to_string()).unwrap(),
+                    false
+                )
+                .len(),
+                1
+            );
+        }
+        let events = n.normalize(
+            super::super::wire::parse_frame(r#"{"type":"result","subtype":"success"}"#).unwrap(),
+            true,
+        );
+        assert!(events.iter().any(|event| matches!(event, AgentEvent::ToolResult { id, is_error: true, .. } if id == "pending")));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Subagent { .. }))
+        );
+        assert!(matches!(
+            events.last(),
+            Some(AgentEvent::Done {
+                status: DoneStatus::Interrupted,
+                ..
+            })
+        ));
+        assert!(n.settle_server_tools().is_empty());
+        assert_eq!(n.server_tools.finish(Some("child")).len(), 1);
     }
 
     fn normalize_one(raw: &str) -> Vec<AgentEvent> {
