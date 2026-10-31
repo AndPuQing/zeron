@@ -64,6 +64,47 @@ impl ChatQuote {
     }
 }
 
+/// Fold staged context into the wire prompt only when sending. The composer
+/// keeps the user's own text independently so a failed send can restore it.
+pub(crate) fn with_selections(text: &str, selections: &[ChatQuote]) -> String {
+    if selections.is_empty() {
+        return text.to_owned();
+    }
+    let mut prompt = selections.iter().map(ChatQuote::prompt).collect::<String>();
+    prompt.push_str(text);
+    prompt
+}
+
+pub(crate) struct SelectionPreview(pub ChatQuote);
+
+impl Render for SelectionPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::of(cx).for_popup();
+        let card = popover::popover_card(&theme)
+            .w(px(360.0))
+            .p(px(12.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(
+                gpui::div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_muted)
+                    .child(self.0.source.clone()),
+            )
+            .child(
+                gpui::div()
+                    .id("selection-preview-body")
+                    .max_h(px(280.0))
+                    .overflow_y_scroll()
+                    .text_size(px(12.0))
+                    .text_color(theme.text)
+                    .child(self.0.text.clone()),
+            );
+        crate::frost::frosted(popover::CARD_RADIUS, crate::frost::MENU_BLUR, card)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChatSelectionAction {
     AddToChat,
@@ -280,6 +321,26 @@ mod tests {
         assert_eq!(events.borrow().len(), 1);
         assert_eq!(events.borrow()[0].quote, quote);
         assert_eq!(events.borrow()[0].action, ChatSelectionAction::AddToChat);
+    }
+
+    #[test]
+    fn staged_selections_fold_into_the_prompt_without_changing_user_text() {
+        let quote = ChatQuote::new(
+            "chat".into(),
+            "Answer\nsource".into(),
+            "第一行\nsecond line".into(),
+        )
+        .unwrap();
+        assert_eq!(with_selections("question", &[]), "question");
+        assert_eq!(with_selections("", &[quote.clone()]), quote.prompt());
+        assert_eq!(
+            with_selections("question", &[quote.clone(), quote.clone()]),
+            format!("{}{}question", quote.prompt(), quote.prompt())
+        );
+        assert!(
+            with_selections("question", &[quote])
+                .contains("Quoted from Answer source:\n\n> 第一行\n> second line")
+        );
     }
 
     #[test]
