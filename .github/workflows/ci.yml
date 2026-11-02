@@ -238,11 +238,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - env:
-          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
           RESULTS: ${{ toJSON(needs) }}
         run: |
-          echo "$RESULTS" | python3 -c 'import json,sys; [print(k.ljust(13), v["result"]) for k, v in json.load(sys.stdin).items()]'
-          test "$FAILED" = false
+          # Hosted capacity failures can be reported as `abandoned`.
+          # Only successful or deliberately skipped dependencies may pass.
+          echo "$RESULTS" | python3 -c 'import json,sys; results=json.load(sys.stdin); [print(k.ljust(13), v["result"]) for k, v in results.items()]; sys.exit(not results or any(v["result"] not in ("success", "skipped") for v in results.values()))'
   coretext:
     needs:
       - plan
