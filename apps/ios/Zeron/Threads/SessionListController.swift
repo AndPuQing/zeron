@@ -482,6 +482,7 @@ class SessionsViewController: SessionListController {
         title = "Sessions"
         navigationItem.largeTitleDisplayMode = .always
         navigationItem.rightBarButtonItem = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: optionsMenu())
+        navigationItem.rightBarButtonItem?.accessibilityIdentifier = "sessions-menu"
     }
 
     /// iPhone: search lives in the bottom bar (the system's toolbar-integrated

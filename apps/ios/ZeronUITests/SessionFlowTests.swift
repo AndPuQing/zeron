@@ -67,7 +67,9 @@ final class SessionFlowTests: XCTestCase {
 
     private func openImport(_ app: XCUIApplication) {
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        let menu = app.buttons["sessions-menu"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5), "the Sessions menu is available in either navigation layout")
+        menu.tap()
         app.buttons["Import sessions…"].tap()
         XCTAssertTrue(app.navigationBars["Import sessions"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.cells.containing(.staticText, identifier: "Improve import navigation").firstMatch.waitForExistence(timeout: 10))
@@ -433,7 +435,9 @@ final class SessionFlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Sessions"].waitForExistence(timeout: 10))
         // Open the official entry first: the bottom bar's search on iPhone,
         // the sidebar's own field on iPad.
-        let toolbarSearch = app.buttons["bottom-search"].firstMatch
+        // The compact iPhone Duo rail exposes UIKit's Search button by its
+        // label, without the identifier set on the original toolbar item.
+        let toolbarSearch = app.buttons.matching(NSPredicate(format: "identifier == 'bottom-search' OR label == 'Search'")).firstMatch
         if toolbarSearch.waitForExistence(timeout: 5) {
             toolbarSearch.tap()
         }
@@ -467,7 +471,15 @@ final class SessionFlowTests: XCTestCase {
         let draft = "Keep this side-chat draft when I go back"
         input.typeText(draft)
         snapshot(app, "new-side-chat-draft")
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        // iPhone Duo moves Back out of the navigation bar into its side rail.
+        let railBack = app.buttons["BackButton"]
+        if railBack.waitForExistence(timeout: 1) {
+            railBack.tap()
+        } else {
+            let back = app.navigationBars.buttons.element(boundBy: 0)
+            XCTAssertTrue(back.waitForExistence(timeout: 5))
+            back.tap()
+        }
         let panel = openCompanions(app)
         let row = sideChatRow("New side chat", in: panel)
         reveal(row, in: panel)
