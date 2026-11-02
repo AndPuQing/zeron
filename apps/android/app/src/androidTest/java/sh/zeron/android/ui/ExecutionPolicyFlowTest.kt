@@ -2,9 +2,14 @@ package sh.zeron.android.ui
 
 import android.content.Intent
 import android.os.SystemClock
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
+import androidx.test.runner.lifecycle.Stage
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.UiObject2
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
 import org.junit.After
@@ -59,12 +64,28 @@ class ExecutionPolicyFlowTest {
         val label = model.row("chat-deploy")!!.modelLabel!!
         var lastBounds: android.graphics.Rect? = null
         var stableSince = SystemClock.uptimeMillis()
+        lateinit var modelChip: UiObject2
+        // The toolbar may be stationary before the IME starts opening. Wait
+        // for its resized position above the visible keyboard before tapping.
         await {
-            val bounds = device.findObject(By.text(label))?.visibleBounds ?: return@await false
+            var imeBottom = 0
+            instrumentation.runOnMainSync {
+                val activity = ActivityLifecycleMonitorRegistry.getInstance().getActivitiesInStage(Stage.RESUMED).single()
+                val insets = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                if (insets?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
+                    imeBottom = insets.getInsets(WindowInsetsCompat.Type.ime()).bottom
+                }
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 33) instrumentation.uiAutomation.clearCache()
+            val chip = device.findObject(By.text(label)) ?: return@await false
+            val bounds = chip.visibleBounds
             if (lastBounds != bounds) { lastBounds = bounds; stableSince = SystemClock.uptimeMillis() }
-            SystemClock.uptimeMillis() - stableSince > 500
+            if (imeBottom <= 0 || bounds.isEmpty || bounds.bottom >= device.displayHeight - imeBottom ||
+                SystemClock.uptimeMillis() - stableSince <= 500) return@await false
+            modelChip = chip
+            true
         }
-        text(label).click()
+        modelChip.click()
         requireNotNull(device.wait(Until.findObject(By.desc("Close")), 5_000)) {
             "Model settings sheet must survive the editor losing focus"
         }
