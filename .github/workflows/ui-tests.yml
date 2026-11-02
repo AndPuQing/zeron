@@ -3,6 +3,20 @@ name: Linux tests
 # Called by ci.yml, which decides which of these run and holds the runners for
 # them (scripts/ci/plan.py, scripts/ci/admit.py).
 on:
+  workflow_dispatch:
+    inputs:
+      core:
+        description: Run core regressions
+        type: boolean
+        default: true
+      ui:
+        description: Run UI regressions
+        type: boolean
+        default: true
+      browser:
+        description: Run native browser regressions
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       pass-key:

@@ -6,6 +6,7 @@ name: Native Codex voice
 # (scripts/ci/test-core.sh), the mobile voice and orb core in ios-core
 # (macos.yml), voice-media on Windows in windows.yml.
 on:
+  workflow_dispatch:
   workflow_call:
     inputs:
       pass-key:
@@ -24,7 +25,7 @@ jobs:
   # The WebRTC AEC3 audio stack (zeron-audio; its meson build is most of the
   # job) and the Python fixtures.
   offline-linux:
-    if: ${{ !contains(fromJSON(inputs.skip), 'offline-linux') }}
+    if: ${{ !contains(fromJSON(inputs.skip || '[]'), 'offline-linux') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -52,7 +53,7 @@ jobs:
   # The packaged Windows media runtime: download, project and initialize it
   # without audio devices or a provider.
   windows-runtime:
-    if: ${{ !contains(fromJSON(inputs.skip), 'windows-runtime') }}
+    if: ${{ !contains(fromJSON(inputs.skip || '[]'), 'windows-runtime') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
