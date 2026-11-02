@@ -40,8 +40,8 @@ conflicts.
 
 | Area | Change |
 | --- | --- |
-| CI branch wiring | `main` → `dev` in workflow triggers and cache conditions; test workflows cancel superseded PR/dev runs and keep manual diagnostics in a separate concurrency group |
-| Apple CI | native desktop checks, iOS UI checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU; frame-source, voice and TestFlight use `xcode-27`; PRs select native, CoreText, GPUI and iOS checks by their dependencies, while dev and default manual runs retain full coverage; manual `suite` and `macos_runner` inputs target one failed suite and an alternate pool |
+| CI branch wiring | `main` → `dev` in workflow triggers and cache conditions; unified `ci.yml` plans and admits reusable suites, reuses passes for matching inputs, and cancels superseded PR runs; dev is the trusted default branch for caches |
+| Apple CI | native desktop checks, iOS UI checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU; frame-source, voice and TestFlight use `xcode-27`; the unified planner selects native, CoreText, GPUI and iOS checks by their dependencies; CoreText fidelity, complete companion UI coverage and alternate-pool diagnostics remain enabled; manual `suite` and `macos_runner` inputs target one failed suite and an alternate pool |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22`; WorkOS user directory migration `v6` without upstream Cloud migration `v5` |
 | Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |

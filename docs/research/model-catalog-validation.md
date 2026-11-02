@@ -10,7 +10,7 @@ existing clients compatible. `ListModels.force` is optional and defaults to fals
 | --- | --- | --- |
 | 1. Binary selection | Fixed | `executable.rs` deduplicates canonical paths, compares semantic versions, caches by path/mtime/size, bounds probes to two seconds, and includes binary diagnostics. Tests cover newer candidates, replacement, ties, stderr, nonzero status, and termination. Shared by native/ACP resolvers. |
 | 2. Codex response hygiene | Fixed; hidden filtering, pagination and default ordering retained | `current_schema_and_legacy_visibility_are_compatible` and `model_page_skips_hidden_and_unknown_efforts`; old responses warn with binary identity; upgrade ids become description suffixes. |
-| 3. Last-good catalogs | Fixed | Shared `catalog.rs`; `tests/model_catalog.rs` exercises native/ACP retention, auth-context invalidation, and empty responses. Cursor uses the moved helper. Retries, overlap coalescing, force and cooldown are unit tested. |
+| 3. Last-good catalogs | Fixed | Shared `catalog.rs`; `tests/misc/model_catalog.rs` exercises native/ACP retention, auth-context invalidation, and empty responses. Cursor uses the moved helper. Retries, overlap coalescing, force and cooldown are unit tested. |
 | 4. Engine disk persistence | Fixed | Seven `model_catalogs` tests cover persistence, restart fallback, slow background refresh, credential races, corrupt files, revoked auth and missing binaries. Bare RPC shape retained; UI forwards force. |
 | 5. Claude settings | Fixed | `settings_models_keep_manifest_and_full_ladder` uses a temporary settings file; config root honors `CLAUDE_CONFIG_DIR`. |
 | 6. Picker resilience | Fixed | `refresh_failure_keeps_rows_and_catalog_change_reanchors_selection`; retained rows now accompany a refresh error strip and re-anchor after catalog replacement. |
@@ -18,7 +18,7 @@ existing clients compatible. `ListModels.force` is optional and defaults to fals
 
 | Round two item | Result | Evidence |
 | --- | --- | --- |
-| 1. Claude live discovery | Fixed | `tests/claude_models.rs` verifies one shared initialize process for models and commands, curated metadata, concrete ids, live defaults, effort mapping, and failure/logged-out fallback. Initialize cache unit tests cover coalescing, two-minute expiry and context changes. |
+| 1. Claude live discovery | Fixed | `tests/misc/claude_models.rs` verifies one shared initialize process for models and commands, curated metadata, concrete ids, live defaults, effort mapping, and failure/logged-out fallback. Initialize cache unit tests cover coalescing, two-minute expiry and context changes. |
 | 2. Typed failures | Fixed | `catalog_failure.rs` and shared-cache tests cover timeout, failed, missing executable and auth required. Only transient failures serve stale rows. Engine also retires unauthorized disk catalogs; Claude retains its curated fallback. |
 | 3. Empty catalogs | Fixed | Shared helper rejects empty catalogs; `codex_empty_catalogs_retire_children_and_next_request_spawns_fresh` verifies child retirement and recovery. Empty responses cannot replace successful catalogs. |
 | 4. Selected-only tier | Fixed | `saved_model_survives_a_fresh_catalog_without_becoming_a_new_choice` and `explicit_missing_model_does_not_resolve_to_the_catalog_default` preserve the saved id/chip and show a selected-only row. The fresh catalog is not modified. |

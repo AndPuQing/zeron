@@ -1,34 +1,6 @@
 name: Android
 
 on:
-  push:
-    branches: [dev]
-    paths:
-      - 'apps/android/**'
-      - 'apps/ios/Zeron/Assets.xcassets/**'
-      - 'apps/ios/Zeron/Fonts/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'scripts/android/**'
-      - 'scripts/package-android.sh'
-      - '.github/workflows/android.yml'
-      - '.github/workflows/release.yml'
-  pull_request:
-    branches: [dev]
-    paths:
-      - 'apps/android/**'
-      - 'apps/ios/Zeron/Assets.xcassets/**'
-      - 'apps/ios/Zeron/Fonts/**'
-      - 'crates/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'rust-toolchain.toml'
-      - 'scripts/android/**'
-      - 'scripts/package-android.sh'
-      - '.github/workflows/android.yml'
-      - '.github/workflows/release.yml'
   workflow_dispatch:
     inputs:
       release:
@@ -40,6 +12,9 @@ on:
       release:
         type: boolean
         default: false
+      pass-key:
+        type: string
+        default: ''
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: false
@@ -177,6 +152,12 @@ jobs:
           path: apps/android/app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore
 
+      - name: Record the pass (CI skips this job while its inputs stay the same)
+        if: inputs.pass-key != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rust-toolchain.toml
+          key: ${{ inputs.pass-key }}-build
   execution-ui:
     if: inputs.release != true
     needs: build
@@ -212,3 +193,9 @@ jobs:
           name: execution-android-screenshots
           path: ${{ runner.temp }}/execution-android/
           if-no-files-found: error
+      - name: Record the pass (CI skips this job while its inputs stay the same)
+        if: inputs.pass-key != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rust-toolchain.toml
+          key: ${{ inputs.pass-key }}-execution-ui

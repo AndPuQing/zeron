@@ -33,14 +33,14 @@ Fixtures in `crates/harness/tests/fixtures/codex/` use anonymized ids and short
 test content. They cover the 0.153.4 v1/v2 shapes, early output, distinct activity
 ids, completion-only messages, follow-ups, duplicate terminals and resume.
 
-`crates/engine/tests/codex_subagents.rs` runs the actual adapter against the fake
+`crates/engine/tests/misc/codex_subagents.rs` runs the actual adapter against the fake
 app-server, verifies two persisted documents for two children, checks parent
 content isolation and final card status, then restarts the engine and appends a
 resumed child's output to the original document.
 
 ```sh
 cargo test --locked -p zeron-harness -p zeron-doc -p zeron-proto
-cargo test --locked -p zeron-engine --lib --test e2e --test codex_subagents
+cargo test --locked -p zeron-engine --lib --test e2e --test misc
 ```
 
 ## Live validation
