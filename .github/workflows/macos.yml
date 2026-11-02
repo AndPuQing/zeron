@@ -40,6 +40,10 @@ on:
         type: choice
         default: all
         options: [all, native, ios]
+      fixtures:
+        description: Run the native browser and preview fixtures
+        type: boolean
+        default: true
       macos_runner:
         description: Apple Silicon runner pool (alternate pool for hosted capacity incidents)
         type: choice
@@ -233,7 +237,7 @@ jobs:
       # refreshes all three. Only crates/mobile defines the FFI, so this runs with the
       # simulator tests (see scripts/ci/plan.py).
       - name: Generated bindings are current
-        if: ${{ !contains(fromJSON(inputs.skip), 'ios-tests') }}
+        if: ${{ !contains(fromJSON(inputs.skip || '[]'), 'ios-tests') }}
         run: |
           cargo build --locked -p zeron-mobile --lib
           cargo build --locked -p zeron-mobile --bin uniffi-bindgen --features bindgen
