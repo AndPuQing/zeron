@@ -275,6 +275,40 @@ jobs:
           else
             printf '# Zerun %s\n\nDownload the package for your platform below.\n' "$VERSION" > release-notes.md
           fi
+      - name: Verify existing release assets before resuming publication
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          repository = os.environ['GITHUB_REPOSITORY']
+          result = subprocess.run(
+              ['gh', 'api', f'repos/{repository}/releases/tags/' + os.environ['RELEASE_TAG']],
+              capture_output=True, text=True,
+          )
+          if result.returncode:
+              if '(HTTP 404)' in result.stderr:
+                  print('No existing release assets to verify')
+                  raise SystemExit(0)
+              raise SystemExit('Could not inspect existing release assets')
+          files = {path.name: path for path in (pathlib.Path(os.environ['RUNNER_TEMP']) / 'zerun-release-assets').iterdir()}
+          files['manifest.json'] = pathlib.Path('manifest.json')
+          for asset in json.loads(result.stdout)['assets']:
+              path = files.get(asset['name'])
+              if path is None:
+                  continue
+              expected = 'sha256:' + hashlib.sha256(path.read_bytes()).hexdigest()
+              actual = asset.get('digest') or ''
+              if asset['state'] != 'uploaded':
+                  raise SystemExit('An existing release asset has not finished uploading: ' + asset['name'])
+              if not actual.startswith('sha256:'):
+                  content = subprocess.check_output([
+                      'gh', 'api', '-H', 'Accept: application/octet-stream',
+                      f'repos/{repository}/releases/assets/' + str(asset['id']),
+                  ])
+                  actual = 'sha256:' + hashlib.sha256(content).hexdigest()
+              if actual != expected:
+                  raise SystemExit('Existing release asset differs: ' + asset['name'] + '. Recover with the original build artifacts.')
+          print('Existing release assets match the build artifacts')
+          PY
       - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
