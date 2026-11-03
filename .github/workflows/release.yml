@@ -283,10 +283,20 @@ jobs:
             manifest.json
           body_path: release-notes.md
           generate_release_notes: false
-          overwrite_files: true
+          # Published assets may be immutable. A publication retry reuses
+          # the original build artifacts and keeps files already present.
+          overwrite_files: false
       - name: upload to R2 (edge.550w.host/releases/*)
         if: env.CLOUDFLARE_API_TOKEN != ''
         run: |
+          put() {
+            for attempt in 1 2 3 4 5; do
+              npx wrangler@4 r2 object put "zerun-releases/$1" --file "$2" --remote && return 0
+              echo "upload of $1 failed (attempt $attempt), retrying" >&2
+              if [ "$attempt" -lt 5 ]; then sleep $((attempt * 10)); fi
+            done
+            return 1
+          }
           if [[ "${{ inputs.publish_run_id != '' }}" == true ]]; then
             # Remove files uploaded by the interrupted publication before the
             # isolated artifact set is written again.
@@ -309,17 +319,14 @@ jobs:
             "zerun-$VERSION-android.apk"; do
             f="$RUNNER_TEMP/zerun-release-assets/$name"
             test -f "$f" || { echo "missing artifact: $name"; exit 1; }
-            npx wrangler@4 r2 object put "zerun-releases/$name" \
-              --file "$f" --remote
+            put "$name" "$f"
           done
           # manifest.json: version + per-artifact sha256 — the auto-updater
           # (crates/update) verifies downloads against it. Published before
           # latest.txt so no client ever sees a version without its checksums.
-          npx wrangler@4 r2 object put zerun-releases/manifest.json \
-            --file manifest.json --remote
+          put manifest.json manifest.json
           printf '%s' "$VERSION" > latest.txt
-          npx wrangler@4 r2 object put zerun-releases/latest.txt \
-            --file latest.txt --remote
+          put latest.txt latest.txt
       - name: prune old releases from R2
         if: env.CLOUDFLARE_API_TOKEN != ''
         # The release is already published: a failed delete is reported as a
