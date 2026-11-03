@@ -40,14 +40,32 @@ original harness. Existing source histories stay unchanged. See
 
 ## Headless (CLI)
 
-For servers and other machines without a display, such as a VPS that keeps agents running after you close your laptop. Linux only:
+For machines that run agents without a desktop window, such as a Linux VPS or an Apple Silicon Mac. The CLI uses the same engine as the desktop app:
 
 ```bash
 curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 
-The installer starts the engine as a background service that survives reboots.
+On Linux, the installer starts a systemd user service that survives reboots.
+On macOS, it installs a standalone signed CLI and starts a user LaunchAgent:
+the engine starts at login, runs with the screen locked, and stops at logout.
+An SSH-only Mac without a GUI login can run `zerun headless` directly, for
+example inside tmux; automatic startup before login is not included.
+Intel Mac binaries are not currently published.
+
+Already have the macOS desktop app? Its executable also supports headless mode:
+
+```bash
+/Applications/Zerun.app/Contents/MacOS/zerun headless
+```
+
+Use one engine per data directory and IPC port. An already-running desktop
+background engine can serve remote devices; do not start another engine for the
+same profile. The standalone CLI install uses `~/.zerun/app/current` for updates
+and does not replace `Zerun.app`. On macOS, export any `ZERON_*`/`ZERUN_*` overrides
+before `zerun daemon install`; the service captures its supported settings and
+PATH so installed coding-agent CLIs remain discoverable.
 
 ```bash
 zerun status      # local/synced mode and engine status

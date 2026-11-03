@@ -134,7 +134,7 @@ fn require_mac_app_update_platform() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `zerun-<ver>-<os>-<arch>.tar.gz` — the headless/CLI tarball (Linux CI builds).
+/// `zerun-<ver>-<os>-<arch>.tar.gz` — the headless/CLI tarball (Linux and macOS builds).
 pub fn headless_artifact(version: &str) -> String {
     let (os, arch) = platform_key();
     format!("zerun-{version}-{os}-{arch}.tar.gz")

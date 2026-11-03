@@ -3,15 +3,16 @@
 #
 #   curl -fsSL https://edge.550w.host/install.sh | sh
 #
-# Installs the native binary (requires the system ALSA runtime) to
-# ~/.zerun/app, puts `zerun` on PATH, adds a launcher entry and icon under
-# $XDG_DATA_HOME (default ~/.local/share), and runs it as a local-only
-# systemd user service that survives reboots. Signing in is optional and
-# enables sync after a restart. Re-running
-# upgrades in place; ~/.zerun state is preserved.
+# Installs the native binary (Linux requires the system ALSA runtime) to
+# ~/.zerun/app and puts `zerun` on PATH. Linux also gets a launcher entry
+# under $XDG_DATA_HOME (default ~/.local/share) and a systemd user service;
+# macOS gets a login LaunchAgent. Both start local-only. Signing in is optional
+# and enables sync after a restart. Re-running upgrades in place and preserves
+# ~/.zerun state.
 #
 # The binary ships with production endpoints baked in: no ZERON_EDGE_URL or
-# client-id configuration needed. Overrides (if any) go in ~/.zerun/env.
+# client-id configuration needed. Linux overrides go in ~/.zerun/env; on macOS
+# export overrides before running `zerun daemon install` to capture them.
 set -eu
 
 BASE="${ZERUN_BASE_URL:-https://edge.550w.host}"
@@ -21,21 +22,27 @@ os="$(uname -s)"
 arch="$(uname -m)"
 case "$os" in
   Linux) plat=linux ;;
-  Darwin)
-    echo "zerun install: on macOS, download the desktop app instead:" >&2
-    echo "  $BASE/releases/latest.txt → $BASE/releases/zerun-<version>-macos-arm64.dmg" >&2
-    exit 1
-    ;;
+  Darwin) plat=macos ;;
   *)
-    echo "zerun install: unsupported OS '$os' — only Linux for now." >&2
+    echo "zerun install: unsupported OS '$os' — supported platforms are Linux and macOS." >&2
     exit 1
     ;;
 esac
-case "$arch" in
-  x86_64 | amd64) arch=x86_64 ;;
-  aarch64 | arm64) arch=aarch64 ;;
+case "$plat:$arch" in
+  linux:x86_64 | linux:amd64) arch=x86_64 ;;
+  linux:aarch64 | linux:arm64) arch=aarch64 ;;
+  macos:arm64 | macos:aarch64) arch=arm64 ;;
+  macos:x86_64)
+    # A Rosetta shell reports x86_64 on an Apple Silicon machine.
+    if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
+      arch=arm64
+    else
+      echo "zerun install: macOS release binaries currently require Apple Silicon." >&2
+      exit 1
+    fi
+    ;;
   *)
-    echo "zerun install: unsupported architecture '$arch'." >&2
+    echo "zerun install: unsupported architecture '$arch' on $plat." >&2
     exit 1
     ;;
 esac
@@ -63,7 +70,11 @@ fi
 # desktop and headless modes share one binary, including CPAL's ALSA linkage.
 if ! "$dest/zerun" --version >/dev/null; then
   echo "zerun install: the downloaded executable could not start; see the loader error above." >&2
-  echo "Install the missing runtime libraries (including ALSA, libasound.so.2), then rerun this installer." >&2
+  if [ "$plat" = linux ]; then
+    echo "Install the missing runtime libraries (including ALSA, libasound.so.2), then rerun this installer." >&2
+  else
+    echo "Check the macOS version, architecture and executable signature, then rerun this installer." >&2
+  fi
   exit 1
 fi
 
@@ -134,15 +145,26 @@ install_desktop_entry() {
   return 0
 }
 # A missing desktop entry must never fail an otherwise good install.
-install_desktop_entry "$dest" "$app_root" \
-  || echo "warn: could not install the desktop entry — Zerun won't appear in application launchers"
+if [ "$plat" = linux ]; then
+  install_desktop_entry "$dest" "$app_root" \
+    || echo "warn: could not install the desktop entry — Zerun won't appear in application launchers"
+fi
 
 # --- service -----------------------------------------------------------------
 # The daemon is useful before auth: without a saved session it serves the local
 # profile. Login only changes which profile the next daemon start selects.
 
 service=manual
-if command -v systemctl >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
+if [ "$plat" = macos ]; then
+  if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+    "$app_root/current/zerun" daemon install
+    service=launchd
+  else
+    echo "note: no macOS GUI login session — the CLI is installed, but its LaunchAgent was not started."
+    echo "Log in at the Mac, then run: zerun daemon install"
+    echo "For an SSH-only session, run zerun headless directly (for example, inside tmux)."
+  fi
+elif command -v systemctl >/dev/null 2>&1 && [ -n "${XDG_RUNTIME_DIR:-}" ]; then
   mkdir -p "$HOME/.config/systemd/user"
   cat >"$HOME/.config/systemd/user/zerun.service" <<'UNIT'
 [Unit]
@@ -185,6 +207,14 @@ echo ""
 echo "✓ zerun $ver installed$path_hint"
 echo ""
 case "$service" in
+  launchd)
+    echo "the engine is running without a UI (local-only unless sync is enabled)."
+    echo "  zerun daemon status              check the service"
+    echo "  zerun daemon stop|start|restart   manage the service"
+    echo "  zerun update                     update the CLI and restart its service"
+    echo "The service starts at login and stops when you log out; locking the screen is fine."
+    echo "Optional sync: zerun daemon stop; zerun login; zerun daemon start"
+    ;;
   running)
     echo "the engine is running with the new version (local-only unless sync is enabled)."
     echo "  systemctl --user status zerun    check the service"

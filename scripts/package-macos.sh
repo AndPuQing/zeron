@@ -2,7 +2,8 @@
 # macOS packaging: build the release binaries for the host arch and produce
 #   target/package/zerun-<version>-macos-<arch>.dmg          (user download)
 #   target/package/zerun-<version>-macos-<arch>-app.tar.gz   (auto-updater)
-# containing Zerun.app (unsigned unless CODESIGN_IDENTITY is set).
+# containing Zerun.app (unsigned unless CODESIGN_IDENTITY is set), plus
+#   target/package/zerun-<version>-macos-<arch>.tar.gz       (headless CLI)
 #
 # Usage: scripts/package-macos.sh
 # Env:   CODESIGN_IDENTITY="Developer ID Application: …" to sign the bundle.
@@ -106,6 +107,11 @@ fi
 # The auto-updater artifact.
 tar -czf "$APP_TARBALL" -C "$OUT_DIR" Zerun.app
 echo "packaged: $APP_TARBALL"
+
+# Reuse the same executable and headless entry point; sign it independently
+# because the desktop bundle's signature cannot be used outside that bundle.
+scripts/package-macos-headless.sh "$ROOT/target/release/zerun" "$OUT_DIR" "$VERSION"
+
 
 # The dmg presents the classic drag-into-Applications layout over the
 # ascii-hands artwork (committed renders from scripts/dmg-background.py).

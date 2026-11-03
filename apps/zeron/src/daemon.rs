@@ -39,6 +39,7 @@ pub fn install(data_dir: &Path) -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolving the zerun executable path")?;
     let env = captured_env();
     if cfg!(target_os = "macos") {
+        require_launchd_login_session()?;
         let plist = launchd_plist_path()?;
         std::fs::create_dir_all(plist.parent().expect("LaunchAgents parent"))?;
         std::fs::create_dir_all(data_dir)?;
@@ -46,7 +47,11 @@ pub fn install(data_dir: &Path) -> anyhow::Result<()> {
         let _ = run_quiet("launchctl", &["bootout", &launchd_service_target()?]);
         std::fs::write(
             &plist,
-            render_launchd_plist(&exe, &env, &data_dir.join("daemon.log")),
+            render_launchd_plist(
+                &launchd_exec_path(&exe, std::env::var_os("HOME").map(PathBuf::from).as_deref()),
+                &env,
+                &data_dir.join("daemon.log"),
+            ),
         )?;
         run(
             "launchctl",
@@ -115,6 +120,7 @@ pub fn uninstall() -> anyhow::Result<()> {
 
 pub fn start() -> anyhow::Result<()> {
     if cfg!(target_os = "macos") {
+        require_launchd_login_session()?;
         let plist = launchd_plist_path()?;
         if !plist.exists() {
             bail!("not installed — run `zerun daemon install` first");
@@ -257,6 +263,32 @@ fn exec_path_for(exe: &Path, home: Option<&Path>) -> String {
     } else {
         format!("{}", exe.display())
     }
+}
+
+/// A managed CLI update swaps `current`; launchd must not keep starting the
+/// resolved old version after `zerun update` restarts the service.
+fn launchd_exec_path(exe: &Path, home: Option<&Path>) -> PathBuf {
+    if let Some(root) = home.map(|home| home.join(".zerun/app"))
+        && exe.starts_with(&root)
+    {
+        root.join("current/zerun")
+    } else {
+        exe.to_owned()
+    }
+}
+
+fn require_launchd_login_session() -> anyhow::Result<()> {
+    let domain = launchd_domain()?;
+    if !Command::new("launchctl")
+        .args(["print", &domain])
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        bail!(
+            "No macOS GUI login session ({domain}). Log in at the Mac, then run `zerun daemon install`. For an SSH-only session, run `zerun headless` directly, for example inside tmux."
+        );
+    }
+    Ok(())
 }
 
 fn render_launchd_plist(exe: &Path, env: &[(String, String)], log: &Path) -> String {
@@ -431,6 +463,28 @@ mod tests {
                 Some(Path::new("/home/u"))
             ),
             "/src/target/debug/zerun"
+        );
+    }
+
+    #[test]
+    fn launchd_uses_current_for_managed_cli_and_preserves_other_executables() {
+        let home = Path::new("/home/test user");
+        assert_eq!(
+            launchd_exec_path(&home.join(".zerun/app/0.3.0/zerun"), Some(home)),
+            home.join(".zerun/app/current/zerun"),
+        );
+        for path in [
+            "/Applications/Zerun.app/Contents/MacOS/zerun",
+            "/src/target/debug/zerun",
+        ] {
+            assert_eq!(
+                launchd_exec_path(Path::new(path), Some(home)),
+                Path::new(path)
+            );
+        }
+        assert_eq!(
+            launchd_exec_path(Path::new("/src/zerun"), None),
+            Path::new("/src/zerun")
         );
     }
 

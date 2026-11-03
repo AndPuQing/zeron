@@ -10,7 +10,8 @@
 #
 #   zerun-<ver>-linux-x86_64.tar.gz      install.sh + Linux updater
 #   zerun-<ver>-linux-aarch64.tar.gz     install.sh
-#   zerun-<ver>-macos-arm64-app.tar.gz   macOS updater
+#   zerun-<ver>-macos-arm64-app.tar.gz   macOS desktop updater
+#   zerun-<ver>-macos-arm64.tar.gz       macOS CLI installer + updater
 #   zerun-<ver>-windows-x86_64.exe       Windows in-place updater
 #   zerun-<ver>-android.apk              Android updater
 #
@@ -100,7 +101,7 @@ echo "repository: $repo"
 echo "keeping: $(printf '%s' "$kept" | jq -r 'join(", ")')"
 
 # The artifacts the release workflow uploads to R2.
-fetched='-(linux-x86_64|linux-aarch64)\.tar\.gz$|-macos-arm64-app\.tar\.gz$|-windows-x86_64\.exe$|-android\.apk$'
+fetched='-(linux-x86_64|linux-aarch64)\.tar\.gz$|-macos-arm64(-app)?\.tar\.gz$|-windows-x86_64\.exe$|-android\.apk$'
 
 if (( full )); then
   echo "sweeping: every older release"
