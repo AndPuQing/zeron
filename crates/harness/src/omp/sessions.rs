@@ -82,37 +82,17 @@ impl Store {
                 return Ok(file.canonicalize()?);
             }
         }
-        for root in self.roots() {
-            // OMP stores session files under per-project directories at depth 2.
-            // Symlinked directories are not followed, so an escaped link cannot
-            // make an unrelated file look like this session.
-            let mut dirs = vec![(root, 0)];
-            let mut seen = 0;
-            while let Some((dir, depth)) = dirs.pop() {
-                let Ok(entries) = std::fs::read_dir(dir) else {
-                    continue;
-                };
-                for entry in entries.flatten() {
-                    seen += 1;
-                    if seen > 20000 {
-                        return Err(HarnessError::Protocol(
-                            "OMP session search exceeded 20000 entries".into(),
-                        ));
-                    }
-                    let Ok(kind) = entry.file_type() else {
-                        continue;
-                    };
-                    let path = entry.path();
-                    if kind.is_dir() && depth < 2 {
-                        dirs.push((path, depth + 1));
-                    } else if kind.is_file()
-                        && path.extension().is_some_and(|e| e == "jsonl")
-                        && matches_id(&path, id)
-                    {
-                        return Ok(path.canonicalize()?);
-                    }
-                }
+        let mut found = None;
+        super::discovery::visit_files(&self.roots(), |path| {
+            if matches_id(&path, id) {
+                found = Some(path);
+                Ok(true)
+            } else {
+                Ok(false)
             }
+        })?;
+        if let Some(path) = found {
+            return Ok(path);
         }
         Err(HarnessError::Protocol(format!(
             "native OMP session file for {id} was not found"

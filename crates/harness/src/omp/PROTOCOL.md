@@ -75,3 +75,12 @@ OMP index, import and resume paths changed here; Pi's own driver is unchanged.
 Sources inspected: `@oh-my-pi/pi-coding-agent@18.11.3` (`src/modes/rpc/*`,
 `src/session/session-entries.ts`) and a live `omp/mode rpc` probe on
 2026-10-18 capturing the handshake, catalog and a real prompt turn.
+
+Native file discovery and resume fallback share a bounded-depth directory walk.
+Session artifacts live beside `<session>.jsonl` in `<session>/`; those directories
+contain tool output and child logs, not independent sessions, and are skipped.
+Unrelated files do not consume a global discovery quota. Large stores keep the
+existing newest-first, 50-file pagination without a 20,000-entry failure or silent
+truncation. Configured roots are canonicalized and deduplicated; child symlinks
+are not followed. Runtime-indexed session paths still require OMP identity checks,
+and transcript read/import size limits remain in effect.

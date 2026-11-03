@@ -3,6 +3,7 @@
 //! is a distinct product with its own store (`~/.omp`), session format and
 //! framing, so this driver never reuses Pi's discovery or session index.
 mod catalog;
+mod discovery;
 mod normalize;
 mod rpc;
 mod saved;
