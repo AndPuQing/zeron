@@ -131,8 +131,10 @@ the JNA/UniFFI native interfaces are preserved for reflection.
 The script runs unit tests, builds Release with the configuration cache disabled
 so signing credentials are not serialized into it, verifies the certificate
 against the pinned identity, checks 16 KiB ZIP alignment and requires the native core
-for arm64-v8a, rejecting libraries for other architectures. The outputs are
-`target/package/zerun-<version>-android.apk` and its `.apk.sha256` checksum.
+for arm64-v8a, rejecting libraries for other architectures. It also builds the
+Play App Bundle, verifies its JAR signature and checks its signing certificate
+against the same pinned identity. The outputs are
+`target/package/zerun-<version>-android.apk` and `.aab`, each with a SHA256 checksum.
 Direct Gradle release builds should also pass `--no-configuration-cache`.
 
 ## CI and publication
@@ -152,7 +154,31 @@ Signed builds use these repository Actions Secrets:
 
 Run the `Android` workflow manually on `dev` with `release=true` to test the
 signed pipeline without publishing a release. Its `android-release` artifact
-contains the APK and checksum. The temporary keystore is removed after the build.
+contains the APK, App Bundle and checksums. The temporary keystore is removed
+after the build.
+
+### Google Play testing
+
+Play uploads are optional and disabled by default. Create a Play Console app
+for `work.puqing.zerun.android`, complete its required listings and policy
+declarations, and upload the first signed App Bundle in the Console. Configure
+Play App Signing so the app signing certificate matches the pinned production
+certificate if Play installations must remain compatible with direct APK updates.
+Grant a service account access to this app's testing releases, enable the
+Google Play Android Developer API, and store its JSON key in the repository
+secret `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON`.
+
+Then manually run the `Android` workflow on `dev` with `release=true` and
+`upload_play=true`. Choose `play_track=internal` or `beta`, and
+`play_status=draft` to save a release for review in the Console or `completed`
+to roll it out to testers. The defaults are `internal` and `draft`; production
+tracks and automatic uploads on pushes are not supported. The upload job checks
+the bundle checksum before sending it. This does not publish a GitHub release
+or update the direct APK download feed.
+
+Play requires a new version code for every uploaded bundle. Bump the workspace
+version before uploading another bundle; rerunning the same version is only
+useful for builds that have not already been uploaded.
 
 The existing `release` workflow calls the same signed build and requires it
 to succeed before publication. On a `v<version>` tag matching `Cargo.toml`,

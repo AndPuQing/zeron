@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, verify and package the signed ARM64 Android APK.
+# Build, verify and package the signed ARM64 Android APK and App Bundle.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +34,7 @@ keystore_cert="$(keytool -exportcert -keystore "$ZERUN_ANDROID_KEYSTORE" \
 # Release is ARM64-only, even when a developer's debug build uses both ABIs.
 export ZERON_ANDROID_ABIS=arm64-v8a
 "$ROOT/apps/android/gradlew" -p "$ROOT/apps/android" \
-  :app:testDebugUnitTest :app:assembleRelease \
+  :app:testDebugUnitTest :app:assembleRelease :app:bundleRelease \
   --no-daemon --no-configuration-cache --console=plain "$@"
 
 APK="$ROOT/apps/android/app/build/outputs/apk/release/app-release.apk"
@@ -57,7 +57,21 @@ PY
 
 OUT="$ROOT/target/package"
 NAME="zerun-$VERSION-android.apk"
+BUNDLE_NAME="zerun-$VERSION-android.aab"
+AAB="$ROOT/apps/android/app/build/outputs/bundle/release/app-release.aab"
+bundle_signature="$(LC_ALL=C jarsigner -verify "$AAB")"
+printf '%s\n' "$bundle_signature"
+grep -q 'jar verified' <<<"$bundle_signature" \
+  || { echo "App Bundle signature verification failed." >&2; exit 3; }
+bundle_certificate="$(LC_ALL=C keytool -printcert -jarfile "$AAB")"
+bundle_signer="$(sed -n 's/^[[:space:]]*SHA256: //p' <<<"$bundle_certificate" | tr -d ':' | tr '[:upper:]' '[:lower:]')"
+[[ "$bundle_signer" == "$expected" ]] \
+  || { echo "App Bundle signer does not match the production key." >&2; exit 3; }
+
 mkdir -p "$OUT"
 install -m 644 "$APK" "$OUT/$NAME"
+install -m 644 "$AAB" "$OUT/$BUNDLE_NAME"
 (cd "$OUT" && sha256sum "$NAME" > "$NAME.sha256")
+(cd "$OUT" && sha256sum "$BUNDLE_NAME" > "$BUNDLE_NAME.sha256")
 echo "packaged: $OUT/$NAME"
+echo "packaged: $OUT/$BUNDLE_NAME"

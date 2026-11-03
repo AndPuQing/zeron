@@ -4,9 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Build a signed release APK (dev branch only)
+        description: Build a signed release APK and App Bundle (dev branch only)
         type: boolean
         default: false
+      upload_play:
+        description: Upload the signed App Bundle to Google Play testing (requires release=true, dev only)
+        type: boolean
+        default: false
+      play_track:
+        description: Google Play testing track
+        type: choice
+        options: [internal, beta]
+        default: internal
+      play_status:
+        description: Save a draft or roll out to testers
+        type: choice
+        options: [draft, completed]
+        default: draft
   workflow_call:
     inputs:
       release:
@@ -23,6 +37,8 @@ on:
       ANDROID_KEY_ALIAS:
         required: false
       ANDROID_KEY_PASSWORD:
+        required: false
+      GOOGLE_PLAY_SERVICE_ACCOUNT_JSON:
         required: false
 
 permissions:
@@ -41,6 +57,14 @@ jobs:
       ZERON_ANDROID_ABIS: ${{ inputs.release == true && 'arm64-v8a' || 'arm64-v8a x86_64' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Validate Play upload request
+        if: inputs.upload_play == true
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: |
+          [[ "$RELEASE" == true && "$GITHUB_REF" == refs/heads/dev && "$GITHUB_EVENT_NAME" == workflow_dispatch ]] \
+            || { echo 'Play uploads require a manual dev build with release=true.' >&2; exit 2; }
 
       - name: Prepare release signing
         if: inputs.release == true
@@ -108,7 +132,7 @@ jobs:
         working-directory: apps/android
         run: ./gradlew :app:testDebugUnitTest :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain
 
-      - name: Test, sign and verify release APK
+      - name: Test, sign and verify release APK and App Bundle
         if: inputs.release == true
         env:
           ZERUN_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -136,13 +160,24 @@ jobs:
           path: apps/android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
           if-no-files-found: error
 
-      - name: Upload release APK and checksum
+      - name: Upload release APK, App Bundle and checksums
         if: inputs.release == true
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: android-release
-          path: target/package/zerun-*-android.apk*
+          path: |
+            target/package/zerun-*-android.apk*
+            target/package/zerun-*-android.aab*
           if-no-files-found: error
+
+      - name: Upload Play App Bundle and checksum
+        if: inputs.upload_play == true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-aab
+          path: target/package/zerun-*-android.aab*
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Upload failing unit test reports
         if: failure()
@@ -158,6 +193,46 @@ jobs:
         with:
           path: rust-toolchain.toml
           key: ${{ inputs.pass-key }}-build
+
+  play:
+    name: Upload to Google Play testing
+    needs: build
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' &&
+      inputs.release == true && inputs.upload_play == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: android-google-play
+      cancel-in-progress: false
+    env:
+      PLAY_TRACK: ${{ inputs.play_track }}
+      PLAY_STATUS: ${{ inputs.play_status }}
+    steps:
+      - name: Check Play configuration
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+        run: |
+          [[ -n "$PLAY_SERVICE_ACCOUNT_JSON" ]] \
+            || { echo 'Set GOOGLE_PLAY_SERVICE_ACCOUNT_JSON in repository secrets.' >&2; exit 2; }
+          case "$PLAY_TRACK" in internal|beta) ;; *) echo 'Only testing tracks are supported.' >&2; exit 2;; esac
+          case "$PLAY_STATUS" in draft|completed) ;; *) echo 'Use draft or completed for the release status.' >&2; exit 2;; esac
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: android-aab
+          path: out/android
+      - name: Verify bundle checksum
+        working-directory: out/android
+        run: sha256sum -c ./*.aab.sha256
+      - name: Upload signed bundle
+        uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: work.puqing.zerun.android
+          releaseFiles: out/android/*.aab
+          tracks: ${{ env.PLAY_TRACK }}
+          status: ${{ env.PLAY_STATUS }}
+
   execution-ui:
     if: inputs.release != true
     needs: build
