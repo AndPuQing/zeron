@@ -531,13 +531,15 @@ async fn a_watched_checkout_says_when_it_moves_and_never_for_its_own_reads() {
     }
 
     // A commit made elsewhere (an agent's git): HEAD, the index and the
-    // branch moved: said.
+    // branch moved: said. Those writes can span several debounce periods
+    // on a busy host; each notification must name this checkout.
     git(&repo, &["add", "-A"]);
     let said = changed_within(&mut channel, Duration::from_millis(1500)).await;
     assert_eq!(said.len(), 1, "staging: {said:?}");
     git(&repo, &["commit", "-q", "-m", "Second"]);
     let said = changed_within(&mut channel, Duration::from_millis(1500)).await;
-    assert_eq!(said.len(), 1, "a commit: {said:?}");
+    assert!(!said.is_empty(), "a commit was not reported");
+    assert!(said.iter().all(|cwds| cwds == &json!([here])), "a commit: {said:?}");
     // And asked again after it: still nothing of its own.
     f.ok("status", json!({ "cwd": here, "watch": true })).await;
     f.ok("changes", json!({ "cwd": here, "scope": "working" })).await;
@@ -575,8 +577,10 @@ async fn a_linked_worktree_is_told_of_its_own_branch_and_index() {
     git(&repo, &["add", "c.txt"]);
     let said = changed_within(&mut channel, Duration::from_millis(1500)).await;
     assert!(said.is_empty(), "another worktree's index: {said:?}");
-    // Its branch moved by a commit made in it: said.
+    // Its branch moved by a commit made in it: said, possibly in separate
+    // bursts for the index and refs, all for this linked checkout.
     git(&linked, &["commit", "-q", "-m", "Side"]);
     let said = changed_within(&mut channel, Duration::from_millis(1500)).await;
-    assert_eq!(said.len(), 1, "{said:?}");
+    assert!(!said.is_empty(), "a linked commit was not reported");
+    assert!(said.iter().all(|cwds| cwds == &json!([here])), "{said:?}");
 }
