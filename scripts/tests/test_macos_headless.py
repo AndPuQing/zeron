@@ -42,7 +42,7 @@ class HeadlessInstall(unittest.TestCase):
     def release(self, version, broken=False):
         name = f"zerun-{version}-macos-arm64"
         package = self.root / name
-        package.mkdir()
+        package.mkdir(exist_ok=True)
         binary = package / "zerun"
         body = 'exit 1' if broken else f'''case "$*" in
 --version) echo "zerun {version}";;
@@ -103,6 +103,25 @@ esac'''
         self.assertNotIn("ALSA", result.stderr)
         self.assertEqual((self.home / ".zerun/app/current").resolve().name, "9.9.9")
         self.assertEqual((self.home / "daemon-installs").read_text(), previous)
+        self.assertEqual(sorted(p.name for p in (self.home / ".zerun/app").iterdir()),
+                         ["9.9.9", "current"])
+        # A fixed release replaces nothing that was left behind and installs cleanly.
+        self.release("9.9.10")
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.home / ".zerun/app/current").resolve().name, "9.9.10")
+
+    def test_existing_version_dir_that_fails_its_check_is_downloaded_again(self):
+        broken = self.home / ".zerun/app/9.9.9"
+        broken.mkdir(parents=True)
+        (broken / "zerun").write_text("#!/bin/sh\nexit 1\n")
+        (broken / "zerun").chmod(0o755)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("failed its check", result.stdout)
+        self.assertEqual(subprocess.check_output([str(broken / "zerun"), "--version"], text=True).strip(),
+                         "zerun 9.9.9")
+        self.assertEqual(sorted(p.name for p in broken.parent.iterdir()), ["9.9.9", "current"])
 
     @unittest.skipUnless(shutil.which("jq"), "jq required for R2 prune plan")
     def test_prune_keeps_current_cli_and_removes_old_cli_artifacts(self):

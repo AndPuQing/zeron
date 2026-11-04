@@ -55,27 +55,43 @@ data_root="$HOME/.zerun"
 app_root="$data_root/app"
 dest="$app_root/$ver"
 
-if [ -x "$dest/zerun" ]; then
-  echo "zerun $ver already downloaded — relinking."
-else
-  tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
-  echo "downloading zerun $ver ($plat-$arch)…"
-  curl -fSL --progress-bar "$BASE/releases/$file" -o "$tmp/$file"
-  mkdir -p "$dest"
-  tar -xzf "$tmp/$file" -C "$dest" --strip-components=1
-fi
-
 # Probe before changing a working installation or starting its service. The
 # desktop and headless modes share one binary, including CPAL's ALSA linkage.
-if ! "$dest/zerun" --version >/dev/null; then
-  echo "zerun install: the downloaded executable could not start; see the loader error above." >&2
-  if [ "$plat" = linux ]; then
-    echo "Install the missing runtime libraries (including ALSA, libasound.so.2), then rerun this installer." >&2
-  else
-    echo "Check the macOS version, architecture and executable signature, then rerun this installer." >&2
+verify_release() {
+  if ! "$1/zerun" --version >/dev/null; then
+    echo "zerun install: the downloaded executable could not start; see the loader error above." >&2
+    if [ "$plat" = linux ]; then
+      echo "Install the missing runtime libraries (including ALSA, libasound.so.2), then rerun this installer." >&2
+    else
+      echo "Check the macOS version, architecture and executable signature, then rerun this installer." >&2
+    fi
+    return 1
   fi
-  exit 1
+}
+
+# A version directory only ever holds a release that passed verify_release:
+# the download is unpacked and checked beside it, then renamed into place.
+# (BSD rm rejects an empty operand, so only name directories that exist.)
+stage=""
+cleanup() {
+  [ -z "${tmp:-}" ] || rm -rf "$tmp"
+  [ -z "$stage" ] || rm -rf "$stage"
+}
+trap cleanup EXIT
+if [ -x "$dest/zerun" ] && verify_release "$dest" >/dev/null 2>&1; then
+  echo "zerun $ver already downloaded — relinking."
+else
+  [ ! -e "$dest" ] || echo "zerun $ver: the existing copy failed its check — downloading it again."
+  tmp="$(mktemp -d)"
+  echo "downloading zerun $ver ($plat-$arch)…"
+  curl -fSL --progress-bar "$BASE/releases/$file" -o "$tmp/$file"
+  mkdir -p "$app_root"
+  stage="$(mktemp -d "$app_root/.stage-$ver.XXXXXX")"
+  tar -xzf "$tmp/$file" -C "$stage" --strip-components=1
+  verify_release "$stage" || exit 1
+  rm -rf "$dest"
+  mv "$stage" "$dest"
+  stage=""
 fi
 
 ln -sfn "$dest" "$app_root/current"

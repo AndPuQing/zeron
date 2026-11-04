@@ -793,7 +793,8 @@ async fn verify_staged_binary(binary: &Path, version: &str) -> anyhow::Result<()
 // ---------------------------------------------------------------------------
 
 /// Download + unpack the headless tarball into `app_root/<ver>` (idempotent —
-/// an already-staged version is reused). Returns the versioned dir.
+/// an already-staged version is reused once it passes the same check as a
+/// fresh one). Returns the versioned dir.
 pub async fn stage_headless(
     edge_url: &str,
     manifest: &Manifest,
@@ -817,7 +818,20 @@ async fn stage_headless_with_progress(
     );
     let dest = app_root.join(version);
     if dest.join("zerun").exists() {
-        return Ok(dest);
+        // An interrupted or older installer may have left a copy that cannot
+        // run; never hand that to `apply_headless`.
+        match verify_staged_binary(&dest.join("zerun"), version).await {
+            Ok(()) => return Ok(dest),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    dir = %dest.display(),
+                    "staged version failed verification; staging it again"
+                );
+                std::fs::remove_dir_all(&dest)
+                    .with_context(|| format!("removing {}", dest.display()))?;
+            }
+        }
     }
     let file = headless_artifact(version);
     let stage = app_root.join(format!(".stage-{version}-{}", std::process::id()));
@@ -846,8 +860,13 @@ async fn stage_headless_with_progress(
         verify_staged_binary(&unpacked.join("zerun"), version).await?;
         match std::fs::rename(&unpacked, &dest) {
             Ok(()) => {}
-            // Lost a race with another stager — the staged copy is equivalent.
-            Err(_) if dest.join("zerun").exists() => {}
+            // Lost a race with another stager — the staged copy is equivalent
+            // once it passes the same check.
+            Err(_)
+                if dest.join("zerun").exists()
+                    && verify_staged_binary(&dest.join("zerun"), version)
+                        .await
+                        .is_ok() => {}
             Err(err) => {
                 return Err(err).with_context(|| format!("moving {} into place", dest.display()));
             }
@@ -2448,5 +2467,46 @@ mod tests {
         server.abort();
         assert_eq!(staged, app_root.join("9.9.9"));
         assert!(staged.join("zerun").is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn headless_staging_replaces_an_existing_copy_that_fails_verification() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("app");
+        let broken = app_root.join("9.9.9");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("zerun"), "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(broken.join("zerun"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(broken.join("leftover"), "").unwrap();
+
+        let right = fake_headless_tarball(&tmp.path().join("right"), "9.9.9");
+        let manifest = Manifest {
+            version: "9.9.9".into(),
+            files: [(
+                headless_artifact("9.9.9"),
+                FileMeta {
+                    sha256: Some(format!("{:x}", Sha256::digest(&right))),
+                },
+            )]
+            .into(),
+        };
+        let (base, server) = serve_forever(right).await;
+        let staged = stage_headless(&base, &manifest, &app_root).await.unwrap();
+        server.abort();
+        assert_eq!(staged, broken);
+        verify_staged_binary(&staged.join("zerun"), "9.9.9")
+            .await
+            .unwrap();
+        assert!(!staged.join("leftover").exists());
+        assert_eq!(std::fs::read_dir(&app_root).unwrap().count(), 1);
+
+        // A verified copy is reused without another download.
+        let staged = stage_headless("http://127.0.0.1:1", &manifest, &app_root)
+            .await
+            .unwrap();
+        assert_eq!(staged, broken);
     }
 }
