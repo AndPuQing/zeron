@@ -18,7 +18,7 @@ for (const base of [request.packages, join(request.home, 'profiles', request.pro
   const candidate = createRequire(base);
   try { candidate.resolve('@deepseek-ai/dsh-session-persistence-jsonl'); require = candidate; break; } catch {}
 }
-if (!require) throw new Error('Install the dsh profile packages before importing saved sessions.');
+if (!require) throw new Error('Could not find dsh session packages. Check the selected dsh installation and profile.');
 const load = async name => import(pathToFileURL(require.resolve(name)).href);
 const [{ Context }, persistenceModule, { Session }, { buildForkSeed }, projections] = await Promise.all([
   load('@deepseek-ai/cordis'), load('@deepseek-ai/dsh-session-persistence-jsonl'),
@@ -52,6 +52,7 @@ if (typeof persistenceModule.default === 'function') {
   await ctx.plugin(persistenceModule, persistenceConfig).await();
   persistence = ctx.get('sessionPersistence');
 }
+if (!persistence) throw new Error('The installed dsh package did not provide sessionPersistence.');
 const restored = (handle, events) => Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, 'shared-frozen', projections.currentSessionMessageProjections);
 const text = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(p => p.text ?? '').filter(Boolean).join('\n') : '';
 function running(events) {

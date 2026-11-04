@@ -113,12 +113,58 @@ impl AcpHarness {
 /// install's `dsh` runs from; its dependencies hold the persistence packages.
 fn npm_package_manifest(dsh: &Path) -> Option<PathBuf> {
     let entry = dsh.canonicalize().ok()?;
-    entry.ancestors().skip(1).take(4).find_map(|dir| {
-        let manifest = dir.join("package.json");
-        let text = std::fs::read_to_string(&manifest).ok()?;
-        let name = serde_json::from_str::<serde_json::Value>(&text).ok()?["name"].clone();
-        (name == "@deepseek-ai/dsh").then_some(manifest)
+    let mut candidates: Vec<_> = entry
+        .ancestors()
+        .skip(1)
+        .take(4)
+        .map(|dir| dir.join("package.json"))
+        .collect();
+    // npm's Windows .cmd/.ps1 launchers are files, not symlinks into the
+    // package. Resolve their conventional adjacent node_modules directory.
+    if entry
+        .file_name()
+        .and_then(|s| s.to_str())
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("dsh.cmd") || name.eq_ignore_ascii_case("dsh.ps1")
+        })
+    {
+        candidates.push(
+            entry
+                .parent()?
+                .join("node_modules/@deepseek-ai/dsh/package.json"),
+        );
+    }
+    candidates.into_iter().find(|manifest| {
+        std::fs::read_to_string(manifest)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|package| package["name"] == "@deepseek-ai/dsh")
     })
+}
+
+#[cfg(test)]
+mod npm_shim_tests {
+    use super::*;
+
+    #[test]
+    fn npm_command_shims_resolve_the_adjacent_provider_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let package = root.join("node_modules/@deepseek-ai/dsh/package.json");
+        std::fs::create_dir_all(package.parent().unwrap()).unwrap();
+        std::fs::write(&package, r#"{"name":"@deepseek-ai/dsh"}"#).unwrap();
+        for name in ["dsh.cmd", "dsh.ps1"] {
+            let shim = root.join(name);
+            std::fs::write(&shim, "npm shim fixture").unwrap();
+            assert_eq!(npm_package_manifest(&shim), Some(package.clone()));
+        }
+        // An unrelated executable must not borrow dsh's packages next to it.
+        let other = root.join("other.cmd");
+        std::fs::write(&other, "fixture").unwrap();
+        assert_eq!(npm_package_manifest(&other), None);
+        std::fs::write(&package, r#"{"name":"other"}"#).unwrap();
+        assert_eq!(npm_package_manifest(&root.join("dsh.cmd")), None);
+    }
 }
 
 /// What runs the helper script.
