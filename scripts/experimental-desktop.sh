@@ -4,10 +4,10 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$repo_root"
 profile=debug
-build_flags=()
+build_flags=(--profile dev)
 if [[ ${1:-} == --release ]]; then
   profile=release
-  build_flags+=(--release)
+  build_flags=(--release)
   shift
 fi
 cargo build --locked -p zeron --bin zerun-engine --no-default-features "${build_flags[@]}"
