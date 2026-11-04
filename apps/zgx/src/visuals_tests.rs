@@ -410,15 +410,12 @@ fn a_visual_scrolled_away_does_not_animate() {
     // A window too short to show the canvas (under the visual's title).
     app.ui.scene.borrow_mut().resize(800., 60.);
     app.wait_until(|app| app.find(".visual-canvas").is_some());
-    // Script calls in half a second of real time (a tick, a draw: each one).
+    // Half a second on TestApp's 60 Hz clock: wall time would deliver
+    // fewer frames on a busy runner and turn this into a speed test.
     let draws = |app: &mut TestApp| {
         app.frames(5);
         let before = app.calls();
-        let end = std::time::Instant::now() + std::time::Duration::from_millis(500);
-        while std::time::Instant::now() < end {
-            app.frames(1);
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        app.frames(30);
         app.calls() - before
     };
     // (Its first drawing, as it lays out, then nothing.)
