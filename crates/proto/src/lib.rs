@@ -18,6 +18,7 @@ pub mod device_paths;
 pub mod entities;
 pub mod execution;
 pub mod external_sessions;
+pub mod file_links;
 pub mod file_mentions;
 pub mod identity;
 pub mod invocation;
