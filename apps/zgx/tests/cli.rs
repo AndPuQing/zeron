@@ -73,9 +73,13 @@ fn the_engine_s_subcommands_run_in_the_helper_beside_the_app() {
     let status = Command::new(&zeron).args(["plugin", "list"]).env("ZERUN_DATA_DIR", &dir).status().unwrap();
     assert_eq!(status.code(), Some(7));
     assert_eq!(std::fs::read_to_string(&heard).unwrap().trim(), "plugin list");
-    // Without a helper, it says so (and opens no window).
+    // A missing selected helper says so (and opens no window), even when
+    // the checkout has a matching development engine already built.
     std::fs::remove_file(&helper).unwrap();
-    let out = Command::new(&zeron).arg("status").env("ZERUN_DATA_DIR", &dir).output().unwrap();
+    let out = Command::new(&zeron).arg("status")
+        .env("ZERUN_ZGX_ENGINE_BIN", &helper)
+        .env("ZERUN_ZGX_ENGINE_DATA", dir.join("experimental"))
+        .output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&out.stderr).contains("couldn't start the engine"), "{out:?}");
     let _ = std::fs::remove_dir_all(&dir);

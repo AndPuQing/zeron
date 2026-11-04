@@ -44,16 +44,18 @@ fn a_gif_in_a_reply_and_its_lightbox_plays() {
         let near: Vec<&str> = tree.lines().filter(|l| l.contains("pinner") || l.contains("GIF") || l.contains("Open ")).collect();
         panic!("the GIF's tile never showed:\n{}", near.join("\n"));
     }
-    app.frames(20);
-    let tile_id = app.target(tile).expect("the GIF's tile");
-    assert_eq!(animated_under(&app, tile_id), 1, "the reply's GIF carries its animation");
+    // The tile can mount before its image finishes decoding off-thread.
+    let playing = app.wait_until(|app| {
+        app.find(tile).is_some_and(|id| animated_under(app, id) == 1)
+    });
+    assert!(playing, "the reply's GIF carries its animation");
 
     // Opened, the lightbox shows it playing too.
     let root = app.ui.scene.borrow().root();
     let before = animated_under(&app, root);
     app.click(tile);
-    app.frames(60);
+    let playing = app.wait_until(|app| animated_under(app, root) > before);
     let after = animated_under(&app, root);
-    assert!(after > before, "the lightbox's picture carries the animation ({before} → {after})");
+    assert!(playing, "the lightbox's picture carries the animation ({before} → {after})");
     assert_eq!(app.error(), None);
 }
