@@ -1,0 +1,64 @@
+name: Experimental desktop
+
+on:
+  workflow_call:
+    inputs:
+      pass-key:
+        type: string
+        default: ''
+      macos_runner:
+        type: string
+        default: macos-15
+  workflow_dispatch:
+    inputs:
+      macos_runner:
+        type: choice
+        default: macos-15
+        options: [macos-15, xcode-27]
+
+permissions:
+  contents: read
+
+jobs:
+  experimental-desktop:
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Use the alternate pool's selected Xcode
+        if: inputs.macos_runner == 'xcode-27'
+        run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
+      - name: Rust toolchain
+        run: rustup update stable --no-self-update
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/Library/Caches/zgx-ghostty
+          key: experimental-ghostty-${{ hashFiles('apps/zgx/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: experimental-desktop
+          workspaces: |
+            . -> target
+            apps/zgx -> target
+          save-if: ${{ github.ref == 'refs/heads/dev' }}
+      - name: Build matching engine
+        run: cargo build --locked -p zeron --bin zerun-engine --no-default-features
+      - name: Check experimental desktop and run host and interface regressions
+        working-directory: apps/zgx
+        run: |
+          cargo check --locked --all-targets
+          cargo test --locked
+      - name: Check build helper
+        run: bash -n scripts/experimental-desktop.sh
+      - name: Record the pass
+        if: inputs.pass-key != ''
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: rust-toolchain.toml
+          key: ${{ inputs.pass-key }}-experimental-desktop

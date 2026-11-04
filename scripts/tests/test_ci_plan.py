@@ -20,6 +20,14 @@ def selected(suites):
 
 
 class PlanTests(unittest.TestCase):
+    def test_experimental_workspace_has_its_own_reserved_check(self):
+        self.assertEqual(selected(plan.plan(files("apps/zgx/ui/app.luau"), "fast")), {"experimental"})
+        running = plan.jobs_to_run(plan.plan(files("apps/zgx/Cargo.lock"), "fast"))
+        self.assertEqual(plan.reservation(running,"pull_request","refs/pull/1/merge")["macos"],1)
+        self.assertTrue(plan.plan(files("crates/cli/src/lib.rs"), "fast")["experimental"])
+        self.assertTrue(plan.plan(files("apps/zeron/src/bin/zeron-engine.rs"), "fast")["experimental"])
+        self.assertTrue(plan.plan(files("crates/engine/src/rpc.rs"), "fast")["experimental"])
+
     def test_docs_only_runs_nothing(self):
         self.assertEqual(selected(plan.plan(files("README.md", "docs/ci.md"), "fast")), set())
 
@@ -70,7 +78,7 @@ class PlanTests(unittest.TestCase):
 
     def test_lockfile_runs_every_rust_suite(self):
         suites = plan.plan(files("Cargo.lock"), "fast")
-        self.assertEqual(selected(suites), {"core", "ui", "cursor", "windows", "macos", "coretext", "ios", "android"})
+        self.assertEqual(selected(suites), {"core", "ui", "cursor", "windows", "macos", "coretext", "ios", "android", "experimental"})
 
     def test_mobile_core_selects_ios_and_android(self):
         suites = plan.plan(files("crates/sync/src/lib.rs", patch="+let x = 1;"), "fast")
@@ -157,13 +165,13 @@ class PlanTests(unittest.TestCase):
         counts = plan.reservation(plan.jobs_to_run(suites), "pull_request", "refs/pull/1/merge")
         # result + core + ui + cursor + voice + ios-core + Android build/emulator;
         # voice runtime + Windows x2; native + CoreText + ios-tests.
-        self.assertEqual(counts, {"linux": 8, "windows": 3, "macos": 3})
+        self.assertEqual(counts, {"linux": 8, "windows": 3, "macos": 4})
         dev = plan.reservation(plan.jobs_to_run(suites), "push", "refs/heads/dev")
         self.assertEqual(dev["linux"], 8)  # Automatic checks do not publish Android builds.
-        self.assertEqual(plan.format_reservation(counts), "linux=8 windows=3 macos=3")
+        self.assertEqual(plan.format_reservation(counts), "linux=8 windows=3 macos=4")
         daytime = plan.reservation(plan.jobs_to_run(plan.plan(files("Cargo.lock"), "full")), "push",
                                    "refs/heads/dev")
-        self.assertEqual(daytime, {"linux": 7, "windows": 2, "macos": 3})  # no voice
+        self.assertEqual(daytime, {"linux": 7, "windows": 2, "macos": 4})  # no voice
         self.assertEqual(plan.reservation(plan.jobs_to_run({s: False for s in plan.SUITE_JOBS}), "push",
                                           "refs/heads/dev"),
                          {"linux": 1, "windows": 0, "macos": 0})
@@ -174,6 +182,7 @@ class WorkflowConsistencyTests(unittest.TestCase):
 
     # suite -> (workflow, jobs of that workflow the suite turns on)
     SUITES = {
+        "experimental": ("experimental-desktop.yml", ["experimental-desktop"]),
         "core": ("ui-tests.yml", ["core-tests"]),
         "ui": ("ui-tests.yml", ["ui-tests"]),
         "cursor": ("cursor-compatibility.yml", ["cursor-compatibility"]),

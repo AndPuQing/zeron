@@ -6245,6 +6245,7 @@ impl DocHost {
             resume: None,
             worktree: None,
             env: Default::default(),
+            extra_mcp: Vec::new(),
         })
     }
 

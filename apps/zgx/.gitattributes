@@ -1,0 +1,3 @@
+# Embedded TSV keeps trailing tabs for empty data columns.
+ui/ds/emoji_data.luau whitespace=-blank-at-eol
+ui/demos/files_snapshot.luau whitespace=-blank-at-eol

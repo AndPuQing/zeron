@@ -65,6 +65,7 @@ async fn run_turn(client: &RpcClient, chat: &str, prompt: &str) {
             worktree: None,
             resume: None,
             mcp: None,
+            extra_mcp: vec![],
             env: Default::default(),
         },
         message_id: format!("{chat}-m1"),

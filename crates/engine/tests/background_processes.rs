@@ -57,7 +57,7 @@ async fn controls_list_read_and_stop_only_the_addressed_runtime_task() {
         prompt: "start".into(), harness: Some(HarnessId::Mock), model: None, reasoning: None,
         model_options: Default::default(), cwd: directory.path().to_string_lossy().into(),
         sandbox: SandboxLevel::WorkspaceWrite, auto_approve: false, access: Default::default(), plan: false,
-        resume: None, require_native_resume: false, attachments: vec![], worktree: None, mcp: None, env: Default::default(),
+        resume: None, require_native_resume: false, attachments: vec![], worktree: None, mcp: None, extra_mcp: vec![], env: Default::default(),
     }, None).await.unwrap();
     let turn = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {

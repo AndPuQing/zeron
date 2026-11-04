@@ -44,9 +44,10 @@ conflicts.
 | Apple CI | native desktop checks, iOS UI checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU; frame-source, voice and TestFlight use `xcode-27`; the unified planner selects native, CoreText, GPUI and iOS checks by their dependencies; CoreText fidelity, complete companion UI coverage and alternate-pool diagnostics remain enabled; manual `suite` and `macos_runner` inputs target one failed suite and an alternate pool |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22`; WorkOS user directory migration `v6` without upstream Cloud migration `v5` |
-| Endpoints | `apps/zeron`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
+| Endpoints | shared `crates/cli`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |
+| Experimental desktop | Optional `zerun-experimental` entry in `apps/zgx`, independent renderer workspace; fork auth with isolated app state and engine data/IPC, matching checkout engine, no public username/card onboarding or automatic release feed |
 | Desktop isolation | Unix data `~/.zerun`, Windows data `%LOCALAPPDATA%\Zerun`, Linux service `zerun.service`, Windows installer AppId `94F099C7-A9D5-5A32-B951-50AE16E29A01`, IPC 27655, loopback callback 27642; overrides use `ZERUN_*` |
 | Android | follow upstream navigation, phone/tablet layouts, account/agent login, onboarding, voice and interactive visual implementations; retain canonical/attachment draft storage, session import, side-chat search and explicit side-chat deletion; app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed; signed App Bundles are build artifacts, with Play testing uploads available only through an explicit manual dev dispatch |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
@@ -60,7 +61,7 @@ conflicts.
 
 | Item | Where | Status |
 | --- | --- | --- |
-| WorkOS client id | `edge/wrangler.jsonc`, `apps/zeron/src/main.rs`, `crates/client/src/auth.rs`, iOS `SignInViewController.swift` | configured (staging environment `client_01M4AN0G973H42GQJY8RAAC0RS`) |
+| WorkOS client id | `edge/wrangler.jsonc`, `crates/cli/src/env.rs`, `crates/client/src/auth.rs`, iOS `SignInViewController.swift` | configured (staging environment `client_01M4AN0G973H42GQJY8RAAC0RS`) |
 | WorkOS API key | `wrangler secret put WORKOS_API_KEY` in `edge/` | configured on `zerun-edge`; deployed auth routes recognize the secret |
 | WorkOS redirects | WorkOS Dashboard → Applications → Redirects | mobile, CLI and desktop loopback authorization requests accepted (including an alternate port) |
 | APNs key | `wrangler secret put APNS_KEY_P8` / `APNS_KEY_ID`, vars `APNS_TEAM_ID` / `APNS_TOPIC` | pending (topic = iOS bundle id) |

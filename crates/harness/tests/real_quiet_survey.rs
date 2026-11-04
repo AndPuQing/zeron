@@ -1,6 +1,6 @@
 //! Production-settings survey: real multi-tool turns must settle exactly
 //! once with no orphaned output. Silent gaps are measured for diagnostics;
-//! silence is never proof that an ACP prompt has completed (#296).
+//! silence is never proof that an ACP prompt has completed.
 //!
 //! SURVEY_RUNS=3 cargo test -p zeron-harness --test real_quiet_survey -- --ignored --nocapture
 //! Uninstalled/unauthenticated agents are skipped. For mandatory live Pi
@@ -73,6 +73,7 @@ async fn probe_once(harness: Box<dyn Harness>) -> ProbeOutcome {
         worktree: None,
         resume: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     };
     let mut stream = match harness.run(req, controls).await {
         Ok(s) => s,

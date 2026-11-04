@@ -109,6 +109,7 @@ fn request(prompt: &str) -> RunRequest {
         worktree: None,
         resume: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     }
 }
 
@@ -1994,7 +1995,7 @@ async fn image_generation_fake_lifecycle_reaches_done_without_inline_payload() {
 }
 
 /// `view_image` used to leave no trace: the model saw the image, the
-/// transcript showed nothing between its messages (#962). It reads as a
+/// transcript showed nothing between its messages. It reads as a
 /// file read, so the chip opens and previews the image.
 #[tokio::test]
 async fn view_image_reads_as_a_file_read() {

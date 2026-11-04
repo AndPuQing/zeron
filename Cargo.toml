@@ -18,6 +18,8 @@ members = [
     "crates/engine",
     "crates/rpc",
     "crates/update",
+    "crates/cli",
+    "crates/launch",
     "crates/ui",
     "crates/notify",
     "crates/syntax",
@@ -55,6 +57,8 @@ zeron-harness = { path = "crates/harness" }
 zeron-engine = { path = "crates/engine" }
 zeron-rpc = { path = "crates/rpc" }
 zeron-update = { path = "crates/update" }
+zeron-cli = { path = "crates/cli" }
+zeron-launch = { path = "crates/launch" }
 zeron-ui = { path = "crates/ui" }
 zeron-notify = { path = "crates/notify" }
 zeron-syntax = { path = "crates/syntax" }
@@ -75,8 +79,7 @@ loro = "1.17"
 # frames, cross-checked by its js_snapshots tests).
 loro-protocol = "0.3"
 
-# gpui — zeronsh/zui, extracted from wingleeio/zed e2ddcc6 with identical
-# crate sources; adds bounded blur passes and shared Gaussian weights.
+# GPUI renderer with bounded blur passes and shared Gaussian weights.
 # Removes GPL tracing crates and composites deferred GPUI content above native macOS views.
 # Preserved fork history: upstream f14fea9 + commits on
 # `comet/edge-fade-horizontal` (tip of `comet/line-wrap-closing-punctuation`
@@ -104,7 +107,7 @@ loro-protocol = "0.3"
 # Drags need the button held and 4px of travel (0dc69aa).
 # Atlas tiles updated in place from pixels or imported dma-bufs, display-rate
 # frame callbacks in inactive windows, and Wayland frames that no longer stop
-# after a forced draw (b564a34, zeronsh/zui#18).
+# after a forced draw.
 gpui = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9" }
 gpui_platform = { git = "https://github.com/zeronsh/zui", rev = "b564a34413bb7ef1da04121c4a287758f94993d9", features = [
     "wayland",
@@ -183,9 +186,23 @@ strip = "symbols"
 [profile.dev]
 # gpui is slow unoptimized; match zed's approach for deps
 opt-level = 0
+# Full DWARF was ~90% of every rlib (25 GB of target/debug/deps). Line tables
+# keep file:line in panics and backtraces; for locals in lldb, build with
+# `--profile dev-debug`.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
+
+# `cargo build --profile dev-debug`: dev with full debug info, for lldb.
+# Builds into target/dev-debug.
+[profile.dev-debug]
+inherits = "dev"
+debug = true
+
+[profile.dev-debug.package."*"]
+debug = true
 
 # Scenes rasterize in software every frame the camera moves.
 [profile.dev.package.zeron-visual]

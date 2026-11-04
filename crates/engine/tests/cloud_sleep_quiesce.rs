@@ -149,6 +149,7 @@ fn send(core: &EngineCore, id: &str, prompt: &str) {
                     resume: None,
                     require_native_resume: false,
                     env: Default::default(),
+                    extra_mcp: Vec::new(),
                 },
                 message_id: id.into(),
             },

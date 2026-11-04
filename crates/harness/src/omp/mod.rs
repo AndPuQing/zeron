@@ -113,7 +113,7 @@ impl OmpHarness {
         })
     }
     async fn probe(&self, cwd: &Path, models: bool) -> Result<Value, HarnessError> {
-        let mut process = self.spawn(cwd, &["--no-session".into()], None, &Default::default())?;
+        let mut process = self.spawn(cwd, &["--no-session".into()], None, &[], &Default::default())?;
         let (mut tx, rx) = tokio::sync::oneshot::channel();
         let grace = self.kill_grace;
         tokio::spawn(async move {
@@ -137,6 +137,7 @@ impl OmpHarness {
         cwd: &Path,
         args: &[String],
         mcp: Option<&zeron_proto::McpServer>,
+        extra_mcp: &[zeron_proto::McpServer],
         run_env: &std::collections::BTreeMap<String, String>,
     ) -> Result<Process, HarnessError> {
         let exe = self.resolve_executable()?;
@@ -171,11 +172,7 @@ impl OmpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let scratch = mcp
-            .map(|config| {
-                crate::extension_mcp::configure(&crate::extension_mcp::OMP, &mut cmd, config)
-            })
-            .transpose()?;
+        let scratch = crate::extension_mcp::configure_all(&crate::extension_mcp::OMP, &mut cmd, mcp, extra_mcp)?;
         let mut child = Child::new(cmd.spawn()?);
         let tail = crate::StderrTail::default();
         let mut lines = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
@@ -477,6 +474,7 @@ impl Harness for OmpHarness {
             Path::new(&request.cwd),
             &args,
             request.mcp.as_ref(),
+            &request.extra_mcp,
             &request.env,
         )?;
         let (tx, rx) = mpsc::channel(256);
@@ -981,6 +979,7 @@ mod tests {
             attachments: vec![],
             worktree: None,
             mcp: None,
+            extra_mcp: vec![],
             env: Default::default(),
         }
     }
@@ -1052,6 +1051,7 @@ mod tests {
             attachments: vec![],
             worktree: None,
             mcp: None,
+            extra_mcp: vec![],
             env: Default::default(),
         };
         assert!(!thinking_selected(&request));

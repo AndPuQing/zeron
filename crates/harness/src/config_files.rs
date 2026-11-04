@@ -145,7 +145,7 @@ fn resolve(
             };
             settings(root.join("cli-config.json"))
         }
-        HarnessId::Devin | HarnessId::Muse | HarnessId::Mock => vec![],
+        HarnessId::Devin | HarnessId::Muse | HarnessId::Mock | HarnessId::Registry(_) => vec![],
     })
 }
 
