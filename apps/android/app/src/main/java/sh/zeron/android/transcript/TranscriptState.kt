@@ -158,7 +158,9 @@ class TranscriptState {
         frame = new
         if (first && new.rowCount() > 0u) {
             for (i in 0u until new.rowCount()) new.placement(i)?.let { knownKeys.add(it.key) }
-            offset = maxOffset
+            // Documents disable following before the first frame: begin at
+            // their heading, while conversations still start at the tail.
+            offset = if (following) maxOffset else 0f
             settled = true
         } else if (!following) {
             anchor?.let { (key, delta) ->

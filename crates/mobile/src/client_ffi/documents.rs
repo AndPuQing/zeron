@@ -79,7 +79,9 @@ fn resolve_path(raw: &str, base: Option<&str>, explicit: bool) -> Option<String>
     {
         return None;
     }
-    if !explicit && !path.rsplit('/').next()?.contains('.') {
+    // Inside a document, ordinary relative links also name extensionless
+    // files such as LICENSE. Transcript prose keeps the file-name dot rule.
+    if !explicit && base.is_none() && !path.rsplit('/').next()?.contains('.') {
         return None;
     }
     let joined = if !path.starts_with('/') {
@@ -189,6 +191,9 @@ mod tests {
                 "/repo/docs/more.md",
             ),
             ("a%23b.md", None, "a#b.md"),
+            ("../LICENSE", Some("docs/guide.md"), "LICENSE"),
+            ("next", Some("/repo/docs/guide.md"), "/repo/docs/next"),
+            ("%E4%B8%AD%E6%96%87%20guide.md", None, "中文 guide.md"),
         ] {
             assert_eq!(
                 resolve_link(link, base).as_deref(),
@@ -215,6 +220,7 @@ mod tests {
             "a\\b.md",
         ] {
             assert_eq!(resolve_link(link, None), None, "{link}");
+            assert_eq!(resolve_link(link, Some("guide.md")), None, "{link}");
         }
     }
 

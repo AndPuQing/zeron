@@ -1436,7 +1436,7 @@ mod reply_image_tests {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
         };
-        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)", false);
+        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)\n\n![malformed](bad%zz.png)", false);
         let mut painted = DisplayBuilder::default();
         for (_, row) in &blocks {
             let Content::Block(block) = &row.content else { panic!("block") };
@@ -1447,7 +1447,7 @@ mod reply_image_tests {
             _ => None,
         }).collect();
         assert_eq!(paths, ["/repo/docs/a.png", "/repo/images/b.png"]);
-        assert!(painted.text.contains("outside") && painted.text.contains("remote"));
+        assert!(painted.text.contains("outside") && painted.text.contains("remote") && painted.text.contains("malformed"));
     }
 
     #[test]

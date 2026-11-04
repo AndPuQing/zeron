@@ -35,3 +35,6 @@ adb install -r "$RUNNER_TEMP/android-apks/app-debug-androidTest.apk"
 adb shell am instrument -w -e class sh.zeron.android.ui.ExecutionPolicyFlowTest \
   work.puqing.zerun.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$output/test-results.txt"
 grep -q 'OK (1 test)' "$output/test-results.txt"
+adb shell am instrument -w -e class sh.zeron.android.transcript.DocumentPreviewTest \
+  work.puqing.zerun.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$output/document-results.txt"
+grep -q 'OK (1 test)' "$output/document-results.txt"

@@ -435,7 +435,9 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         }
         if first {
             for i in 0..<frame.rowCount() { if let p = frame.placement(index: i) { knownKeys.insert(p.key) } }
-            contentOffset.y = maxOffsetY
+            // A document releases follow before its first frame, so it opens
+            // at its heading. Live conversations still start at the tail.
+            contentOffset.y = following ? maxOffsetY : -adjustedContentInset.top
         } else if following {
             // A reflow for a new width (rotation, iPhone Duo folding) lands
             // on the tail at once; the follow spring visibly glided there
