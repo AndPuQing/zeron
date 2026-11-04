@@ -1692,7 +1692,7 @@ fn credential_location(path: &Path, home: &Path, data_dir: &Path) -> bool {
     }
     CREDENTIAL_LOCATIONS
         .iter()
-        .any(|location| path.starts_with(home.join(location)))
+        .any(|location| path.starts_with(fold(&home.join(location))))
 }
 
 /// One `ReadWorkspaceTextChunk` slice. The path keeps the jail rules of the
@@ -4090,6 +4090,19 @@ mod image_tests {
         }
         // An engine data dir outside the home is Zerun's data all the same.
         assert!(credential_location(Path::new("/srv/zerun/session.json"), home, Path::new("/srv/zerun")));
+        // Normalize the configured locations as well as the candidate: the
+        // Keychains entry contains capitals, even when the candidate does not.
+        if cfg!(any(target_os = "macos", windows)) {
+            for path in [
+                "/HOME/ME/LIBRARY/KEYCHAINS/login.keychain-db",
+                "/home/me/library/keychains/login.keychain-db",
+                "/HOME/ME/.SSH/id_ed25519",
+            ] {
+                assert!(credential_location(Path::new(path), home, data), "{path}");
+            }
+        } else {
+            assert!(!credential_location(Path::new("/home/me/library/keychains/login.keychain-db"), home, data));
+        }
     }
 
     #[test]
