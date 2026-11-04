@@ -39,3 +39,6 @@ grep -Eq '^[[:space:]]*OK \([1-9][0-9]* tests?\)[[:space:]]*$' "$output/test-res
 adb shell am instrument -w -e class sh.zeron.android.transcript.DocumentPreviewTest \
   work.puqing.zerun.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$output/document-results.txt"
 grep -Eq '^[[:space:]]*OK \([1-9][0-9]* tests?\)[[:space:]]*$' "$output/document-results.txt"
+adb shell am instrument -w -e class sh.zeron.android.ui.DocumentReaderAppearanceTest \
+  work.puqing.zerun.android.test/androidx.test.runner.AndroidJUnitRunner | tee "$output/document-appearance-results.txt"
+grep -Eq '^[[:space:]]*OK \([1-9][0-9]* tests?\)[[:space:]]*$' "$output/document-appearance-results.txt"
