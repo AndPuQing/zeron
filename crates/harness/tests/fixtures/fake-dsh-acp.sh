@@ -26,6 +26,8 @@ OPTIONS='[{"id":"model","name":"Model","category":"model","type":"select","curre
 ASK_SCHEMA='{"type":"object","required":["runtime","count"],"properties":{"runtime":{"type":"string","title":"Runtime","description":"Which async runtime should I use?","oneOf":[{"const":"Use tokio","title":"Use tokio"},{"const":"Use smol","title":"Use smol"}]},"runtime__other":{"type":"string","title":"Other (optional)","description":"Free-text answer instead of the listed choices."},"extras":{"type":"array","title":"Extras","items":{"type":"string","anyOf":[{"const":"logging","title":"Logging"},{"const":"metrics","title":"Metrics"}]}},"extras__other":{"type":"string","title":"Other (optional)","description":"Free-text answer instead of the listed choices."},"count":{"type":"integer","title":"Count","description":"How many?"},"note":{"type":"string","title":"Note","description":"Anything else?"}}}'
 
 SETS=""
+SESSION=dsh-1
+RESTORED=no
 ELIC=no
 while read -r line; do
   has "$line" '"id":' || continue
@@ -36,6 +38,14 @@ while read -r line; do
   elif has "$line" '"method":"session/new"'; then
     emit "{\"id\":$id,\"result\":{\"sessionId\":\"dsh-1\",\"configOptions\":$OPTIONS}}"
     emit '{"method":"session/update","params":{"sessionId":"dsh-1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"plan","description":"Plan carefully"}]}}}'
+  elif has "$line" '"method":"session/load"'; then
+    if has "$line" 'session-no-load'; then
+      emit "{\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}"
+    else
+      SESSION=$(printf '%s' "$line" | sed 's/.*"sessionId":"\([^"]*\)".*/\1/')
+      RESTORED=yes
+      emit "{\"id\":$id,\"result\":{\"configOptions\":$OPTIONS}}"
+    fi
   elif has "$line" '"method":"session/set_config_option"'; then
     # the value can be a raw provider tuple full of escaped quotes; take
     # everything up to the line's final quote instead of the first.
@@ -58,7 +68,7 @@ while read -r line; do
       emit "{\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
       exit 0
     fi
-    emit "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"dsh-1\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"sets:$SETS\"}}}}"
+    emit "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"$SESSION\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"restored:$RESTORED session:$SESSION sets:$SETS\"}}}}"
     emit "{\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
     exit 0
   else

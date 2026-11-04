@@ -1118,6 +1118,39 @@ async fn dsh_runs_the_picked_tuple_model_at_off_effort() {
     assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
 }
 
+/// Imported copies must use their native identity instead of creating a new chat.
+#[tokio::test]
+async fn dsh_imported_session_resumes_the_native_copy() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut req = request("continue");
+    req.cwd = workspace.path().display().to_string();
+    req.model = None;
+    req.resume = Some("session-import-copy".into());
+    req.require_native_resume = true;
+    let (controls, _steer, _token) = controls();
+    let events = run_to_end(&dsh_harness(), req, controls).await;
+    assert!(events.iter().any(|event| matches!(event,
+        AgentEvent::TextDelta { text } if text.contains("restored:yes session:session-import-copy"))));
+    assert_eq!(dones(&events), vec![(DoneStatus::Completed, None)]);
+}
+
+#[tokio::test]
+async fn dsh_imported_session_without_load_keeps_context_and_explains_the_profile() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut req = request("continue");
+    req.cwd = workspace.path().display().to_string();
+    req.model = None;
+    req.resume = Some("session-no-load".into());
+    req.require_native_resume = true;
+    let (controls, _steer, _token) = controls();
+    let events = run_to_end(&dsh_harness(), req, controls).await;
+    assert!(!events.iter().any(|event| matches!(event, AgentEvent::TextDelta { .. })));
+    let done = dones(&events);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].0, DoneStatus::Errored);
+    assert!(done[0].1.as_deref().unwrap_or_default().contains("acp-plus"), "{done:?}");
+}
+
 /// dsh's `ask_user_question` rides ACP form elicitation: Zeron has to advertise
 /// `clientCapabilities.elicitation.form` and answer `elicitation/create`
 /// through the shared input bridge, or dsh reports that no user-questions

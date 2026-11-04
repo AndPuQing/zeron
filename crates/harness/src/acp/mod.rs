@@ -5104,8 +5104,15 @@ async fn open_session(
         match restored {
             Ok(response) => return Ok((resume.clone(), response)),
             Err(e) if request.require_native_resume => {
+                let hint = if harness == HarnessId::Dsh
+                    && matches!(&e, HarnessError::Protocol(message) if message.contains("(code -32601)"))
+                {
+                    " Use a dsh ACP profile that supports session/load, such as acp-plus, to continue imported sessions."
+                } else {
+                    ""
+                };
                 return Err(HarnessError::Protocol(format!(
-                    "{agent_name} could not restore required session {resume}: {e}"
+                    "{agent_name} could not restore required session {resume}: {e}{hint}"
                 )));
             }
             Err(e) if is_auth_required(&e) => return Err(e),
