@@ -2933,7 +2933,7 @@ mod tests {
         assert!(content(&root, &long, None).is_err());
     }
 
-    fn read_fixture(bytes: &[u8]) -> WorkspaceFileText {
+    pub(super) fn read_fixture(bytes: &[u8]) -> WorkspaceFileText {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("file.txt"), bytes).unwrap();
         let canonical = std::fs::canonicalize(root.path()).unwrap();
@@ -3865,7 +3865,7 @@ mod image_tests {
         use zeron_proto::WORKSPACE_TEXT_CHUNK_BYTES;
         // CRLF and escapes that would bloat JSON: offsets count decoded text.
         let source = "é\"\u{1b}\r\n".repeat(WORKSPACE_TEXT_CHUNK_BYTES / 4);
-        let mut file = read_fixture(source.as_bytes());
+        let mut file = tests::read_fixture(source.as_bytes());
         file.checkout_id = "checkout".into();
         let text = file.text.clone().unwrap();
         assert!(text.len() > WORKSPACE_TEXT_CHUNK_BYTES);
@@ -3884,7 +3884,7 @@ mod image_tests {
         assert!(text_chunk(file.clone(), first.next_offset, Some("stale")).is_err());
         assert!(text_chunk(file.clone(), text.len() + 1, Some(&hash)).is_err());
         // No text (binary): one empty, final chunk carrying the verdict.
-        let binary = text_chunk(read_fixture(b"a\0b"), 0, None).unwrap();
+        let binary = text_chunk(tests::read_fixture(b"a\0b"), 0, None).unwrap();
         assert!(binary.done && binary.data.is_empty() && binary.text_len.is_none());
         assert_eq!(binary.read_only_reason, Some(WorkspaceReadOnlyReason::Binary));
     }
