@@ -28,17 +28,24 @@ ASK_SCHEMA='{"type":"object","required":["runtime","count"],"properties":{"runti
 SETS=""
 SESSION=dsh-1
 RESTORED=no
+RESTORE=${ZERON_TEST_DSH_RESTORE:-load}
+CAPABILITIES='"loadSession":true'
+if [ "$RESTORE" = resume ]; then CAPABILITIES='"sessionCapabilities":{"resume":{}}'; fi
 ELIC=no
 while read -r line; do
   has "$line" '"id":' || continue
   id=$(rid "$line")
   if has "$line" '"method":"initialize"'; then
     if has "$line" '"elicitation":{"form":{}}'; then ELIC=yes; fi
-    emit "{\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true},\"authMethods\":[],\"_meta\":{\"steering\":{\"supported\":true,\"idleBehavior\":\"promptRequired\"}}}}"
+    emit "{\"id\":$id,\"result\":{\"protocolVersion\":1,\"agentCapabilities\":{$CAPABILITIES},\"authMethods\":[],\"_meta\":{\"steering\":{\"supported\":true,\"idleBehavior\":\"promptRequired\"}}}}"
   elif has "$line" '"method":"session/new"'; then
     emit "{\"id\":$id,\"result\":{\"sessionId\":\"dsh-1\",\"configOptions\":$OPTIONS}}"
     emit '{"method":"session/update","params":{"sessionId":"dsh-1","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name":"plan","description":"Plan carefully"}]}}}'
-  elif has "$line" '"method":"session/load"'; then
+  elif has "$line" '"method":"session/load"' || has "$line" '"method":"session/resume"'; then
+    if ! has "$line" "\"method\":\"session/$RESTORE\""; then
+      emit "{\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}"
+      continue
+    fi
     if has "$line" 'session-no-load'; then
       emit "{\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}"
     else
@@ -68,7 +75,7 @@ while read -r line; do
       emit "{\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
       exit 0
     fi
-    emit "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"$SESSION\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"restored:$RESTORED session:$SESSION sets:$SETS\"}}}}"
+    emit "{\"method\":\"session/update\",\"params\":{\"sessionId\":\"$SESSION\",\"update\":{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"restored:$RESTORED via:$RESTORE session:$SESSION sets:$SETS\"}}}}"
     emit "{\"id\":$id,\"result\":{\"stopReason\":\"end_turn\"}}"
     exit 0
   else

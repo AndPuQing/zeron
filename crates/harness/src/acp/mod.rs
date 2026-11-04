@@ -5107,7 +5107,7 @@ async fn open_session(
                 let hint = if harness == HarnessId::Dsh
                     && matches!(&e, HarnessError::Protocol(message) if message.contains("(code -32601)"))
                 {
-                    " Use a dsh ACP profile that supports session/load, such as acp-plus, to continue imported sessions."
+                    " Use a dsh ACP profile with session/resume or session/load support to continue imported sessions."
                 } else {
                     ""
                 };

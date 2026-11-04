@@ -1,11 +1,10 @@
 # DeepSeek Harness (`dsh`) over ACP
 
 Zerun connects to DeepSeek Harness through `AcpHarness::dsh()`. Install the
-CLI and extended ACP profile yourself:
+CLI yourself, or use the macOS desktop app’s CLI:
 
 ```sh
 npm install -g @deepseek-ai/dsh
-dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus
 ```
 
 Configure credentials in dsh before selecting **DeepSeek Harness** in Zerun.
@@ -15,6 +14,12 @@ Settings reports available CLI updates; apply them with
 
 ## Profiles and configuration
 
+The extended profile is optional:
+
+```sh
+dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus
+```
+
 Zerun starts `dsh --profile acp-plus` when
 `$DSH_HOME/profiles/acp-plus` exists, otherwise it starts the bundled `acp`
 profile. Set `DSH_PROFILE` to choose a different profile, or `DSH_EXECUTABLE`
@@ -23,8 +28,8 @@ to override executable discovery. `DSH_HOME` defaults to `~/.dsh`.
 The extended profile provides session loading, mid-turn steering, and form
 elicitation. Steering is used at step boundaries when the agent advertises
 `_meta.steering`; `ask_user_question` rides ACP `elicitation/create` and
-surfaces in Zerun's question wizard. The bundled `acp` profile has fewer
-capabilities.
+surfaces in Zerun's question wizard. The bundled `acp` profile supports listing
+and resuming saved sessions through `session/list` and `session/resume`.
 
 Skills are discovered from `$DSH_HOME/skills`, `$DSH_AGENTS_HOME/skills`
 (`DSH_AGENTS_HOME` defaults to `~/.agents`), and the project's `.agents/skills`
@@ -35,9 +40,9 @@ and `.dsh/skills` directories.
 Use **Import sessions** on the device where dsh keeps its history, then select
 **DeepSeek Harness**. Zerun reads the native store under `$DSH_HOME/sessions`,
 creates independent native copies associated with the original working
-directories, and imports their display history. Original session files remain unchanged. Finish or stop
-an active source turn before importing; subagent histories are not separate
-import entries.
+directories, and imports their display history. Original session files remain
+unchanged. Finish or stop an active source turn before importing; subagent
+histories are not separate import entries.
 
 Both plain and zstd-compressed histories are decoded by dsh's own persistence
 packages. macOS desktop installations use their bundled runtime and archive;
@@ -45,10 +50,11 @@ npm installations use Node.js and the packages beside the installed CLI. Older
 installations can still resolve packages from their profile directories. Zerun
 does not install or update dsh as part of an import.
 
-Continuing an imported conversation requires an ACP profile that implements
-`session/load`, such as `acp-plus`. The bundled official ACP profile currently
-does not implement it. If the selected profile cannot restore the native copy,
-Zerun reports the limitation and retains the session for retry; it never replaces
+Continuing an imported conversation uses the restore method the ACP profile
+advertises: `session/resume` for the bundled official profile, or `session/load`
+for profiles that provide replay, including `acp-plus`. The extended profile is
+not required for importing and resuming saved sessions. If the selected profile
+cannot restore the native copy, Zerun reports the limitation and retains the session for retry; it never replaces
 an imported conversation with a fresh session. Importing history does not send
 a model prompt.
 
