@@ -122,6 +122,7 @@ fun DocumentPreviewDialog(core: CoreClient, chatId: String, initialPath: String,
 
 @Composable
 internal fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEntry, back: () -> Unit, open: (String) -> Unit, canGoBack: Boolean = false) {
+    DialogSystemBars()
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var sheet by remember { mutableStateOf<TextSheet?>(null) }

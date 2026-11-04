@@ -1,6 +1,8 @@
 package sh.zeron.android.ui
 
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.os.SystemClock
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
@@ -81,6 +83,7 @@ class DocumentReaderAppearanceTest {
         }
         try {
             await { (entry.transcript?.frame?.rowCount() ?: 0u) > 0u }
+            awaitDocumentPaint(dark = false)
             capture("document-android-preview-light")
             requireNotNull(device.wait(Until.findObject(By.desc("Document options")), 5_000)).click()
             requireNotNull(device.wait(Until.findObject(By.text("File details")), 5_000)).click()
@@ -91,6 +94,7 @@ class DocumentReaderAppearanceTest {
             instrumentation.runOnMainSync { revision = entry.transcript!!.frame!!.revision(); theme = ThemeMode.Dark }
             requireNotNull(device.wait(Until.findObject(By.text("Source")), 5_000)).click()
             await { entry.source && entry.transcript!!.frame!!.revision() > revision }
+            awaitDocumentPaint(dark = true)
             capture("document-android-source-dark")
             instrumentation.runOnMainSync {
                 theme = ThemeMode.Light
@@ -120,5 +124,30 @@ class DocumentReaderAppearanceTest {
         device.waitForIdle()
         val folder = File(context.cacheDir, "execution-screenshots").apply { mkdirs() }
         assertTrue(device.takeScreenshot(File(folder, "$name.png")))
+    }
+
+    /** Layout arrives before the canvas is painted (and before its reveal animation). */
+    private fun awaitDocumentPaint(dark: Boolean) {
+        val deadline = SystemClock.uptimeMillis() + 10_000
+        while (SystemClock.uptimeMillis() < deadline) {
+            val raw = instrumentation.uiAutomation.takeScreenshot()
+            if (raw != null) {
+                val bitmap = raw.copy(Bitmap.Config.ARGB_8888, false)
+                raw.recycle()
+                var ink = 0
+                // Only the reading area: the toolbar must not make an empty page pass.
+                for (y in bitmap.height * 3 / 10 until bitmap.height * 4 / 5 step 3) {
+                    for (x in bitmap.width / 10 until bitmap.width * 9 / 10 step 3) {
+                        val pixel = bitmap.getPixel(x, y)
+                        val r = Color.red(pixel); val g = Color.green(pixel); val b = Color.blue(pixel)
+                        if (if (dark) r > 160 && g > 160 && b > 160 else r < 160 && g < 160 && b < 160) ink++
+                    }
+                }
+                bitmap.recycle()
+                if (ink > 50) return
+            }
+            SystemClock.sleep(100)
+        }
+        fail("The document canvas stayed blank")
     }
 }
