@@ -24,6 +24,61 @@ use super::markdown::{Ctx, PBlock, PText, Px, ReplyImageContext, place, place_te
 use super::style::{Family, TYPE, Weight};
 use super::tools::{ThoughtState, ToolGroup, place_tools};
 
+/// Bound standalone document blocks before preparing native rows. Code keeps
+/// its language; oversized compound Markdown stays readable as literal source.
+/// The document toolbar still copies the original, complete text.
+fn document_blocks(blocks: &[Arc<TopBlock>], text: &str) -> Vec<(Arc<TopBlock>, Option<String>)> {
+    use zeron_markdown::parser::{Block, InlineRun, InlineStyle};
+    let mut out = Vec::new();
+    for block in blocks {
+        let source = text.get(block.range.clone()).unwrap_or("");
+        if !matches!(block.block, Block::CodeBlock { .. })
+            && source.len() <= super::SOURCE_BLOCK_BYTES
+            && source.lines().count() <= super::SOURCE_BLOCK_LINES
+        {
+            out.push((block.clone(), None));
+            continue;
+        }
+        let (body, language) = match &block.block {
+            Block::CodeBlock { code, language } => (code.as_str(), language.clone()),
+            _ => (source, None),
+        };
+        let slices = super::source_blocks(body);
+        if slices.len() <= 1 {
+            out.push((block.clone(), None));
+            continue;
+        }
+        if !matches!(block.block, Block::CodeBlock { .. }) {
+            let notice = "Large Markdown section shown as source.".to_owned();
+            out.push((
+                Arc::new(TopBlock {
+                    range: block.range.clone(),
+                    block: Block::Paragraph {
+                        runs: vec![InlineRun {
+                            text: notice.clone(),
+                            style: InlineStyle::default(),
+                        }],
+                    },
+                }),
+                Some(notice),
+            ));
+        }
+        for slice in slices {
+            out.push((
+                Arc::new(TopBlock {
+                    range: block.range.clone(),
+                    block: Block::CodeBlock {
+                        language: language.clone(),
+                        code: format!("{slice}\n"),
+                    },
+                }),
+                Some(slice.to_owned()),
+            ));
+        }
+    }
+    out
+}
+
 /// Row kinds the painter may style differently (e.g. context menus).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum RowKind {
@@ -44,11 +99,24 @@ pub struct PendingUser {
     pub text: String,
 }
 
+/// Fixed host context for a standalone file; it must not drift with a live chat.
+#[derive(Debug, Clone)]
+pub struct DocumentContext {
+    pub chat_id: String,
+    pub device_id: String,
+    pub cwd: Option<String>,
+    pub path: String,
+    /// Source view: each block is a fenced slice of the file's lines.
+    pub source: bool,
+}
+
 /// What the row builder reads from a session snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct TranscriptInput {
     /// None for subagent transcripts: never borrow their parent's folder.
     pub chat_id: Option<String>,
+    /// Standalone document: relative media resolve beside this host file.
+    pub document: Option<DocumentContext>,
     pub entries: Vec<Arc<SessionMessageEntry>>,
     pub pending: Vec<PendingUser>,
     /// A turn is running (drives the tail working indicator).
@@ -209,6 +277,8 @@ struct EntryState {
 #[derive(Default)]
 pub(crate) struct RowBuilder {
     reply_chat: Option<ReplyImageContext>,
+    /// A document's source view: code blocks copy their lines, not the fence.
+    document_source: bool,
     parts: HashMap<String, PartState>,
     /// Reasoning parts' parse + prepared detail, keyed `{entry}#{part}`.
     pub(crate) thoughts: HashMap<String, ThoughtState>,
@@ -237,11 +307,14 @@ pub(crate) fn quick_hash(s: &str) -> u64 {
 impl RowBuilder {
     /// Rows for `input`, reusing every row whose source is unchanged.
     pub fn build(&mut self, ctx: &mut Ctx, input: &TranscriptInput) -> Vec<Placed> {
-        let chat = input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
-            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone() })
+        let chat = input.document.as_ref().map(|doc| ReplyImageContext {
+            chat_id: doc.chat_id.clone(), cwd: doc.cwd.clone(), host: doc.device_id.clone(), document_path: Some(doc.path.clone()),
+        }).or_else(|| input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
+            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone(), document_path: None }))
             // A snapshot that briefly lacks the chat's row (reconnect, refresh)
             // keeps the folder it had: only a real change re-lays out the transcript.
             .or_else(|| self.reply_chat.clone().filter(|known| input.chat_id.as_ref() == Some(&known.chat_id)));
+        self.document_source = input.document.as_ref().is_some_and(|doc| doc.source);
         if self.reply_chat != chat {
             self.parts.clear();
             self.entries.clear();
@@ -609,10 +682,36 @@ impl RowBuilder {
         state.source_len = text.len();
         state.source_hash = hash;
         state.streaming = streaming;
-        let tree = if streaming { state.parser.display_tree() } else { state.parser.tree().clone() };
-        let mut next = Vec::with_capacity(tree.blocks.len());
-        for (bi, block) in tree.blocks.iter().enumerate() {
-            let copy = text.get(block.range.clone()).unwrap_or("").trim_end();
+        let tree = if streaming {
+            state.parser.display_tree()
+        } else {
+            state.parser.tree().clone()
+        };
+        let blocks = if self
+            .reply_chat
+            .as_ref()
+            .is_some_and(|chat| chat.document_path.is_some())
+        {
+            document_blocks(&tree.blocks, text)
+        } else {
+            tree.blocks
+                .iter()
+                .map(|block| (block.clone(), None))
+                .collect()
+        };
+        let mut next = Vec::with_capacity(blocks.len());
+        for (bi, (block, copy_override)) in blocks.iter().enumerate() {
+            let copy = copy_override
+                .as_deref()
+                .unwrap_or_else(|| match &block.block {
+                    // A document's source slice copies the file's own lines.
+                    zeron_markdown::parser::Block::CodeBlock { code, .. }
+                        if self.document_source =>
+                    {
+                        code.trim_end_matches('\n')
+                    }
+                    _ => text.get(block.range.clone()).unwrap_or("").trim_end(),
+                });
             // Same rendering isn't enough: the source can still differ (a
             // closing `**` that renders identically) and Copy reads the source.
             let reuse = state
@@ -1379,7 +1478,7 @@ mod reply_image_tests {
     #[test]
     fn mobile_reply_images_preserve_text_and_measure_their_widgets() {
         let mut w = super::super::tests::worker(390.0);
-        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None });
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
@@ -1413,9 +1512,34 @@ mod reply_image_tests {
     }
 
     #[test]
+    fn document_images_resolve_beside_the_document_and_keep_the_chat_jail() {
+        let mut w = super::super::tests::worker(390.0);
+        w.builder.reply_chat = Some(ReplyImageContext {
+            chat_id: "chat".into(), cwd: Some("/repo".into()), host: "ubuntu".into(),
+            document_path: Some("docs/guide.md".into()),
+        });
+        let mut ctx = Ctx {
+            typo: &mut w.typo, cache: &mut w.cache, math: w.math,
+            math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
+        };
+        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)\n\n![above](../../e.png)", false);
+        let mut painted = DisplayBuilder::default();
+        for (_, row) in &blocks {
+            let Content::Block(block) = &row.content else { panic!("block") };
+            place(block, Px(1.0), 0.0, 0.0, 354.0, Some(&mut painted));
+        }
+        let paths: Vec<_> = painted.widgets.iter().filter_map(|widget| match &widget.kind {
+            WidgetKind::ChatImage { chat_id, path } => { assert_eq!(chat_id, "chat"); Some(path.as_str()) },
+            _ => None,
+        }).collect();
+        assert_eq!(paths, ["/repo/docs/a.png", "/repo/images/b.png"]);
+        assert!(painted.text.contains("outside") && painted.text.contains("remote") && painted.text.contains("above"));
+    }
+
+    #[test]
     fn a_snapshot_missing_the_chat_row_keeps_its_folder() {
         let mut w = super::super::tests::worker(390.0);
-        let known = ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() };
+        let known = ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None };
         w.builder.reply_chat = Some(known.clone());
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
@@ -1430,7 +1554,7 @@ mod reply_image_tests {
     #[test]
     fn mobile_reply_images_wait_for_a_settled_block_and_stay_out_of_subagents() {
         let mut w = super::super::tests::worker(390.0);
-        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None });
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,

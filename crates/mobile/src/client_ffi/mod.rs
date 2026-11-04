@@ -12,6 +12,8 @@
 //! (`snapshot()` / `subscribe()`), never over FFI.
 
 mod cloud;
+pub(crate) mod documents;
+pub use documents::*;
 pub(crate) mod companions;
 mod composer_actions;
 mod providers;

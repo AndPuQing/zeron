@@ -2423,6 +2423,7 @@ fn forwardable(method: &str) -> bool {
             | methods::SEARCH_WORKSPACE_CONTENT
             | methods::READ_WORKSPACE_IMAGE
             | methods::READ_WORKSPACE_FILE
+            | methods::READ_WORKSPACE_TEXT_CHUNK
             | methods::DELETE_WORKSPACE_ENTRY
             | methods::MOVE_WORKSPACE_ENTRY
             | methods::CREATE_WORKSPACE_ENTRY
@@ -4875,6 +4876,17 @@ impl RpcService for EngineRpc {
                 .map_err(RpcError::from)?;
                 RpcReply::value(&file)
             }
+            methods::READ_WORKSPACE_TEXT_CHUNK => {
+                let request: zeron_proto::ReadWorkspaceTextChunkRequest = parse_params(params)?;
+                let chunk = tokio::time::timeout(
+                    crate::workspace_files::WORKSPACE_FILE_RPC_TIMEOUT,
+                    self.workspace_files.read_text_chunk(request),
+                )
+                .await
+                .map_err(|_| RpcError::Failed("workspace file read timed out".into()))?
+                .map_err(RpcError::from)?;
+                RpcReply::value(&chunk)
+            }
             methods::DELETE_WORKSPACE_ENTRY => {
                 let request: zeron_proto::DeleteWorkspaceEntryRequest = parse_params(params)?;
                 let outcome = self
@@ -6091,6 +6103,7 @@ mod tests {
         assert!(forwardable(methods::LIST_WORKSPACE_DIRECTORY));
         assert!(forwardable(methods::SEARCH_WORKSPACE_FILES));
         assert!(forwardable(methods::READ_WORKSPACE_FILE));
+        assert!(forwardable(methods::READ_WORKSPACE_TEXT_CHUNK));
         assert!(forwardable(methods::READ_WORKSPACE_IMAGE));
         assert!(forwardable(methods::DELETE_WORKSPACE_ENTRY));
         assert!(forwardable(methods::MOVE_WORKSPACE_ENTRY));

@@ -1421,6 +1421,8 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func vaultUsage(provider: String, slot: String) async throws  -> CloudUsageInfo
     
+    func readDocument(chatId: String, path: String, allowOutside: Bool) async throws  -> DocumentRead
+    
     /**
      * Run `harness` on `account_id` from now on.
      */
@@ -2937,6 +2939,22 @@ open func vaultUsage(provider: String, slot: String)async throws  -> CloudUsageI
             completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
             freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
             liftFunc: FfiConverterTypeCloudUsageInfo_lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+open func readDocument(chatId: String, path: String, allowOutside: Bool)async throws  -> DocumentRead  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_read_document(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(path),FfiConverterBool.lower(allowOutside)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterTypeDocumentRead_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -5968,6 +5986,12 @@ public protocol TranscriptViewProtocol: AnyObject, Sendable {
     func setDebugEntries(entries: [DebugEntry], working: Bool) 
     
     /**
+     * Render a standalone read-only host document with the native Markdown engine.
+     * This view never attaches to or writes into the live conversation.
+     */
+    func setDocument(chatId: String, document: DocumentPreview, markdown: Bool) 
+    
+    /**
      * Render formulas (in `face`, at `size_percent` of the text around
      * them, clamped to 75–200), or show them as their TeX source.
      */
@@ -6125,6 +6149,21 @@ open func setDebugEntries(entries: [DebugEntry], working: Bool)  {try! rustCall(
             self.uniffiCloneHandle(),
         FfiConverterSequenceTypeDebugEntry.lower(entries),
         FfiConverterBool.lower(working),uniffiCallStatus
+    )
+}
+}
+    
+    /**
+     * Render a standalone read-only host document with the native Markdown engine.
+     * This view never attaches to or writes into the live conversation.
+     */
+open func setDocument(chatId: String, document: DocumentPreview, markdown: Bool)  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_transcriptview_set_document(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(chatId),
+        FfiConverterTypeDocumentPreview_lower(document),
+        FfiConverterBool.lower(markdown),uniffiCallStatus
     )
 }
 }
@@ -9981,6 +10020,82 @@ public func FfiConverterTypeDeviceView_lift(_ buf: RustBuffer) throws -> DeviceV
 #endif
 public func FfiConverterTypeDeviceView_lower(_ value: DeviceView) -> RustBuffer {
     return FfiConverterTypeDeviceView.lower(value)
+}
+
+
+public struct DocumentPreview: Equatable, Hashable {
+    /**
+     * Requested path, retained even when the host returns a workspace-relative path.
+     */
+    public var path: String
+    public var text: String
+    public var markdown: Bool
+    public var truncated: Bool
+    public var deviceId: String
+    public var cwd: String?
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(
+        /**
+         * Requested path, retained even when the host returns a workspace-relative path.
+         */path: String, text: String, markdown: Bool, truncated: Bool, deviceId: String, cwd: String?) {
+        self.path = path
+        self.text = text
+        self.markdown = markdown
+        self.truncated = truncated
+        self.deviceId = deviceId
+        self.cwd = cwd
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension DocumentPreview: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDocumentPreview: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DocumentPreview {
+        return
+            try DocumentPreview(
+                path: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf), 
+                markdown: FfiConverterBool.read(from: &buf), 
+                truncated: FfiConverterBool.read(from: &buf), 
+                deviceId: FfiConverterString.read(from: &buf), 
+                cwd: FfiConverterOptionString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: DocumentPreview, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterBool.write(value.markdown, into: &buf)
+        FfiConverterBool.write(value.truncated, into: &buf)
+        FfiConverterString.write(value.deviceId, into: &buf)
+        FfiConverterOptionString.write(value.cwd, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentPreview_lift(_ buf: RustBuffer) throws -> DocumentPreview {
+    return try FfiConverterTypeDocumentPreview.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentPreview_lower(_ value: DocumentPreview) -> RustBuffer {
+    return FfiConverterTypeDocumentPreview.lower(value)
 }
 
 
@@ -17746,6 +17861,85 @@ public func FfiConverterTypeDemoFixture_lower(_ value: DemoFixture) -> RustBuffe
 
 
 /**
+ * A document read: the preview, or a file the viewer must first agree to
+ * open because it lies beyond the chat's workspace (any file, in a chat in
+ * the host's home folder). Read it again with `allow_outside` after they do.
+ */
+
+public enum DocumentRead: Equatable, Hashable {
+    
+    case ready(document: DocumentPreview
+    )
+    case needsConfirmation(deviceId: String, deviceName: String, path: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DocumentRead: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDocumentRead: FfiConverterRustBuffer {
+    typealias SwiftType = DocumentRead
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DocumentRead {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ready(document: try FfiConverterTypeDocumentPreview.read(from: &buf)
+        )
+        
+        case 2: return .needsConfirmation(deviceId: try FfiConverterString.read(from: &buf), deviceName: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DocumentRead, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .ready(document):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeDocumentPreview.write(document, into: &buf)
+            
+        
+        case let .needsConfirmation(deviceId,deviceName,path):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(deviceId, into: &buf)
+            FfiConverterString.write(deviceName, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentRead_lift(_ buf: RustBuffer) throws -> DocumentRead {
+    return try FfiConverterTypeDocumentRead.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentRead_lower(_ value: DocumentRead) -> RustBuffer {
+    return FfiConverterTypeDocumentRead.lower(value)
+}
+
+
+
+/**
  * Faces the platform registers (same bytes it hands CoreText/Skia).
  */
 
@@ -23795,6 +23989,19 @@ public func mobileComposerActionError(action: MobileComposerAction, context: Mob
 })
 }
 /**
+ * Resolve a local file link without consulting the phone's filesystem.
+ * `base_path` is the document containing a relative link, not a local directory.
+ */
+public func documentLinkPath(url: String, basePath: String?) -> String?  {
+    return try!  FfiConverterOptionString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_document_link_path(
+        FfiConverterString.lower(url),
+        FfiConverterOptionString.lower(basePath),uniffiCallStatus
+    )
+})
+}
+/**
  * [`AgentLoginRules`] for `harness` (`claude-code`, `codex`, …).
  */
 public func agentLoginRules(harness: String) -> AgentLoginRules  {
@@ -24066,6 +24273,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_mobile_composer_action_error() != 33528) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_document_link_path() != 2899) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_agent_login_rules() != 18451) {
@@ -24410,6 +24620,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_vault_usage() != 58618) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_read_document() != 14017) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_device_activate_account() != 7247) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -24645,6 +24858,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_entries() != 54762) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_transcriptview_set_document() != 45583) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_transcriptview_set_math() != 28799) {

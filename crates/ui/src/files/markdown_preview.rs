@@ -109,53 +109,10 @@ fn preview_link_outcome(activation: &render::LinkActivation) -> render::LinkOutc
     }
 }
 
-/// URL path resolution is independent of the UI host's filesystem.
+/// URL path resolution is independent of the UI host's filesystem; the
+/// phone document previews share the same rule.
 pub(super) fn relative_target(document: &str, target: &str) -> Option<(String, Option<String>)> {
-    if let Some(target) = target.strip_prefix("zeron-file:") {
-        return relative_target("", target);
-    }
-    if target.starts_with('/') || target.contains(':') || target.contains('\\') {
-        return None;
-    }
-    let (path, anchor) = target
-        .split_once('#')
-        .map_or((target, None), |(p, a)| (p, Some(a.to_string())));
-    let decode = |s: &str| -> Option<String> {
-        let mut bytes = Vec::new();
-        let mut chars = s.as_bytes().iter().copied();
-        while let Some(c) = chars.next() {
-            if c == b'%' {
-                let a = (chars.next()? as char).to_digit(16)?;
-                let b = (chars.next()? as char).to_digit(16)?;
-                bytes.push((a * 16 + b) as u8);
-            } else {
-                bytes.push(c);
-            }
-        }
-        String::from_utf8(bytes).ok()
-    };
-    let path = decode(path)?;
-    if path.contains(['\\', ':', '\0']) || path.starts_with('/') {
-        return None;
-    }
-    if path.is_empty() {
-        return Some((document.into(), anchor.and_then(|a| decode(&a))));
-    }
-    let mut parts: Vec<&str> = document.split('/').collect();
-    parts.pop();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop()?;
-            }
-            _ => parts.push(part),
-        }
-    }
-    if parts.is_empty() {
-        return None;
-    }
-    Some((parts.join("/"), anchor.and_then(|a| decode(&a))))
+    zeron_proto::file_links::document_link_target(document, target)
 }
 
 pub(super) struct MarkdownPreview {

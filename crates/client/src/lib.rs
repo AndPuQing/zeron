@@ -33,6 +33,7 @@ pub mod composer;
 pub mod config;
 pub mod connectivity;
 mod demo;
+pub mod documents;
 pub mod error;
 pub mod events;
 mod host_stream;

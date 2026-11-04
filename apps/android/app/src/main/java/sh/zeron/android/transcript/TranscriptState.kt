@@ -23,7 +23,10 @@ import kotlin.math.max
  * to a row, or following the tail.
  */
 @Stable
-class TranscriptState {
+class TranscriptState(
+    /** A document opens at its first line; a conversation at its tail, whether or not it follows. */
+    private val startsAtTop: Boolean = false,
+) {
     private val main = Handler(Looper.getMainLooper())
     private val pending = AtomicBoolean(false)
 
@@ -48,7 +51,7 @@ class TranscriptState {
     var viewport by mutableFloatStateOf(0f)
     /** Breathing room below the last row, on top of the frame's own (dp). */
     var bottomInset by mutableFloatStateOf(12f)
-    var following by mutableStateOf(true)
+    var following by mutableStateOf(!startsAtTop)
     var dragging by mutableStateOf(false)
     val fonts = StyleFonts()
     /** Rows present before a frame arrived don't fade in. */
@@ -158,7 +161,7 @@ class TranscriptState {
         frame = new
         if (first && new.rowCount() > 0u) {
             for (i in 0u until new.rowCount()) new.placement(i)?.let { knownKeys.add(it.key) }
-            offset = maxOffset
+            offset = if (startsAtTop) 0f else maxOffset
             settled = true
         } else if (!following) {
             anchor?.let { (key, delta) ->
@@ -202,6 +205,13 @@ class TranscriptState {
         cache[k]?.let { return it }
         val display = frame.display(index) ?: return null
         return RowModel(display).also { cache[k] = it }
+    }
+
+    /** A new document view starts at the top even after scrolling to its tail. */
+    fun showDocument(chatId: String, document: uniffi.zeron_core.DocumentPreview, markdown: Boolean) {
+        released()
+        offset = 0f
+        engine.setDocument(chatId, document, markdown)
     }
 
     /** User scroll by `delta` dp (positive = toward the tail). Returns the consumed amount. */

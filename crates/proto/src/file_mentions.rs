@@ -9,7 +9,7 @@ pub struct FileMentionLink {
     pub is_dir: bool,
 }
 
-fn percent_encode_path(path: &str) -> String {
+pub fn percent_encode_path(path: &str) -> String {
     let mut out = String::new();
     for byte in path.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
@@ -22,7 +22,8 @@ fn percent_encode_path(path: &str) -> String {
     out
 }
 
-fn percent_decode_path(encoded: &str) -> Option<String> {
+/// `None` for a broken escape or bytes that are not UTF-8.
+pub fn percent_decode_path(encoded: &str) -> Option<String> {
     let mut bytes = Vec::with_capacity(encoded.len());
     let raw = encoded.as_bytes();
     let mut at = 0;

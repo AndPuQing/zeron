@@ -4,7 +4,11 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
-const FILE_MENTION_SCHEME: &str = "zeron-file:";
+use zeron_proto::file_links::{
+    FileLinkKind as ClassifiedKind, clean_path, has_url_scheme, split_line_fragment,
+    split_line_suffix,
+};
+use zeron_proto::file_mentions::{percent_decode_path, percent_encode_path};
 
 /// Where a classified file link sits relative to a surface's ordered roots.
 #[derive(Debug, PartialEq, Eq)]
@@ -260,25 +264,6 @@ struct ClassifiedLink {
     link: WorkspaceFileLink,
 }
 
-enum ClassifiedKind {
-    /// `zeron-file:` mention — resolution stays inside-or-unresolved.
-    Mention,
-    /// Root-relative path.
-    Relative,
-    /// POSIX-absolute path — inside a root when one owns it, a host file
-    /// read-only otherwise.
-    Absolute,
-}
-
-/// What a `#`/`:` line suffix or fragment contributed: a valid first-line
-/// anchor, nothing usable (plain `#anchor` fragments are dropped), or an
-/// anchor that kills the whole target (line 0, reversed range).
-enum LineAnchor {
-    None,
-    Line { line: u32, column: Option<u32> },
-    Invalid,
-}
-
 pub(crate) fn resolve_workspace_file_link(
     target: &str,
     workspace_root: &str,
@@ -307,247 +292,22 @@ pub(crate) fn resolve_workspace_file_link(
     }
 }
 
-/// Classify a link destination under the file-link grammar — without a root
-/// to resolve against yet. Line references split on the raw target so an
-/// escaped `#` or `:` stays inside the path; the path itself then decodes
-/// exactly once and every safety check runs on the decoded string.
+/// The shared file-link grammar ([`zeron_proto::file_links`]), tagged for
+/// this surface's root resolution.
 fn classify_file_link(target: &str) -> Option<ClassifiedLink> {
-    let target = target.trim();
-    if target.is_empty() {
-        return None;
-    }
-
-    // `zeron-file:` mentions keep their strict canonical spelling: the whole
-    // path decodes once and must re-encode to the identical string.
-    if let Some(encoded) = target.strip_prefix(FILE_MENTION_SCHEME) {
-        let decoded = percent_decode_path(encoded)?;
-        if percent_encode_path(&decoded) != encoded
-            || decoded.ends_with('/')
-            || decoded.contains(':')
-            || !clean_path(&decoded)
-        {
-            return None;
-        }
-        return Some(ClassifiedLink {
-            kind: ClassifiedKind::Mention,
-            link: WorkspaceFileLink {
-                path: decoded,
-                line: None,
-                column: None,
-                outside: false,
-            },
-        });
-    }
-
-    let file_url = target.starts_with("file://");
-    let raw = if file_url {
-        let rest = &target["file://".len()..];
-        // Only an empty host keeps this a file path — `file://localhost/…`
-        // and friends are ordinary URLs — and a `?query` is never a file.
-        let host_end = rest.find('/').unwrap_or(rest.len());
-        if !rest[..host_end].is_empty() || rest.contains('?') {
-            return None;
-        }
-        &rest[host_end..]
-    } else {
-        if target.contains("://") || target.starts_with("mailto:") {
-            return None;
-        }
-        target
-    };
-
-    let (raw, fragment) = split_line_fragment(raw)?;
-    let (raw, suffix) = split_line_suffix(raw)?;
-    let decoded: Cow<str> = if raw.contains('%') {
-        match percent_decode_path(raw) {
-            Some(decoded) => Cow::Owned(decoded),
-            // Broken escapes keep the raw spelling — a literal `%` in a file
-            // name still opens.
-            None => Cow::Borrowed(raw),
-        }
-    } else {
-        Cow::Borrowed(raw)
-    };
-    if decoded.is_empty() || !clean_path(&decoded) {
-        return None;
-    }
-    let kind = if decoded.starts_with('/') {
-        // Absolute POSIX path: one leading slash, not the root itself, and
-        // no trailing slash. A plain absolute path also wants a `.` in its
-        // file name (`/usr/bin/ls` stays plain text); `file://` is exempt.
-        if decoded.len() == 1
-            || decoded.starts_with("//")
-            || decoded.ends_with('/')
-            || (!file_url && !file_name(&decoded).contains('.'))
-        {
-            return None;
-        }
-        ClassifiedKind::Absolute
-    } else {
-        if file_url || decoded.starts_with('~') || has_url_scheme(&decoded) {
-            return None;
-        }
-        if !file_name(&decoded).contains('.') {
-            return None;
-        }
-        ClassifiedKind::Relative
-    };
+    let classified = zeron_proto::file_links::classify_file_link(target)?;
     Some(ClassifiedLink {
-        kind,
+        kind: classified.kind,
         link: WorkspaceFileLink {
-            path: decoded.into_owned(),
-            line: fragment.line.or(suffix.line),
-            column: fragment.column.or(suffix.column),
+            path: classified.path,
+            line: classified.line,
+            column: classified.column,
             outside: false,
         },
     })
 }
 
-/// `target` without its `#L12` fragment or `:12` line suffix: the path a
-/// location link points into. A target that is not a location stays whole.
-pub(crate) fn without_location(target: &str) -> &str {
-    split_line_fragment(target)
-        .and_then(|(path, _)| split_line_suffix(path))
-        .map_or(target, |(path, _)| path)
-}
-
-/// A line reference merged across `#` fragment and `:` suffix: the fragment
-/// wins each field it provides.
-#[derive(Default)]
-struct ParsedAnchor {
-    line: Option<u32>,
-    column: Option<u32>,
-}
-
-/// A `#L12`-style fragment (GitHub line anchors, ranges included, all
-/// opening at the first line). A non-empty fragment without `/` that is not
-/// one of these drops away, leaving the file path; `0` and reversed ranges
-/// make the whole target not a file link.
-fn split_line_fragment(target: &str) -> Option<(&str, ParsedAnchor)> {
-    let Some((path, fragment)) = target.rsplit_once('#') else {
-        return Some((target, ParsedAnchor::default()));
-    };
-    if fragment.is_empty() {
-        return Some((path, ParsedAnchor::default()));
-    }
-    if fragment.contains('/') {
-        // The `#` is inside the path, not an anchor.
-        return Some((target, ParsedAnchor::default()));
-    }
-    match parse_anchor(fragment) {
-        LineAnchor::Invalid => None,
-        LineAnchor::None => Some((path, ParsedAnchor::default())),
-        LineAnchor::Line { line, column } => Some((
-            path,
-            ParsedAnchor {
-                line: Some(line),
-                column,
-            },
-        )),
-    }
-}
-
-/// `path:12`, `path:12:5` and `path:12-20` line suffixes. As with fragments,
-/// a zero line or a backwards range makes the whole target not a file link.
-fn split_line_suffix(target: &str) -> Option<(&str, ParsedAnchor)> {
-    let Some(colon) = target.rfind(':') else {
-        return Some((target, ParsedAnchor::default()));
-    };
-    let last = &target[colon + 1..];
-    if let Some((start, end)) = last.split_once('-') {
-        let (Ok(start), Ok(end)) = (start.parse::<u32>(), end.parse::<u32>()) else {
-            return Some((target, ParsedAnchor::default()));
-        };
-        return if start == 0 || end < start {
-            None
-        } else {
-            Some((
-                &target[..colon],
-                ParsedAnchor {
-                    line: Some(start),
-                    column: None,
-                },
-            ))
-        };
-    }
-    if last.parse::<u32>().is_ok_and(|number| number == 0) {
-        return None;
-    }
-    let Some(last_number) = positive_number(last) else {
-        return Some((target, ParsedAnchor::default()));
-    };
-    let before = &target[..colon];
-    let anchor = match before.rfind(':') {
-        Some(colon2) => match positive_number(&before[colon2 + 1..]) {
-            Some(line) => (
-                &before[..colon2],
-                ParsedAnchor {
-                    line: Some(line),
-                    column: Some(last_number),
-                },
-            ),
-            // `a:0:5` rejects like `a:0`; `a:x:5` keeps `a:x` as the path —
-            // the `:` it carries rejects it as a scheme-shaped target anyway.
-            None if before[colon2 + 1..].parse::<u32>() == Ok(0) => return None,
-            None => (
-                before,
-                ParsedAnchor {
-                    line: Some(last_number),
-                    column: None,
-                },
-            ),
-        },
-        None => (
-            before,
-            ParsedAnchor {
-                line: Some(last_number),
-                column: None,
-            },
-        ),
-    };
-    Some(anchor)
-}
-
-/// `#L12`, `#L12C5`, `#L12-L20`, `#L12-20` or `#L12C1-L20C3` — the parsed
-/// first line plus its column when present.
-fn parse_anchor(fragment: &str) -> LineAnchor {
-    let Some(rest) = fragment.strip_prefix('L') else {
-        return LineAnchor::None;
-    };
-    let (start_part, end_part) = match rest.split_once('-') {
-        Some((start, end)) => (start, Some(end.strip_prefix('L').unwrap_or(end))),
-        None => (rest, None),
-    };
-    let Some((line, column)) = parse_line_column(start_part) else {
-        return LineAnchor::None;
-    };
-    if line == 0 || column == Some(0) {
-        return LineAnchor::Invalid;
-    }
-    if let Some(end_part) = end_part {
-        let Some((end, end_column)) = parse_line_column(end_part) else {
-            return LineAnchor::None;
-        };
-        if end < line || end_column == Some(0) {
-            return LineAnchor::Invalid;
-        }
-    }
-    LineAnchor::Line { line, column }
-}
-
-/// `12` or `12C5` — the line number plus an optional column.
-fn parse_line_column(value: &str) -> Option<(u32, Option<u32>)> {
-    let (line, column) = match value.split_once('C') {
-        Some((line, column)) => (line, Some(column)),
-        None => (value, None),
-    };
-    let line = line.parse::<u32>().ok()?;
-    let column = match column {
-        Some(column) => Some(column.parse::<u32>().ok()?),
-        None => None,
-    };
-    Some((line, column))
-}
+pub(crate) use zeron_proto::file_links::without_location;
 
 /// The resolved link's inside-the-root tail: an absolute decoded path keeps
 /// only its workspace-relative remainder, anything else must already be a
@@ -577,76 +337,6 @@ fn safe_relative_path(path: &Path) -> Option<String> {
         }
     }
     (!parts.is_empty()).then(|| parts.join("/"))
-}
-
-/// The path-safety checks every classified link passes, on the decoded path:
-/// no backslashes, no `?`, no control characters, no `.`/`..`/empty segments.
-/// A single leading `/` segment is allowed — it marks an absolute path.
-fn clean_path(path: &str) -> bool {
-    !path.contains(['\\', '?'])
-        && !path.chars().any(char::is_control)
-        && path
-            .split('/')
-            .enumerate()
-            .all(|(index, part)| !(part.is_empty() && index != 0) && !matches!(part, "." | ".."))
-}
-
-fn file_name(path: &str) -> &str {
-    path.rsplit('/').next().unwrap_or(path)
-}
-
-/// `scheme:` at the start of a relative path means it is a URL, not a file.
-fn has_url_scheme(path: &str) -> bool {
-    let mut chars = path.chars();
-    if !chars
-        .next()
-        .is_some_and(|first| first.is_ascii_alphabetic())
-    {
-        return false;
-    }
-    for character in chars {
-        match character {
-            ':' => return true,
-            character
-                if character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.') => {}
-            _ => return false,
-        }
-    }
-    false
-}
-
-fn positive_number(value: &str) -> Option<u32> {
-    value.parse::<u32>().ok().filter(|number| *number > 0)
-}
-
-fn percent_decode_path(encoded: &str) -> Option<String> {
-    let raw = encoded.as_bytes();
-    let mut bytes = Vec::with_capacity(raw.len());
-    let mut at = 0;
-    while at < raw.len() {
-        if raw[at] == b'%' {
-            let hex = std::str::from_utf8(raw.get(at + 1..at + 3)?).ok()?;
-            bytes.push(u8::from_str_radix(hex, 16).ok()?);
-            at += 3;
-        } else {
-            bytes.push(raw[at]);
-            at += 1;
-        }
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn percent_encode_path(path: &str) -> String {
-    let mut out = String::new();
-    for byte in path.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~' | b'/') {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            out.push_str(&format!("{byte:02X}"));
-        }
-    }
-    out
 }
 
 #[cfg(test)]
