@@ -87,7 +87,7 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         list.imageFetcher = { [weak self] ref in await self?.source.image(ref) }
         list.onOpenDocument = { [weak self] url in
             guard let self, let client = self.app.client,
-                  let path = documentLinkPath(url: url.absoluteString, basePath: nil) else { return false }
+                  let path = documentLinkPath(url: url, basePath: nil) else { return false }
             let preview = DocumentPreviewViewController(client: client, chatId: self.chatId, path: path)
             if let nav = self.navigationController { nav.pushViewController(preview, animated: true) }
             else { self.present(UINavigationController(rootViewController: preview), animated: true) }

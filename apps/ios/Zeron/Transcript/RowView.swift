@@ -390,8 +390,8 @@ final class RowView: UIView {
         }
     }
 
-    /// Link at a point in row coordinates.
-    func link(at point: CGPoint) -> URL? {
+    /// The raw Markdown target of the link at a point in row coordinates.
+    func linkTarget(at point: CGPoint) -> String? {
         guard let d = model?.display else { return nil }
         for l in d.links {
             var p = point
@@ -400,7 +400,7 @@ final class RowView: UIView {
                 p = CGPoint(x: point.x - sv.frame.minX + sv.contentOffset.x, y: point.y - sv.frame.minY)
             }
             let r = CGRect(x: CGFloat(l.x), y: CGFloat(l.y), width: CGFloat(l.w), height: CGFloat(l.h)).insetBy(dx: -4, dy: -2)
-            if r.contains(p) { return URL(string: l.url) }
+            if r.contains(p) { return l.url }
         }
         return nil
     }

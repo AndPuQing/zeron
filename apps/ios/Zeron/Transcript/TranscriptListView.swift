@@ -118,6 +118,9 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
 
     /// Following the tail: new content keeps the bottom in view.
     private(set) var following = true
+    /// A document opens at its first line; a conversation at its tail,
+    /// whether or not it follows.
+    private let startsAtTop: Bool
     var onFollowChange: ((Bool) -> Void)?
     /// A row's button was tapped (`sign-in` on an error card).
     var onAction: ((String) -> Void)?
@@ -130,7 +133,9 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     /// A sender caption or fork seam opens its chat through the shell.
     var onOpenChat: ((String) -> Void)?
     /// Returns true when the session handled a host file link internally.
-    var onOpenDocument: ((URL) -> Bool)?
+    /// Gets the link's raw Markdown target, as Android does: URL parsing
+    /// would re-encode a literal `%` before the shared link grammar sees it.
+    var onOpenDocument: ((String) -> Bool)?
 
     // MARK: Runway (desktop transcript.rs `OwnTurnAnchor`)
     //
@@ -266,9 +271,11 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         let width: Float
     }
 
-    init(engine: TranscriptView) {
+    init(engine: TranscriptView, startsAtTop: Bool = false) {
         self.engine = engine
+        self.startsAtTop = startsAtTop
         super.init(frame: .zero)
+        following = !startsAtTop
         alwaysBounceVertical = true
         keyboardDismissMode = .interactive
         contentInsetAdjustmentBehavior = .always
@@ -435,9 +442,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         }
         if first {
             for i in 0..<frame.rowCount() { if let p = frame.placement(index: i) { knownKeys.insert(p.key) } }
-            // A document releases follow before its first frame, so it opens
-            // at its heading. Live conversations still start at the tail.
-            contentOffset.y = following ? maxOffsetY : -adjustedContentInset.top
+            contentOffset.y = startsAtTop ? -adjustedContentInset.top : maxOffsetY
         } else if following {
             // A reflow for a new width (rotation, iPhone Duo folding) lands
             // on the tail at once; the follow spring visibly glided there
@@ -682,8 +687,10 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     @objc private func tapped(_ tap: UITapGestureRecognizer) {
         let point = tap.location(in: self)
         guard let row = visible.values.first(where: { !$0.isHidden && $0.frame.contains(point) }),
-              let url = row.link(at: tap.location(in: row))
+              let target = row.linkTarget(at: tap.location(in: row))
         else { return }
+        if onOpenDocument?(target) == true { return }
+        guard let url = URL(string: target) else { return }
         rowView(row, open: url)
     }
 
@@ -707,7 +714,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     }
 
     func rowView(_ view: RowView, open url: URL) {
-        if onOpenDocument?(url) == true { return }
+        if onOpenDocument?(url.absoluteString) == true { return }
         // Chat links (the fork seam) route through the shell, not Safari.
         if url.scheme == "zerun", url.host == "chat" {
             let id = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

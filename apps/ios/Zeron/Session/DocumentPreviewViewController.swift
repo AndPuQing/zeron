@@ -13,7 +13,7 @@ final class DocumentPreviewViewController: UIViewController {
         self.list.apply(self.engine.frame())
     }
     private lazy var engine = TranscriptView(text: TextEngine.shared, listener: relay)
-    private lazy var list = TranscriptListView(engine: engine)
+    private lazy var list = TranscriptListView(engine: engine, startsAtTop: true)
     private let notice = UILabel()
     private let status = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -45,10 +45,12 @@ final class DocumentPreviewViewController: UIViewController {
         notice.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(notice)
         list.translatesAutoresizingMaskIntoConstraints = false
-        list.releaseFollow()
         list.onOpenDocument = { [weak self] url in
-            guard let self, let target = documentLinkPath(url: url.absoluteString, basePath: self.path) else { return false }
-            self.navigationController?.pushViewController(DocumentPreviewViewController(client: self.client, chatId: self.chatId, path: target), animated: true)
+            guard let self, let target = documentLinkPath(url: url, basePath: self.path) else { return false }
+            // A link to this document (`guide.md#usage`) stays on it.
+            if target != self.path {
+                self.navigationController?.pushViewController(DocumentPreviewViewController(client: self.client, chatId: self.chatId, path: target), animated: true)
+            }
             return true
         }
         view.addSubview(list)
@@ -110,7 +112,7 @@ final class DocumentPreviewViewController: UIViewController {
             } catch {
                 guard !Task.isCancelled, let self else { return }
                 self.spinner.stopAnimating()
-                self.status.text = String(describing: error)
+                self.status.text = CloudStore.message(error)
                 self.retry.isHidden = false
             }
         }

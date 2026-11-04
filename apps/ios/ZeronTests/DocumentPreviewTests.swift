@@ -20,14 +20,24 @@ final class DocumentPreviewTests: XCTestCase {
         }
         let frame = engine.frame()
         XCTAssertGreaterThan(frame.totalHeight(), 800)
-        let reader = TranscriptListView(engine: engine)
+        let reader = TranscriptListView(engine: engine, startsAtTop: true)
         reader.frame = CGRect(x: 0, y: 0, width: 390, height: 500)
-        reader.releaseFollow()
         reader.apply(frame)
         XCTAssertEqual(reader.contentOffset.y, -reader.adjustedContentInset.top, accuracy: 1)
+        XCTAssertFalse(reader.following)
+        // A conversation that isn't following still opens at its tail.
         let chat = TranscriptListView(engine: engine)
         chat.frame = reader.frame
+        chat.releaseFollow()
         chat.apply(frame)
         XCTAssertGreaterThan(chat.contentOffset.y, 0)
+    }
+
+    func testSharedLinkGrammarMatchesTheRawAndEncodedSpellings() {
+        // Android hands over the raw Markdown target; URL(string:) encodes a literal `%`.
+        XCTAssertEqual(documentLinkPath(url: "100%.md", basePath: nil), "100%.md")
+        XCTAssertEqual(documentLinkPath(url: "100%25.md", basePath: nil), "100%.md")
+        XCTAssertEqual(documentLinkPath(url: "guide.md#usage", basePath: "docs/guide.md"), "docs/guide.md")
+        XCTAssertNil(documentLinkPath(url: "../../.ssh/id_ed25519", basePath: "docs/guide.md"))
     }
 }
