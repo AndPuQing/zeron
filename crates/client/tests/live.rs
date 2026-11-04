@@ -587,9 +587,8 @@ impl zeron_rpc::RpcService for HostService {
                             "data": base64::engine::general_purpose::STANDARD.encode(&text.as_bytes()[request.offset..end]),
                             "nextOffset": end, "done": end == text.len()})
                     }
-                    "/etc/hosts" => json!({"checkoutId": "", "path": "/etc/hosts", "contentHash": "h2",
-                        "size": 6, "textLen": 6, "readOnlyReason": "tooLarge",
-                        "data": base64::engine::general_purpose::STANDARD.encode("secret"), "nextOffset": 6, "done": true}),
+                    // The host refuses outside files (engine `read_text_chunk`).
+                    "/etc/hosts" => return Err(zeron_rpc::RpcError::Failed("file is outside the workspace".into())),
                     _ => return Err(zeron_rpc::RpcError::Failed("file not found".into())),
                 }
             }
@@ -785,8 +784,7 @@ async fn host_rpcs_ride_the_device_relay() {
     let c = client.clone();
     let missing = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "missing.md", 4 << 20).await }).await;
     assert!(missing.err().unwrap().to_string().contains("wasn't found on the host"));
-    // A host file outside the workspace never reaches the viewer, even when
-    // another reason already made it read-only.
+    // A host file outside the workspace never reaches the viewer.
     let c = client.clone();
     let outside = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "/etc/hosts", 4 << 20).await }).await;
     assert!(outside.err().unwrap().to_string().contains("outside the conversation's workspace"));

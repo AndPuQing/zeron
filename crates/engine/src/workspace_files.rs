@@ -530,8 +530,10 @@ impl WorkspaceFiles {
         result
     }
 
-    /// [`Self::read_file`] in relay-sized slices. Every slice re-reads the
-    /// file, so a change between slices fails on the content hash.
+    /// [`Self::read_file`] in relay-sized slices, for files inside the
+    /// workspace only: an outside host file never leaves this device. Every
+    /// slice re-reads the file, so a change between slices fails on the
+    /// content hash.
     pub async fn read_text_chunk(
         &self,
         request: zeron_proto::ReadWorkspaceTextChunkRequest,
@@ -547,6 +549,13 @@ impl WorkspaceFiles {
                 path: request.path,
             })
             .await?;
+        // Outside reads always clear the checkout identity, whatever else
+        // made them read-only.
+        if file.checkout_id.is_empty() {
+            return Err(WorkspaceFilesError::Authorization(
+                "file is outside the workspace".into(),
+            ));
+        }
         text_chunk(
             file,
             request.offset,

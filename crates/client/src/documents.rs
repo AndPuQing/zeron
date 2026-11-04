@@ -15,6 +15,8 @@ use crate::{Client, ClientError};
 
 /// Deadline for one host call; a long document takes several.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
+const OUTSIDE_WORKSPACE: &str =
+    "This file is outside the conversation's workspace, so it can't be previewed.";
 
 /// A document's text and the host context captured for the request.
 pub struct HostDocument {
@@ -32,7 +34,8 @@ impl Client {
     /// Read up to about `limit` bytes of a document through its chat's
     /// execution host, never the viewer's disk. A relative path names a file
     /// below the chat's folder, the base the agent and the transcript's
-    /// images use. Only files inside the chat's workspace are returned.
+    /// images use. Only files inside the chat's workspace are returned, and
+    /// none from a chat whose folder is the host's home.
     pub async fn read_chat_file(
         &self,
         chat_id: &str,
@@ -48,6 +51,11 @@ impl Client {
             space_id: None,
             checkout_path: None,
         };
+        if home_folder(chat.cwd.as_deref()) {
+            return Err(ClientError::InvalidArgument(
+                "Documents can't be previewed from a conversation in the host's home folder.".into(),
+            ));
+        }
         let path = host_path(path, chat.cwd.as_deref());
         let chunked = self.read_text_chunks(&chat.device_id, &target, &path, limit).await;
         let (text, read_only_reason, truncated) =
@@ -157,14 +165,18 @@ fn host_path(path: &str, cwd: Option<&str>) -> String {
     }
 }
 
+/// A chat in the host's home folder: its workspace is the whole home, keys
+/// and all, so it previews nothing. Images fail closed for it as well.
+fn home_folder(cwd: Option<&str>) -> bool {
+    cwd.is_none_or(zeron_proto::projectless::is_home_cwd)
+}
+
 /// Fail closed on a host file beyond the chat's workspace. The host marks an
 /// outside read `OutsideWorkspace` only when nothing else already made it
 /// read-only, but it always clears the checkout identity.
 fn inside_workspace(checkout_id: &str, reason: Option<WorkspaceReadOnlyReason>) -> Result<()> {
     if checkout_id.is_empty() || reason == Some(WorkspaceReadOnlyReason::OutsideWorkspace) {
-        return Err(ClientError::InvalidArgument(
-            "This file is outside the conversation's workspace, so it can't be previewed.".into(),
-        ));
+        return Err(ClientError::InvalidArgument(OUTSIDE_WORKSPACE.into()));
     }
     Ok(())
 }
@@ -179,6 +191,7 @@ fn document_error(method: &str, error: ClientError) -> ClientError {
                 .unwrap_or(&message);
             ClientError::HostError(match message {
                 "file not found" => "This document wasn't found on the host.".into(),
+                "file is outside the workspace" => OUTSIDE_WORKSPACE.into(),
                 other => other.to_owned(),
             })
         }
@@ -201,6 +214,8 @@ mod tests {
         assert_eq!(host_path("/etc/a.md", Some("/repo")), "/etc/a.md");
         assert_eq!(host_path("docs/a.md", Some("~/.zeron/x")), "docs/a.md");
         assert_eq!(host_path("docs/a.md", None), "docs/a.md");
+        assert!(home_folder(None) && home_folder(Some("~")) && home_folder(Some("~/")));
+        assert!(!home_folder(Some("~/.zeron/x")) && !home_folder(Some("/repo")));
     }
 
     #[test]
@@ -215,5 +230,10 @@ mod tests {
             ClientError::HostError("ReadWorkspaceTextChunk: file not found".into()),
         );
         assert!(error.to_string().contains("wasn't found on the host"));
+        let error = document_error(
+            methods::READ_WORKSPACE_TEXT_CHUNK,
+            ClientError::HostError("ReadWorkspaceTextChunk: file is outside the workspace".into()),
+        );
+        assert!(error.to_string().contains("outside the conversation's workspace"));
     }
 }
