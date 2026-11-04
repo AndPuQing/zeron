@@ -83,7 +83,7 @@ impl Store {
             }
         }
         let mut found = None;
-        super::discovery::visit_files(&self.roots(), |path| {
+        super::discovery::visit_files_for_resume(&self.roots(), |path| {
             if matches_id(&path, id) {
                 found = Some(path);
                 Ok(true)
@@ -228,6 +228,24 @@ mod tests {
             "a Pi-format file must never resolve as an OMP session"
         );
     }
+    #[cfg(unix)]
+    #[test]
+    fn resume_fallback_ignores_unreadable_projects_without_accepting_wrong_identity() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        let file = omp_session("wanted", &agent);
+        let blocked = agent.join("sessions/blocked");
+        std::fs::create_dir(&blocked).unwrap();
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0)).unwrap();
+        let store = Store::new(None, Some(agent));
+        let found = store.resolve("wanted", dir.path());
+        let missing = store.resolve("not-present", dir.path());
+        std::fs::set_permissions(&blocked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(found.unwrap(), file.canonicalize().unwrap());
+        assert!(missing.unwrap_err().to_string().contains("was not found"));
+    }
+
     #[test]
     fn remember_round_trips_and_missing_file_is_not_recreated() {
         let dir = tempfile::tempdir().unwrap();

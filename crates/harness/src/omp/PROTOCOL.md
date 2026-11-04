@@ -84,3 +84,9 @@ existing newest-first, 50-file pagination without a 20,000-entry failure or sile
 truncation. Configured roots are canonicalized and deduplicated; child symlinks
 are not followed. Runtime-indexed session paths still require OMP identity checks,
 and transcript read/import size limits remain in effect.
+
+Overlapping roots retain the full depth allowance of each configured root while
+returning each transcript only once. Resume fallback skips filesystem errors in
+unrelated directories and keeps searching other roots, as native identity checks
+still gate the result. History listing reports access errors rather than silently
+presenting an incomplete inventory.

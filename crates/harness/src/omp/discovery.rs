@@ -1,7 +1,7 @@
 //! Enumerate native OMP transcripts, not the artifacts stored beside them.
 use crate::HarnessError;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -23,38 +23,92 @@ fn artifact_dir(path: &Path) -> bool {
 /// roots may be symlinked and are deduplicated by their canonical identity.
 pub(super) fn visit_files(
     roots: &[PathBuf],
+    visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
+) -> Result<(), HarnessError> {
+    walk(roots, IoPolicy::Report, visit)
+}
+
+/// Resume is a best-effort search: an unreadable directory must not prevent
+/// finding the requested identity in another directory or configured root.
+/// Listing remains strict so a partial inventory is never presented as complete.
+pub(super) fn visit_files_for_resume(
+    roots: &[PathBuf],
+    visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
+) -> Result<(), HarnessError> {
+    walk(roots, IoPolicy::Skip, visit)
+}
+
+#[derive(Clone, Copy)]
+enum IoPolicy {
+    Report,
+    Skip,
+}
+
+impl IoPolicy {
+    fn read<T>(self, result: std::io::Result<T>) -> Result<Option<T>, HarnessError> {
+        match result {
+            Ok(value) => Ok(Some(value)),
+            Err(e) if matches!(self, Self::Skip) || e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+}
+
+fn open_dir(
+    path: &Path,
+    depth: usize,
+    visited: &mut HashMap<PathBuf, usize>,
+    policy: IoPolicy,
+) -> Result<Option<fs::ReadDir>, HarnessError> {
+    // A directory reached from an enclosing root has less depth left. A later
+    // explicit root must be allowed to revisit it with its full depth budget.
+    if visited.get(path).is_some_and(|previous| *previous <= depth) {
+        return Ok(None);
+    }
+    let entries = policy.read(fs::read_dir(path))?;
+    if entries.is_some() {
+        visited.insert(path.to_owned(), depth);
+    }
+    Ok(entries)
+}
+
+fn walk(
+    roots: &[PathBuf],
+    policy: IoPolicy,
     mut visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
 ) -> Result<(), HarnessError> {
-    let mut visited = HashSet::new();
+    let mut visited = HashMap::new();
+    let mut files = HashSet::new();
     for root in roots {
-        let root = match root.canonicalize() {
-            Ok(path) => path,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        };
-        if !visited.insert(root.clone()) {
+        let Some(root) = policy.read(root.canonicalize())? else {
             continue;
-        }
-        let mut stack = vec![(fs::read_dir(root)?, 0)];
+        };
+        let Some(entries) = open_dir(&root, 0, &mut visited, policy)? else {
+            continue;
+        };
+        let mut stack = vec![(entries, 0)];
         while let Some((entries, depth)) = stack.last_mut() {
             let Some(entry) = entries.next() else {
                 stack.pop();
                 continue;
             };
-            let entry = entry?;
-            let kind = entry.file_type()?;
+            let Some(entry) = policy.read(entry)? else {
+                continue;
+            };
+            let Some(kind) = policy.read(entry.file_type())? else {
+                continue;
+            };
             let path = entry.path();
             if kind.is_dir() && *depth < 2 && !artifact_dir(&path) {
                 let depth = *depth + 1;
-                if visited.insert(path.clone()) {
-                    match fs::read_dir(path) {
-                        Ok(entries) => stack.push((entries, depth)),
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e.into()),
-                    }
+                if let Some(entries) = open_dir(&path, depth, &mut visited, policy)? {
+                    stack.push((entries, depth));
                 }
             } else if kind.is_file()
                 && path.extension().is_some_and(|e| e == "jsonl")
+                && files.insert(path.clone())
                 && visit(path)?
             {
                 return Ok(());
@@ -67,6 +121,100 @@ pub(super) fn visit_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overlapping_roots_keep_each_roots_depth_budget_without_duplicate_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions");
+        let custom = root.join("custom");
+        fs::create_dir_all(custom.join("project/legacy/too-deep")).unwrap();
+        let shallow = custom.join("project/session.jsonl");
+        let deep = custom.join("project/legacy/session.jsonl");
+        fs::write(&shallow, "").unwrap();
+        fs::write(&deep, "").unwrap();
+        fs::write(custom.join("project/legacy/too-deep/session.jsonl"), "").unwrap();
+        let expected = HashSet::from([
+            shallow.canonicalize().unwrap(),
+            deep.canonicalize().unwrap(),
+        ]);
+        for roots in [vec![root.clone(), custom.clone()], vec![custom, root]] {
+            let mut found = Vec::new();
+            visit_files(&roots, |path| {
+                found.push(path);
+                Ok(false)
+            })
+            .unwrap();
+            assert_eq!(
+                found.len(),
+                2,
+                "overlapping roots must not duplicate callbacks"
+            );
+            assert_eq!(found.into_iter().collect::<HashSet<_>>(), expected);
+        }
+    }
+
+    #[test]
+    fn resume_skips_invalid_roots_but_listing_reports_them_and_callbacks_still_fail() {
+        let dir = tempfile::tempdir().unwrap();
+        let invalid = dir.path().join("not-a-directory");
+        fs::write(&invalid, "").unwrap();
+        let good = dir.path().join("sessions");
+        fs::create_dir(&good).unwrap();
+        let transcript = good.join("session.jsonl");
+        fs::write(&transcript, "").unwrap();
+        let roots = [invalid, good];
+        assert!(visit_files(&roots, |_| Ok(false)).is_err());
+        let mut found = vec![];
+        visit_files_for_resume(&roots, |path| {
+            found.push(path);
+            Ok(true)
+        })
+        .unwrap();
+        assert_eq!(found, [transcript.canonicalize().unwrap()]);
+        let error = visit_files_for_resume(&roots, |_| {
+            Err(HarnessError::Protocol("visitor failure".into()))
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("visitor failure"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resume_skips_permission_denied_roots_and_children_without_hiding_listing_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let denied = dir.path().join("denied");
+        let good = dir.path().join("sessions");
+        let child = good.join("unreadable-project");
+        fs::create_dir_all(&denied).unwrap();
+        fs::create_dir_all(&child).unwrap();
+        let transcript = good.join("session.jsonl");
+        fs::write(&transcript, "").unwrap();
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                fs::set_permissions(&self.0, fs::Permissions::from_mode(0o700)).unwrap();
+            }
+        }
+        let _root_guard = Restore(denied.clone());
+        let _child_guard = Restore(child.clone());
+        fs::set_permissions(&denied, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(&child, fs::Permissions::from_mode(0)).unwrap();
+        // Root/privileged test runners can bypass mode bits.
+        if fs::read_dir(&denied).is_ok() {
+            return;
+        }
+        for roots in [vec![denied.clone(), good.clone()], vec![good, denied]] {
+            assert!(visit_files(&roots, |_| Ok(false)).is_err());
+            let mut found = vec![];
+            visit_files_for_resume(&roots, |path| {
+                found.push(path);
+                Ok(false)
+            })
+            .unwrap();
+            assert_eq!(found, [transcript.canonicalize().unwrap()]);
+        }
+    }
 
     #[test]
     fn more_than_twenty_thousand_transcripts_are_not_truncated() {

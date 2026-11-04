@@ -191,11 +191,8 @@ impl OmpHarness {
 }
 fn inventory(roots: &[PathBuf]) -> Result<Vec<PathBuf>, HarnessError> {
     let mut files = vec![];
-    let mut seen = HashSet::new();
     super::discovery::visit_files(roots, |path| {
-        if seen.insert(path.clone()) {
-            files.push(path);
-        }
+        files.push(path);
         Ok(false)
     })?;
     files.sort_by_cached_key(|p| {
