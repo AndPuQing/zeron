@@ -13,8 +13,9 @@ class DocumentPreviewTest {
         lateinit var reader: TranscriptState
         lateinit var chat: TranscriptState
         instrumentation.runOnMainSync {
-            reader = TranscriptState().also { it.following = false }
-            chat = TranscriptState()
+            reader = TranscriptState(startsAtTop = true)
+            // A conversation the reader scrolled away from still opens at its tail.
+            chat = TranscriptState().also { it.following = false }
             val document = DocumentPreview("docs/guide.md",
                 (1..80).joinToString("\n\n") { "## Section $it\n\nDocument content." },
                 true, false, "host", "/repo")

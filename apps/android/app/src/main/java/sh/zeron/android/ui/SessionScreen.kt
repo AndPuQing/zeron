@@ -26,9 +26,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -36,7 +33,6 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
@@ -78,8 +74,6 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import sh.zeron.android.core.AppModel
-import sh.zeron.android.design.Geist
-import sh.zeron.android.design.GeistMono
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
@@ -89,8 +83,6 @@ import uniffi.zeron_core.ComposerState
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
 import uniffi.zeron_core.SessionHandle
-
-private data class TextSheet(val title: String, val text: String, val mono: Boolean)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -447,22 +439,7 @@ fun SessionScreen(
     documentPath?.let { path ->
         DocumentPreviewDialog(core, chatId, path) { documentPath = null }
     }
-    sheet?.let { s ->
-        ModalBottomSheet(onDismissRequest = { sheet = null }) {
-            Text(s.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp))
-            SelectionContainer {
-                Text(
-                    s.text,
-                    fontFamily = if (s.mono) GeistMono else Geist,
-                    style = if (s.mono) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(24.dp),
-                )
-            }
-        }
-    }
+    sheet?.let { s -> TextSheetHost(s) { sheet = null } }
 }
 
 /** How far above the chips and composer the transcript starts to fade. */
