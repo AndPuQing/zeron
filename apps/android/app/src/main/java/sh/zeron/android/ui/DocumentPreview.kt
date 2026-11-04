@@ -67,8 +67,8 @@ private class DocumentEntry(val path: String) {
     var source by mutableStateOf(false)
     /** A file beyond the chat's workspace, waiting for the reader's answer. */
     var confirm by mutableStateOf<DocumentRead.NeedsConfirmation?>(null)
-    /** The reader agreed to open it; later reads (Retry) need not ask again. */
-    var allowOutside = false
+    /** Canonical path the reader agreed to open; Retry keeps the same target. */
+    var approvedPath: String? = null
     /** The reader, kept while deeper documents are open. */
     var transcript: TranscriptState? = null
     /** Whether the reader last rendered Markdown; null before its first render. */
@@ -111,8 +111,9 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
         if (entry.document != null) return@LaunchedEffect
         entry.error = null
         try {
-            when (val read = core.readDocument(chatId, entry.path, entry.allowOutside)) {
-                is DocumentRead.Ready -> { entry.document = read.document }
+            val approved = entry.approvedPath
+            when (val read = core.readDocument(chatId, approved ?: entry.path, approved != null)) {
+                is DocumentRead.Ready -> { entry.document = read.document.copy(path = entry.path) }
                 is DocumentRead.NeedsConfirmation -> { entry.confirm = read }
             }
         }
@@ -186,7 +187,7 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
             confirmButton = {
                 TextButton(onClick = {
                     entry.confirm = null
-                    entry.allowOutside = true
+                    entry.approvedPath = ask.path
                     entry.attempt++
                 }) { Text("Open anyway") }
             },

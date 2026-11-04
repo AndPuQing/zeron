@@ -8,8 +8,8 @@ final class DocumentPreviewViewController: UIViewController {
     private var document: DocumentPreview?
     private var source = false
     private var request: Task<Void, Never>?
-    /// The reader agreed to open a file beyond the chat's workspace.
-    private var allowOutside = false
+    /// Canonical path the reader agreed to open; Retry keeps the same target.
+    private var approvedPath: String?
     /// A confirmation that arrived before the view was on screen.
     private var pendingConfirmation: UIAlertController?
     private lazy var relay: FrameRelay = FrameRelay { [weak self] in
@@ -93,12 +93,13 @@ final class DocumentPreviewViewController: UIViewController {
         status.text = "Loading document…"
         retry.isHidden = true
         spinner.startAnimating()
-        let client = self.client, chatId = self.chatId, path = self.path, allowOutside = self.allowOutside
+        let client = self.client, chatId = self.chatId
+        let path = approvedPath ?? self.path, allowOutside = approvedPath != nil
         request = Task { @MainActor [weak self] in
             do {
                 let read = try await client.readDocument(chatId: chatId, path: path, allowOutside: allowOutside)
                 guard !Task.isCancelled, let self else { return }
-                let doc: DocumentPreview
+                var doc: DocumentPreview
                 switch read {
                 case let .ready(document):
                     doc = document
@@ -106,6 +107,8 @@ final class DocumentPreviewViewController: UIViewController {
                     self.confirmOutside(device: deviceName, path: outsidePath)
                     return
                 }
+                // Relative links keep the document's original conversation context.
+                doc.path = self.path
                 self.document = doc
                 self.spinner.stopAnimating()
                 self.state.isHidden = !doc.text.isEmpty
@@ -142,7 +145,7 @@ final class DocumentPreviewViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.leave() })
         alert.addAction(UIAlertAction(title: "Open anyway", style: .default) { [weak self] _ in
             guard let self else { return }
-            self.allowOutside = true
+            self.approvedPath = path
             self.loadDocument()
         })
         if view.window == nil {

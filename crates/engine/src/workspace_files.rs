@@ -203,6 +203,9 @@ impl WorkspaceRelativePath {
                     let value = value
                         .to_str()
                         .ok_or_else(|| bad_path("path must be UTF-8"))?;
+                    if cfg!(windows) && value.contains(':') {
+                        return Err(bad_path("path contains an invalid character"));
+                    }
                     if value.eq_ignore_ascii_case(".git") {
                         return Err(bad_path(".git paths are not accessible"));
                     }
@@ -512,7 +515,8 @@ impl WorkspaceFiles {
         let workspace = self.resolve_target(&request.target).await?;
         // Only a chat target may read by absolute path; space targets keep
         // the workspace-relative grammar.
-        let absolute = request.target.chat_id.is_some() && request.path.starts_with('/');
+        let absolute = request.target.chat_id.is_some()
+            && (request.path.starts_with('/') || Path::new(&request.path).is_absolute());
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_on_drop = CancelOnDrop::new(cancel.clone());
         let result = tokio::task::spawn_blocking(move || {
@@ -546,7 +550,8 @@ impl WorkspaceFiles {
             ));
         }
         let workspace = self.resolve_target(&request.target).await?;
-        let absolute = request.target.chat_id.is_some() && request.path.starts_with('/');
+        let absolute = request.target.chat_id.is_some()
+            && (request.path.starts_with('/') || Path::new(&request.path).is_absolute());
         let data_dir = self.inner.repos.data_dir().to_path_buf();
         tokio::task::spawn_blocking(move || {
             let home = crate::repos::home_dir();
@@ -1682,17 +1687,22 @@ fn credential_location(path: &Path, home: &Path, data_dir: &Path) -> bool {
             path.to_path_buf()
         }
     };
-    let (path, home) = (fold(path), fold(home));
-    for data in [fold(data_dir), home.join(".zerun")] {
-        if path.starts_with(&data) {
-            return !DATA_DIR_WORKSPACES
+    let protected = |path: &Path| {
+        fold(&std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()))
+    };
+    let path = fold(path);
+    for data in [protected(data_dir), protected(&home.join(".zerun"))] {
+        if path.starts_with(&data)
+            && !DATA_DIR_WORKSPACES
                 .iter()
-                .any(|folder| path.starts_with(data.join(folder)));
+                .any(|folder| path.starts_with(data.join(folder)))
+        {
+            return true;
         }
     }
     CREDENTIAL_LOCATIONS
         .iter()
-        .any(|location| path.starts_with(fold(&home.join(location))))
+        .any(|location| path.starts_with(protected(&home.join(location))))
 }
 
 /// One `ReadWorkspaceTextChunk` slice. The path keeps the jail rules of the
@@ -1722,6 +1732,8 @@ fn read_text_chunk_blocking(
     }
     // A chat in the host's home folder has no workspace to stay inside.
     let inside = inside && canonical(&workspace.root) != home;
+    #[cfg(windows)]
+    let full = dunce::simplified(&full);
     let full_path = full.to_string_lossy().into_owned();
     if !inside && !request.allow_outside {
         return Ok(zeron_proto::WorkspaceTextChunk {
@@ -1805,14 +1817,18 @@ enum AbsoluteRead {
 }
 
 /// Canonicalize an absolute request path and classify it against the
-/// workspace. The wire grammar mirrors the link side's safety envelope: one
-/// leading slash, never `//`, no trailing slash, no `?`, backslashes, NUL or
-/// `.`/`..` segments. A missing path is the same `NotFound` a relative read
-/// reports.
+/// workspace. POSIX paths and local Windows drive paths keep the link
+/// grammar's restrictions: no network/device paths, trailing separators,
+/// `?`, control characters or `.`/`..` segments. A missing path is the same
+/// `NotFound` a relative read reports.
 fn resolve_absolute_read(
     workspace: &ResolvedWorkspace,
     path: &str,
 ) -> Result<AbsoluteRead, WorkspaceFilesError> {
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    #[cfg(windows)]
+    let path = path.as_str();
     if path.len() > MAX_ABSOLUTE_PATH_BYTES
         || path.len() == 1
         || path.starts_with("//")
@@ -3954,7 +3970,6 @@ mod image_tests {
         request.offset = usize::MAX;
         assert!(read_image_blocking(&root, &path, &request).is_err());
     }
-    #[cfg(unix)]
     fn chunk_request(path: &str, allow_outside: bool) -> zeron_proto::ReadWorkspaceTextChunkRequest {
         zeron_proto::ReadWorkspaceTextChunkRequest {
             target: WorkspaceTarget {
@@ -4133,6 +4148,114 @@ mod image_tests {
         let binary = text_chunk(tests::read_fixture(b"a\0b"), 0, None).unwrap();
         assert!(binary.done && binary.data.is_empty() && binary.text_len.is_none());
         assert_eq!(binary.read_only_reason, Some(WorkspaceReadOnlyReason::Binary));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credential_locations_follow_their_symlinked_roots() {
+        for folder in ["repo/credential-storage", ".zerun/scratch/keys"] {
+            let (_dir, home, workspace) = chunk_host();
+            let keys = home.join(folder);
+            std::fs::rename(home.join(".ssh"), &keys).unwrap();
+            std::os::unix::fs::symlink(&keys, home.join(".ssh")).unwrap();
+            for path in [home.join(".ssh/id_ed25519"), keys.join("id_ed25519")] {
+                for allow in [false, true] {
+                    let request = chunk_request(&path.to_string_lossy(), allow);
+                    let error = read_text_chunk_blocking(
+                        &workspace,
+                        &home,
+                        &home.join(".zerun"),
+                        true,
+                        &request,
+                    )
+                    .unwrap_err();
+                    assert!(error.to_string().contains("never previewed"));
+                }
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_confirmed_path_keeps_its_target_when_the_original_link_moves() {
+        use base64::Engine as _;
+        let (_dir, home, workspace) = chunk_host();
+        let data = home.join(".zerun");
+        let link = workspace.root.join("link.md");
+        std::fs::write(home.join("notes/other.md"), "other").unwrap();
+        std::os::unix::fs::symlink(home.join("notes/plan.md"), &link).unwrap();
+        let asked = read_text_chunk_blocking(
+            &workspace,
+            &home,
+            &data,
+            true,
+            &chunk_request(&link.to_string_lossy(), false),
+        )
+        .unwrap();
+        assert!(asked.data.is_empty());
+        std::fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(home.join("notes/other.md"), &link).unwrap();
+        // The phone reads the confirmed path instead of resolving the original link again.
+        let opened = read_text_chunk_blocking(
+            &workspace,
+            &home,
+            &data,
+            true,
+            &chunk_request(&asked.path, true),
+        )
+        .unwrap();
+        assert_eq!(opened.path, asked.path);
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(opened.data)
+                .unwrap(),
+            b"outside"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_document_reads_use_the_chat_subdirectory() {
+        use base64::Engine as _;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        for (path, text) in [("docs/guide.md", "root"), ("pkg/docs/guide.md", "package")] {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let workspace = ResolvedWorkspace {
+            checkout_id: "checkout".into(),
+            root: root.clone(),
+        };
+        let folder = root.join("pkg");
+        let cwd = dunce::simplified(&folder).to_string_lossy();
+        let path = zeron_proto::chat_images::resolve_path("docs/guide.md", Some(&cwd));
+        for path in [path.clone(), path.replace('\\', "/")] {
+            assert!(Path::new(&path).is_absolute());
+            let chunk = read_text_chunk_blocking(
+                &workspace,
+                &root.join("home"),
+                &root.join("data"),
+                true,
+                &chunk_request(&path, false),
+            )
+            .unwrap();
+            assert_eq!(chunk.checkout_id, "checkout");
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(chunk.data)
+                    .unwrap(),
+                b"package"
+            );
+        }
+        for path in [
+            r"\\server\share\guide.md",
+            r"\\?\C:\guide.md",
+            r"\\.\C:\guide.md",
+        ] {
+            assert!(resolve_absolute_read(&workspace, path).is_err());
+        }
     }
 
     #[test]

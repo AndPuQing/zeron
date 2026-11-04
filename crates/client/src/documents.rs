@@ -180,10 +180,11 @@ impl Client {
 /// differs when the project is a subfolder of its repository. A home-relative
 /// folder (a projectless chat's) is the host's root for relative paths already.
 fn host_path(path: &str, cwd: Option<&str>) -> String {
+    use zeron_proto::chat_images::{is_host_absolute, resolve_path};
     match cwd.map(str::trim) {
-        Some(cwd) if cwd.starts_with('/') && !path.starts_with('/') => {
-            format!("{}/{}", cwd.trim_end_matches('/'), path.trim_start_matches("./"))
-        }
+        Some(cwd) if is_host_absolute(cwd) => resolve_path(path, Some(cwd)),
+        // A legacy host's home-folder confirmation uses this display spelling.
+        _ if home_folder(cwd) => path.strip_prefix("~/").unwrap_or(path).to_owned(),
         _ => path.to_owned(),
     }
 }
@@ -233,9 +234,14 @@ mod tests {
     #[test]
     fn relative_paths_join_an_absolute_chat_folder_only() {
         assert_eq!(host_path("docs/a.md", Some("/repo/pkg/")), "/repo/pkg/docs/a.md");
+        assert_eq!(host_path("docs/a.md", Some("C:/repo/pkg")), "C:/repo/pkg/docs/a.md");
+        assert_eq!(host_path("docs/a.md", Some(r"C:\repo\pkg")), r"C:\repo\pkg\docs\a.md");
+        assert_eq!(host_path(r"D:\notes\a.md", Some(r"C:\repo\pkg")), r"D:\notes\a.md");
         assert_eq!(host_path("/etc/a.md", Some("/repo")), "/etc/a.md");
         assert_eq!(host_path("docs/a.md", Some("~/.zeron/x")), "docs/a.md");
         assert_eq!(host_path("docs/a.md", None), "docs/a.md");
+        assert_eq!(host_path("~/docs/a.md", Some("~")), "docs/a.md");
+        assert_eq!(host_path("~/docs/a.md", None), "docs/a.md");
         assert!(home_folder(None) && home_folder(Some("~")) && home_folder(Some("~/")));
         assert!(!home_folder(Some("~/.zeron/x")) && !home_folder(Some("/repo")));
     }
