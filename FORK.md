@@ -52,7 +52,7 @@ conflicts.
 | Android | follow upstream navigation, phone/tablet layouts, account/agent login, onboarding, voice and interactive visual implementations; retain canonical/attachment draft storage, session import, side-chat search and explicit side-chat deletion; app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed; signed App Bundles are build artifacts, with Play testing uploads available only through an explicit manual dev dispatch |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
 | iOS companions | follow upstream Companions for subagents, side chats, terminals and their navigation; retain side-chat search, canonical/attachment drafts and explicit deletion |
-| Claude account usage | Do not query subscription quotas or identify unknown Pi Claude tokens through independent background requests; use Claude Code for subscription usage |
+| Agent account usage | No independent provider quota queries, quota resets or background identity lookups; account lists use stored metadata and ignore old probe caches. Preserve explicit sign-in/account switching and usage reported by agent sessions |
 | Mobile side chats | retain empty side chats until explicitly deleted; closing a page or background refresh must not delete a session that may own an unsent draft or attachments |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
 | Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |

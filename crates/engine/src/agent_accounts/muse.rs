@@ -15,11 +15,10 @@
 //! `muse/`, whose entries are linked in turn except `auth.json` — the one
 //! file that is the account's own. Links are refreshed at every spawn.
 //!
-//! Sign-in, identity, usage and sign-out all go through Muse's own account
-//! surface (verified live against Muse 1.4.12; usage stays empty from a
-//! fresh host, see [`AgentAccounts::muse_usage`]) ([`zeron_harness::muse::account`]): Muse mints, refreshes and
-//! locks its tokens itself; zeron never reads one. With no zeron account
-//! selected, Muse runs on its own login (`muse login`), untouched.
+//! Sign-in, identity and sign-out go through Muse's own account surface
+//! ([`zeron_harness::muse::account`]); usage arrives only from active runs.
+//! Muse mints, refreshes and locks its tokens itself; zeron never reads one.
+//! With no zeron account selected, Muse runs on its own login (`muse login`).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,8 +27,8 @@ use zeron_harness::muse::account as msp;
 use zeron_proto::{AgentLoginMode, AgentLoginStart, AgentUsageWindow, HarnessId};
 
 use super::{
-    AgentAccounts, EngineError, LoginFlow, Slot, SlotProfile, TaskLoginState, UsageSnapshot, lock,
-    new_id, now_ms, private_dir, slot_id_for,
+    AgentAccounts, EngineError, LoginFlow, Slot, SlotProfile, TaskLoginState, UsageEntry,
+    UsageSnapshot, lock, new_id, now_ms, private_dir, slot_id_for,
 };
 
 /// The selected zeron-kept account's slot id (absent: Muse's own login).
@@ -349,18 +348,16 @@ impl AgentAccounts {
             return;
         };
         let mut usage = lock(&self.inner.usage);
-        usage
-            .entry(super::usage_key(HarnessId::Muse, &slot.account_key))
-            .or_default()
-            .record(
-                Ok(UsageSnapshot {
+        usage.insert(
+            super::usage_key(HarnessId::Muse, &slot.account_key),
+            UsageEntry {
+                usage: Some(UsageSnapshot {
                     windows,
                     plan_label,
-                    codex_reset_credits: None,
                 }),
-                String::new(),
-                now_ms(),
-            );
+                fetched_at: Some(now_ms()),
+            },
+        );
         self.persist_usage(&usage);
     }
 

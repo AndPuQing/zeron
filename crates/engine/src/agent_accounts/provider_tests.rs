@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::stores::*;
-use super::usage::*;
 use super::*;
 
 fn write(path: &Path, contents: &str) {
@@ -108,12 +107,7 @@ impl MockServer {
         }
     }
 
-    fn hits(&self, prefix: &str) -> usize {
-        lock(&self.hits)
-            .iter()
-            .filter(|h| h.starts_with(prefix))
-            .count()
-    }
+
 }
 
 fn accounts_with(root: &Path, endpoints: ProbeEndpoints) -> (AgentAccounts, AgentAccountsConfig) {
@@ -124,22 +118,16 @@ fn accounts_with(root: &Path, endpoints: ProbeEndpoints) -> (AgentAccounts, Agen
     )
 }
 
-/// Endpoints that all point at `base` (a mock), with slot refresh allowed.
+/// Explicit sign-in endpoints that all point at `base` (a mock).
 fn mocked(base: &str) -> ProbeEndpoints {
     ProbeEndpoints {
         claude_token: format!("{base}/v1/oauth/token"),
         claude_loopback_token: format!("{base}/v1/oauth/token"),
         claude_profile: format!("{base}/api/oauth/profile"),
-        codex_usage: format!("{base}/backend-api/wham/usage"),
-        codex_reset_credits: format!("{base}/backend-api/wham/rate-limit-reset-credits"),
-        codex_consume_reset: format!("{base}/backend-api/wham/rate-limit-reset-credits/consume"),
-        grok_usage: format!("{base}/v1/billing?format=credits"),
         github_api: base.to_string(),
         github_login: base.to_string(),
         openai_auth: base.to_string(),
         openai_port: 0,
-        nous_portal: base.to_string(),
-        allow_slot_refresh: true,
         allow_loopback_http: true,
     }
 }
@@ -266,33 +254,6 @@ fn grok_auth_prefers_auth_x_ai_and_keys_by_identity() {
     assert_eq!(grok_plan(None), None);
 }
 
-#[test]
-fn grok_usage_uses_the_grok_build_share_of_the_period() {
-    let body = serde_json::json!({
-        "config": {
-            "creditUsagePercent": 12.0,
-            "productUsage": [
-                { "product": "Chat", "usagePercent": 80.0 },
-                { "product": "GrokBuild", "usagePercent": 45.0 },
-            ],
-            "currentPeriod": {
-                "type": "USAGE_PERIOD_TYPE_WEEKLY",
-                "end": "2030-01-08T00:00:00Z",
-            },
-        }
-    });
-    let snapshot = grok_usage_snapshot(&body).unwrap();
-    assert_eq!(snapshot.windows.len(), 1);
-    assert_eq!(snapshot.windows[0].label, "Week");
-    assert!((snapshot.windows[0].used_fraction - 0.45).abs() < 1e-6);
-    assert!(snapshot.windows[0].resets_at.is_some());
-    // Blended percent when the product breakdown is missing.
-    let blended = serde_json::json!({ "config": { "creditUsagePercent": 12.0 } });
-    let snapshot = grok_usage_snapshot(&blended).unwrap();
-    assert_eq!(snapshot.windows[0].label, "Period");
-    assert!(grok_usage_snapshot(&serde_json::json!({ "config": {} })).is_none());
-}
-
 #[tokio::test]
 async fn grok_logins_snapshot_swap_and_forget() {
     let tmp = tempfile::tempdir().unwrap();
@@ -412,71 +373,6 @@ async fn forgetting_a_live_login_signs_out_only_that_login() {
     }
 }
 
-#[tokio::test]
-async fn a_rejected_saved_grok_token_refreshes_once_against_its_issuer() {
-    let issuer_hits = Arc::new(AtomicUsize::new(0));
-    let hits = issuer_hits.clone();
-    let server = MockServer::start(move |method, path, body| match (method, path) {
-        ("GET", p) if p.starts_with("/v1/billing") => {
-            // Only the refreshed token is accepted.
-            (200, r#"{"config":{"creditUsagePercent":30}}"#.to_string())
-        }
-        ("POST", "/oauth2/token") => {
-            hits.fetch_add(1, Ordering::SeqCst);
-            assert!(body.contains("grant_type=refresh_token"), "{body}");
-            (
-                200,
-                r#"{"access_token":"fresh","refresh_token":"rotated","expires_in":60}"#.into(),
-            )
-        }
-        _ => (404, String::new()),
-    })
-    .await;
-    // Billing rejects every token but "fresh".
-    let billing = MockServer::start(|_, _, _| (401, String::new())).await;
-    let tmp = tempfile::tempdir().unwrap();
-    let mut endpoints = mocked(&server.base);
-    endpoints.grok_usage = format!("{}/v1/billing?format=credits", billing.base);
-    let (accounts, _) = accounts_with(tmp.path(), endpoints);
-    let mut auth = grok_auth("user-a", "a@x.ai", "stale");
-    auth["https://auth.x.ai::client-1"]["oidc_issuer"] = server.base.clone().into();
-    let detected = parse_grok_auth(auth).unwrap();
-    let slot = Slot {
-        id: slot_id_for(HarnessId::Grok, "user-a"),
-        harness: HarnessId::Grok,
-        account_key: "user-a".into(),
-        profile: detected.profile,
-        credentials: detected.credentials.unwrap(),
-        claude_config: None,
-        saved_at: 1,
-        created_at: None,
-        store_key: detected.store_key,
-    };
-    accounts.write_slot(&slot).unwrap();
-    // The LIVE login is never refreshed by zeron.
-    let live = accounts.grok_usage(&slot, true).await;
-    assert!(matches!(live, Err(ProbeError::Unauthorized { .. })));
-    assert_eq!(issuer_hits.load(Ordering::SeqCst), 0);
-    // A saved one is — once — and the rotated pair lands in its slot.
-    let saved = accounts.grok_usage(&slot, false).await;
-    assert_eq!(issuer_hits.load(Ordering::SeqCst), 1);
-    assert!(
-        matches!(saved, Err(ProbeError::Unauthorized { .. })),
-        "billing mock rejects all"
-    );
-    let stored = accounts.read_slot(HarnessId::Grok, &slot.id).unwrap();
-    assert_eq!(stored.credentials["key"], "fresh");
-    assert_eq!(stored.credentials["refresh_token"], "rotated");
-
-    // An issuer outside xAI never receives the refresh token.
-    let mut evil = slot.clone();
-    evil.credentials["oidc_issuer"] = "https://auth.x.ai.evil.example".into();
-    let before = issuer_hits.load(Ordering::SeqCst);
-    let refused = accounts.grok_usage(&evil, false).await;
-    assert_eq!(refused, Err(ProbeError::UntrustedEndpoint));
-    assert_eq!(issuer_hits.load(Ordering::SeqCst), before);
-}
-
 #[cfg(unix)]
 #[tokio::test]
 async fn grok_add_account_runs_the_device_login_in_a_throwaway_home() {
@@ -545,55 +441,9 @@ fn devin_credentials_round_trip_and_key_by_digest() {
     assert!(parse_devin_credentials(serde_json::json!({ "api_server_url": "x" })).is_none());
 }
 
-#[test]
-fn devin_usage_inverts_remaining_quota_and_names_the_account() {
-    let body = serde_json::json!({
-        "userStatus": {
-            "email": "dev@example.com",
-            "name": "Dev",
-            "planStatus": {
-                "planInfo": { "teamsTier": "TEAMS_TIER_DEVIN_PRO", "planName": "Pro" },
-                "dailyQuotaRemainingPercent": 75,
-                "dailyQuotaResetAtUnix": "1893456000",
-                "weeklyQuotaRemainingPercent": 10.0,
-                "weeklyQuotaResetAtUnix": 1893888000,
-            }
-        }
-    });
-    let (snapshot, identity) = devin_usage_snapshot(&body).unwrap();
-    assert_eq!(identity.email.as_deref(), Some("dev@example.com"));
-    assert_eq!(snapshot.plan_label.as_deref(), Some("Devin Pro"));
-    let labels: Vec<_> = snapshot.windows.iter().map(|w| w.label.as_str()).collect();
-    assert_eq!(labels, ["Day", "Week"]);
-    assert!((snapshot.windows[0].used_fraction - 0.25).abs() < 1e-6);
-    assert!((snapshot.windows[1].used_fraction - 0.90).abs() < 1e-6);
-    assert!(snapshot.windows.iter().all(|w| w.resets_at.is_some()));
-    assert_eq!(
-        devin_plan_label(None, Some("Teams")).as_deref(),
-        Some("Devin Teams")
-    );
-    assert!(devin_usage_snapshot(&serde_json::json!({ "userStatus": {} })).is_none());
-}
-
 #[tokio::test]
-async fn devin_swaps_and_learns_its_identity_from_the_usage_probe() {
-    let server = MockServer::start(|method, path, body| {
-        assert_eq!(method, "POST");
-        assert!(
-            path.ends_with("SeatManagementService/GetUserStatus"),
-            "{path}"
-        );
-        let who = if body.contains("key-a") { "a" } else { "b" };
-        (
-            200,
-            serde_json::json!({ "userStatus": {
-                "email": format!("{who}@devin.ai"),
-                "planStatus": { "dailyQuotaRemainingPercent": 50 },
-            }})
-            .to_string(),
-        )
-    })
-    .await;
+async fn devin_swaps_using_local_credentials_without_probing_identity_or_usage() {
+    let server = MockServer::start(|_, _, _| (401, String::new())).await;
     let tmp = tempfile::tempdir().unwrap();
     let (accounts, config) = accounts_with(tmp.path(), mocked(&server.base));
     let live = &config.devin_credentials_file;
@@ -606,16 +456,20 @@ async fn devin_swaps_and_learns_its_identity_from_the_usage_probe() {
     write(live, &creds("key-a"));
     let devin = rows(&accounts.list(true).await.unwrap(), HarnessId::Devin);
     assert_eq!(devin.len(), 1);
-    assert_eq!(
-        devin[0].email.as_deref(),
-        Some("a@devin.ai"),
-        "identity written back"
+    assert!(
+        devin[0]
+            .email
+            .as_deref()
+            .unwrap()
+            .starts_with("Devin account")
     );
-    assert!((devin[0].usage_windows[0].used_fraction - 0.5).abs() < 1e-6);
+    assert!(devin[0].usage_windows.is_empty());
+    assert_eq!(
+        devin[0].usage_error.as_deref(),
+        Some(ACCOUNT_USAGE_UNAVAILABLE)
+    );
     let a_id = devin[0].id.clone();
-    // A later detection of the same key keeps the learned identity.
-    let devin = rows(&accounts.list(false).await.unwrap(), HarnessId::Devin);
-    assert_eq!(devin[0].email.as_deref(), Some("a@devin.ai"));
+    assert_eq!(lock(&server.hits).len(), 0);
 
     write(live, &creds("key-b"));
     assert_eq!(
@@ -848,7 +702,10 @@ async fn pi_claude_accounts_use_local_identity_and_never_probe_profile_or_usage(
         assert!(pi[0].active && pi[0].switchable);
         assert!(pi[0].usage_windows.is_empty());
         assert_eq!(pi[0].usage_fetched_at, None);
-        assert_eq!(pi[0].usage_error.as_deref(), Some(CLAUDE_USAGE_UNAVAILABLE));
+        assert_eq!(
+            pi[0].usage_error.as_deref(),
+            Some(ACCOUNT_USAGE_UNAVAILABLE)
+        );
     }
     // Pi rotating an opaque token does not trigger a profile lookup either.
     write(
@@ -886,9 +743,10 @@ async fn an_unidentifiable_live_token_is_listed_but_not_switchable() {
     assert_eq!(rows[0].provider.as_deref(), Some("github-copilot"));
     // Nothing was snapshotted without an identity.
     assert!(accounts.read_slots(HarnessId::Opencode).is_empty());
-    // A failed lookup isn't retried on every list.
+    // Ordinary and forced lists never try to discover the identity online.
     accounts.list(false).await.unwrap();
-    assert_eq!(server.hits("GET /user"), 1);
+    accounts.list(true).await.unwrap();
+    assert!(lock(&server.hits).is_empty());
 }
 
 #[tokio::test]
@@ -1042,9 +900,11 @@ async fn a_new_login_never_replaces_an_unidentified_live_one() {
         ("POST", "/login/oauth/access_token") => {
             (200, r#"{"access_token":"gho_new","token_type":"bearer"}"#.into())
         }
-        // The live token's lookup fails; the new login's succeeds.
-        ("GET", "/user") if calls.fetch_add(1, Ordering::SeqCst) == 0 => (401, String::new()),
-        ("GET", "/user") => (200, r#"{"id":42,"login":"octo"}"#.into()),
+        // Only the explicit new sign-in may ask for its identity.
+        ("GET", "/user") => {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (200, r#"{"id":42,"login":"octo"}"#.into())
+        },
         _ => (404, String::new()),
     })
     .await;
@@ -1059,6 +919,7 @@ async fn a_new_login_never_replaces_an_unidentified_live_one() {
     );
     let before = rows(&accounts.list(false).await.unwrap(), HarnessId::Opencode);
     assert!(before[0].active && !before[0].switchable);
+    assert_eq!(user_calls.load(Ordering::SeqCst), 0);
 
     let start = accounts
         .start_login_with(HarnessId::Opencode, Some("github-copilot"), None)
@@ -1083,6 +944,7 @@ async fn a_new_login_never_replaces_an_unidentified_live_one() {
         rows.iter()
             .any(|a| a.email.as_deref() == Some("octo") && !a.active && a.switchable)
     );
+    assert_eq!(user_calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
@@ -1155,87 +1017,6 @@ async fn copilot_device_sign_in_for_opencode_shows_the_code_and_connects() {
     assert!(rows[0].active && rows[0].switchable);
 }
 
-#[test]
-fn copilot_usage_reads_metered_quotas_and_the_plan() {
-    let paid = serde_json::json!({
-        "login": "octo",
-        "copilot_plan": "individual",
-        "quota_reset_date_utc": "2030-02-01T00:00:00.000Z",
-        "quota_snapshots": {
-            "chat": { "unlimited": true, "percent_remaining": 100.0 },
-            "completions": { "unlimited": true },
-            "premium_interactions": { "entitlement": 300, "remaining": 75,
-                                      "percent_remaining": 25.0, "unlimited": false },
-        }
-    });
-    let snapshot = copilot_usage_snapshot(&paid).unwrap();
-    assert_eq!(snapshot.plan_label.as_deref(), Some("Copilot Pro"));
-    assert_eq!(snapshot.windows.len(), 1);
-    assert_eq!(snapshot.windows[0].label, "Premium");
-    assert!((snapshot.windows[0].used_fraction - 0.75).abs() < 1e-6);
-    assert!(snapshot.windows[0].resets_at.is_some());
-
-    let free = serde_json::json!({
-        "copilot_plan": "free",
-        "limited_user_reset_date": "2030-02-01",
-        "monthly_quotas": { "chat": 50, "completions": 2000 },
-        "limited_user_quotas": { "chat": 40, "completions": 500 },
-    });
-    let snapshot = copilot_usage_snapshot(&free).unwrap();
-    let labels: Vec<_> = snapshot.windows.iter().map(|w| w.label.as_str()).collect();
-    assert_eq!(labels, ["Chat", "Completions"]);
-    assert!((snapshot.windows[0].used_fraction - 0.2).abs() < 1e-6);
-    assert!((snapshot.windows[1].used_fraction - 0.75).abs() < 1e-6);
-    assert!(copilot_usage_snapshot(&serde_json::json!({})).is_none());
-}
-
-#[tokio::test]
-async fn keyed_logins_probe_the_vendor_behind_them() {
-    let server = MockServer::start(|method, path, _| match (method, path) {
-        ("GET", "/backend-api/wham/usage") => (
-            200,
-            r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":40,"limit_window_seconds":18000}}}"#.into(),
-        ),
-        ("GET", "/copilot_internal/user") => (
-            200,
-            r#"{"copilot_plan":"business","quota_snapshots":{"premium_interactions":{"percent_remaining":90,"unlimited":false}}}"#.into(),
-        ),
-        _ => (404, String::new()),
-    })
-    .await;
-    let tmp = tempfile::tempdir().unwrap();
-    let (accounts, config) = accounts_with(tmp.path(), mocked(&server.base));
-    write(
-        &config.opencode_auth_file,
-        &serde_json::json!({ "openai": openai_entry("a@example.com", "acct-a") }).to_string(),
-    );
-    let slot = accounts.read_slots(HarnessId::Opencode);
-    assert!(slot.is_empty());
-    let rows = rows(&accounts.list(true).await.unwrap(), HarnessId::Opencode);
-    assert!((rows[0].usage_windows[0].used_fraction - 0.4).abs() < 1e-6);
-    assert_eq!(rows[0].plan_label.as_deref(), Some("ChatGPT Plus"));
-    let copilot = Slot {
-        id: "0123456789abcdef".into(),
-        harness: HarnessId::Pi,
-        account_key: "github-copilot:1".into(),
-        profile: SlotProfile {
-            email: "octo".into(),
-            display_name: None,
-            organization: None,
-            plan: None,
-            auth_kind: AgentAuthKind::Oauth,
-        },
-        credentials: serde_json::json!({ "type": "oauth", "access": "copilot-session", "refresh": "gho_x" }),
-        claude_config: None,
-        saved_at: 1,
-        created_at: None,
-        store_key: Some("github-copilot".into()),
-    };
-    let usage = accounts.keyed_usage(HarnessId::Pi, &copilot).await.unwrap();
-    assert_eq!(usage.plan_label.as_deref(), Some("Copilot Business"));
-    assert!((usage.windows[0].used_fraction - 0.1).abs() < 1e-6);
-}
-
 // ── Hermes ──────────────────────────────────────────────────────────────────
 
 fn hermes_auth() -> serde_json::Value {
@@ -1265,18 +1046,7 @@ fn hermes_auth() -> serde_json::Value {
 
 #[tokio::test]
 async fn hermes_lists_its_own_pool_read_only() {
-    let server = MockServer::start(|_, path, _| match path {
-        "/api/oauth/account" => (
-            200,
-            r#"{"user":{"email":"nous@example.com"},"subscription":{"plan":"plus","monthly_credits":100,"credits_remaining":25,"current_period_end":"2030-02-01T00:00:00Z"}}"#.into(),
-        ),
-        "/backend-api/wham/usage" => (
-            200,
-            r#"{"rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000}}}"#.into(),
-        ),
-        _ => (404, String::new()),
-    })
-    .await;
+    let server = MockServer::start(|_, _, _| (401, String::new())).await;
     let tmp = tempfile::tempdir().unwrap();
     let (accounts, config) = accounts_with(tmp.path(), mocked(&server.base));
     let auth = hermes_auth().to_string().replace("PORTAL", &server.base);
@@ -1297,14 +1067,12 @@ async fn hermes_lists_its_own_pool_read_only() {
     assert!(hermes[0].active && !hermes[1].active && !hermes[2].active);
     assert!(hermes.iter().all(|a| !a.switchable && a.saved_at.is_none()));
     assert_eq!(hermes[0].plan_label.as_deref(), Some("ChatGPT Pro"));
-    assert!((hermes[0].usage_windows[0].used_fraction - 0.1).abs() < 1e-6);
-    let nous = &hermes[2];
-    assert_eq!(nous.plan_label.as_deref(), Some("Nous Plus"));
-    assert!((nous.usage_windows[0].used_fraction - 0.75).abs() < 1e-6);
-    assert_eq!(
-        hermes[3].usage_error.as_deref(),
-        Some("API keys have no plan usage")
-    );
+    for row in &hermes {
+        assert!(row.usage_windows.is_empty());
+        assert!(row.usage_fetched_at.is_none());
+        assert_eq!(row.usage_error.as_deref(), Some(ACCOUNT_USAGE_UNAVAILABLE));
+    }
+    assert!(lock(&server.hits).is_empty());
     // zeron never writes Hermes' pool: no switch, no forget, no slot files.
     assert!(
         accounts
@@ -1444,42 +1212,6 @@ fn device_codes_and_urls_are_found_in_coloured_cli_output() {
     );
 }
 
-#[test]
-fn usage_reasons_name_each_providers_vendor_and_cli() {
-    let entry = UsageEntry::default();
-    let reason = |harness, key: Option<&str>, active, error: ProbeError| {
-        usage_error_message(harness, key, active, &error, &entry, 0).unwrap()
-    };
-    let limited = ProbeError::RateLimited {
-        retry_after_secs: None,
-    };
-    let rejected = ProbeError::Unauthorized { status: 401 };
-    assert_eq!(
-        reason(HarnessId::Grok, None, true, limited.clone()),
-        "Rate limited by xAI"
-    );
-    assert_eq!(
-        reason(HarnessId::Opencode, Some("github-copilot"), false, limited),
-        "Rate limited by GitHub"
-    );
-    assert_eq!(
-        reason(HarnessId::Grok, None, true, rejected.clone()),
-        "Session expired — it refreshes the next time grok runs"
-    );
-    assert_eq!(
-        reason(HarnessId::Pi, Some("openai-codex"), false, rejected.clone()),
-        "Session expired — switch to it to refresh"
-    );
-    assert_eq!(
-        reason(HarnessId::Devin, None, true, rejected.clone()),
-        "Signed out — sign in again"
-    );
-    assert_eq!(
-        reason(HarnessId::Grok, None, false, rejected),
-        "Signed out — sign in again"
-    );
-}
-
 // ── review hardening: grok entries, endpoints, the secret writer ────────────
 
 /// A multi-issuer `auth.json`: a switch merges only the slot's issuer entry
@@ -1530,33 +1262,7 @@ async fn a_grok_switch_leaves_other_issuers_entries_alone() {
 }
 
 #[test]
-fn credential_defined_endpoints_must_be_the_vendors_own_https_hosts() {
-    let ok = |raw: &str, policy| trusted_base(raw, policy, false).map(|u| u.to_string());
-    assert_eq!(
-        ok("https://auth.x.ai", GROK_ISSUERS).as_deref(),
-        Some("https://auth.x.ai/")
-    );
-    assert!(ok("https://auth.x.ai/", GROK_ISSUERS).is_some());
-    assert!(ok("https://server.codeium.com", DEVIN_SERVERS).is_some());
-    assert!(ok("https://inference.codeium.com", DEVIN_SERVERS).is_some());
-    assert!(ok("https://portal.nousresearch.com", NOUS_PORTALS).is_some());
-    for raw in [
-        "http://auth.x.ai",               // not https
-        "https://auth.x.ai.evil.example", // look-alike suffix
-        "https://evilx.ai",               // not a subdomain
-        "https://user:pw@auth.x.ai",      // userinfo
-        "https://auth.x.ai?next=evil",    // query
-        "https://auth.x.ai#frag",         // fragment
-        "https://auth.x.ai/oauth2/token", // a path, not a base
-        "https://auth.x.ai:8443",         // explicit port
-        "https://1.2.3.4",                // IP literal
-        "auth.x.ai",                      // no scheme for a vendor url
-        "file:///etc/passwd",
-        "http://127.0.0.1:9", // loopback only in tests
-    ] {
-        assert_eq!(ok(raw, GROK_ISSUERS), None, "{raw}");
-    }
-    assert!(trusted_base("http://127.0.0.1:9", GROK_ISSUERS, true).is_some());
+fn copilot_sign_in_endpoints_must_be_githubs_own_https_hosts() {
     // GitHub Enterprise Cloud: `<tenant>.ghe.com` only, https only.
     let ghe = |raw: &str| {
         copilot_api_base(
@@ -1579,6 +1285,9 @@ fn credential_defined_endpoints_must_be_the_vendors_own_https_hosts() {
         "evil@company.ghe.com",
         "localhost",
         "company.ghe.com?x=1",
+        "https://user:password@company.ghe.com",
+        "https://company.ghe.com#fragment",
+        "https://company.ghe.com:8443",
         "10.0.0.1",
         // Any plain host outside ghe.com — the review's case: the file
         // alone must never pick where the GitHub token goes.
@@ -1681,7 +1390,7 @@ async fn untrusted_endpoints_in_credentials_are_never_sent_a_secret() {
     let devin = rows(&snapshot, HarnessId::Devin);
     assert_eq!(
         devin[0].usage_error.as_deref(),
-        Some("Usage skipped — this login names a server zeron doesn't recognize")
+        Some(ACCOUNT_USAGE_UNAVAILABLE)
     );
     let hermes = rows(&snapshot, HarnessId::Hermes);
     assert_eq!(hermes[0].usage_error, devin[0].usage_error);
@@ -1786,7 +1495,24 @@ async fn a_self_hosted_ghes_login_switches_away_and_back_without_the_network() {
         serde_json::json!({ "github-copilot": copilot, "zen": { "type": "api", "key": "k" } })
             .to_string()
     };
-    // github.com login first (identified over the mocked API), then GHES.
+    accounts
+        .snapshot_detected(
+            HarnessId::Opencode,
+            &Detected::known(
+                "github-copilot:42".into(),
+                SlotProfile {
+                    email: "octo@example.com".into(),
+                    display_name: None,
+                    organization: None,
+                    plan: Some("GitHub Copilot".into()),
+                    auth_kind: AgentAuthKind::Oauth,
+                },
+                dotcom.clone(),
+            )
+            .keyed("github-copilot"),
+        )
+        .unwrap();
+    // Match the saved github.com login locally, then detect GHES locally.
     write(file, &store(&dotcom));
     let dotcom_id = rows(&accounts.list(false).await.unwrap(), HarnessId::Opencode)[0]
         .id
@@ -1800,7 +1526,7 @@ async fn a_self_hosted_ghes_login_switches_away_and_back_without_the_network() {
     assert!(ghes_row.active && ghes_row.switchable);
     assert_eq!(
         ghes_row.usage_error.as_deref(),
-        Some("Usage skipped — this login names a server zeron doesn't recognize")
+        Some(ACCOUNT_USAGE_UNAVAILABLE)
     );
     let ghes_id = ghes_row.id.clone();
     // Keyed by a fingerprint — the token itself is never the account key.
@@ -1832,14 +1558,9 @@ async fn a_self_hosted_ghes_login_switches_away_and_back_without_the_network() {
     let listed = rows(&accounts.list(false).await.unwrap(), HarnessId::Opencode);
     assert_eq!(listed.len(), 2);
     assert!(listed.iter().any(|a| a.id == ghes_id && a.active));
-    // Only the github.com login was ever looked up; no request carried the
-    // GHES token anywhere (its usage was skipped before any request).
-    assert_eq!(server.hits("GET /user"), 1);
-    let hits = lock(&server.hits).clone();
     assert!(
-        hits.iter()
-            .all(|h| h == "GET /user" || h.starts_with("GET /copilot_internal")),
-        "{hits:?}"
+        lock(&server.hits).is_empty(),
+        "both logins are matched locally"
     );
 }
 
@@ -1958,89 +1679,182 @@ fn codex_auth(email: &str, account_id: &str) -> String {
 }
 
 #[tokio::test]
-async fn codex_banked_resets_list_persist_and_redeem_against_the_mock() {
-    // Who the usage endpoint says the token belongs to (a mismatch: another).
-    let answers_for = Arc::new(Mutex::new("acct-ada".to_string()));
-    let consumed = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
-    let (who, sent) = (answers_for.clone(), consumed.clone());
-    let server = MockServer::start(move |method, path, body| match (method, path) {
-        ("GET", "/backend-api/wham/usage") => (
-            200,
-            serde_json::json!({
-                "account_id": *lock(&who),
-                "plan_type": "plus",
-                "rate_limit": { "primary_window": { "used_percent": 100, "limit_window_seconds": 18000 } },
-                "rate_limit_reset_credits": { "available_count": 2 },
-            })
-            .to_string(),
-        ),
-        ("GET", "/backend-api/wham/rate-limit-reset-credits") => (
-            200,
-            serde_json::json!({
-                "available_count": 2,
-                "credits": [
-                    { "id": "credit-1", "reset_type": "codex_rate_limits", "status": "available",
-                      "title": "Full reset (Weekly + 5 hr)", "expires_at": "2030-01-04T02:01:00Z" },
-                    { "id": "credit-2", "reset_type": "codex_rate_limits", "status": "available",
-                      "title": "Full reset (Weekly + 5 hr)", "expires_at": "2030-01-12T02:01:00Z" },
-                ]
-            })
-            .to_string(),
-        ),
-        ("POST", "/backend-api/wham/rate-limit-reset-credits/consume") => {
-            lock(&sent).push(serde_json::from_str(body).unwrap_or_default());
-            (200, r#"{"code":"reset"}"#.into())
-        }
-        _ => (404, String::new()),
-    })
-    .await;
+async fn codex_quota_resets_are_refused_without_requests_or_credential_changes() {
+    let server = MockServer::start(|_, _, _| (200, r#"{"code":"reset"}"#.into())).await;
     let tmp = tempfile::tempdir().unwrap();
     let (accounts, config) = accounts_with(tmp.path(), mocked(&server.base));
-    write(&config.codex_home.join("auth.json"), &codex_auth("ada@example.com", "acct-ada"));
+    let auth = codex_auth("ada@example.com", "acct-ada");
+    let file = config.codex_home.join("auth.json");
+    write(&file, &auth);
+    let row = rows(&accounts.list(true).await.unwrap(), HarnessId::Codex).remove(0);
+    for (account, credit) in [
+        (row.id.as_str(), "credit-1"),
+        ("no-such-account", "credit-2"),
+        (row.id.as_str(), ""),
+    ] {
+        let err = accounts
+            .consume_codex_reset_credit(account, credit, "request-1")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not performed by Zerun"), "{err}");
+    }
+    assert!(row.codex_reset_credits.is_none());
+    assert!(lock(&server.hits).is_empty());
+    assert_eq!(std::fs::read_to_string(file).unwrap(), auth);
+}
 
-    // The probe loads the credits alongside the usage.
-    let codex = rows(&accounts.list(true).await.unwrap(), HarnessId::Codex);
-    assert_eq!(codex.len(), 1);
-    let credits = codex[0].codex_reset_credits.clone().expect("credits listed");
-    assert_eq!(credits.available_count, 2);
-    assert_eq!(credits.credits[0].id, "credit-1");
-    assert!((codex[0].usage_windows[0].used_fraction - 1.0).abs() < 1e-6);
-    let account = codex[0].id.clone();
-
-    // They're in the on-disk usage cache: a restarted engine shows them
-    // before it probes again.
-    let (restarted, _) = accounts_with(tmp.path(), mocked(&server.base));
-    let cold = rows(&restarted.list(false).await.unwrap(), HarnessId::Codex);
-    assert_eq!(cold[0].codex_reset_credits.as_ref().map(|c| c.available_count), Some(2));
-
-    // Redeeming checks the account, then sends Codex's own request.
-    let outcome = accounts
-        .consume_codex_reset_credit(&account, "credit-1", "key-1")
-        .await
-        .unwrap();
-    assert_eq!(outcome.outcome, "reset");
-    assert_eq!(
-        lock(&consumed).as_slice(),
-        [serde_json::json!({ "redeem_request_id": "key-1", "credit_id": "credit-1" })]
+#[tokio::test]
+async fn all_account_lists_ignore_legacy_quota_without_network_or_token_refresh() {
+    let server = MockServer::start(|_, _, _| (401, String::new())).await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = AgentAccountsConfig::isolated(tmp.path());
+    let make_accounts = || {
+        let mut accounts =
+            AgentAccounts::with_endpoints(config.clone(), mocked(&server.base), Default::default());
+        // Any restored fixed endpoint must also hit this local mock, never the internet.
+        Arc::get_mut(&mut accounts.inner).unwrap().http = reqwest::Client::builder()
+            .no_proxy()
+            .proxy(reqwest::Proxy::all(&server.base).unwrap())
+            .timeout(Duration::from_secs(1))
+            .build()
+            .unwrap();
+        accounts
+    };
+    write(
+        &config.claude_config_file,
+        &serde_json::json!({
+            "oauthAccount": { "accountUuid": "claude-a", "emailAddress": "claude@example.com" },
+        })
+        .to_string(),
     );
-
-    // The token answering for another account: no redemption is sent...
-    *lock(&answers_for) = "acct-someone-else".into();
-    let refused = accounts
-        .consume_codex_reset_credit(&account, "credit-2", "key-2")
-        .await
-        .unwrap_err();
-    assert!(refused.to_string().contains("different account"), "{refused}");
-    assert_eq!(server.hits("POST /backend-api/wham/rate-limit-reset-credits/consume"), 1);
-    // ...and a fresh engine's probe shows no numbers for it.
-    let fresh = tempfile::tempdir().unwrap();
-    let (other, config) = accounts_with(fresh.path(), mocked(&server.base));
-    write(&config.codex_home.join("auth.json"), &codex_auth("ada@example.com", "acct-ada"));
-    let refused = rows(&other.list(true).await.unwrap(), HarnessId::Codex);
-    assert!(refused[0].usage_windows.is_empty());
-    assert!(refused[0].codex_reset_credits.is_none());
-
-    // Nothing to redeem with: refused before any request.
-    assert!(accounts.consume_codex_reset_credit(&account, "", "key-3").await.is_err());
-    assert!(accounts.consume_codex_reset_credit("no-such-account", "credit-2", "key-4").await.is_err());
+    write(&config.claude_creds_file(), &serde_json::json!({
+        "claudeAiOauth": { "accessToken": "claude-access", "refreshToken": "claude-refresh", "expiresAt": 1 },
+    }).to_string());
+    write(
+        &config.codex_auth_file(),
+        &codex_auth("codex@example.com", "codex-a"),
+    );
+    write(
+        &config.cursor_sdk_auth_file,
+        &serde_json::json!({
+            "apiKey": "cursor-key", "email": "cursor@example.com", "backendUrl": server.base,
+        })
+        .to_string(),
+    );
+    let grok_file = config.grok_home.join("auth.json");
+    write(
+        &grok_file,
+        &grok_auth("grok-a", "grok@example.com", "grok-access").to_string(),
+    );
+    write(
+        &config.devin_credentials_file,
+        &format!(
+            "windsurf_api_key = \"devin-key\"\napi_server_url = \"{}\"\n",
+            server.base,
+        ),
+    );
+    let copilot = serde_json::json!({
+        "type": "oauth", "access": "copilot-session", "refresh": "copilot-refresh", "expires": 1,
+    });
+    write(
+        &config.opencode_auth_file,
+        &serde_json::json!({
+            "openai": openai_entry("opencode@example.com", "opencode-a"),
+            "github-copilot": copilot,
+        })
+        .to_string(),
+    );
+    let pi_file = config.pi_agent_dir.join("auth.json");
+    write(&pi_file, &serde_json::json!({
+        "openai-codex": openai_entry("pi@example.com", "pi-a"),
+        "anthropic": { "type": "oauth", "access": "pi-claude-access", "refresh": "pi-claude-refresh", "expires": 1 },
+        "github-copilot": copilot,
+    }).to_string());
+    let hermes_file = config.hermes_home.join("auth.json");
+    write(
+        &hermes_file,
+        &hermes_auth().to_string().replace("PORTAL", &server.base),
+    );
+    let files = [
+        config.claude_config_file.clone(),
+        config.claude_creds_file(),
+        config.codex_auth_file(),
+        config.cursor_sdk_auth_file.clone(),
+        grok_file,
+        config.devin_credentials_file.clone(),
+        config.opencode_auth_file.clone(),
+        pi_file,
+        hermes_file,
+    ];
+    let before: Vec<_> = files.iter().map(|p| std::fs::read(p).unwrap()).collect();
+    let harnesses = [
+        HarnessId::ClaudeCode,
+        HarnessId::Codex,
+        HarnessId::Cursor,
+        HarnessId::Grok,
+        HarnessId::Devin,
+        HarnessId::Opencode,
+        HarnessId::Pi,
+        HarnessId::Hermes,
+    ];
+    let accounts = make_accounts();
+    accounts.list(false).await.unwrap();
+    // Include an expired, inactive Grok slot with a refresh token and issuer.
+    let mut saved = accounts.read_slots(HarnessId::Grok).remove(0);
+    saved.account_key = "grok-saved".into();
+    saved.id = slot_id_for(HarnessId::Grok, &saved.account_key);
+    saved.credentials["key"] = "saved-expired-access".into();
+    saved.credentials["refresh_token"] = "saved-refresh".into();
+    saved.credentials["oidc_issuer"] = server.base.clone().into();
+    accounts.write_slot(&saved).unwrap();
+    let mut entries = serde_json::Map::new();
+    for harness in harnesses {
+        let slots = if harness == HarnessId::Hermes {
+            accounts.hermes_slots().0
+        } else {
+            accounts.read_slots(harness)
+        };
+        for slot in slots {
+            entries.insert(usage_key(harness, &slot.account_key), serde_json::json!({
+                "usage": { "windows": [{"label": "Old quota", "usedFraction": 0.9}],
+                    "planLabel": "Cached plan", "codexResetCredits": { "availableCount": 1, "credits": [] } },
+                "fetchedAt": 1, "checkedAt": 1, "retryAt": 2,
+                "error": { "kind": "unauthorized", "status": 401 }, "credentials": "old-digest",
+            }));
+        }
+    }
+    write(
+        &config.usage_cache_file(),
+        &serde_json::json!({ "entries": entries }).to_string(),
+    );
+    drop(accounts);
+    let accounts = make_accounts();
+    for force in [false, true, false, true] {
+        let snapshot = accounts.list(force).await.unwrap();
+        for harness in harnesses {
+            let rows = rows(&snapshot, harness);
+            assert!(!rows.is_empty(), "{harness:?}");
+            for row in rows {
+                assert!(row.usage_windows.is_empty(), "{harness:?}");
+                assert!(row.codex_reset_credits.is_none());
+                assert!(row.usage_fetched_at.is_none());
+                assert_eq!(row.usage_error.as_deref(), Some(ACCOUNT_USAGE_UNAVAILABLE));
+                assert_ne!(row.plan_label.as_deref(), Some("Cached plan"));
+            }
+        }
+    }
+    for (file, contents) in files.iter().zip(before) {
+        assert_eq!(std::fs::read(file).unwrap(), contents, "{file:?}");
+    }
+    assert_eq!(
+        accounts
+            .read_slot(HarnessId::Grok, &saved.id)
+            .unwrap()
+            .credentials,
+        saved.credentials
+    );
+    assert!(
+        lock(&server.hits).is_empty(),
+        "no provider usage, identity or refresh request is allowed"
+    );
 }
