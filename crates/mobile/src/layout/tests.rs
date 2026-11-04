@@ -1719,3 +1719,25 @@ fn document_preview_renders_markdown_and_keeps_source_literal() {
     assert!((0..frame.row_count()).all(|i| frame.display(i).unwrap().links.is_empty()));
     assert!(frame.plain_text().contains("**bold**"));
 }
+
+#[test]
+fn source_documents_split_into_rows_that_copy_their_own_lines() {
+    let text: String = (1..=250).map(|i| format!("line {i} ```tick```\n")).collect();
+    let mut w = worker(390.0);
+    w.input = document_input("notes.txt".into(), text.clone(), false);
+    w.input.document = Some(rows::DocumentContext {
+        chat_id: "chat".into(), device_id: "host".into(), cwd: None, path: "notes.txt".into(), source: true,
+    });
+    let frame = w.pass();
+    let copies: Vec<String> = (0..frame.row_count()).filter_map(|i| frame.message_text(i)).filter(|t| !t.is_empty()).collect();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(copies.first().map(String::as_str), Some(lines[..100].join("\n").as_str()));
+    assert_eq!(copies.last().map(String::as_str), Some(lines[200..].join("\n").as_str()));
+    assert!(frame.row_count() >= 3, "a long source file is several rows");
+    // An over-long line is still cut into bounded slices.
+    let long = "é".repeat(SOURCE_BLOCK_BYTES);
+    let blocks = source_blocks(&long);
+    assert_eq!(blocks.len(), 2);
+    assert!(blocks.iter().all(|b| b.len() <= SOURCE_BLOCK_BYTES));
+    assert_eq!(blocks.concat(), long);
+}

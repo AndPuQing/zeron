@@ -51,6 +51,8 @@ pub struct DocumentContext {
     pub device_id: String,
     pub cwd: Option<String>,
     pub path: String,
+    /// Source view: each block is a fenced slice of the file's lines.
+    pub source: bool,
 }
 
 /// What the row builder reads from a session snapshot.
@@ -220,6 +222,8 @@ struct EntryState {
 #[derive(Default)]
 pub(crate) struct RowBuilder {
     reply_chat: Option<ReplyImageContext>,
+    /// A document's source view: code blocks copy their lines, not the fence.
+    document_source: bool,
     parts: HashMap<String, PartState>,
     /// Reasoning parts' parse + prepared detail, keyed `{entry}#{part}`.
     pub(crate) thoughts: HashMap<String, ThoughtState>,
@@ -255,6 +259,7 @@ impl RowBuilder {
             // A snapshot that briefly lacks the chat's row (reconnect, refresh)
             // keeps the folder it had: only a real change re-lays out the transcript.
             .or_else(|| self.reply_chat.clone().filter(|known| input.chat_id.as_ref() == Some(&known.chat_id)));
+        self.document_source = input.document.as_ref().is_some_and(|doc| doc.source);
         if self.reply_chat != chat {
             self.parts.clear();
             self.entries.clear();
@@ -625,7 +630,11 @@ impl RowBuilder {
         let tree = if streaming { state.parser.display_tree() } else { state.parser.tree().clone() };
         let mut next = Vec::with_capacity(tree.blocks.len());
         for (bi, block) in tree.blocks.iter().enumerate() {
-            let copy = text.get(block.range.clone()).unwrap_or("").trim_end();
+            let copy = match &block.block {
+                // A document's source slice copies the file's own lines.
+                zeron_markdown::parser::Block::CodeBlock { code, .. } if self.document_source => code.trim_end_matches('\n'),
+                _ => text.get(block.range.clone()).unwrap_or("").trim_end(),
+            };
             // Same rendering isn't enough: the source can still differ (a
             // closing `**` that renders identically) and Copy reads the source.
             let reuse = state
@@ -1436,7 +1445,7 @@ mod reply_image_tests {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
         };
-        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)\n\n![malformed](bad%zz.png)", false);
+        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)\n\n![above](../../e.png)", false);
         let mut painted = DisplayBuilder::default();
         for (_, row) in &blocks {
             let Content::Block(block) = &row.content else { panic!("block") };
@@ -1447,7 +1456,7 @@ mod reply_image_tests {
             _ => None,
         }).collect();
         assert_eq!(paths, ["/repo/docs/a.png", "/repo/images/b.png"]);
-        assert!(painted.text.contains("outside") && painted.text.contains("remote") && painted.text.contains("malformed"));
+        assert!(painted.text.contains("outside") && painted.text.contains("remote") && painted.text.contains("above"));
     }
 
     #[test]

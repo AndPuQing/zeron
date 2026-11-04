@@ -864,6 +864,49 @@ pub struct WorkspaceImageChunk {
     pub done: bool,
 }
 
+/// Raw text bytes per `ReadWorkspaceTextChunk` reply: base64 keeps the reply
+/// a fixed size (512 KiB) whatever the text escapes to in JSON, well under
+/// the relay's message cap. A multiple of 3 so chunks encode independently.
+pub const WORKSPACE_TEXT_CHUNK_BYTES: usize = 384 * 1024;
+const _: () = assert!(WORKSPACE_TEXT_CHUNK_BYTES % 3 == 0);
+
+/// One slice of a text file read through `ReadWorkspaceTextChunk`, for
+/// clients behind the relay. Offsets count bytes of the decoded text that
+/// `ReadWorkspaceFile` would return (BOM removed, CRLF normalized).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadWorkspaceTextChunkRequest {
+    #[serde(flatten)]
+    pub target: WorkspaceTarget,
+    pub path: String,
+    pub offset: usize,
+    /// The first chunk's `contentHash`: a file that changed between chunks
+    /// fails instead of splicing two revisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_content_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTextChunk {
+    /// Empty for a host file outside the workspace, as in [`WorkspaceFileText`].
+    pub checkout_id: String,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// File size on disk.
+    pub size: u64,
+    /// Decoded text length; `None` when the file has no text to read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_len: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_reason: Option<WorkspaceReadOnlyReason>,
+    /// Base64 of the text bytes `offset..next_offset`.
+    pub data: String,
+    pub next_offset: usize,
+    pub done: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceFileText {

@@ -540,7 +540,7 @@ impl TranscriptView {
     pub fn set_document(&self, chat_id: String, document: crate::client_ffi::DocumentPreview, markdown: bool) {
         let mut input = document_input(document.path.clone(), document.text, markdown);
         input.document = Some(rows::DocumentContext {
-            chat_id, device_id: document.device_id, cwd: document.cwd, path: document.path,
+            chat_id, device_id: document.device_id, cwd: document.cwd, path: document.path, source: !markdown,
         });
         self.send(Msg::Input(input));
     }
@@ -576,14 +576,55 @@ impl Drop for TranscriptView {
     }
 }
 
+/// Lines per source-view block. Each block is its own row, so a long file
+/// virtualizes instead of laying out as one giant row.
+const SOURCE_BLOCK_LINES: usize = 100;
+/// Bytes per source-view block, for files with very long lines.
+const SOURCE_BLOCK_BYTES: usize = 16 * 1024;
+
 fn document_input(path: String, text: String, markdown: bool) -> TranscriptInput {
-    let text = if markdown { text } else {
-        // A source containing fences must not escape into rendered Markdown.
-        let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-        let fence = "`".repeat(longest.max(2) + 1);
-        format!("{fence}\n{text}\n{fence}")
-    };
-    debug_input(vec![DebugEntry { id: format!("document:{path}"), user: false, text, streaming: false }], false)
+    if markdown {
+        return debug_input(vec![DebugEntry { id: format!("document:{path}"), user: false, text, streaming: false }], false);
+    }
+    // A source containing fences must not escape into rendered Markdown.
+    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    // One entry per slice: a row's Copy and Select text give its lines alone.
+    let entries = source_blocks(&text)
+        .into_iter()
+        .enumerate()
+        .map(|(i, lines)| DebugEntry { id: format!("document-source:{i}"), user: false, text: format!("{fence}\n{lines}\n{fence}"), streaming: false })
+        .collect();
+    debug_input(entries, false)
+}
+
+/// `text` in consecutive slices of whole lines (an over-long line alone is
+/// cut at a character boundary), without the newline that ends each slice.
+fn source_blocks(text: &str) -> Vec<&str> {
+    let mut blocks = Vec::new();
+    let mut rest = text;
+    while !rest.is_empty() {
+        let mut end = 0;
+        let mut lines = 0;
+        while end < rest.len() && lines < SOURCE_BLOCK_LINES {
+            let line_end = rest[end..].find('\n').map_or(rest.len(), |i| end + i + 1);
+            if line_end > SOURCE_BLOCK_BYTES && end > 0 {
+                break;
+            }
+            end = line_end;
+            lines += 1;
+        }
+        if end > SOURCE_BLOCK_BYTES {
+            end = SOURCE_BLOCK_BYTES;
+            while !rest.is_char_boundary(end) {
+                end -= 1;
+            }
+        }
+        let (block, tail) = rest.split_at(end);
+        blocks.push(block.strip_suffix('\n').unwrap_or(block));
+        rest = tail;
+    }
+    blocks
 }
 
 pub(crate) fn debug_input(entries: Vec<DebugEntry>, working: bool) -> TranscriptInput {

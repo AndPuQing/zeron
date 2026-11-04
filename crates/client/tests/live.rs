@@ -551,6 +551,12 @@ struct HostService {
 
 const HOST_IMAGE: &str = "/Users/dev/.zeron/uploads/host.png";
 
+/// A document spanning several `ReadWorkspaceTextChunk` replies, with a
+/// multi-byte character across each slice boundary.
+fn live_guide() -> String {
+    format!("# Remote guide\n\nFrom the host, not the phone.\n{}", "é".repeat(zeron_proto::WORKSPACE_TEXT_CHUNK_BYTES))
+}
+
 fn host_image() -> Vec<u8> {
     (0..100_000u32).map(|i| (i * 7 % 251) as u8).collect()
 }
@@ -565,17 +571,27 @@ impl zeron_rpc::RpcService for HostService {
         use serde_json::json;
         use zeron_rpc::{RpcReply, methods as m};
         let value = match method {
-            m::READ_WORKSPACE_FILE => {
-                let request: zeron_proto::ReadWorkspaceFileRequest = serde_json::from_value(params).unwrap();
+            m::READ_WORKSPACE_TEXT_CHUNK => {
+                use base64::Engine as _;
+                let request: zeron_proto::ReadWorkspaceTextChunkRequest = serde_json::from_value(params).unwrap();
                 assert_eq!(request.target.chat_id.as_deref(), Some(CHAT));
                 assert!(request.target.space_id.is_none() && request.target.checkout_path.is_none());
-                if request.path == "missing.md" {
-                    return Err(zeron_rpc::RpcError::Failed("Document not found".into()));
+                match request.path.as_str() {
+                    // Relative links resolve from the chat's folder, not the checkout root.
+                    "/Users/dev/live/docs/guide.md" => {
+                        let text = live_guide();
+                        assert_eq!(request.expected_content_hash.is_some(), request.offset > 0);
+                        let end = (request.offset + zeron_proto::WORKSPACE_TEXT_CHUNK_BYTES).min(text.len());
+                        json!({"checkoutId": "co-live", "path": "docs/guide.md", "contentHash": "h1",
+                            "size": text.len(), "textLen": text.len(),
+                            "data": base64::engine::general_purpose::STANDARD.encode(&text.as_bytes()[request.offset..end]),
+                            "nextOffset": end, "done": end == text.len()})
+                    }
+                    "/etc/hosts" => json!({"checkoutId": "", "path": "/etc/hosts", "contentHash": "h2",
+                        "size": 6, "textLen": 6, "readOnlyReason": "tooLarge",
+                        "data": base64::engine::general_purpose::STANDARD.encode("secret"), "nextOffset": 6, "done": true}),
+                    _ => return Err(zeron_rpc::RpcError::Failed("file not found".into())),
                 }
-                assert_eq!(request.path, "docs/guide.md");
-                json!({"checkoutId": "co-live", "path": "docs/guide.md",
-                    "text": "# Remote guide\n\nFrom the host, not the phone.",
-                    "size": 47, "encoding": "utf8", "truncated": false})
             }
             m::LIST_HARNESSES => json!([
                 {"id": "claude-code", "name": "Claude Code", "supportsSteering": true,
@@ -755,15 +771,25 @@ async fn host_rpcs_ride_the_device_relay() {
         .unwrap();
     assert!(folders.entries[0].is_repo);
 
-    // The viewer chooses the conversation, not an arbitrary/local device.
+    // The viewer chooses the conversation, not an arbitrary/local device,
+    // and a document larger than one relay message arrives in chunks.
     let c = client.clone();
-    let document = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md").await }).await.unwrap();
+    let document = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md", 4 << 20).await }).await.unwrap();
     assert_eq!(document.device_id, HOST);
     assert_eq!(document.cwd.as_deref(), Some("/Users/dev/live"));
-    assert!(document.file.text.unwrap().contains("From the host"));
+    assert_eq!(document.text.as_deref(), Some(live_guide().as_str()));
+    assert!(!document.truncated);
     let c = client.clone();
-    let missing = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "missing.md").await }).await;
-    assert!(missing.err().unwrap().to_string().contains("Document not found"));
+    let head = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md", 1).await }).await.unwrap();
+    assert!(head.truncated && head.text.unwrap().len() < live_guide().len());
+    let c = client.clone();
+    let missing = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "missing.md", 4 << 20).await }).await;
+    assert!(missing.err().unwrap().to_string().contains("wasn't found on the host"));
+    // A host file outside the workspace never reaches the viewer, even when
+    // another reason already made it read-only.
+    let c = client.clone();
+    let outside = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "/etc/hosts", 4 << 20).await }).await;
+    assert!(outside.err().unwrap().to_string().contains("outside the conversation's workspace"));
 
     // Chunked upload (> one 510KB slice) with progress.
     let data: Vec<u8> = (0..1_200_000u32).map(|i| (i % 253) as u8).collect();

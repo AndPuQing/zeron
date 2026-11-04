@@ -213,6 +213,8 @@ pub mod methods {
     pub const SEARCH_WORKSPACE_CONTENT: &str = "SearchWorkspaceContent";
     pub const READ_WORKSPACE_IMAGE: &str = "ReadWorkspaceImage";
     pub const READ_WORKSPACE_FILE: &str = "ReadWorkspaceFile";
+    /// One bounded slice of a text file (relay-sized `ReadWorkspaceFile`).
+    pub const READ_WORKSPACE_TEXT_CHUNK: &str = "ReadWorkspaceTextChunk";
     pub const MOVE_WORKSPACE_ENTRY: &str = "MoveWorkspaceEntry";
     pub const DELETE_WORKSPACE_ENTRY: &str = "DeleteWorkspaceEntry";
     pub const WRITE_WORKSPACE_FILE: &str = "WriteWorkspaceFile";

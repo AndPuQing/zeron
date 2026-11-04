@@ -530,6 +530,30 @@ impl WorkspaceFiles {
         result
     }
 
+    /// [`Self::read_file`] in relay-sized slices. Every slice re-reads the
+    /// file, so a change between slices fails on the content hash.
+    pub async fn read_text_chunk(
+        &self,
+        request: zeron_proto::ReadWorkspaceTextChunkRequest,
+    ) -> Result<zeron_proto::WorkspaceTextChunk, WorkspaceFilesError> {
+        if request.offset > 0 && request.expected_content_hash.is_none() {
+            return Err(WorkspaceFilesError::BadParams(
+                "a later text chunk needs expectedContentHash".into(),
+            ));
+        }
+        let file = self
+            .read_file(ReadWorkspaceFileRequest {
+                target: request.target,
+                path: request.path,
+            })
+            .await?;
+        text_chunk(
+            file,
+            request.offset,
+            request.expected_content_hash.as_deref(),
+        )
+    }
+
     pub async fn read_image(
         &self,
         request: zeron_proto::ReadWorkspaceImageRequest,
@@ -1622,6 +1646,44 @@ fn read_image_blocking(
         next_offset: end,
         size: bytes.len(),
         done: end == bytes.len(),
+    })
+}
+
+/// The slice of `file`'s decoded text starting at `offset`, with the read's
+/// identity and verdict so the caller can apply its own policy.
+fn text_chunk(
+    file: WorkspaceFileText,
+    offset: usize,
+    expected_hash: Option<&str>,
+) -> Result<zeron_proto::WorkspaceTextChunk, WorkspaceFilesError> {
+    use base64::Engine as _;
+    if expected_hash.is_some_and(|expected| file.content_hash.as_deref() != Some(expected)) {
+        return Err(WorkspaceFilesError::Io(
+            "file changed while it was being read; retry".into(),
+        ));
+    }
+    let text_len = file.text.as_ref().map(String::len);
+    let bytes = file.text.as_deref().unwrap_or("").as_bytes();
+    if offset > bytes.len() {
+        return Err(WorkspaceFilesError::BadParams(
+            "text offset is past the end of the file".into(),
+        ));
+    }
+    let end = offset
+        .saturating_add(zeron_proto::WORKSPACE_TEXT_CHUNK_BYTES)
+        .min(bytes.len());
+    let data = base64::engine::general_purpose::STANDARD.encode(&bytes[offset..end]);
+    let done = end == bytes.len();
+    Ok(zeron_proto::WorkspaceTextChunk {
+        checkout_id: file.checkout_id,
+        path: file.path,
+        content_hash: file.content_hash,
+        size: file.size,
+        text_len,
+        read_only_reason: file.read_only_reason,
+        data,
+        next_offset: end,
+        done,
     })
 }
 
@@ -3006,6 +3068,31 @@ mod tests {
         assert!(file.read_only_reason.is_none());
     }
 
+    /// A project in a subfolder of its repository: the checkout root is the
+    /// repository, the chat's folder is the package. Phone previews send the
+    /// cwd-joined absolute path, so a link reads the package's file — the one
+    /// the agent and its images mean — not the same name at the repository root.
+    #[cfg(unix)]
+    #[test]
+    fn a_cwd_joined_path_reads_below_the_chat_folder_not_the_checkout_root() {
+        let root = tempfile::tempdir().unwrap();
+        for (path, text) in [("docs/guide.md", "root\n"), ("pkg/docs/guide.md", "package\n")] {
+            std::fs::create_dir_all(root.path().join(path).parent().unwrap()).unwrap();
+            std::fs::write(root.path().join(path), text).unwrap();
+        }
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        let workspace = resolved_workspace(&canonical);
+        let cwd = canonical.join("pkg").to_string_lossy().into_owned();
+        let relative = WorkspaceRelativePath::file("docs/guide.md").unwrap();
+        let from_root = read_file_blocking(&workspace.root, &relative, &no_cancel()).unwrap();
+        assert_eq!(from_root.text.as_deref(), Some("root\n"));
+        let joined = format!("{cwd}/docs/guide.md");
+        let file = read_absolute_file_blocking(&workspace, &joined, &no_cancel()).unwrap();
+        assert_eq!(file.text.as_deref(), Some("package\n"));
+        assert_eq!(file.path, "pkg/docs/guide.md");
+        assert_eq!(file.checkout_id, "checkout-test");
+    }
+
     #[cfg(unix)]
     #[test]
     fn absolute_read_outside_the_workspace_is_read_only() {
@@ -3763,6 +3850,36 @@ mod image_tests {
         request.offset = usize::MAX;
         assert!(read_image_blocking(&root, &path, &request).is_err());
     }
+    #[test]
+    fn text_chunks_cover_the_decoded_text_in_bounded_versioned_slices() {
+        use base64::Engine as _;
+        use zeron_proto::WORKSPACE_TEXT_CHUNK_BYTES;
+        // CRLF and escapes that would bloat JSON: offsets count decoded text.
+        let source = "é\"\u{1b}\r\n".repeat(WORKSPACE_TEXT_CHUNK_BYTES / 4);
+        let mut file = read_fixture(source.as_bytes());
+        file.checkout_id = "checkout".into();
+        let text = file.text.clone().unwrap();
+        assert!(text.len() > WORKSPACE_TEXT_CHUNK_BYTES);
+        let first = text_chunk(file.clone(), 0, None).unwrap();
+        assert!(!first.done && first.data.len() <= WORKSPACE_TEXT_CHUNK_BYTES / 3 * 4);
+        assert_eq!(first.checkout_id, "checkout");
+        assert_eq!(first.text_len, Some(text.len()));
+        let hash = first.content_hash.clone().unwrap();
+        let second = text_chunk(file.clone(), first.next_offset, Some(&hash)).unwrap();
+        assert!(second.done && second.next_offset == text.len());
+        let mut bytes = Vec::new();
+        for chunk in [&first, &second] {
+            bytes.extend(base64::engine::general_purpose::STANDARD.decode(&chunk.data).unwrap());
+        }
+        assert_eq!(String::from_utf8(bytes).unwrap(), text);
+        assert!(text_chunk(file.clone(), first.next_offset, Some("stale")).is_err());
+        assert!(text_chunk(file.clone(), text.len() + 1, Some(&hash)).is_err());
+        // No text (binary): one empty, final chunk carrying the verdict.
+        let binary = text_chunk(read_fixture(b"a\0b"), 0, None).unwrap();
+        assert!(binary.done && binary.data.is_empty() && binary.text_len.is_none());
+        assert_eq!(binary.read_only_reason, Some(WorkspaceReadOnlyReason::Binary));
+    }
+
     #[test]
     fn workspace_images_reject_large_files_and_symlinks() {
         let dir = tempfile::tempdir().unwrap();
