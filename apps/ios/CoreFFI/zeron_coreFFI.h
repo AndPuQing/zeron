@@ -961,7 +961,7 @@ uint64_t uniffi_zeron_mobile_fn_method_coreclient_vault_usage(uint64_t ptr, Rust
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_READ_DOCUMENT
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_READ_DOCUMENT
-uint64_t uniffi_zeron_mobile_fn_method_coreclient_read_document(uint64_t ptr, RustBuffer chat_id, RustBuffer path
+uint64_t uniffi_zeron_mobile_fn_method_coreclient_read_document(uint64_t ptr, RustBuffer chat_id, RustBuffer path, int8_t allow_outside
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_DEVICE_ACTIVATE_ACCOUNT

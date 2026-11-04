@@ -1421,7 +1421,7 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func vaultUsage(provider: String, slot: String) async throws  -> CloudUsageInfo
     
-    func readDocument(chatId: String, path: String) async throws  -> DocumentPreview
+    func readDocument(chatId: String, path: String, allowOutside: Bool) async throws  -> DocumentRead
     
     /**
      * Run `harness` on `account_id` from now on.
@@ -2943,18 +2943,18 @@ open func vaultUsage(provider: String, slot: String)async throws  -> CloudUsageI
         )
 }
     
-open func readDocument(chatId: String, path: String)async throws  -> DocumentPreview  {
+open func readDocument(chatId: String, path: String, allowOutside: Bool)async throws  -> DocumentRead  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_zeron_mobile_fn_method_coreclient_read_document(
-                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(path)
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(path),FfiConverterBool.lower(allowOutside)
                 )
             },
             pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
             completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
             freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
-            liftFunc: FfiConverterTypeDocumentPreview_lift,
+            liftFunc: FfiConverterTypeDocumentRead_lift,
             errorHandler: FfiConverterTypeCoreError_lift
         )
 }
@@ -17861,6 +17861,85 @@ public func FfiConverterTypeDemoFixture_lower(_ value: DemoFixture) -> RustBuffe
 
 
 /**
+ * A document read: the preview, or a file the viewer must first agree to
+ * open because it lies beyond the chat's workspace (any file, in a chat in
+ * the host's home folder). Read it again with `allow_outside` after they do.
+ */
+
+public enum DocumentRead: Equatable, Hashable {
+    
+    case ready(document: DocumentPreview
+    )
+    case needsConfirmation(deviceId: String, deviceName: String, path: String
+    )
+
+
+
+
+
+}
+
+#if compiler(>=6)
+extension DocumentRead: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeDocumentRead: FfiConverterRustBuffer {
+    typealias SwiftType = DocumentRead
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DocumentRead {
+        let variant: Int32 = try readInt(&buf)
+        switch variant {
+        
+        case 1: return .ready(document: try FfiConverterTypeDocumentPreview.read(from: &buf)
+        )
+        
+        case 2: return .needsConfirmation(deviceId: try FfiConverterString.read(from: &buf), deviceName: try FfiConverterString.read(from: &buf), path: try FfiConverterString.read(from: &buf)
+        )
+        
+        default: throw UniffiInternalError.unexpectedEnumCase
+        }
+    }
+
+    public static func write(_ value: DocumentRead, into buf: inout [UInt8]) {
+        switch value {
+        
+        
+        case let .ready(document):
+            writeInt(&buf, Int32(1))
+            FfiConverterTypeDocumentPreview.write(document, into: &buf)
+            
+        
+        case let .needsConfirmation(deviceId,deviceName,path):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(deviceId, into: &buf)
+            FfiConverterString.write(deviceName, into: &buf)
+            FfiConverterString.write(path, into: &buf)
+            
+        }
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentRead_lift(_ buf: RustBuffer) throws -> DocumentRead {
+    return try FfiConverterTypeDocumentRead.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeDocumentRead_lower(_ value: DocumentRead) -> RustBuffer {
+    return FfiConverterTypeDocumentRead.lower(value)
+}
+
+
+
+/**
  * Faces the platform registers (same bytes it hands CoreText/Skia).
  */
 
@@ -24541,7 +24620,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_vault_usage() != 58618) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_coreclient_read_document() != 50446) {
+    if (uniffi_zeron_mobile_checksum_method_coreclient_read_document() != 14017) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_device_activate_account() != 7247) {
