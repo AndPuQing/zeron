@@ -134,7 +134,7 @@ fn require_mac_app_update_platform() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `zerun-<ver>-<os>-<arch>.tar.gz` — the headless/CLI tarball (Linux CI builds).
+/// `zerun-<ver>-<os>-<arch>.tar.gz` — the headless/CLI tarball (Linux and macOS builds).
 pub fn headless_artifact(version: &str) -> String {
     let (os, arch) = platform_key();
     format!("zerun-{version}-{os}-{arch}.tar.gz")
@@ -547,6 +547,16 @@ pub fn detect_install() -> InstallKind {
         .clone()
 }
 
+/// `path` with every symlink resolved, or unchanged when it cannot be (it
+/// does not exist, or the platform's canonical form is not comparable).
+fn resolved_path(path: &Path) -> PathBuf {
+    if cfg!(unix) {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
+    } else {
+        path.to_owned()
+    }
+}
+
 fn detect_install_from(exe: &Path, home: Option<&Path>) -> InstallKind {
     detect_install_from_for_os(exe, home, std::env::consts::OS)
 }
@@ -563,10 +573,13 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
     if !managed_updates_supported(os) {
         return InstallKind::Unmanaged;
     }
+    // Linux's `current_exe` resolves symlinks, but macOS reports the path the
+    // binary was started through, such as `~/.local/bin/zerun` or
+    // `app/current/zerun`. Compare resolved paths so both see the versioned dir.
+    let exe = &resolved_path(exe);
     if let Some(home) = home {
-        // `current_exe` resolves the `current` symlink to the versioned dir.
         let app_root = home.join(".zerun").join("app");
-        if exe.starts_with(&app_root) {
+        if exe.starts_with(&app_root) || exe.starts_with(resolved_path(&app_root)) {
             return InstallKind::Managed { app_root };
         }
     }
@@ -780,7 +793,8 @@ async fn verify_staged_binary(binary: &Path, version: &str) -> anyhow::Result<()
 // ---------------------------------------------------------------------------
 
 /// Download + unpack the headless tarball into `app_root/<ver>` (idempotent —
-/// an already-staged version is reused). Returns the versioned dir.
+/// an already-staged version is reused once it passes the same check as a
+/// fresh one). Returns the versioned dir.
 pub async fn stage_headless(
     edge_url: &str,
     manifest: &Manifest,
@@ -804,7 +818,20 @@ async fn stage_headless_with_progress(
     );
     let dest = app_root.join(version);
     if dest.join("zerun").exists() {
-        return Ok(dest);
+        // An interrupted or older installer may have left a copy that cannot
+        // run; never hand that to `apply_headless`.
+        match verify_staged_binary(&dest.join("zerun"), version).await {
+            Ok(()) => return Ok(dest),
+            Err(error) => {
+                tracing::warn!(
+                    error = %format!("{error:#}"),
+                    dir = %dest.display(),
+                    "staged version failed verification; staging it again"
+                );
+                std::fs::remove_dir_all(&dest)
+                    .with_context(|| format!("removing {}", dest.display()))?;
+            }
+        }
     }
     let file = headless_artifact(version);
     let stage = app_root.join(format!(".stage-{version}-{}", std::process::id()));
@@ -833,8 +860,13 @@ async fn stage_headless_with_progress(
         verify_staged_binary(&unpacked.join("zerun"), version).await?;
         match std::fs::rename(&unpacked, &dest) {
             Ok(()) => {}
-            // Lost a race with another stager — the staged copy is equivalent.
-            Err(_) if dest.join("zerun").exists() => {}
+            // Lost a race with another stager — the staged copy is equivalent
+            // once it passes the same check.
+            Err(_)
+                if dest.join("zerun").exists()
+                    && verify_staged_binary(&dest.join("zerun"), version)
+                        .await
+                        .is_ok() => {}
             Err(err) => {
                 return Err(err).with_context(|| format!("moving {} into place", dest.display()));
             }
@@ -1983,6 +2015,39 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn install_kind_detection_follows_the_cli_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_root = home.join(".zerun/app");
+        std::fs::create_dir_all(app_root.join("0.1.1")).unwrap();
+        std::fs::write(app_root.join("0.1.1/zerun"), "").unwrap();
+        std::os::unix::fs::symlink(app_root.join("0.1.1"), app_root.join("current")).unwrap();
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(app_root.join("current/zerun"), bin.join("zerun")).unwrap();
+        for exe in [bin.join("zerun"), app_root.join("current/zerun")] {
+            assert_eq!(
+                detect_install_from(&exe, Some(&home)),
+                InstallKind::Managed {
+                    app_root: app_root.clone()
+                },
+                "{}",
+                exe.display()
+            );
+        }
+        // A symlink to a binary outside the installation stays unmanaged.
+        let source = tmp.path().join("target/release/zerun");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "").unwrap();
+        std::os::unix::fs::symlink(&source, tmp.path().join("zerun")).unwrap();
+        assert_eq!(
+            detect_install_from(&tmp.path().join("zerun"), Some(&home)),
+            InstallKind::Unmanaged
+        );
+    }
+
     #[test]
     fn artifact_names_match_packaging() {
         let (os, arch) = platform_key();
@@ -2402,5 +2467,46 @@ mod tests {
         server.abort();
         assert_eq!(staged, app_root.join("9.9.9"));
         assert!(staged.join("zerun").is_file());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn headless_staging_replaces_an_existing_copy_that_fails_verification() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let app_root = tmp.path().join("app");
+        let broken = app_root.join("9.9.9");
+        std::fs::create_dir_all(&broken).unwrap();
+        std::fs::write(broken.join("zerun"), "#!/bin/sh\nexit 1\n").unwrap();
+        std::fs::set_permissions(broken.join("zerun"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+        std::fs::write(broken.join("leftover"), "").unwrap();
+
+        let right = fake_headless_tarball(&tmp.path().join("right"), "9.9.9");
+        let manifest = Manifest {
+            version: "9.9.9".into(),
+            files: [(
+                headless_artifact("9.9.9"),
+                FileMeta {
+                    sha256: Some(format!("{:x}", Sha256::digest(&right))),
+                },
+            )]
+            .into(),
+        };
+        let (base, server) = serve_forever(right).await;
+        let staged = stage_headless(&base, &manifest, &app_root).await.unwrap();
+        server.abort();
+        assert_eq!(staged, broken);
+        verify_staged_binary(&staged.join("zerun"), "9.9.9")
+            .await
+            .unwrap();
+        assert!(!staged.join("leftover").exists());
+        assert_eq!(std::fs::read_dir(&app_root).unwrap().count(), 1);
+
+        // A verified copy is reused without another download.
+        let staged = stage_headless("http://127.0.0.1:1", &manifest, &app_root)
+            .await
+            .unwrap();
+        assert_eq!(staged, broken);
     }
 }

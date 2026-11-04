@@ -33,14 +33,19 @@ actualización y abre el instalador de Android. Consulta
 
 ## Modo headless (CLI)
 
-Para servidores y otras máquinas sin pantalla, como un VPS que mantiene los agentes en ejecución después de cerrar tu portátil. Solo Linux:
+Para servidores y otras máquinas sin pantalla, como un VPS que mantiene los agentes en ejecución después de cerrar tu portátil. Linux y macOS (Apple Silicon):
 
 ```bash
 curl -fsSL https://edge.550w.host/install.sh | sh
 zerun status
 ```
 
-El instalador arranca el motor como un servicio en segundo plano que sobrevive a los reinicios.
+En Linux, el instalador arranca un servicio systemd que sobrevive a los reinicios.
+En macOS, instala una CLI independiente y un LaunchAgent de usuario: arranca al
+iniciar sesión y termina al cerrarla. Sin sesión gráfica, se puede ejecutar
+`zerun headless` directamente por SSH, por ejemplo dentro de tmux. No se publican
+binarios para Mac Intel. No ejecutes dos motores sobre el mismo directorio de
+datos y puerto IPC. Consulta los detalles de instalación en el [README](README.md#headless-cli).
 
 ```bash
 zerun status      # modo local/sincronizado y estado del motor

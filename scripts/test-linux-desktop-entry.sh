@@ -23,6 +23,11 @@ cp "$ROOT/dist/zeron.desktop" "$WORK/pkg/$PKG/zerun.desktop"
 printf 'not-really-a-png' >"$WORK/pkg/$PKG/zerun.png"
 echo "$VERSION" >"$WORK/site/releases/latest.txt"
 tar -czf "$WORK/site/releases/$PKG.tar.gz" -C "$WORK/pkg" "$PKG"
+# The curl installer only installs a download matching the manifest's sha256.
+sha="$( (sha256sum "$WORK/site/releases/$PKG.tar.gz" 2>/dev/null \
+  || shasum -a 256 "$WORK/site/releases/$PKG.tar.gz") | cut -d' ' -f1)"
+printf '{\n  "version": "%s",\n  "files": {\n    "%s.tar.gz": {\n      "sha256": "%s"\n    }\n  }\n}\n' \
+  "$VERSION" "$PKG" "$sha" >"$WORK/site/releases/manifest.json"
 printf '#!/bin/sh\ncase "$1" in -s) echo Linux ;; -m) echo x86_64 ;; *) exec /usr/bin/uname "$@" ;; esac\n' >"$WORK/shim/uname"
 chmod 755 "$WORK/shim/uname"
 cat >"$WORK/shim/systemctl" <<'SH'

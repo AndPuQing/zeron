@@ -73,7 +73,7 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
             bail!(
                 "this binary is not update-managed (source build or hand-copied).\n\
                  Linux: curl -fsSL https://edge.550w.host/install.sh | sh, or run install.sh from the release tarball\n\
-                 macOS: download the new Zerun.app dmg, or rebuild from source.\n\
+                 macOS: use the CLI installer at https://edge.550w.host/install.sh, download the Zerun.app dmg, or rebuild from source.\n\
                  Windows: install with the Zerun setup .exe from {}, or rebuild from source.",
                 zeron_update::LATEST_RELEASE_PAGE
             )

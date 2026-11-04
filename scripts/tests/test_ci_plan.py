@@ -112,6 +112,11 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(selected(plan.plan(files("edge/src/install.sh"), "fast")), {"edge", "installer"})
         self.assertTrue(plan.plan(files("edge/package-lock.json"), "fast")["macos"])
 
+    def test_macos_headless_packaging_and_installer_checks_are_selected(self):
+        self.assertTrue(plan.plan(files("scripts/package-macos-headless.sh"), "fast")["macos"])
+        suites = selected(plan.plan(files("scripts/tests/test_macos_headless.py"), "fast"))
+        self.assertTrue({"installer", "macos"}.issubset(suites))
+
     def test_version_bumps_select_nothing(self):
         bump = [{"filename": "Cargo.toml", "patch": '@@ -37 +37 @@\n-version = "0.2.126"\n+version = "0.2.127"'},
                 {"filename": "Cargo.lock", "patch": ' name = "zeron-ui"\n-version = "0.2.126"\n+version = "0.2.127"'}]

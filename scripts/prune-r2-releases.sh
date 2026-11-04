@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Keep the `zerun-releases` R2 bucket to what clients actually fetch.
 #
-# Nothing in the product downloads an older release: install.sh resolves the
-# headless tarball from `latest.txt`, and the desktop updater
-# (crates/update/src/lib.rs, windows.rs) and the Android updater
+# Nothing in the product downloads an older release: install.sh, the desktop
+# updater (crates/update/src/lib.rs, windows.rs) and the Android updater
 # (AndroidUpdater.kt) build their file names from `manifest.json`'s version. So
 # every version but the newest is dead weight for clients, and the release
 # workflow uploads only the handful of per-release artifacts that are fetched:
 #
 #   zerun-<ver>-linux-x86_64.tar.gz      install.sh + Linux updater
 #   zerun-<ver>-linux-aarch64.tar.gz     install.sh
-#   zerun-<ver>-macos-arm64-app.tar.gz   macOS updater
+#   zerun-<ver>-macos-arm64-app.tar.gz   macOS desktop updater
+#   zerun-<ver>-macos-arm64.tar.gz       macOS CLI installer + updater
 #   zerun-<ver>-windows-x86_64.exe       Windows in-place updater
 #   zerun-<ver>-android.apk              Android updater
 #
@@ -100,7 +100,7 @@ echo "repository: $repo"
 echo "keeping: $(printf '%s' "$kept" | jq -r 'join(", ")')"
 
 # The artifacts the release workflow uploads to R2.
-fetched='-(linux-x86_64|linux-aarch64)\.tar\.gz$|-macos-arm64-app\.tar\.gz$|-windows-x86_64\.exe$|-android\.apk$'
+fetched='-(linux-x86_64|linux-aarch64)\.tar\.gz$|-macos-arm64(-app)?\.tar\.gz$|-windows-x86_64\.exe$|-android\.apk$'
 
 if (( full )); then
   echo "sweeping: every older release"
