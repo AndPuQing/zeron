@@ -1,5 +1,5 @@
 //! Read-only host documents shared by both phone clients.
-use zeron_client::documents::HostDocument;
+use zeron_client::documents::{DocumentRead as HostRead, HostDocument};
 use zeron_proto::file_links::{classify_file_link, document_link_target};
 use zeron_proto::file_mentions::{FILE_MENTION_SCHEME, percent_decode_path};
 
@@ -16,6 +16,15 @@ pub struct DocumentPreview {
     pub truncated: bool,
     pub device_id: String,
     pub cwd: Option<String>,
+}
+
+/// A document read: the preview, or a file the viewer must first agree to
+/// open because it lies beyond the chat's workspace (any file, in a chat in
+/// the host's home folder). Read it again with `allow_outside` after they do.
+#[derive(Clone, uniffi::Enum)]
+pub enum DocumentRead {
+    Ready { document: DocumentPreview },
+    NeedsConfirmation { device_id: String, device_name: String, path: String },
 }
 
 /// Resolve a local file link without consulting the phone's filesystem.
@@ -98,17 +107,35 @@ fn preview(path: String, host: HostDocument) -> Result<DocumentPreview, zeron_cl
     })
 }
 
+/// The phone's outcome for a host read; `device_name` labels the prompt.
+fn document_read(
+    path: String,
+    read: HostRead,
+    device_name: impl FnOnce(&str) -> Option<String>,
+) -> Result<DocumentRead, zeron_client::ClientError> {
+    Ok(match read {
+        HostRead::Ready(host) => DocumentRead::Ready { document: preview(path, host)? },
+        HostRead::Outside { device_id, path } => DocumentRead::NeedsConfirmation {
+            device_name: device_name(&device_id).unwrap_or_else(|| device_id.clone()),
+            device_id,
+            path,
+        },
+    })
+}
+
 #[uniffi::export]
 impl CoreClient {
     pub async fn read_document(
         &self,
         chat_id: String,
         path: String,
-    ) -> CoreResult<DocumentPreview> {
+        allow_outside: bool,
+    ) -> CoreResult<DocumentRead> {
         let client = self.client.clone();
         on_runtime(async move {
-            let host = client.read_chat_file(&chat_id, &path, PREVIEW_LIMIT).await?;
-            preview(path, host)
+            let read = client.read_chat_file(&chat_id, &path, PREVIEW_LIMIT, allow_outside).await?;
+            let workspace = client.workspace();
+            document_read(path, read, |id| workspace.device(id).map(|device| device.name.clone()))
         })
         .await
     }
@@ -195,6 +222,28 @@ mod tests {
             read_only_reason: Some(zeron_proto::WorkspaceReadOnlyReason::Binary),
             truncated: false,
         }
+    }
+
+    /// Outside files, and every file of a chat in the host's home folder,
+    /// come back from the host as `Outside`: the phone asks, never refuses.
+    #[test]
+    fn outside_reads_become_a_confirmation_naming_device_and_path() {
+        let read = HostRead::Outside { device_id: "ubuntu".into(), path: "/home/me/notes/plan.md".into() };
+        match document_read("~/notes/plan.md".into(), read, |id| (id == "ubuntu").then(|| "Build box".into())).unwrap() {
+            DocumentRead::NeedsConfirmation { device_id, device_name, path } => {
+                assert_eq!((device_id.as_str(), device_name.as_str()), ("ubuntu", "Build box"));
+                assert_eq!(path, "/home/me/notes/plan.md");
+            }
+            DocumentRead::Ready { .. } => panic!("opened without consent"),
+        }
+        // An unknown device is still named, by its id.
+        let read = HostRead::Outside { device_id: "ubuntu".into(), path: "/etc/hosts".into() };
+        assert!(matches!(
+            document_read("/etc/hosts".into(), read, |_| None).unwrap(),
+            DocumentRead::NeedsConfirmation { device_name, .. } if device_name == "ubuntu"
+        ));
+        let ready = document_read("a.md".into(), HostRead::Ready(host(Some("# A".into()))), |_| None).unwrap();
+        assert!(matches!(ready, DocumentRead::Ready { document } if document.markdown && document.text == "# A"));
     }
 
     #[test]

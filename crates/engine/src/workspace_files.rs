@@ -530,10 +530,12 @@ impl WorkspaceFiles {
         result
     }
 
-    /// [`Self::read_file`] in relay-sized slices, for files inside the
-    /// workspace only: an outside host file never leaves this device. Every
-    /// slice re-reads the file, so a change between slices fails on the
-    /// content hash.
+    /// [`Self::read_file`] in relay-sized slices for the phone previews.
+    /// A file beyond the chat's workspace (any file, for a chat in the host's
+    /// home folder) is read only with `allowOutside`, given once the viewer
+    /// agreed; without it the reply names the file and carries no text.
+    /// Credential locations are never read. Every slice re-reads the file,
+    /// so a change between slices fails on the content hash.
     pub async fn read_text_chunk(
         &self,
         request: zeron_proto::ReadWorkspaceTextChunkRequest,
@@ -543,24 +545,15 @@ impl WorkspaceFiles {
                 "a later text chunk needs expectedContentHash".into(),
             ));
         }
-        let file = self
-            .read_file(ReadWorkspaceFileRequest {
-                target: request.target,
-                path: request.path,
-            })
-            .await?;
-        // Outside reads always clear the checkout identity, whatever else
-        // made them read-only.
-        if file.checkout_id.is_empty() {
-            return Err(WorkspaceFilesError::Authorization(
-                "file is outside the workspace".into(),
-            ));
-        }
-        text_chunk(
-            file,
-            request.offset,
-            request.expected_content_hash.as_deref(),
-        )
+        let workspace = self.resolve_target(&request.target).await?;
+        let absolute = request.target.chat_id.is_some() && request.path.starts_with('/');
+        let data_dir = self.inner.repos.data_dir().to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            let home = crate::repos::home_dir();
+            read_text_chunk_blocking(&workspace, &home, &data_dir, absolute, &request)
+        })
+        .await
+        .map_err(|error| WorkspaceFilesError::Io(format!("file read worker failed: {error}")))?
     }
 
     pub async fn read_image(
@@ -1656,6 +1649,108 @@ fn read_image_blocking(
         size: bytes.len(),
         done: end == bytes.len(),
     })
+}
+
+/// Where credentials live, below the host's home: never previewed, even
+/// with the viewer's consent. Zerun's own data folder (`.zerun`, and the
+/// engine's data dir when it lives elsewhere) is refused as well, except
+/// the folders chats themselves work in.
+const CREDENTIAL_LOCATIONS: &[&str] = &[
+    ".ssh",
+    ".aws",
+    ".gnupg",
+    ".config/gcloud",
+    ".kube",
+    ".docker/config.json",
+    ".netrc",
+    ".git-credentials",
+    ".npmrc",
+    ".pypirc",
+    "Library/Keychains",
+];
+const DATA_DIR_WORKSPACES: &[&str] = &["scratch", "worktrees"];
+const CREDENTIAL_REFUSAL: &str = "credential files are never previewed";
+
+/// Whether canonical `path` is a credential location (see
+/// [`CREDENTIAL_LOCATIONS`]). Case-insensitive where the host's filesystem
+/// usually is.
+fn credential_location(path: &Path, home: &Path, data_dir: &Path) -> bool {
+    let fold = |path: &Path| -> PathBuf {
+        if cfg!(any(target_os = "macos", windows)) {
+            PathBuf::from(path.to_string_lossy().to_lowercase())
+        } else {
+            path.to_path_buf()
+        }
+    };
+    let (path, home) = (fold(path), fold(home));
+    for data in [fold(data_dir), home.join(".zerun")] {
+        if path.starts_with(&data) {
+            return !DATA_DIR_WORKSPACES
+                .iter()
+                .any(|folder| path.starts_with(data.join(folder)));
+        }
+    }
+    CREDENTIAL_LOCATIONS
+        .iter()
+        .any(|location| path.starts_with(home.join(location)))
+}
+
+/// One `ReadWorkspaceTextChunk` slice. The path keeps the jail rules of the
+/// other reads (one leading slash, no `..`, no symlink in a workspace path,
+/// regular files only, the preview size limit); the credential check runs on
+/// the canonical path, after symlinks are resolved.
+fn read_text_chunk_blocking(
+    workspace: &ResolvedWorkspace,
+    home: &Path,
+    data_dir: &Path,
+    absolute: bool,
+    request: &zeron_proto::ReadWorkspaceTextChunkRequest,
+) -> Result<zeron_proto::WorkspaceTextChunk, WorkspaceFilesError> {
+    let canonical = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let home = canonical(home);
+    let (base, relative, inside) = if absolute {
+        match resolve_absolute_read(workspace, &request.path)? {
+            AbsoluteRead::Inside(relative) => (workspace.root.clone(), relative, true),
+            AbsoluteRead::Outside { base, relative } => (base, relative, false),
+        }
+    } else {
+        (workspace.root.clone(), WorkspaceRelativePath::file(&request.path)?, true)
+    };
+    let full = base.join(relative.as_path());
+    if credential_location(&canonical(&full), &home, &canonical(data_dir)) {
+        return Err(WorkspaceFilesError::Authorization(CREDENTIAL_REFUSAL.into()));
+    }
+    // A chat in the host's home folder has no workspace to stay inside.
+    let inside = inside && canonical(&workspace.root) != home;
+    let full_path = full.to_string_lossy().into_owned();
+    if !inside && !request.allow_outside {
+        return Ok(zeron_proto::WorkspaceTextChunk {
+            checkout_id: String::new(),
+            path: full_path,
+            content_hash: None,
+            size: 0,
+            text_len: None,
+            read_only_reason: Some(WorkspaceReadOnlyReason::OutsideWorkspace),
+            data: String::new(),
+            next_offset: 0,
+            done: true,
+        });
+    }
+    let mut file = read_file_blocking(&base, &relative, &AtomicBool::new(false))?;
+    if inside {
+        file.checkout_id = workspace.checkout_id.clone();
+    } else {
+        file.checkout_id = String::new();
+        file.path = full_path;
+        if file.read_only_reason.is_none() {
+            file.read_only_reason = Some(WorkspaceReadOnlyReason::OutsideWorkspace);
+        }
+    }
+    text_chunk(
+        file,
+        request.offset,
+        request.expected_content_hash.as_deref(),
+    )
 }
 
 /// The slice of `file`'s decoded text starting at `offset`, with the read's
@@ -3859,6 +3954,144 @@ mod image_tests {
         request.offset = usize::MAX;
         assert!(read_image_blocking(&root, &path, &request).is_err());
     }
+    #[cfg(unix)]
+    fn chunk_request(path: &str, allow_outside: bool) -> zeron_proto::ReadWorkspaceTextChunkRequest {
+        zeron_proto::ReadWorkspaceTextChunkRequest {
+            target: WorkspaceTarget {
+                chat_id: Some("chat".into()),
+                space_id: None,
+                checkout_path: None,
+            },
+            path: path.into(),
+            offset: 0,
+            expected_content_hash: None,
+            allow_outside,
+        }
+    }
+
+    /// A fake host: `home` with credentials, a project folder and a file
+    /// beside it, Zerun's data folder with a chat's scratch folder.
+    #[cfg(unix)]
+    fn chunk_host() -> (tempfile::TempDir, PathBuf, ResolvedWorkspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().canonicalize().unwrap();
+        for (path, text) in [
+            ("repo/README.md", "inside"),
+            ("notes/plan.md", "outside"),
+            (".ssh/id_ed25519", "KEY"),
+            (".docker/config.json", "{}"),
+            (".zerun/session.json", "{}"),
+            (".zerun/scratch/chat/a.md", "scratch"),
+        ] {
+            std::fs::create_dir_all(home.join(path).parent().unwrap()).unwrap();
+            std::fs::write(home.join(path), text).unwrap();
+        }
+        let workspace = ResolvedWorkspace {
+            checkout_id: "checkout".into(),
+            root: home.join("repo"),
+        };
+        (dir, home, workspace)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outside_text_reads_need_consent_and_credentials_never_open() {
+        use base64::Engine as _;
+        let (_dir, home, workspace) = chunk_host();
+        let data = home.join(".zerun");
+        let read = |path: &str, allow: bool| {
+            let absolute = path.starts_with('/');
+            read_text_chunk_blocking(&workspace, &home, &data, absolute, &chunk_request(path, allow))
+        };
+        let text = |chunk: zeron_proto::WorkspaceTextChunk| {
+            String::from_utf8(base64::engine::general_purpose::STANDARD.decode(chunk.data).unwrap()).unwrap()
+        };
+        let inside = read("README.md", false).unwrap();
+        assert_eq!(inside.checkout_id, "checkout");
+        assert_eq!(text(inside), "inside");
+
+        // Outside without consent: the file's full path, no text.
+        let outside = home.join("notes/plan.md").to_string_lossy().into_owned();
+        let asked = read(&outside, false).unwrap();
+        assert_eq!(asked.read_only_reason, Some(WorkspaceReadOnlyReason::OutsideWorkspace));
+        assert!(asked.text_len.is_none() && asked.data.is_empty() && asked.checkout_id.is_empty());
+        assert_eq!(asked.path, outside);
+        let opened = read(&outside, true).unwrap();
+        assert!(opened.checkout_id.is_empty());
+        assert_eq!(text(opened), "outside");
+
+        // Credentials stay closed with consent, by `..` or through a symlink.
+        for path in [".ssh/id_ed25519", ".docker/config.json", ".zerun/session.json"] {
+            let path = home.join(path).to_string_lossy().into_owned();
+            assert!(read(&path, true).unwrap_err().to_string().contains("never previewed"), "{path}");
+        }
+        let climbing = format!("{}/../.ssh/id_ed25519", home.join("repo").display());
+        assert!(read(&climbing, true).is_err());
+        std::os::unix::fs::symlink(home.join(".ssh"), home.join("notes/keys")).unwrap();
+        let linked = home.join("notes/keys/id_ed25519").to_string_lossy().into_owned();
+        assert!(read(&linked, true).unwrap_err().to_string().contains("never previewed"));
+        std::os::unix::fs::symlink(home.join(".ssh/id_ed25519"), home.join("repo/key")).unwrap();
+        assert!(read("key", true).unwrap_err().to_string().contains("never previewed"));
+        // A chat's own scratch folder below Zerun's data is not a credential.
+        let scratch = home.join(".zerun/scratch/chat/a.md").to_string_lossy().into_owned();
+        assert_eq!(text(read(&scratch, true).unwrap()), "scratch");
+    }
+
+    /// A chat in the host's home folder has no workspace: even a relative
+    /// path asks first, naming the full path.
+    #[cfg(unix)]
+    #[test]
+    fn a_home_folder_chat_asks_before_every_read() {
+        let (_dir, home, _) = chunk_host();
+        let workspace = ResolvedWorkspace {
+            checkout_id: "home".into(),
+            root: home.clone(),
+        };
+        let data = home.join(".zerun");
+        let asked = read_text_chunk_blocking(&workspace, &home, &data, false, &chunk_request("notes/plan.md", false)).unwrap();
+        assert_eq!(asked.read_only_reason, Some(WorkspaceReadOnlyReason::OutsideWorkspace));
+        assert_eq!(asked.path, home.join("notes/plan.md").to_string_lossy());
+        assert!(asked.text_len.is_none());
+        let opened = read_text_chunk_blocking(&workspace, &home, &data, false, &chunk_request("notes/plan.md", true)).unwrap();
+        assert_eq!(opened.text_len, Some("outside".len()));
+        assert!(read_text_chunk_blocking(&workspace, &home, &data, false, &chunk_request(".ssh/id_ed25519", true)).is_err());
+    }
+
+    #[test]
+    fn credential_locations_match_whole_components() {
+        let home = Path::new("/home/me");
+        let data = Path::new("/home/me/.zerun");
+        for path in [
+            "/home/me/.ssh",
+            "/home/me/.ssh/id_ed25519",
+            "/home/me/.aws/credentials",
+            "/home/me/.gnupg/private-keys-v1.d/x.key",
+            "/home/me/.config/gcloud/credentials.db",
+            "/home/me/.kube/config",
+            "/home/me/.docker/config.json",
+            "/home/me/.netrc",
+            "/home/me/.git-credentials",
+            "/home/me/.npmrc",
+            "/home/me/.pypirc",
+            "/home/me/Library/Keychains/login.keychain-db",
+            "/home/me/.zerun/agent-accounts/a.json",
+        ] {
+            assert!(credential_location(Path::new(path), home, data), "{path}");
+        }
+        for path in [
+            "/home/me/.sshconfig.md",
+            "/home/me/.docker/daemon.json",
+            "/home/me/project/.ssh.md",
+            "/home/me/.zerun/scratch/2026-10-25-a1b2c3d4/notes.md",
+            "/home/me/.zerun/worktrees/app/README.md",
+            "/elsewhere/.ssh/id_ed25519",
+        ] {
+            assert!(!credential_location(Path::new(path), home, data), "{path}");
+        }
+        // An engine data dir outside the home is Zerun's data all the same.
+        assert!(credential_location(Path::new("/srv/zerun/session.json"), home, Path::new("/srv/zerun")));
+    }
+
     #[test]
     fn text_chunks_cover_the_decoded_text_in_bounded_versioned_slices() {
         use base64::Engine as _;

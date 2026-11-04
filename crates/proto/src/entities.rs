@@ -884,6 +884,11 @@ pub struct ReadWorkspaceTextChunkRequest {
     /// fails instead of splicing two revisions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_content_hash: Option<String>,
+    /// The viewer agreed to open a file beyond the chat's workspace. Without
+    /// it such a file comes back as an `OutsideWorkspace` chunk naming its
+    /// path, with no text. Credential locations are refused either way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_outside: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

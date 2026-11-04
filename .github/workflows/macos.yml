@@ -246,6 +246,14 @@ jobs:
           diff -u apps/ios/Zeron/Core/Generated/zeron_core.swift "$RUNNER_TEMP/gen/zeron_core.swift"
           diff -u apps/ios/CoreFFI/zeron_coreFFI.h "$RUNNER_TEMP/gen/zeron_coreFFI.h"
           diff -u apps/ios/CoreFFI/module.modulemap "$RUNNER_TEMP/gen/zeron_coreFFI.modulemap"
+      # Stale bindings: the regenerated files, to commit without a local mobile build.
+      - name: Upload generated Swift bindings for regeneration without a local mobile build
+        if: ${{ failure() && !contains(fromJSON(inputs.skip || '[]'), 'ios-tests') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-generated-swift
+          path: ${{ runner.temp }}/gen
+          if-no-files-found: ignore
       - name: Record the pass (CI skips this job while its inputs stay the same)
         if: inputs.pass-key != ''
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

@@ -15,8 +15,6 @@ use crate::{Client, ClientError};
 
 /// Deadline for one host call; a long document takes several.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
-const OUTSIDE_WORKSPACE: &str =
-    "This file is outside the conversation's workspace, so it can't be previewed.";
 
 /// A document's text and the host context captured for the request.
 pub struct HostDocument {
@@ -30,18 +28,34 @@ pub struct HostDocument {
     pub truncated: bool,
 }
 
+/// What a document read found.
+pub enum DocumentRead {
+    Ready(HostDocument),
+    /// Beyond the chat's workspace, or in a chat in the host's home folder
+    /// (which has none): nothing was shown. Read again with `allow_outside`
+    /// once the viewer agreed to open `path` on `device_id`.
+    Outside { device_id: String, path: String },
+}
+
+/// What the chunked or single-reply read produced, before the host context.
+enum Read {
+    Text(Option<String>, Option<WorkspaceReadOnlyReason>, bool),
+    Outside(String),
+}
+
 impl Client {
     /// Read up to about `limit` bytes of a document through its chat's
     /// execution host, never the viewer's disk. A relative path names a file
     /// below the chat's folder, the base the agent and the transcript's
-    /// images use. Only files inside the chat's workspace are returned, and
-    /// none from a chat whose folder is the host's home.
+    /// images use. A file the viewer must first agree to open comes back as
+    /// [`DocumentRead::Outside`] unless `allow_outside` says they did.
     pub async fn read_chat_file(
         &self,
         chat_id: &str,
         path: &str,
         limit: usize,
-    ) -> Result<HostDocument> {
+        allow_outside: bool,
+    ) -> Result<DocumentRead> {
         let workspace = self.workspace();
         let chat = workspace
             .session(chat_id)
@@ -51,32 +65,37 @@ impl Client {
             space_id: None,
             checkout_path: None,
         };
-        if home_folder(chat.cwd.as_deref()) {
-            return Err(ClientError::InvalidArgument(
-                "Documents can't be previewed from a conversation in the host's home folder.".into(),
-            ));
-        }
+        let home = home_folder(chat.cwd.as_deref());
         let path = host_path(path, chat.cwd.as_deref());
-        let chunked = self.read_text_chunks(&chat.device_id, &target, &path, limit).await;
-        let (text, read_only_reason, truncated) =
-            match chunked {
-                // A host that predates chunked reads answers in one reply.
-                Err(ClientError::Unsupported(_)) => {
-                    let request = ReadWorkspaceFileRequest { target, path };
-                    let file: WorkspaceFileText = self
-                        .document_call(&chat.device_id, methods::READ_WORKSPACE_FILE, &request)
-                        .await?;
-                    inside_workspace(&file.checkout_id, file.read_only_reason)?;
-                    (file.text, file.read_only_reason, file.truncated)
+        let chunked = self
+            .read_text_chunks(&chat.device_id, &target, &path, limit, allow_outside)
+            .await;
+        let read = match chunked {
+            // A host that predates chunked reads answers in one reply, which
+            // the viewer sees only on the same terms.
+            Err(ClientError::Unsupported(_)) => {
+                let request = ReadWorkspaceFileRequest { target, path: path.clone() };
+                let file: WorkspaceFileText = self
+                    .document_call(&chat.device_id, methods::READ_WORKSPACE_FILE, &request)
+                    .await?;
+                if !allow_outside && (home || outside(&file.checkout_id, file.read_only_reason)) {
+                    Read::Outside(if home && !path.starts_with('/') { format!("~/{path}") } else { path })
+                } else {
+                    Read::Text(file.text, file.read_only_reason, file.truncated)
                 }
-                other => other?,
-            };
-        Ok(HostDocument {
-            device_id: chat.device_id.clone(),
-            cwd: chat.cwd.clone(),
-            text,
-            read_only_reason,
-            truncated,
+            }
+            other => other?,
+        };
+        let device_id = chat.device_id.clone();
+        Ok(match read {
+            Read::Outside(path) => DocumentRead::Outside { device_id, path },
+            Read::Text(text, read_only_reason, truncated) => DocumentRead::Ready(HostDocument {
+                device_id,
+                cwd: chat.cwd.clone(),
+                text,
+                read_only_reason,
+                truncated,
+            }),
         })
     }
 
@@ -88,7 +107,8 @@ impl Client {
         target: &WorkspaceTarget,
         path: &str,
         limit: usize,
-    ) -> Result<(Option<String>, Option<WorkspaceReadOnlyReason>, bool)> {
+        allow_outside: bool,
+    ) -> Result<Read> {
         let mut bytes = Vec::new();
         let mut hash = None;
         loop {
@@ -97,14 +117,17 @@ impl Client {
                 path: path.to_owned(),
                 offset: bytes.len(),
                 expected_content_hash: hash.clone(),
+                allow_outside,
             };
             let chunk: WorkspaceTextChunk = self
                 .document_call(device_id, methods::READ_WORKSPACE_TEXT_CHUNK, &request)
                 .await?;
-            // Refused before any further slice is read.
-            inside_workspace(&chunk.checkout_id, chunk.read_only_reason)?;
+            // The host sent no text for it: it names the file to ask about.
+            if !allow_outside && outside(&chunk.checkout_id, chunk.read_only_reason) {
+                return Ok(Read::Outside(chunk.path));
+            }
             if chunk.text_len.is_none() {
-                return Ok((None, chunk.read_only_reason, false));
+                return Ok(Read::Text(None, chunk.read_only_reason, false));
             }
             let data = base64::engine::general_purpose::STANDARD
                 .decode(&chunk.data)
@@ -127,7 +150,7 @@ impl Client {
                 };
                 bytes.truncate(valid);
                 let text = String::from_utf8(bytes).map_err(|e| ClientError::HostError(e.to_string()))?;
-                return Ok((Some(text), chunk.read_only_reason, !chunk.done));
+                return Ok(Read::Text(Some(text), chunk.read_only_reason, !chunk.done));
             }
         }
     }
@@ -165,20 +188,17 @@ fn host_path(path: &str, cwd: Option<&str>) -> String {
     }
 }
 
-/// A chat in the host's home folder: its workspace is the whole home, keys
-/// and all, so it previews nothing. Images fail closed for it as well.
+/// A chat in the host's home folder: it has no workspace, so every file
+/// it names is opened only with the viewer's consent.
 fn home_folder(cwd: Option<&str>) -> bool {
     cwd.is_none_or(zeron_proto::projectless::is_home_cwd)
 }
 
-/// Fail closed on a host file beyond the chat's workspace. The host marks an
-/// outside read `OutsideWorkspace` only when nothing else already made it
-/// read-only, but it always clears the checkout identity.
-fn inside_workspace(checkout_id: &str, reason: Option<WorkspaceReadOnlyReason>) -> Result<()> {
-    if checkout_id.is_empty() || reason == Some(WorkspaceReadOnlyReason::OutsideWorkspace) {
-        return Err(ClientError::InvalidArgument(OUTSIDE_WORKSPACE.into()));
-    }
-    Ok(())
+/// A host file beyond the chat's workspace. The host marks an outside read
+/// `OutsideWorkspace` only when nothing else already made it read-only, but
+/// it always clears the checkout identity.
+fn outside(checkout_id: &str, reason: Option<WorkspaceReadOnlyReason>) -> bool {
+    checkout_id.is_empty() || reason == Some(WorkspaceReadOnlyReason::OutsideWorkspace)
 }
 
 /// Host failures without the RPC method prefix, in words for the viewer.
@@ -191,7 +211,9 @@ fn document_error(method: &str, error: ClientError) -> ClientError {
                 .unwrap_or(&message);
             ClientError::HostError(match message {
                 "file not found" => "This document wasn't found on the host.".into(),
-                "file is outside the workspace" => OUTSIDE_WORKSPACE.into(),
+                "credential files are never previewed" => {
+                    "This is a credential location, which is never previewed.".into()
+                }
                 other => other.to_owned(),
             })
         }
@@ -219,12 +241,12 @@ mod tests {
     }
 
     #[test]
-    fn outside_reads_fail_closed_whatever_else_made_them_read_only() {
-        assert!(inside_workspace("co", None).is_ok());
-        assert!(inside_workspace("co", Some(WorkspaceReadOnlyReason::TooLarge)).is_ok());
-        assert!(inside_workspace("", Some(WorkspaceReadOnlyReason::TooLarge)).is_err());
-        assert!(inside_workspace("", Some(WorkspaceReadOnlyReason::MixedLineEndings)).is_err());
-        assert!(inside_workspace("co", Some(WorkspaceReadOnlyReason::OutsideWorkspace)).is_err());
+    fn outside_reads_ask_first_whatever_else_made_them_read_only() {
+        assert!(!outside("co", None));
+        assert!(!outside("co", Some(WorkspaceReadOnlyReason::TooLarge)));
+        assert!(outside("", Some(WorkspaceReadOnlyReason::TooLarge)));
+        assert!(outside("", Some(WorkspaceReadOnlyReason::MixedLineEndings)));
+        assert!(outside("co", Some(WorkspaceReadOnlyReason::OutsideWorkspace)));
         let error = document_error(
             methods::READ_WORKSPACE_TEXT_CHUNK,
             ClientError::HostError("ReadWorkspaceTextChunk: file not found".into()),
@@ -232,8 +254,8 @@ mod tests {
         assert!(error.to_string().contains("wasn't found on the host"));
         let error = document_error(
             methods::READ_WORKSPACE_TEXT_CHUNK,
-            ClientError::HostError("ReadWorkspaceTextChunk: file is outside the workspace".into()),
+            ClientError::HostError("ReadWorkspaceTextChunk: credential files are never previewed".into()),
         );
-        assert!(error.to_string().contains("outside the conversation's workspace"));
+        assert!(error.to_string().contains("credential location"));
     }
 }

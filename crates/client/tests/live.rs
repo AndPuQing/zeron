@@ -587,8 +587,14 @@ impl zeron_rpc::RpcService for HostService {
                             "data": base64::engine::general_purpose::STANDARD.encode(&text.as_bytes()[request.offset..end]),
                             "nextOffset": end, "done": end == text.len()})
                     }
-                    // The host refuses outside files (engine `read_text_chunk`).
-                    "/etc/hosts" => return Err(zeron_rpc::RpcError::Failed("file is outside the workspace".into())),
+                    // Outside the workspace: named without text until the viewer agrees
+                    // (engine `read_text_chunk`).
+                    "/etc/hosts" if !request.allow_outside => json!({"checkoutId": "", "path": "/etc/hosts",
+                        "size": 0, "readOnlyReason": "outsideWorkspace", "data": "", "nextOffset": 0, "done": true}),
+                    "/etc/hosts" => json!({"checkoutId": "", "path": "/etc/hosts", "contentHash": "h2",
+                        "size": 6, "textLen": 6, "readOnlyReason": "outsideWorkspace",
+                        "data": base64::engine::general_purpose::STANDARD.encode("hosts!"), "nextOffset": 6, "done": true}),
+                    "/Users/dev/.ssh/id_ed25519" => return Err(zeron_rpc::RpcError::Failed("credential files are never previewed".into())),
                     _ => return Err(zeron_rpc::RpcError::Failed("file not found".into())),
                 }
             }
@@ -772,22 +778,35 @@ async fn host_rpcs_ride_the_device_relay() {
 
     // The viewer chooses the conversation, not an arbitrary/local device,
     // and a document larger than one relay message arrives in chunks.
-    let c = client.clone();
-    let document = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md", 4 << 20).await }).await.unwrap();
+    let read = |path: &'static str, limit: usize, allow: bool| {
+        let c = client.clone();
+        zeron_client::runtime::run(async move { c.read_chat_file(CHAT, path, limit, allow).await })
+    };
+    let ready = |read: zeron_client::documents::DocumentRead| match read {
+        zeron_client::documents::DocumentRead::Ready(document) => document,
+        zeron_client::documents::DocumentRead::Outside { path, .. } => panic!("asked to open {path}"),
+    };
+    let document = ready(read("docs/guide.md", 4 << 20, false).await.unwrap());
     assert_eq!(document.device_id, HOST);
     assert_eq!(document.cwd.as_deref(), Some("/Users/dev/live"));
     assert_eq!(document.text.as_deref(), Some(live_guide().as_str()));
     assert!(!document.truncated);
-    let c = client.clone();
-    let head = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md", 1).await }).await.unwrap();
+    let head = ready(read("docs/guide.md", 1, false).await.unwrap());
     assert!(head.truncated && head.text.unwrap().len() < live_guide().len());
-    let c = client.clone();
-    let missing = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "missing.md", 4 << 20).await }).await;
+    let missing = read("missing.md", 4 << 20, false).await;
     assert!(missing.err().unwrap().to_string().contains("wasn't found on the host"));
-    // A host file outside the workspace never reaches the viewer.
-    let c = client.clone();
-    let outside = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "/etc/hosts", 4 << 20).await }).await;
-    assert!(outside.err().unwrap().to_string().contains("outside the conversation's workspace"));
+    // A file outside the workspace is named for the viewer to confirm, and
+    // read only once they agreed.
+    match read("/etc/hosts", 4 << 20, false).await.unwrap() {
+        zeron_client::documents::DocumentRead::Outside { device_id, path } => {
+            assert_eq!((device_id.as_str(), path.as_str()), (HOST, "/etc/hosts"));
+        }
+        zeron_client::documents::DocumentRead::Ready(_) => panic!("opened without consent"),
+    }
+    let opened = ready(read("/etc/hosts", 4 << 20, true).await.unwrap());
+    assert_eq!(opened.text.as_deref(), Some("hosts!"));
+    let key = read("/Users/dev/.ssh/id_ed25519", 4 << 20, true).await;
+    assert!(key.err().unwrap().to_string().contains("credential location"));
 
     // Chunked upload (> one 510KB slice) with progress.
     let data: Vec<u8> = (0..1_200_000u32).map(|i| (i % 253) as u8).collect();

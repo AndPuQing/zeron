@@ -14,15 +14,28 @@ Conversation links follow the desktop transcript's file-link rules, and relative
 paths resolve from the conversation's folder. Links inside a document follow the
 desktop Markdown preview's rules: they resolve beside that document, never name
 an absolute path, and cannot climb above the conversation's folder for a document
-opened by a relative path. Only files inside the conversation's workspace open;
-anything else shows an error. Conversations whose folder is the host's home
-folder don't preview documents. A link
-to the open document, such as `#usage`, keeps it open; the viewer does not
-scroll to headings or lines. Back returns to the previous document, with its
-position and view, or to the conversation. Local raster images use the existing
-chat image reader and remain limited to the chat's folder. Network images stay
-links; HTML is not executed. Formatting follows the mobile transcript renderer,
-so desktop-only rendering features are not added by this viewer.
+opened by a relative path. A link to the open document, such as `#usage`, keeps
+it open; the viewer does not scroll to headings or lines. Back returns to the
+previous document, with its position and view, or to the conversation.
+
+Files inside the conversation's workspace open directly. A file outside it, and
+any file in a conversation whose folder is the host's home folder, opens only
+after a confirmation that names the host device and the file's full path:
+**Open anyway** reads it, **Cancel** leaves it unread. This applies to links in
+the conversation and inside documents alike.
+
+Credential locations are never previewed, even after confirmation. The host
+refuses them after resolving symbolic links: `~/.ssh`, `~/.aws`, `~/.gnupg`,
+`~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`,
+`~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/Library/Keychains`, and
+Zerun's own data folder (`~/.zerun`, apart from the conversation folders under
+its `scratch` and `worktrees`). A host that predates chunked reads applies only
+the confirmation, not this list.
+
+Local raster images use the existing chat image reader and remain limited to the
+chat's folder. Network images stay links; HTML is not executed. Formatting
+follows the mobile transcript renderer, so desktop-only rendering features are
+not added by this viewer.
 
 Previews are limited to the first 2 MiB of text, with a visible truncation notice;
 the text arrives in bounded chunks from hosts that support it. The host can reject
