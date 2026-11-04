@@ -167,6 +167,7 @@ fun SessionScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var sheet by remember { mutableStateOf<TextSheet?>(null) }
+    var documentPath by remember(core, chatId) { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
     val imageDevice = handle.composer().host.deviceId
     val actions = remember(chatId, imageDevice, core) {
@@ -184,7 +185,8 @@ fun SessionScreen(
             imageCacheScope = imageCacheScope,
             openUrl = { url ->
                 val uri = Uri.parse(url)
-                when (uri.scheme) {
+                val file = uniffi.zeron_core.documentLinkPath(url, null)
+                if (file != null) documentPath = file else when (uri.scheme) {
                     "zerun" -> if (uri.host == "chat") uri.pathSegments.singleOrNull()?.let(onOpen)
                     "http", "https" -> CustomTabsIntent.Builder().build().launchUrl(context, uri)
                     // An image chip opens its upload full size, as its thumbnail did.
@@ -442,6 +444,9 @@ fun SessionScreen(
         )
     }
 
+    documentPath?.let { path ->
+        DocumentPreviewDialog(core, chatId, path) { documentPath = null }
+    }
     sheet?.let { s ->
         ModalBottomSheet(onDismissRequest = { sheet = null }) {
             Text(s.title, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 24.dp))

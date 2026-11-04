@@ -129,6 +129,8 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     var imageFetcher: ((TranscriptImageRef) async -> UIImage?)?
     /// A sender caption or fork seam opens its chat through the shell.
     var onOpenChat: ((String) -> Void)?
+    /// Returns true when the session handled a host file link internally.
+    var onOpenDocument: ((URL) -> Bool)?
 
     // MARK: Runway (desktop transcript.rs `OwnTurnAnchor`)
     //
@@ -703,6 +705,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     }
 
     func rowView(_ view: RowView, open url: URL) {
+        if onOpenDocument?(url) == true { return }
         // Chat links (the fork seam) route through the shell, not Safari.
         if url.scheme == "zerun", url.host == "chat" {
             let id = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

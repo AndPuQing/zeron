@@ -44,11 +44,22 @@ pub struct PendingUser {
     pub text: String,
 }
 
+/// Fixed host context for a standalone file; it must not drift with a live chat.
+#[derive(Debug, Clone)]
+pub struct DocumentContext {
+    pub chat_id: String,
+    pub device_id: String,
+    pub cwd: Option<String>,
+    pub path: String,
+}
+
 /// What the row builder reads from a session snapshot.
 #[derive(Debug, Clone, Default)]
 pub struct TranscriptInput {
     /// None for subagent transcripts: never borrow their parent's folder.
     pub chat_id: Option<String>,
+    /// Standalone document: relative media resolve beside this host file.
+    pub document: Option<DocumentContext>,
     pub entries: Vec<Arc<SessionMessageEntry>>,
     pub pending: Vec<PendingUser>,
     /// A turn is running (drives the tail working indicator).
@@ -237,8 +248,10 @@ pub(crate) fn quick_hash(s: &str) -> u64 {
 impl RowBuilder {
     /// Rows for `input`, reusing every row whose source is unchanged.
     pub fn build(&mut self, ctx: &mut Ctx, input: &TranscriptInput) -> Vec<Placed> {
-        let chat = input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
-            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone() })
+        let chat = input.document.as_ref().map(|doc| ReplyImageContext {
+            chat_id: doc.chat_id.clone(), cwd: doc.cwd.clone(), host: doc.device_id.clone(), document_path: Some(doc.path.clone()),
+        }).or_else(|| input.chat_id.as_deref().and_then(|id| input.workspace.as_ref()?.session(id))
+            .map(|row| ReplyImageContext { chat_id: row.id.clone(), cwd: row.cwd.clone(), host: row.device_id.clone(), document_path: None }))
             // A snapshot that briefly lacks the chat's row (reconnect, refresh)
             // keeps the folder it had: only a real change re-lays out the transcript.
             .or_else(|| self.reply_chat.clone().filter(|known| input.chat_id.as_ref() == Some(&known.chat_id)));
@@ -1379,7 +1392,7 @@ mod reply_image_tests {
     #[test]
     fn mobile_reply_images_preserve_text_and_measure_their_widgets() {
         let mut w = super::super::tests::worker(390.0);
-        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None });
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
@@ -1413,9 +1426,34 @@ mod reply_image_tests {
     }
 
     #[test]
+    fn document_images_resolve_beside_the_document_and_keep_the_chat_jail() {
+        let mut w = super::super::tests::worker(390.0);
+        w.builder.reply_chat = Some(ReplyImageContext {
+            chat_id: "chat".into(), cwd: Some("/repo".into()), host: "ubuntu".into(),
+            document_path: Some("docs/guide.md".into()),
+        });
+        let mut ctx = Ctx {
+            typo: &mut w.typo, cache: &mut w.cache, math: w.math,
+            math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,
+        };
+        let blocks = w.builder.text_blocks(&mut ctx, "document", "![local](a.png)\n\n![parent](../images/b.png)\n\n![outside](/private/c.png)\n\n![remote](https://example.com/d.png)", false);
+        let mut painted = DisplayBuilder::default();
+        for (_, row) in &blocks {
+            let Content::Block(block) = &row.content else { panic!("block") };
+            place(block, Px(1.0), 0.0, 0.0, 354.0, Some(&mut painted));
+        }
+        let paths: Vec<_> = painted.widgets.iter().filter_map(|widget| match &widget.kind {
+            WidgetKind::ChatImage { chat_id, path } => { assert_eq!(chat_id, "chat"); Some(path.as_str()) },
+            _ => None,
+        }).collect();
+        assert_eq!(paths, ["/repo/docs/a.png", "/repo/images/b.png"]);
+        assert!(painted.text.contains("outside") && painted.text.contains("remote"));
+    }
+
+    #[test]
     fn a_snapshot_missing_the_chat_row_keeps_its_folder() {
         let mut w = super::super::tests::worker(390.0);
-        let known = ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() };
+        let known = ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None };
         w.builder.reply_chat = Some(known.clone());
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
@@ -1430,7 +1468,7 @@ mod reply_image_tests {
     #[test]
     fn mobile_reply_images_wait_for_a_settled_block_and_stay_out_of_subagents() {
         let mut w = super::super::tests::worker(390.0);
-        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into() });
+        w.builder.reply_chat = Some(ReplyImageContext { chat_id: "chat".into(), cwd: Some("/repo".into()), host: "host".into(), document_path: None });
         let mut ctx = Ctx {
             typo: &mut w.typo, cache: &mut w.cache, math: w.math,
             math_failures: &mut w.math_failures, in_table: false, math_area: 0.0,

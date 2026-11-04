@@ -314,6 +314,7 @@ pub(crate) struct ReplyImageContext {
     pub chat_id: String,
     pub cwd: Option<String>,
     pub host: String,
+    pub document_path: Option<String>,
 }
 
 pub(crate) enum PBlock {
@@ -534,7 +535,10 @@ pub(crate) fn prepare_reply_block(ctx: &mut Ctx, block: &Block, depth: usize, mu
             let mut start = 0;
             for (i, run) in runs.iter().enumerate() {
                 let Some(image) = &run.style.image else { continue };
-                let Some((path, _)) = zeron_proto::chat_images::markdown_image(&image.source, chat.cwd.as_deref()) else { continue };
+                let source = chat.document_path.as_deref()
+                    .and_then(|base| crate::client_ffi::documents::resolve_link(&image.source, Some(base)))
+                    .unwrap_or_else(|| image.source.clone());
+                let Some((path, _)) = zeron_proto::chat_images::markdown_image(&source, chat.cwd.as_deref()) else { continue };
                 // Mobile can't fall back to the link once a widget is laid out:
                 // anything the host is sure to refuse stays a link.
                 if !zeron_proto::chat_images::in_chat_folder(&path, chat.cwd.as_deref()) { continue }

@@ -395,6 +395,7 @@ impl zeron_client::SubagentSink for SubagentInput {
         let live = entries.last().is_some_and(|e| e.status == Some(MessageStatus::Streaming));
         let input = TranscriptInput {
             chat_id: None,
+            document: None,
             entries,
             pending: Vec::new(),
             working: live,
@@ -468,6 +469,7 @@ impl TranscriptView {
         let guard = handle.watch(move |snap| {
             let input = TranscriptInput {
                 chat_id: Some(snap.chat_id.clone()),
+                document: None,
                 entries: snap.transcript_messages(),
                 pending: snap
                     .pending
@@ -533,6 +535,16 @@ impl TranscriptView {
         self.shared.frame.lock().unwrap().clone()
     }
 
+    /// Render a standalone read-only host document with the native Markdown engine.
+    /// This view never attaches to or writes into the live conversation.
+    pub fn set_document(&self, chat_id: String, document: crate::client_ffi::DocumentPreview, markdown: bool) {
+        let mut input = document_input(document.path.clone(), document.text, markdown);
+        input.document = Some(rows::DocumentContext {
+            chat_id, device_id: document.device_id, cwd: document.cwd, path: document.path,
+        });
+        self.send(Msg::Input(input));
+    }
+
     /// Feed markdown fixtures directly (demo screens, benchmarks, tests).
     pub fn set_debug_entries(&self, entries: Vec<DebugEntry>, working: bool) {
         self.send(Msg::Input(debug_input(entries, working)));
@@ -564,9 +576,20 @@ impl Drop for TranscriptView {
     }
 }
 
+fn document_input(path: String, text: String, markdown: bool) -> TranscriptInput {
+    let text = if markdown { text } else {
+        // A source containing fences must not escape into rendered Markdown.
+        let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+        let fence = "`".repeat(longest.max(2) + 1);
+        format!("{fence}\n{text}\n{fence}")
+    };
+    debug_input(vec![DebugEntry { id: format!("document:{path}"), user: false, text, streaming: false }], false)
+}
+
 pub(crate) fn debug_input(entries: Vec<DebugEntry>, working: bool) -> TranscriptInput {
     TranscriptInput {
         chat_id: None,
+        document: None,
         entries: entries
             .into_iter()
             .map(|e| {

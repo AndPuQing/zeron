@@ -682,7 +682,7 @@ fn bench_layout_passes() {
             continuation_of: None,
             duration_ms: None,
         }));
-        w.input = TranscriptInput { chat_id: None, entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, workspace: None };
+        w.input = TranscriptInput { chat_id: None, entries: e, pending: vec![], working: true, working_since_ms: None, streaming: true, workspace: None, document: None };
         let t = Instant::now();
         w.pass();
         total += t.elapsed();
@@ -1704,4 +1704,18 @@ fn tool_result_images_only_load_in_expanded_details() {
     w.builder.detail_open.insert(rows::row_key("a#g0/tool"), false);
     w.builder.invalidate(key);
     assert!(images(w.pass()).is_empty());
+}
+
+#[test]
+fn document_preview_renders_markdown_and_keeps_source_literal() {
+    let text = "# Guide\n\n**bold** and [next](next.md)\n\n```rust\nfn main() {}\n```";
+    let mut w = worker(390.0);
+    w.input = document_input("docs/guide.md".into(), text.into(), true);
+    let frame = w.pass();
+    assert!(frame.row_count() >= 3);
+    assert!((0..frame.row_count()).any(|i| frame.display(i).unwrap().links.iter().any(|l| l.url == "next.md")));
+    w.input = document_input("docs/guide.md".into(), text.into(), false);
+    let frame = w.pass();
+    assert!((0..frame.row_count()).all(|i| frame.display(i).unwrap().links.is_empty()));
+    assert!(frame.plain_text().contains("**bold**"));
 }

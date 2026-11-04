@@ -85,6 +85,14 @@ final class SessionViewController: UIViewController, UIGestureRecognizerDelegate
         list.accessibilityIdentifier = "transcript"
         list.imageLoader = { [weak self] ref, iv in self?.source.loadImage(ref, into: iv) }
         list.imageFetcher = { [weak self] ref in await self?.source.image(ref) }
+        list.onOpenDocument = { [weak self] url in
+            guard let self, let client = self.app.client,
+                  let path = documentLinkPath(url: url.absoluteString, basePath: nil) else { return false }
+            let preview = DocumentPreviewViewController(client: client, chatId: self.chatId, path: path)
+            if let nav = self.navigationController { nav.pushViewController(preview, animated: true) }
+            else { self.present(UINavigationController(rootViewController: preview), animated: true) }
+            return true
+        }
         // Hidden while following (the runway glide and tail spring travel).
         // An error card's "Log in": that provider's sign-in, started at once.
         list.onAction = { [weak self] action in

@@ -565,6 +565,18 @@ impl zeron_rpc::RpcService for HostService {
         use serde_json::json;
         use zeron_rpc::{RpcReply, methods as m};
         let value = match method {
+            m::READ_WORKSPACE_FILE => {
+                let request: zeron_proto::ReadWorkspaceFileRequest = serde_json::from_value(params).unwrap();
+                assert_eq!(request.target.chat_id.as_deref(), Some(CHAT));
+                assert!(request.target.space_id.is_none() && request.target.checkout_path.is_none());
+                if request.path == "missing.md" {
+                    return Err(zeron_rpc::RpcError::Failed("Document not found".into()));
+                }
+                assert_eq!(request.path, "docs/guide.md");
+                json!({"checkoutId": "co-live", "path": "docs/guide.md",
+                    "text": "# Remote guide\n\nFrom the host, not the phone.",
+                    "size": 47, "encoding": "utf8", "truncated": false})
+            }
             m::LIST_HARNESSES => json!([
                 {"id": "claude-code", "name": "Claude Code", "supportsSteering": true,
                  "steeringMode": "step-boundary", "reasoningLevels": ["high"], "installed": true,
@@ -742,6 +754,16 @@ async fn host_rpcs_ride_the_device_relay() {
         .await
         .unwrap();
     assert!(folders.entries[0].is_repo);
+
+    // The viewer chooses the conversation, not an arbitrary/local device.
+    let c = client.clone();
+    let document = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "docs/guide.md").await }).await.unwrap();
+    assert_eq!(document.device_id, HOST);
+    assert_eq!(document.cwd.as_deref(), Some("/Users/dev/live"));
+    assert!(document.file.text.unwrap().contains("From the host"));
+    let c = client.clone();
+    let missing = zeron_client::runtime::run(async move { c.read_chat_file(CHAT, "missing.md").await }).await;
+    assert!(missing.err().unwrap().to_string().contains("Document not found"));
 
     // Chunked upload (> one 510KB slice) with progress.
     let data: Vec<u8> = (0..1_200_000u32).map(|i| (i % 253) as u8).collect();

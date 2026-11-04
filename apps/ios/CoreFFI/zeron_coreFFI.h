@@ -959,6 +959,11 @@ uint64_t uniffi_zeron_mobile_fn_method_coreclient_vault_status(uint64_t ptr
 uint64_t uniffi_zeron_mobile_fn_method_coreclient_vault_usage(uint64_t ptr, RustBuffer provider, RustBuffer slot
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_READ_DOCUMENT
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_READ_DOCUMENT
+uint64_t uniffi_zeron_mobile_fn_method_coreclient_read_document(uint64_t ptr, RustBuffer chat_id, RustBuffer path
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_DEVICE_ACTIVATE_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_DEVICE_ACTIVATE_ACCOUNT
 uint64_t uniffi_zeron_mobile_fn_method_coreclient_device_activate_account(uint64_t ptr, RustBuffer device_id, RustBuffer harness, RustBuffer account_id
@@ -1514,6 +1519,11 @@ uint64_t uniffi_zeron_mobile_fn_method_transcriptview_frame(uint64_t ptr, RustCa
 void uniffi_zeron_mobile_fn_method_transcriptview_set_debug_entries(uint64_t ptr, RustBuffer entries, int8_t working, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_TRANSCRIPTVIEW_SET_DOCUMENT
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_TRANSCRIPTVIEW_SET_DOCUMENT
+void uniffi_zeron_mobile_fn_method_transcriptview_set_document(uint64_t ptr, RustBuffer chat_id, RustBuffer document, int8_t markdown, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_TRANSCRIPTVIEW_SET_MATH
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_TRANSCRIPTVIEW_SET_MATH
 void uniffi_zeron_mobile_fn_method_transcriptview_set_math(uint64_t ptr, int8_t enabled, RustBuffer face, uint16_t size_percent, RustCallStatus *_Nonnull out_status
@@ -1909,6 +1919,11 @@ RustBuffer uniffi_zeron_mobile_fn_func_mobile_composer_action(RustBuffer harness
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_MOBILE_COMPOSER_ACTION_ERROR
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_MOBILE_COMPOSER_ACTION_ERROR
 RustBuffer uniffi_zeron_mobile_fn_func_mobile_composer_action_error(RustBuffer action, RustBuffer context, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_DOCUMENT_LINK_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_DOCUMENT_LINK_PATH
+RustBuffer uniffi_zeron_mobile_fn_func_document_link_path(RustBuffer url, RustBuffer base_path, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_AGENT_LOGIN_RULES
@@ -2384,6 +2399,12 @@ uint16_t uniffi_zeron_mobile_checksum_func_mobile_composer_action(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_MOBILE_COMPOSER_ACTION_ERROR
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_MOBILE_COMPOSER_ACTION_ERROR
 uint16_t uniffi_zeron_mobile_checksum_func_mobile_composer_action_error(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_DOCUMENT_LINK_PATH
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_DOCUMENT_LINK_PATH
+uint16_t uniffi_zeron_mobile_checksum_func_document_link_path(void
     
 );
 #endif
@@ -3071,6 +3092,12 @@ uint16_t uniffi_zeron_mobile_checksum_method_coreclient_vault_usage(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_READ_DOCUMENT
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_READ_DOCUMENT
+uint16_t uniffi_zeron_mobile_checksum_method_coreclient_read_document(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_DEVICE_ACTIVATE_ACCOUNT
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_DEVICE_ACTIVATE_ACCOUNT
 uint16_t uniffi_zeron_mobile_checksum_method_coreclient_device_activate_account(void
@@ -3542,6 +3569,12 @@ uint16_t uniffi_zeron_mobile_checksum_method_transcriptview_frame(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_TRANSCRIPTVIEW_SET_DEBUG_ENTRIES
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_TRANSCRIPTVIEW_SET_DEBUG_ENTRIES
 uint16_t uniffi_zeron_mobile_checksum_method_transcriptview_set_debug_entries(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_TRANSCRIPTVIEW_SET_DOCUMENT
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_TRANSCRIPTVIEW_SET_DOCUMENT
+uint16_t uniffi_zeron_mobile_checksum_method_transcriptview_set_document(void
     
 );
 #endif
