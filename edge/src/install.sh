@@ -212,8 +212,19 @@ fi
 service=manual
 if [ "$plat" = macos ]; then
   if launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
-    "$app_root/current/zerun" daemon install
-    service=launchd
+    # `daemon install` returns only once the service's engine is up, and exits
+    # 3 without touching launchd while another engine (usually the desktop
+    # app's) holds ~/.zerun.
+    daemon_rc=0
+    "$app_root/current/zerun" daemon install || daemon_rc=$?
+    case "$daemon_rc" in
+      0) service=launchd ;;
+      3) service=engine_running ;;
+      *)
+        echo "zerun install: the LaunchAgent did not start; see $data_root/daemon.log, then run: zerun daemon install" >&2
+        exit "$daemon_rc"
+        ;;
+    esac
   else
     echo "note: no macOS GUI login session — the CLI is installed, but its LaunchAgent was not started."
     echo "Log in at the Mac, then run: zerun daemon install"
@@ -269,6 +280,10 @@ case "$service" in
     echo "  zerun update                     update the CLI and restart its service"
     echo "The service starts at login and stops when you log out; locking the screen is fine."
     echo "Optional sync: zerun daemon stop; zerun login; zerun daemon start"
+    ;;
+  engine_running)
+    echo "another Zerun engine (usually the desktop app) is already running, so the LaunchAgent was not started."
+    echo "To run the engine as a background service instead, quit it, then run: zerun daemon install"
     ;;
   running)
     echo "the engine is running with the new version (local-only unless sync is enabled)."

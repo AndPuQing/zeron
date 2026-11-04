@@ -48,7 +48,7 @@ class HeadlessInstall(unittest.TestCase):
         binary = package / "zerun"
         body = 'exit 1' if broken else f'''case "$*" in
 --version) echo "zerun {version}";;
-"daemon install") printf '%s\\n' "$0" >> "$HOME/daemon-installs";;
+"daemon install") printf '%s\\n' "$0" >> "$HOME/daemon-installs"; exit "${{TEST_DAEMON_EXIT:-0}}";;
 *) exit 1;;
 esac'''
         binary.write_text("#!/bin/sh\n" + body + "\n")
@@ -100,6 +100,19 @@ esac'''
         self.assertIn("SSH-only", result.stdout)
         self.assertTrue((self.home / ".local/bin/zerun").exists())
         self.assertFalse((self.home / "daemon-installs").exists())
+
+    def test_running_desktop_engine_is_reported_instead_of_a_started_service(self):
+        result = self.install(TEST_DAEMON_EXIT="3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("desktop app", result.stdout)
+        self.assertNotIn("the engine is running", result.stdout)
+        self.assertEqual((self.home / ".zerun/app/current").resolve().name, "9.9.9")
+
+    def test_service_that_does_not_start_fails_the_install(self):
+        result = self.install(TEST_DAEMON_EXIT="1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("did not start", result.stderr)
+        self.assertNotIn("the engine is running", result.stdout)
 
     def test_rosetta_downloads_arm64_and_intel_is_rejected_before_install(self):
         result = self.install(TEST_ARCH="x86_64", TEST_ARM="1")
