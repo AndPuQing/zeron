@@ -44,9 +44,9 @@
 //!   accounts through `hermes auth add` (device code; Hermes appends to its
 //!   own pool under its own lock). It never rewrites the pool.
 //!
-//! Opaque tokens (Pi's Claude login, Copilot tokens) carry no identity: a
-//! live entry is matched to its slot by token, else identified ONCE per token
-//! with a read-only profile call (`/api/oauth/profile`, GitHub `/user`). A
+//! Pi's Claude login is matched only to a local saved slot; an unknown token
+//! stays unnamed without a profile request. Copilot tokens are matched locally,
+//! then identified once per token with GitHub's `/user` call. A
 //! Copilot login on a self-hosted GitHub Enterprise Server (a host zeron
 //! never sends the token to) gets a local identity instead — its host and a
 //! SHA-256 fingerprint of the token — so it still switches; its usage is
@@ -922,9 +922,8 @@ impl AgentAccounts {
         }
     }
 
-    /// Who an opaque live entry is: the slot already holding this exact
-    /// token, else the remembered answer for it, else one read-only profile
-    /// call (cached per token, so a list doesn't re-ask).
+    /// Match a live entry to a saved slot. Unknown Claude tokens stay
+    /// unidentified; only Copilot may make a cached profile request.
     async fn identify_opaque(
         &self,
         harness: HarnessId,
@@ -940,6 +939,11 @@ impl AgentAccounts {
             return Some(
                 Detected::known(slot.account_key, slot.profile, entry.clone()).keyed(store_key),
             );
+        }
+        // Claude's CLI owns its network configuration. Listing a login must
+        // not send its opaque token to an independent official endpoint.
+        if upstream == Upstream::Anthropic {
+            return None;
         }
         // A GitHub Enterprise host zeron won't send the token to (self-hosted
         // GHES): no profile call — a local identity keeps it switchable.
@@ -961,12 +965,8 @@ impl AgentAccounts {
             Some(IdentityLookup::Failed(at)) if at.elapsed() < IDENTITY_RETRY => return None,
             _ => {
                 let known = match upstream {
-                    Upstream::Anthropic => match str_field(entry, "access") {
-                        Some(access) => self.anthropic_identity(store_key, &access).await,
-                        None => None,
-                    },
                     Upstream::Copilot => self.github_identity(store_key, &secret, entry).await,
-                    Upstream::OpenAi => None,
+                    Upstream::Anthropic | Upstream::OpenAi => None,
                 };
                 let lookup = match &known {
                     Some((key, profile)) => IdentityLookup::Known(key.clone(), profile.clone()),
@@ -977,47 +977,6 @@ impl AgentAccounts {
             }
         };
         Some(Detected::known(account_key, profile, entry.clone()).keyed(store_key))
-    }
-
-    /// Claude's profile for a live access token (`user:profile` scope).
-    async fn anthropic_identity(
-        &self,
-        store_key: &str,
-        access_token: &str,
-    ) -> Option<(String, SlotProfile)> {
-        let profile: serde_json::Value = self
-            .inner
-            .http
-            .get(&self.inner.endpoints.claude_profile)
-            .bearer_auth(access_token)
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .send()
-            .await
-            .ok()
-            .filter(|res| res.status().is_success())?
-            .json()
-            .await
-            .ok()?;
-        let account = profile.get("account")?;
-        let org = profile.get("organization").cloned().unwrap_or_default();
-        let email = str_field(account, "email_address")?;
-        let uuid = str_field(account, "uuid").unwrap_or_else(|| email.clone());
-        Some((
-            format!("{store_key}:{uuid}"),
-            SlotProfile {
-                email,
-                display_name: str_field(account, "display_name")
-                    .or_else(|| str_field(account, "full_name")),
-                organization: str_field(&org, "name"),
-                plan: claude_plan(
-                    str_field(&org, "organization_type").as_deref(),
-                    str_field(&org, "rate_limit_tier").as_deref(),
-                )
-                .map(|plan| format!("Claude {plan}"))
-                .or_else(|| Some("Claude".to_string())),
-                auth_kind: AgentAuthKind::Oauth,
-            },
-        ))
     }
 
     /// The GitHub user behind a Copilot login's GitHub token.

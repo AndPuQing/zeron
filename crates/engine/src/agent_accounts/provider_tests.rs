@@ -127,7 +127,6 @@ fn accounts_with(root: &Path, endpoints: ProbeEndpoints) -> (AgentAccounts, Agen
 /// Endpoints that all point at `base` (a mock), with slot refresh allowed.
 fn mocked(base: &str) -> ProbeEndpoints {
     ProbeEndpoints {
-        claude_usage: format!("{base}/api/oauth/usage"),
         claude_token: format!("{base}/v1/oauth/token"),
         claude_loopback_token: format!("{base}/v1/oauth/token"),
         claude_profile: format!("{base}/api/oauth/profile"),
@@ -794,44 +793,78 @@ async fn pi_swaps_under_its_lockfile_and_groups_rows_per_provider() {
 }
 
 #[tokio::test]
-async fn an_opaque_pi_claude_token_is_identified_once_then_matched_by_token() {
-    let server = MockServer::start(|_, path, _| match path {
-        "/api/oauth/profile" => (
-            200,
-            serde_json::json!({
-                "account": { "uuid": "acct-uuid", "email_address": "claude@example.com" },
-                "organization": { "name": "Org", "organization_type": "claude_max",
-                                  "rate_limit_tier": "default_claude_max_20x" },
-            })
-            .to_string(),
-        ),
-        _ => (404, String::new()),
-    })
-    .await;
+async fn pi_claude_accounts_use_local_identity_and_never_probe_profile_or_usage() {
+    let server = MockServer::start(|_, _, _| (401, String::new())).await;
     let tmp = tempfile::tempdir().unwrap();
     let (accounts, config) = accounts_with(tmp.path(), mocked(&server.base));
     let file = config.pi_agent_dir.join("auth.json");
-    let entry = |refresh: &str| {
-        serde_json::json!({ "anthropic": {
-            "type": "oauth", "access": "opaque-access", "refresh": refresh, "expires": 1,
+    let entry = serde_json::json!({
+        "type": "oauth", "access": "opaque-access", "refresh": "r1", "expires": 1,
+    });
+    write(
+        &file,
+        &serde_json::json!({ "anthropic": entry }).to_string(),
+    );
+    let unknown = rows(&accounts.list(true).await.unwrap(), HarnessId::Pi);
+    assert_eq!(unknown.len(), 1);
+    assert_eq!(unknown[0].email.as_deref(), Some("Claude account"));
+    assert!(unknown[0].active && !unknown[0].switchable);
+
+    // An existing saved login can still be identified without contacting its vendor.
+    let detected = Detected::known(
+        "anthropic:acct-uuid".into(),
+        SlotProfile {
+            email: "claude@example.com".into(),
+            display_name: None,
+            organization: None,
+            plan: Some("Claude Max".into()),
+            auth_kind: AgentAuthKind::Oauth,
+        },
+        entry.clone(),
+    )
+    .keyed("anthropic");
+    accounts
+        .snapshot_detected(HarnessId::Pi, &detected)
+        .unwrap();
+    lock(&accounts.inner.usage).insert(
+        usage_key(HarnessId::Pi, &detected.account_key),
+        UsageEntry {
+            usage: Some(UsageSnapshot {
+                windows: vec![AgentUsageWindow {
+                    label: "Week".into(),
+                    used_fraction: 0.7,
+                    resets_at: None,
+                }],
+                ..Default::default()
+            }),
+            fetched_at: Some(now_ms()),
+            ..Default::default()
+        },
+    );
+    for forced in [false, true] {
+        let pi = rows(&accounts.list(forced).await.unwrap(), HarnessId::Pi);
+        assert_eq!(pi.len(), 1);
+        assert_eq!(pi[0].email.as_deref(), Some("claude@example.com"));
+        assert!(pi[0].active && pi[0].switchable);
+        assert!(pi[0].usage_windows.is_empty());
+        assert_eq!(pi[0].usage_fetched_at, None);
+        assert_eq!(pi[0].usage_error.as_deref(), Some(CLAUDE_USAGE_UNAVAILABLE));
+    }
+    // Pi rotating an opaque token does not trigger a profile lookup either.
+    write(
+        &file,
+        &serde_json::json!({ "anthropic": {
+            "type": "oauth", "access": "new-access", "refresh": "r2", "expires": 1,
         }})
-        .to_string()
-    };
-    write(&file, &entry("r1"));
-    let pi = rows(&accounts.list(false).await.unwrap(), HarnessId::Pi);
-    assert_eq!(pi.len(), 1);
-    assert_eq!(pi[0].email.as_deref(), Some("claude@example.com"));
-    assert_eq!(pi[0].plan_label.as_deref(), Some("Claude Max 20×"));
-    assert!(pi[0].active && pi[0].switchable);
-    assert_eq!(server.hits("GET /api/oauth/profile"), 1);
-    // The same token again: matched to its slot, no network.
-    accounts.list(false).await.unwrap();
-    assert_eq!(server.hits("GET /api/oauth/profile"), 1);
-    // Pi refreshed (new pair): one more lookup, SAME account.
-    write(&file, &entry("r2"));
-    let pi = rows(&accounts.list(false).await.unwrap(), HarnessId::Pi);
-    assert_eq!(pi.len(), 1);
-    assert_eq!(server.hits("GET /api/oauth/profile"), 2);
+        .to_string(),
+    );
+    accounts.list(true).await.unwrap();
+    assert!(lock(&server.hits).is_empty());
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(file).unwrap()).unwrap()
+            ["anthropic"]["refresh"],
+        "r2"
+    );
 }
 
 #[tokio::test]

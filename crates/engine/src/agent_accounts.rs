@@ -61,10 +61,9 @@
 //!    its callback port to [`zeron_preview::login`], so the requester can
 //!    forward its own loopback to it over the P2P link.
 //!
-//! Usage probes: all three providers expose the rate-limit view their own CLIs render
-//! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
-//! so the probe exchanges it for a dashboard session and reads the
-//! `GetCurrentPeriodUsage` call the Cursor app itself makes). Usage is
+//! Claude subscription usage is not queried: this service does not share the
+//! CLI's network configuration. Other usage probes read the providers' quota
+//! views (`/status` in Codex; Cursor's dashboard usage call). Usage is
 //! stale-while-revalidate: every list serves each account's last good probe
 //! (persisted to `agent-accounts/usage-cache.json`, so it survives restarts)
 //! with its fetch time; only `force_usage` hits the network, probing all
@@ -72,7 +71,7 @@
 //! update in place. A failed probe keeps the last good windows, records why
 //! (shown instead of "Usage unavailable"), and backs off — honouring
 //! `Retry-After` — before that account is probed again. Only 401/403 counts
-//! as a rejected token (and only then is a saved Claude slot refreshed).
+//! as a rejected token. Listing or refreshing usage never refreshes Claude tokens.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -121,7 +120,8 @@ const CLAUDE_REDIRECT: &str = "https://console.anthropic.com/oauth/code/callback
 const CLAUDE_SCOPES: &str = "org:create_api_key user:profile user:inference";
 const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const CLAUDE_USAGE_UNAVAILABLE: &str =
+    "Subscription usage is not queried by Zerun. Check it in Claude Code.";
 // Claude Code 2.1.x's automatic (loopback) login: the claude.ai authorize
 // page, the token endpoint it exchanges at, the page it sends the browser to
 // once the code is redeemed, and the scopes it asks for.
@@ -709,7 +709,6 @@ struct UsageCacheFile {
 /// (the live diagnosis harness must never rotate a real refresh token).
 #[derive(Debug, Clone)]
 struct ProbeEndpoints {
-    claude_usage: String,
     claude_token: String,
     /// Where the loopback login redeems its code (and reads the profile).
     claude_loopback_token: String,
@@ -740,7 +739,6 @@ struct ProbeEndpoints {
 impl Default for ProbeEndpoints {
     fn default() -> Self {
         Self {
-            claude_usage: CLAUDE_USAGE_URL.into(),
             claude_token: CLAUDE_TOKEN_URL.into(),
             claude_loopback_token: CLAUDE_LOOPBACK_TOKEN_URL.into(),
             claude_profile: CLAUDE_PROFILE_URL.into(),
@@ -1076,7 +1074,11 @@ impl AgentAccounts {
             let active_set = active_keys.get(&harness);
             for slot in slots {
                 let active = active_set.is_some_and(|keys| keys.contains(&slot.account_key));
-                let entry = usage.get(&usage_key(harness, &slot.account_key));
+                let claude_account = is_claude_account(harness, slot.store_key.as_deref());
+                // Old direct probes must not keep presenting cached quota as current.
+                let entry = usage
+                    .get(&usage_key(harness, &slot.account_key))
+                    .filter(|_| !claude_account);
                 let snapshot = entry.and_then(|entry| entry.usage.as_ref());
                 accounts.push(AgentAccount {
                     id: slot.id.clone(),
@@ -1095,16 +1097,20 @@ impl AgentAccounts {
                     codex_reset_credits: snapshot
                         .and_then(|usage| usage.codex_reset_credits.clone()),
                     usage_fetched_at: entry.and_then(|entry| entry.fetched_at),
-                    usage_error: entry.and_then(|entry| {
-                        usage_error_message(
-                            harness,
-                            slot.store_key.as_deref(),
-                            active,
-                            entry.error.as_ref()?,
-                            entry,
-                            now,
-                        )
-                    }),
+                    usage_error: if claude_account {
+                        Some(CLAUDE_USAGE_UNAVAILABLE.to_string())
+                    } else {
+                        entry.and_then(|entry| {
+                            usage_error_message(
+                                harness,
+                                slot.store_key.as_deref(),
+                                active,
+                                entry.error.as_ref()?,
+                                entry,
+                                now,
+                            )
+                        })
+                    },
                     display_name: slot.profile.display_name.clone(),
                     organization: slot.profile.organization.clone(),
                     auth_kind: Some(slot.profile.auth_kind),
@@ -3072,9 +3078,11 @@ impl AgentAccounts {
             let usage = lock(&self.inner.usage);
             let mut inflight = lock(&self.inner.inflight_probes);
             for &(harness, slot, active) in targets {
-                // Muse reports its usage from runs (`record_muse_usage`); a
-                // probe's fresh host has observed none.
-                if harness == HarnessId::Muse {
+                // Muse reports usage from runs. Claude's subscription usage is
+                // left to the CLI, which owns its proxy and endpoint settings.
+                if harness == HarnessId::Muse
+                    || is_claude_account(harness, slot.store_key.as_deref())
+                {
                     continue;
                 }
                 let key = usage_key(harness, &slot.account_key);
@@ -3151,7 +3159,9 @@ impl AgentAccounts {
         is_active: bool,
     ) -> Result<UsageSnapshot, ProbeError> {
         let result = match harness {
-            HarnessId::ClaudeCode => self.claude_usage(slot, is_active).await,
+            HarnessId::ClaudeCode => Err(ProbeError::NoCredentials {
+                why: NoCredentials::Unsupported,
+            }),
             HarnessId::Codex => self.codex_usage(slot).await,
             HarnessId::Cursor => self.cursor_usage(slot).await,
             HarnessId::Grok => self.grok_usage(slot, is_active).await,
@@ -3178,59 +3188,6 @@ impl AgentAccounts {
             }
         }
         result
-    }
-
-    async fn claude_usage(
-        &self,
-        slot: &Slot,
-        is_active: bool,
-    ) -> Result<UsageSnapshot, ProbeError> {
-        let missing = ProbeError::NoCredentials {
-            why: NoCredentials::Missing,
-        };
-        let oauth = slot
-            .credentials
-            .get("claudeAiOauth")
-            .ok_or(missing.clone())?;
-        let access_token = str_field(oauth, "accessToken").ok_or(missing)?;
-        match self.claude_usage_request(&access_token).await {
-            // The stored expiry metadata can lie (a Claude Code regression
-            // wrote `expiresAt: 0` for fresh logins), so probe with the
-            // stored token first and rotate the slot-owned pair only after
-            // the endpoint actually REJECTED it (401/403) — a 429 or 5xx says
-            // nothing about the token, and a refresh there would burn a
-            // single-use refresh token for nothing. The active login is never
-            // rotated: the running CLI may hold its single-use refresh token.
-            Err(ProbeError::Unauthorized { status })
-                if !is_active
-                    && self.inner.endpoints.allow_slot_refresh
-                    && self.claude_slot_is_not_live(slot).await =>
-            {
-                match self.refresh_claude_slot(slot).await? {
-                    Some(fresh) => self.claude_usage_request(&fresh).await,
-                    // Refresh in flight elsewhere (single-flight) — report
-                    // the original rejection; the next probe sees the result.
-                    None => Err(ProbeError::Unauthorized { status }),
-                }
-            }
-            result => result,
-        }
-    }
-
-    /// One usage probe: GET the endpoint and parse windows.
-    async fn claude_usage_request(&self, access_token: &str) -> Result<UsageSnapshot, ProbeError> {
-        let body = probe_json(
-            "claude-code",
-            "usage",
-            self.inner
-                .http
-                .get(&self.inner.endpoints.claude_usage)
-                .bearer_auth(access_token)
-                .header("anthropic-beta", "oauth-2025-04-20")
-                .header("Content-Type", "application/json"),
-        )
-        .await?;
-        claude_usage_windows(&body).ok_or_else(|| schema_error("claude-code", &body))
     }
 
     async fn codex_usage(&self, slot: &Slot) -> Result<UsageSnapshot, ProbeError> {
@@ -3446,44 +3403,9 @@ impl AgentAccounts {
         })
     }
 
-    /// Whether `slot` is provably NOT the grant Claude Code runs on, so zeron
-    /// may rotate its refresh token. `is_active` alone isn't proof: it is
-    /// false whenever the live identity couldn't be read (`~/.claude.json`
-    /// mid-rewrite), and rotating the CLI's own refresh token logs it out.
-    async fn claude_slot_is_not_live(&self, slot: &Slot) -> bool {
-        let file = &self.inner.config.claude_config_file;
-        let cfg = read_json(file);
-        if cfg.is_none() && file.exists() {
-            return false;
-        }
-        let live_key = cfg.as_ref().and_then(|cfg| {
-            let oauth = cfg.get("oauthAccount")?;
-            str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
-        });
-        if live_key.as_deref() == Some(slot.account_key.as_str()) {
-            return false;
-        }
-        let (live, warning) = self
-            .read_claude_credentials_cached(live_key.as_deref().unwrap_or_default())
-            .await;
-        if live.is_none() && warning.is_some() {
-            return false;
-        }
-        let refresh = |creds: &serde_json::Value| {
-            creds
-                .get("claudeAiOauth")
-                .and_then(|oauth| str_field(oauth, "refreshToken"))
-        };
-        live.as_ref()
-            .and_then(refresh)
-            .is_none_or(|live| Some(live) != refresh(&slot.credentials))
-    }
-
-    /// Refresh a saved Claude slot's expired access token so its usage stays
-    /// queryable. NEVER called for the active login. Single-flight per slot:
-    /// OAuth refresh tokens are commonly single-use, and a concurrent second
-    /// POST of the same one would revoke the family and brick the slot.
-    /// `Ok(None)` = another refresh of this slot is already in flight.
+    /// Refresh an expired saved Claude login only when the user switches to it.
+    /// Single-flight per slot: refresh tokens can be single-use.
+    /// `Ok(None)` means another refresh of this slot is already in flight.
     async fn refresh_claude_slot(&self, slot: &Slot) -> Result<Option<String>, ProbeError> {
         if !lock(&self.inner.inflight_refreshes).insert(slot.id.clone()) {
             return Ok(None);
@@ -4187,6 +4109,14 @@ fn cursor_key_usable(auth: &serde_json::Value) -> bool {
 
 fn parse_when(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
     zeron_proto::plan_usage::parse_when(value)
+}
+
+fn is_claude_account(harness: HarnessId, store_key: Option<&str>) -> bool {
+    harness == HarnessId::ClaudeCode
+        || matches!(
+            store_key.and_then(|key| stores::upstream_of(harness, key)),
+            Some(stores::Upstream::Anthropic)
+        )
 }
 
 fn usage_key(harness: HarnessId, account_key: &str) -> String {
@@ -6273,36 +6203,76 @@ mod login_tests {
     }
 
     #[tokio::test]
-    async fn the_live_claude_grant_is_never_refreshed_when_its_identity_is_unreadable() {
+    async fn claude_account_lists_drop_cached_quota_without_network_or_token_refresh() {
         let tmp = tempfile::tempdir().unwrap();
-        let (usage_url, _) = fixed_server("401 Unauthorized", "{}").await;
-        let (token_url, refreshes) = fixed_server(
-            "200 OK",
-            r#"{"access_token":"x","refresh_token":"y","expires_in":3600}"#,
-        )
-        .await;
+        let (url, hits) = fixed_server("401 Unauthorized", "{}").await;
         let endpoints = ProbeEndpoints {
-            claude_usage: usage_url,
-            claude_token: token_url,
+            claude_token: url.clone(),
+            claude_profile: url,
             ..Default::default()
         };
+        let accounts = AgentAccounts::with_endpoints(
+            config(tmp.path()),
+            endpoints.clone(),
+            Default::default(),
+        );
+        write_live_claude(tmp.path(), "acct-a", "a@example.com", "live");
+        let saved = claude_slot("acct-b", "b@example.com", "saved-refresh", 1);
+        accounts.write_slot(&saved).unwrap();
+        accounts.list(false).await.unwrap();
+        let live_before = std::fs::read(config(tmp.path()).claude_creds_file()).unwrap();
+        {
+            let mut cache = lock(&accounts.inner.usage);
+            for slot in accounts.read_slots(HarnessId::ClaudeCode) {
+                cache.insert(
+                    usage_key(HarnessId::ClaudeCode, &slot.account_key),
+                    UsageEntry {
+                        usage: Some(UsageSnapshot {
+                            windows: vec![AgentUsageWindow {
+                                label: "Session".into(),
+                                used_fraction: 0.8,
+                                resets_at: None,
+                            }],
+                            ..Default::default()
+                        }),
+                        fetched_at: Some(now_ms()),
+                        ..Default::default()
+                    },
+                );
+            }
+            accounts.persist_usage(&cache);
+        }
+        // Exercise a previous release's on-disk cache after restarting the engine.
         let accounts =
             AgentAccounts::with_endpoints(config(tmp.path()), endpoints, Default::default());
-        write_live_claude(tmp.path(), "acct-a", "a@example.com", "live");
-        accounts.list(false).await.unwrap();
-        // Claude Code is mid-rewrite of ~/.claude.json: no live identity, so
-        // the slot reads as inactive — but it shares the CLI's refresh token.
-        write(&config(tmp.path()).claude_config_file, "{\"oauthAcc");
-
-        accounts.list(true).await.unwrap();
-        assert_eq!(refreshes.load(std::sync::atomic::Ordering::SeqCst), 0);
-        let slot = accounts
-            .read_slot(
-                HarnessId::ClaudeCode,
-                &slot_id_for(HarnessId::ClaudeCode, "acct-a"),
-            )
-            .unwrap();
-        assert_eq!(slot.credentials["claudeAiOauth"]["refreshToken"], "rt");
+        for forced in [false, true] {
+            let snapshot = accounts.list(forced).await.unwrap();
+            let rows: Vec<_> = snapshot
+                .accounts
+                .iter()
+                .filter(|a| a.harness == HarnessId::ClaudeCode)
+                .collect();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().any(|row| row.active));
+            for row in rows {
+                assert!(row.switchable);
+                assert!(row.usage_windows.is_empty());
+                assert_eq!(row.usage_fetched_at, None);
+                assert_eq!(row.usage_error.as_deref(), Some(CLAUDE_USAGE_UNAVAILABLE));
+            }
+        }
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            std::fs::read(config(tmp.path()).claude_creds_file()).unwrap(),
+            live_before
+        );
+        assert_eq!(
+            accounts
+                .read_slot(HarnessId::ClaudeCode, &saved.id)
+                .unwrap()
+                .credentials,
+            saved.credentials
+        );
     }
 
     #[tokio::test]

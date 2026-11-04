@@ -12,7 +12,7 @@
 //!   key file lacks, written back into the slot. Keys don't refresh.
 //! - **ChatGPT logins** (OpenCode `openai`, Pi `openai-codex`, Hermes
 //!   `openai-codex`): the Codex usage endpoint — the same token kind.
-//! - **Claude logins** (Pi `anthropic`): Claude's `/api/oauth/usage`.
+//! - **Claude logins** (Pi `anthropic`): no independent subscription usage probe.
 //! - **Copilot** (OpenCode / Pi `github-copilot`):
 //!   `api.github.com/copilot_internal/user` — premium-request quota.
 //! - **Nous** (Hermes `nous`): the portal's `/api/oauth/account` credits.
@@ -268,10 +268,9 @@ impl AgentAccounts {
                 self.openai_usage(stores::cli_name(harness), &access, &account)
                     .await
             }
-            Some(Upstream::Anthropic) => {
-                let access = str_field(creds, "access").ok_or(missing)?;
-                self.claude_usage_request(&access).await
-            }
+            Some(Upstream::Anthropic) => Err(ProbeError::NoCredentials {
+                why: NoCredentials::Unsupported,
+            }),
             Some(Upstream::Copilot) => {
                 let token = str_field(creds, "refresh").ok_or(missing)?;
                 // GitHub Enterprise: a validated plain host, or nothing is sent.
