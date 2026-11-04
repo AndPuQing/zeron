@@ -7,8 +7,10 @@ workspace file-read API.
 
 `.md` and `.markdown` files open as formatted Markdown. **Source** shows the
 original text; **Preview** returns to the formatted view. Other supported text
-files open as source. **Copy** copies the displayed document text. Files are
-never edited or saved by this viewer.
+files open as source. The copy icon copies the displayed document text. The
+options menu opens **File details**, including the full path and host, or
+**Copy path**. Files are never edited or saved by this viewer. On wider screens,
+the reading column stays centered with a bounded line width.
 
 Conversation links follow the desktop transcript's file-link rules, and relative
 paths resolve from the conversation's folder. Links inside a document follow the
