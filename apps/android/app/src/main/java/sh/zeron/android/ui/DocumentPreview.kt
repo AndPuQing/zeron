@@ -5,14 +5,29 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,12 +52,16 @@ import androidx.compose.ui.platform.ClipboardManager
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import sh.zeron.android.design.ZIcon
+import sh.zeron.android.design.ZIcons
+import sh.zeron.android.design.GeistMono
 import sh.zeron.android.core.CloudStore
 import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
@@ -60,7 +79,7 @@ private const val COPY_LIMIT = 100_000
 
 /** One document in the preview's back stack: its read, mode and scroll survive a deeper link. */
 @Stable
-private class DocumentEntry(val path: String) {
+internal class DocumentEntry(val path: String) {
     var document by mutableStateOf<DocumentPreview?>(null)
     var error by mutableStateOf<String?>(null)
     var attempt by mutableIntStateOf(0)
@@ -90,10 +109,10 @@ fun DocumentPreviewDialog(core: CoreClient, chatId: String, initialPath: String,
     // A link to the open document (`guide.md#usage`) stays on it.
     val open: (String) -> Unit = { path -> if (path != stack.last().path) stack.add(DocumentEntry(path)) }
     Dialog(onDismissRequest = back, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        Surface(Modifier.fillMaxSize()) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surfaceContainerLowest) {
             val entry = stack.last()
             key(entry) {
-                DocumentContent(core, chatId, entry, back, open)
+                DocumentContent(core, chatId, entry, back, open, canGoBack = stack.size > 1)
                 // A popped document's reader goes once it leaves the screen.
                 DisposableEffect(entry) { onDispose { if (entry !in stack) entry.close() } }
             }
@@ -102,10 +121,12 @@ fun DocumentPreviewDialog(core: CoreClient, chatId: String, initialPath: String,
 }
 
 @Composable
-private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEntry, back: () -> Unit, open: (String) -> Unit) {
+internal fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEntry, back: () -> Unit, open: (String) -> Unit, canGoBack: Boolean = false) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
     var sheet by remember { mutableStateOf<TextSheet?>(null) }
+    var menu by remember { mutableStateOf(false) }
+    var details by remember { mutableStateOf(false) }
     LaunchedEffect(entry, entry.attempt) {
         // Back to a loaded document: no second read.
         if (entry.document != null) return@LaunchedEffect
@@ -120,27 +141,62 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { entry.error = CloudStore.message(failure) }
     }
-    Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = back) { Text("Back") }
-            Text(entry.path.substringAfterLast('/'), Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
-            entry.document?.let { doc ->
-                if (doc.markdown) TextButton(onClick = { entry.source = !entry.source }) { Text(if (entry.source) "Preview" else "Source") }
-                TextButton(onClick = { copyDocument(context, clipboard, doc.text) }) { Text("Copy") }
+    Column(Modifier.fillMaxSize().safeDrawingPadding(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = back) {
+                ZIcon(if (canGoBack) ZIcons.Back else ZIcons.Close, if (canGoBack) "Back" else "Close document")
+            }
+            Text(entry.path.substringAfterLast('/'), Modifier.weight(1f).padding(horizontal = 8.dp),
+                maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
+            IconButton(onClick = { entry.document?.let { copyDocument(context, clipboard, it.text) } }, enabled = entry.document != null) {
+                ZIcon(ZIcons.Copy, "Copy document")
+            }
+            Box {
+                IconButton(onClick = { menu = true }) { ZIcon(ZIcons.More, "Document options") }
+                DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                    DropdownMenuItem(text = { Text("File details") }, leadingIcon = { ZIcon(ZIcons.Info, null) },
+                        onClick = { menu = false; details = true })
+                    DropdownMenuItem(text = { Text("Copy path") }, leadingIcon = { ZIcon(ZIcons.Copy, null) },
+                        onClick = { menu = false; copyDocument(context, clipboard, entry.approvedPath ?: entry.path) })
+                }
             }
         }
-        Text("Read-only · ${entry.path}", Modifier.padding(horizontal = 16.dp, vertical = 4.dp), style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
         val doc = entry.document
+        if (doc?.markdown == true) {
+            SingleChoiceSegmentedButtonRow(Modifier.widthIn(max = 360.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
+                listOf("Preview", "Source").forEachIndexed { index, label ->
+                    SegmentedButton(
+                        selected = entry.source == (index == 1),
+                        onClick = { entry.source = index == 1 },
+                        shape = SegmentedButtonDefaults.itemShape(index, 2),
+                        icon = {},
+                        colors = SegmentedButtonDefaults.colors(
+                            activeContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            activeContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            inactiveContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+                            inactiveContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        ),
+                    ) { Text(label) }
+                }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+        if (doc?.truncated == true) {
+            Row(Modifier.widthIn(max = 760.dp).fillMaxWidth().padding(horizontal = 20.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                ZIcon(ZIcons.Info, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Showing the first 2 MiB", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         val error = entry.error
         when {
-            error != null -> Column(Modifier.fillMaxWidth().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(error, color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = { entry.attempt++ }) { Text("Retry") }
-            }
-            doc == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { if (entry.confirm == null) CircularProgressIndicator() }
-            doc.text.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("This document is empty.") }
+            error != null -> DocumentStatus("Couldn't open document", error, ZIcons.Warning, retry = { entry.attempt++ })
+            doc == null -> DocumentStatus(
+                if (entry.confirm == null) "Opening document" else "Waiting for permission",
+                if (entry.confirm == null) "Reading from the conversation's host…" else "Confirm to read this file.",
+                ZIcons.Text, loading = entry.confirm == null)
+            doc.text.isEmpty() -> DocumentStatus("This document is empty", "There is no content to display.", ZIcons.Text)
             else -> {
-                if (doc.truncated) Text("Preview truncated to the first 2 MiB.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
                 val transcript = remember(entry) { entry.transcript ?: TranscriptState(startsAtTop = true).also { entry.transcript = it } }
                 val markdown = doc.markdown && !entry.source
                 LaunchedEffect(transcript, markdown) {
@@ -171,14 +227,29 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
                         showText = { title, text, mono -> sheet = TextSheet(title, text, mono) },
                     )
                 }
-                Transcript(transcript, actions, Modifier.weight(1f))
+                Transcript(transcript, actions, Modifier.weight(1f).widthIn(max = 760.dp).fillMaxWidth().padding(top = 12.dp))
                 viewing?.let { ImageViewer(it) { viewing = null } }
             }
         }
     }
+    if (details) {
+        val device = entry.document?.deviceId?.let { id -> core.devices().firstOrNull { it.id == id }?.name }
+        AlertDialog(
+            onDismissRequest = { details = false },
+            title = { Text("File details") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Read-only" + (device?.let { " · $it" } ?: ""), style = MaterialTheme.typography.labelMedium)
+                    SelectionContainer { Text(entry.approvedPath ?: entry.path, fontFamily = GeistMono, style = MaterialTheme.typography.bodySmall) }
+                }
+            },
+            confirmButton = { TextButton(onClick = { details = false }) { Text("Done") } },
+            dismissButton = { TextButton(onClick = { copyDocument(context, clipboard, entry.approvedPath ?: entry.path) }) { Text("Copy path") } },
+        )
+    }
     sheet?.let { s -> TextSheetHost(s) { sheet = null } }
     entry.confirm?.let { ask ->
-        // Nothing of the file has been read yet; Cancel leaves it unread.
+        // New hosts defer the read; legacy hosts withhold only the preview.
         val cancel = { entry.confirm = null; back() }
         AlertDialog(
             onDismissRequest = cancel,
@@ -196,12 +267,27 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
     }
 }
 
+/** Status content stays readable on short screens and with large text. */
+@Composable
+private fun DocumentStatus(title: String, detail: String, icon: Int, loading: Boolean = false, retry: (() -> Unit)? = null) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(Modifier.widthIn(max = 420.dp).verticalScroll(rememberScrollState()).padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (loading) CircularProgressIndicator(Modifier.size(28.dp), strokeWidth = 2.dp)
+            else ZIcon(icon, null, Modifier.size(36.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(title, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            Text(detail, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            retry?.let { FilledTonalButton(onClick = it) { Text("Try again") } }
+        }
+    }
+}
+
 /** Copy at most [COPY_LIMIT] characters, saying so when the copy is partial or fails. */
 private fun copyDocument(context: Context, clipboard: ClipboardManager, text: String) {
     val clipped = clipText(text, COPY_LIMIT)
     val notice = try {
         clipboard.setText(AnnotatedString(clipped))
-        if (clipped.length < text.length) "Copied the first ${"%,d".format(COPY_LIMIT)} characters." else null
+        if (clipped.length < text.length) "Copied the first ${"%,d".format(COPY_LIMIT)} characters." else "Copied"
     } catch (failure: Exception) {
         "Couldn't copy this document."
     }
