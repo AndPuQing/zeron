@@ -134,6 +134,7 @@ final class DocumentPreviewViewController: UIViewController {
 
     deinit {
         request?.cancel()
-        engine.close()
+        // Releasing TranscriptView shuts down its worker in Rust. Accessing
+        // the lazy, main-actor engine from nonisolated deinit is invalid.
     }
 }
