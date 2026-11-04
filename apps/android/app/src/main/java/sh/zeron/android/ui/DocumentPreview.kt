@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -48,6 +49,7 @@ import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
 import uniffi.zeron_core.CoreClient
 import uniffi.zeron_core.DocumentPreview
+import uniffi.zeron_core.DocumentRead
 import uniffi.zeron_core.documentLinkPath
 
 /**
@@ -63,6 +65,10 @@ private class DocumentEntry(val path: String) {
     var error by mutableStateOf<String?>(null)
     var attempt by mutableIntStateOf(0)
     var source by mutableStateOf(false)
+    /** A file beyond the chat's workspace, waiting for the reader's answer. */
+    var confirm by mutableStateOf<DocumentRead.NeedsConfirmation?>(null)
+    /** The reader agreed to open it; later reads (Retry) need not ask again. */
+    var allowOutside = false
     /** The reader, kept while deeper documents are open. */
     var transcript: TranscriptState? = null
     /** Whether the reader last rendered Markdown; null before its first render. */
@@ -104,7 +110,12 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
         // Back to a loaded document: no second read.
         if (entry.document != null) return@LaunchedEffect
         entry.error = null
-        try { entry.document = core.readDocument(chatId, entry.path) }
+        try {
+            when (val read = core.readDocument(chatId, entry.path, entry.allowOutside)) {
+                is DocumentRead.Ready -> { entry.document = read.document }
+                is DocumentRead.NeedsConfirmation -> { entry.confirm = read }
+            }
+        }
         catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { entry.error = CloudStore.message(failure) }
     }
@@ -125,7 +136,7 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
                 Text(error, color = MaterialTheme.colorScheme.error)
                 TextButton(onClick = { entry.attempt++ }) { Text("Retry") }
             }
-            doc == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+            doc == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { if (entry.confirm == null) CircularProgressIndicator() }
             doc.text.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("This document is empty.") }
             else -> {
                 if (doc.truncated) Text("Preview truncated to the first 2 MiB.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.error)
@@ -166,6 +177,23 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
         }
     }
     sheet?.let { s -> TextSheetHost(s) { sheet = null } }
+    entry.confirm?.let { ask ->
+        // Nothing of the file has been read yet; Cancel leaves it unread.
+        val cancel = { entry.confirm = null; back() }
+        AlertDialog(
+            onDismissRequest = cancel,
+            title = { Text("Open this file?") },
+            text = { Text("This file is outside the chat's folder.\n\n${ask.deviceName}: ${ask.path}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    entry.confirm = null
+                    entry.allowOutside = true
+                    entry.attempt++
+                }) { Text("Open anyway") }
+            },
+            dismissButton = { TextButton(onClick = cancel) { Text("Cancel") } },
+        )
+    }
 }
 
 /** Copy at most [COPY_LIMIT] characters, saying so when the copy is partial or fails. */
