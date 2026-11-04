@@ -8,12 +8,12 @@ final class DocumentPreviewViewController: UIViewController {
     private var document: DocumentPreview?
     private var source = false
     private var request: Task<Void, Never>?
-    private lazy var relay = FrameRelay { [weak self] in
+    private lazy var relay: FrameRelay = FrameRelay { [weak self] in
         guard let self else { return }
         self.list.apply(self.engine.frame())
     }
-    private lazy var engine = TranscriptView(text: TextEngine.shared, listener: relay)
-    private lazy var list = TranscriptListView(engine: engine, startsAtTop: true)
+    private lazy var engine: TranscriptView = TranscriptView(text: TextEngine.shared, listener: relay)
+    private lazy var list: TranscriptListView = TranscriptListView(engine: engine, startsAtTop: true)
     private let notice = UILabel()
     private let status = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
