@@ -49,3 +49,9 @@ oversized files, unsupported encodings, binary files or inaccessible paths. Empt
 documents have an explicit empty state; failed reads show an error and **Retry**.
 On Android, **Copy** and text selection take at most the first 100,000 characters
 and say so. PDF and Office document rendering are not supported.
+
+Large code blocks are split into bounded rows in both Source and Preview. Very
+large compound Markdown sections are shown as source with a notice; other
+sections keep their formatting. Long source lines continue in another block.
+The document toolbar's Copy action keeps the original text, subject to the
+platform's documented copy limit.

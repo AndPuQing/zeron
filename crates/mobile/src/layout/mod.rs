@@ -576,24 +576,34 @@ impl Drop for TranscriptView {
     }
 }
 
-/// Lines per source-view block. Each block is its own row, so a long file
+/// Lines per document code/source block. Each block is its own row, so a long file
 /// virtualizes instead of laying out as one giant row.
 const SOURCE_BLOCK_LINES: usize = 100;
 /// Bytes per source-view block, for files with very long lines.
 const SOURCE_BLOCK_BYTES: usize = 16 * 1024;
+/// Bound horizontal scroller dimensions as well as row height, including tabs.
+const SOURCE_BLOCK_COLUMNS: usize = 128;
 
 fn document_input(path: String, text: String, markdown: bool) -> TranscriptInput {
     if markdown {
         return debug_input(vec![DebugEntry { id: format!("document:{path}"), user: false, text, streaming: false }], false);
     }
-    // A source containing fences must not escape into rendered Markdown.
-    let longest = text.split(|c| c != '`').map(str::len).max().unwrap_or(0);
-    let fence = "`".repeat(longest.max(2) + 1);
     // One entry per slice: a row's Copy and Select text give its lines alone.
     let entries = source_blocks(&text)
         .into_iter()
         .enumerate()
-        .map(|(i, lines)| DebugEntry { id: format!("document-source:{i}"), user: false, text: format!("{fence}\n{lines}\n{fence}"), streaming: false })
+        .map(|(i, lines)| {
+            // Choose the fence per slice: one long run of backticks must not
+            // allocate a document-sized fence for every row.
+            let longest = lines.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+            let fence = "`".repeat(longest.max(2) + 1);
+            DebugEntry {
+                id: format!("document-source:{i}"),
+                user: false,
+                text: format!("{fence}\n{lines}\n{fence}"),
+                streaming: false,
+            }
+        })
         .collect();
     debug_input(entries, false)
 }
@@ -606,18 +616,26 @@ fn source_blocks(text: &str) -> Vec<&str> {
     while !rest.is_empty() {
         let mut end = 0;
         let mut lines = 0;
-        while end < rest.len() && lines < SOURCE_BLOCK_LINES {
-            let line_end = rest[end..].find('\n').map_or(rest.len(), |i| end + i + 1);
-            if line_end > SOURCE_BLOCK_BYTES && end > 0 {
+        let mut columns = 0;
+        for (offset, ch) in rest.char_indices() {
+            let next = offset + ch.len_utf8();
+            let width = match ch {
+                '\n' => 0,
+                '\t' => 4 - columns % 4,
+                _ => 1,
+            };
+            if next > SOURCE_BLOCK_BYTES || columns + width > SOURCE_BLOCK_COLUMNS {
                 break;
             }
-            end = line_end;
-            lines += 1;
-        }
-        if end > SOURCE_BLOCK_BYTES {
-            end = SOURCE_BLOCK_BYTES;
-            while !rest.is_char_boundary(end) {
-                end -= 1;
+            end = next;
+            if ch == '\n' {
+                lines += 1;
+                columns = 0;
+                if lines == SOURCE_BLOCK_LINES {
+                    break;
+                }
+            } else {
+                columns += width;
             }
         }
         let (block, tail) = rest.split_at(end);

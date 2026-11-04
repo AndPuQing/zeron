@@ -1737,7 +1737,149 @@ fn source_documents_split_into_rows_that_copy_their_own_lines() {
     // An over-long line is still cut into bounded slices.
     let long = "é".repeat(SOURCE_BLOCK_BYTES);
     let blocks = source_blocks(&long);
-    assert_eq!(blocks.len(), 2);
-    assert!(blocks.iter().all(|b| b.len() <= SOURCE_BLOCK_BYTES));
+    assert!(blocks.len() > 2);
+    assert!(
+        blocks
+            .iter()
+            .all(|b| b.len() <= SOURCE_BLOCK_BYTES && b.chars().count() <= SOURCE_BLOCK_COLUMNS)
+    );
     assert_eq!(blocks.concat(), long);
+}
+
+#[test]
+fn document_markdown_large_blocks_have_bounded_rows_and_keep_surrounding_links() {
+    let code = (0..20_000)
+        .map(|i| format!("line_{i}();\n"))
+        .collect::<String>();
+    for body in [
+        format!("```rust\n{code}```"),
+        format!(
+            "> ```rust\n{}> ```",
+            code.lines()
+                .map(|line| format!("> {line}\n"))
+                .collect::<String>()
+        ),
+    ] {
+        let top_level_code = body.starts_with("```");
+        let text = format!("# Guide\n\n{body}\n\n[Next][next]\n\n[next]: next.md");
+        let mut w = worker(390.0);
+        w.input = document_input("guide.md".into(), text, true);
+        w.input.document = Some(rows::DocumentContext {
+            chat_id: "chat".into(),
+            device_id: "host".into(),
+            cwd: Some("/repo".into()),
+            path: "guide.md".into(),
+            source: false,
+        });
+        let frame = w.pass();
+        assert!(frame.row_count() >= 200);
+        for row in frame.rows_in(0.0, frame.total_height()) {
+            assert!(
+                row.height < 4_000.0,
+                "document row is {} dp tall",
+                row.height
+            );
+        }
+        let copied = frame.plain_text();
+        assert!(copied.contains("line_0();") && copied.contains("line_19999();"));
+        if top_level_code {
+            let slices: Vec<_> = (0..frame.row_count())
+                .flat_map(|i| frame.display(i).unwrap().widgets.clone())
+                .filter(|widget| matches!(widget.kind, display::WidgetKind::CopyCode))
+                .filter_map(|widget| widget.payload)
+                .collect();
+            assert!(slices.join("\n") == code.trim_end(), "code copy slices lost or reordered content");
+            assert!(
+                (0..frame.row_count()).any(|i| frame.display(i).unwrap().text.contains("rust"))
+            );
+        } else {
+            assert!(
+                frame
+                    .plain_text()
+                    .contains("Large Markdown section shown as source.")
+            );
+        }
+        assert!((0..frame.row_count()).any(|i| {
+            frame
+                .display(i)
+                .unwrap()
+                .links
+                .iter()
+                .any(|l| l.url == "next.md")
+        }));
+    }
+}
+
+#[test]
+fn document_source_bounds_long_lines_tabs_and_fences_without_losing_text() {
+    for text in [
+        "`".repeat(20_000),
+        "\t".repeat(20_000),
+        "中文é".repeat(10_000),
+    ] {
+        let blocks = source_blocks(&text);
+        assert_eq!(blocks.concat(), text);
+        assert!(
+            blocks
+                .iter()
+                .all(|block| block.chars().count() <= SOURCE_BLOCK_COLUMNS)
+        );
+        let mut w = worker(390.0);
+        w.input = document_input("source.txt".into(), text.clone(), false);
+        let frame = w.pass();
+        for row in frame.rows_in(0.0, frame.total_height()) {
+            assert!(row.height < 4_000.0);
+            for scroller in frame.display(row.index).unwrap().scrollers.iter() {
+                assert!(
+                    scroller.content_width < 4_000.0,
+                    "wide document row: {}",
+                    scroller.content_width
+                );
+            }
+        }
+        // Synthetic fence sizes remain proportional to each slice.
+        let encoded: usize = w
+            .input
+            .entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        MessagePart::Text { text, .. } => text.len(),
+                        _ => 0,
+                    })
+                    .sum::<usize>()
+            })
+            .sum();
+        assert!(encoded < text.len() * 4);
+    }
+}
+
+#[test]
+fn ordinary_document_markdown_remains_formatted() {
+    let text = format!(
+        "**{}** and [next][n]\n\n[n]: next.md",
+        "readable text ".repeat(30)
+    );
+    let mut w = worker(390.0);
+    w.input = document_input("guide.md".into(), text, true);
+    w.input.document = Some(rows::DocumentContext {
+        chat_id: "chat".into(),
+        device_id: "host".into(),
+        cwd: Some("/repo".into()),
+        path: "guide.md".into(),
+        source: false,
+    });
+    let frame = w.pass();
+    assert!(!frame.plain_text().contains("Large Markdown section"));
+    assert!((0..frame.row_count()).any(|i| {
+        frame
+            .display(i)
+            .unwrap()
+            .links
+            .iter()
+            .any(|l| l.url == "next.md")
+    }));
 }

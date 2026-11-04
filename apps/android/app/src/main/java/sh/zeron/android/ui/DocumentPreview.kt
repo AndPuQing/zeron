@@ -145,9 +145,8 @@ private fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEnt
                 LaunchedEffect(transcript, markdown) {
                     if (entry.rendered == markdown) return@LaunchedEffect
                     // Switching Source/Preview starts the other view at its top.
-                    if (entry.rendered != null) transcript.offset = 0f
                     entry.rendered = markdown
-                    transcript.engine.setDocument(chatId, doc, markdown)
+                    transcript.showDocument(chatId, doc, markdown)
                 }
                 val scope = rememberCoroutineScope()
                 var viewing by remember { mutableStateOf<ImageBitmap?>(null) }

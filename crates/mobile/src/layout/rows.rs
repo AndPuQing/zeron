@@ -24,6 +24,61 @@ use super::markdown::{Ctx, PBlock, PText, Px, ReplyImageContext, place, place_te
 use super::style::{Family, TYPE, Weight};
 use super::tools::{ThoughtState, ToolGroup, place_tools};
 
+/// Bound standalone document blocks before preparing native rows. Code keeps
+/// its language; oversized compound Markdown stays readable as literal source.
+/// The document toolbar still copies the original, complete text.
+fn document_blocks(blocks: &[Arc<TopBlock>], text: &str) -> Vec<(Arc<TopBlock>, Option<String>)> {
+    use zeron_markdown::parser::{Block, InlineRun, InlineStyle};
+    let mut out = Vec::new();
+    for block in blocks {
+        let source = text.get(block.range.clone()).unwrap_or("");
+        if !matches!(block.block, Block::CodeBlock { .. })
+            && source.len() <= super::SOURCE_BLOCK_BYTES
+            && source.lines().count() <= super::SOURCE_BLOCK_LINES
+        {
+            out.push((block.clone(), None));
+            continue;
+        }
+        let (body, language) = match &block.block {
+            Block::CodeBlock { code, language } => (code.as_str(), language.clone()),
+            _ => (source, None),
+        };
+        let slices = super::source_blocks(body);
+        if slices.len() <= 1 {
+            out.push((block.clone(), None));
+            continue;
+        }
+        if !matches!(block.block, Block::CodeBlock { .. }) {
+            let notice = "Large Markdown section shown as source.".to_owned();
+            out.push((
+                Arc::new(TopBlock {
+                    range: block.range.clone(),
+                    block: Block::Paragraph {
+                        runs: vec![InlineRun {
+                            text: notice.clone(),
+                            style: InlineStyle::default(),
+                        }],
+                    },
+                }),
+                Some(notice),
+            ));
+        }
+        for slice in slices {
+            out.push((
+                Arc::new(TopBlock {
+                    range: block.range.clone(),
+                    block: Block::CodeBlock {
+                        language: language.clone(),
+                        code: format!("{slice}\n"),
+                    },
+                }),
+                Some(slice.to_owned()),
+            ));
+        }
+    }
+    out
+}
+
 /// Row kinds the painter may style differently (e.g. context menus).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum RowKind {
@@ -627,14 +682,36 @@ impl RowBuilder {
         state.source_len = text.len();
         state.source_hash = hash;
         state.streaming = streaming;
-        let tree = if streaming { state.parser.display_tree() } else { state.parser.tree().clone() };
-        let mut next = Vec::with_capacity(tree.blocks.len());
-        for (bi, block) in tree.blocks.iter().enumerate() {
-            let copy = match &block.block {
-                // A document's source slice copies the file's own lines.
-                zeron_markdown::parser::Block::CodeBlock { code, .. } if self.document_source => code.trim_end_matches('\n'),
-                _ => text.get(block.range.clone()).unwrap_or("").trim_end(),
-            };
+        let tree = if streaming {
+            state.parser.display_tree()
+        } else {
+            state.parser.tree().clone()
+        };
+        let blocks = if self
+            .reply_chat
+            .as_ref()
+            .is_some_and(|chat| chat.document_path.is_some())
+        {
+            document_blocks(&tree.blocks, text)
+        } else {
+            tree.blocks
+                .iter()
+                .map(|block| (block.clone(), None))
+                .collect()
+        };
+        let mut next = Vec::with_capacity(blocks.len());
+        for (bi, (block, copy_override)) in blocks.iter().enumerate() {
+            let copy = copy_override
+                .as_deref()
+                .unwrap_or_else(|| match &block.block {
+                    // A document's source slice copies the file's own lines.
+                    zeron_markdown::parser::Block::CodeBlock { code, .. }
+                        if self.document_source =>
+                    {
+                        code.trim_end_matches('\n')
+                    }
+                    _ => text.get(block.range.clone()).unwrap_or("").trim_end(),
+                });
             // Same rendering isn't enough: the source can still differ (a
             // closing `**` that renders identically) and Copy reads the source.
             let reuse = state

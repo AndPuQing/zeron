@@ -207,6 +207,13 @@ class TranscriptState(
         return RowModel(display).also { cache[k] = it }
     }
 
+    /** A new document view starts at the top even after scrolling to its tail. */
+    fun showDocument(chatId: String, document: uniffi.zeron_core.DocumentPreview, markdown: Boolean) {
+        released()
+        offset = 0f
+        engine.setDocument(chatId, document, markdown)
+    }
+
     /** User scroll by `delta` dp (positive = toward the tail). Returns the consumed amount. */
     fun scrollBy(delta: Float): Float {
         val before = offset
