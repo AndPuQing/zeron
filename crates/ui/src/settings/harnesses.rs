@@ -1747,6 +1747,7 @@ mod tests {
                                     release.notified().await;
                                 }
                                 RpcReply::value(&vec![HarnessDescriptor {
+                                    icon: None,
                                     access_modes: Vec::new(),
                                     supports_plan: false,
                                     id: HarnessId::Codex,
@@ -1958,6 +1959,7 @@ mod tests {
             .update(cx, |page, _, cx| {
                 page.harnesses =
                     super::Loadable::Ready(vec![zeron_engine::registry::HarnessDescriptor {
+                        icon: None,
                         access_modes: Vec::new(),
                         supports_plan: false,
                         id: zeron_proto::HarnessId::Codex,
