@@ -3,6 +3,7 @@
 //! is a distinct product with its own store (`~/.omp`), session format and
 //! framing, so this driver never reuses Pi's discovery or session index.
 mod catalog;
+mod discovery;
 mod normalize;
 mod rpc;
 mod saved;
@@ -312,6 +313,18 @@ fn response_data(frame: Value) -> Result<Value, HarnessError> {
         )))
     }
 }
+/// A missing index record falls back to walking the native store, so the
+/// lookup runs off the async runtime.
+async fn resume_args(
+    store: &sessions::Store,
+    id: &str,
+    cwd: &str,
+) -> Result<Vec<String>, HarnessError> {
+    let (store, id, cwd) = (store.clone(), id.to_owned(), PathBuf::from(cwd));
+    tokio::task::spawn_blocking(move || store.resume_args(&id, &cwd))
+        .await
+        .map_err(|e| HarnessError::Protocol(e.to_string()))?
+}
 #[async_trait]
 impl Harness for OmpHarness {
     fn saved_session_store_id(&self) -> Result<String, HarnessError> {
@@ -441,7 +454,7 @@ impl Harness for OmpHarness {
         let store = sessions::Store::new(self.session_store.clone(), self.agent_dir.clone());
         let mut lost_context = None;
         let args = match &request.resume {
-            Some(id) => match store.resume_args(id, Path::new(&request.cwd)) {
+            Some(id) => match resume_args(&store, id, &request.cwd).await {
                 Ok(args) => args,
                 // An imported copy must never fall back to a fresh provider
                 // session: the doc would then claim history it does not have.

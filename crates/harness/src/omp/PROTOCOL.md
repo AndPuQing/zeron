@@ -75,3 +75,29 @@ OMP index, import and resume paths changed here; Pi's own driver is unchanged.
 Sources inspected: `@oh-my-pi/pi-coding-agent@18.11.3` (`src/modes/rpc/*`,
 `src/session/session-entries.ts`) and a live `omp/mode rpc` probe on
 2026-10-18 capturing the handshake, catalog and a real prompt turn.
+
+Native file discovery and resume fallback share a bounded-depth directory walk.
+Session artifacts live beside `<session>.jsonl` in `<session>/`; those directories
+contain tool output and child logs, not independent sessions, and are skipped.
+Unrelated files do not consume a global discovery quota. Large stores keep the
+existing newest-first, 50-file pagination without a 20,000-entry failure or silent
+truncation. Configured roots are canonicalized and deduplicated; child symlinks
+are not followed. Runtime-indexed session paths still require OMP identity checks,
+and transcript read/import size limits remain in effect.
+
+Overlapping roots retain the full depth allowance of each configured root while
+returning each transcript only once. Resume fallback skips filesystem errors in
+unrelated directories and keeps searching other roots, as native identity checks
+still gate the result. History listing reports directory access errors rather
+than silently presenting an incomplete inventory; a single transcript that is
+oversized, partial, changing while read or of an unsupported version is left out
+of its page instead of failing it.
+
+Resume first uses the runtime index, then walks the store off the async runtime.
+The walk matches file names first: OMP and native copies name transcripts
+`<timestamp>_<id>.jsonl`, so the session is found without opening unrelated
+files. Only exact name matches are accepted inside `<session>/` artifact
+directories, which keeps a child transcript copied beside its source resumable
+without treating other artifacts as sessions; listing never shows them. A
+top-level transcript whose name does not identify it is found by its header, and
+that fallback opens a bounded number of files.

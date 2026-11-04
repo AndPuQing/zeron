@@ -9,10 +9,22 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
+use zeron_launch::engine_lock_holder;
 
 const LAUNCHD_LABEL: &str = "work.puqing.zerun";
+/// `zerun daemon install` exits with this, without touching launchd, when an
+/// engine other than the LaunchAgent's (usually the desktop app's) already
+/// holds the data dir; `edge/src/install.sh` reads it.
+pub const ENGINE_ALREADY_RUNNING_EXIT: i32 = 3;
+/// `bootout` returns before the old job has fully gone, and a `bootstrap` in
+/// that window fails with "5: Input/output error".
+const LAUNCHD_BOOTSTRAP_ATTEMPTS: u32 = 5;
+/// How long `zerun daemon install` waits for the service's engine to take the
+/// data dir before reporting that it did not start.
+const ENGINE_START_TIMEOUT: Duration = Duration::from_secs(20);
 /// Same unit name the curl|sh installer (`edge/src/install.sh`) writes, so
 /// `zerun daemon …` manages that installation rather than a competing copy.
 const SYSTEMD_UNIT: &str = "zerun.service";
@@ -39,21 +51,47 @@ pub fn install(data_dir: &Path) -> anyhow::Result<()> {
     let exe = std::env::current_exe().context("resolving the zerun executable path")?;
     let env = captured_env();
     if cfg!(target_os = "macos") {
+        require_launchd_login_session()?;
         let plist = launchd_plist_path()?;
         std::fs::create_dir_all(plist.parent().expect("LaunchAgents parent"))?;
         std::fs::create_dir_all(data_dir)?;
-        // Reinstall-friendly: unload any previous incarnation before rewriting.
-        let _ = run_quiet("launchctl", &["bootout", &launchd_service_target()?]);
-        std::fs::write(
-            &plist,
-            render_launchd_plist(&exe, &env, &data_dir.join("daemon.log")),
-        )?;
-        run(
-            "launchctl",
-            &["bootstrap", &launchd_domain()?, &plist.to_string_lossy()],
-        )?;
+        let target = launchd_service_target()?;
+        let job = launchd_print(&target);
+        let previous_pid = job.as_deref().and_then(launchd_print_pid);
+        // The desktop app's engine and the service share the data dir and the
+        // IPC port: a second engine would only fail the lock and be restarted
+        // by KeepAlive forever.
+        if let Some(pid) = foreign_engine(engine_lock_holder(data_dir).as_deref(), previous_pid) {
+            eprintln!(
+                "Another Zerun engine (pid {pid}, usually the desktop app) is already running on {}; {LAUNCHD_LABEL} was not installed or started.",
+                data_dir.display()
+            );
+            eprintln!("Quit it, then run `zerun daemon install` again.");
+            std::process::exit(ENGINE_ALREADY_RUNNING_EXIT);
+        }
+        let rendered = render_launchd_plist(
+            &launchd_exec_path(&exe, std::env::var_os("HOME").map(PathBuf::from).as_deref()),
+            &env,
+            &data_dir.join("daemon.log"),
+        );
+        if job.is_some()
+            && std::fs::read_to_string(&plist).is_ok_and(|installed| installed == rendered)
+        {
+            // Same definition (it runs `current/zerun`, so a new version too):
+            // restart the loaded job in place.
+            run("launchctl", &["kickstart", "-k", &target])?;
+        } else {
+            // Reinstall-friendly: unload any previous incarnation before rewriting.
+            if job.is_some() {
+                let _ = run_quiet("launchctl", &["bootout", &target]);
+                wait_for_launchd_unload(&target);
+            }
+            std::fs::write(&plist, rendered)?;
+            bootstrap_launchd(&launchd_domain()?, &plist)?;
+        }
+        let pid = wait_for_launchd_engine(data_dir, &target, previous_pid)?;
         println!(
-            "Installed and started {LAUNCHD_LABEL} ({}).",
+            "Installed and started {LAUNCHD_LABEL} (pid {pid}, {}).",
             plist.display()
         );
     } else if cfg!(target_os = "linux") {
@@ -115,6 +153,7 @@ pub fn uninstall() -> anyhow::Result<()> {
 
 pub fn start() -> anyhow::Result<()> {
     if cfg!(target_os = "macos") {
+        require_launchd_login_session()?;
         let plist = launchd_plist_path()?;
         if !plist.exists() {
             bail!("not installed — run `zerun daemon install` first");
@@ -257,6 +296,118 @@ fn exec_path_for(exe: &Path, home: Option<&Path>) -> String {
     } else {
         format!("{}", exe.display())
     }
+}
+
+/// A managed CLI update swaps `current`; launchd must not keep starting the
+/// resolved old version after `zerun update` restarts the service. macOS's
+/// `current_exe` keeps the path the binary was started through (for example
+/// `~/.local/bin/zerun`), so compare with symlinks resolved on both sides.
+fn launchd_exec_path(exe: &Path, home: Option<&Path>) -> PathBuf {
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    if let Some(root) = home.map(|home| home.join(".zerun/app")) {
+        let exe = resolved(exe);
+        if exe.starts_with(&root) || exe.starts_with(resolved(&root)) {
+            return root.join("current/zerun");
+        }
+    }
+    exe.to_owned()
+}
+
+/// The pid of an engine holding the data dir that is not the LaunchAgent's
+/// own job (a reinstall restarts that one in place).
+fn foreign_engine<'a>(holder: Option<&'a str>, job_pid: Option<&str>) -> Option<&'a str> {
+    holder.filter(|holder| Some(*holder) != job_pid)
+}
+
+/// `launchctl print <service>` output, `None` when the job is not loaded.
+fn launchd_print(target: &str) -> Option<String> {
+    let output = Command::new("launchctl")
+        .args(["print", target])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The running process of a loaded job (`pid = 123`), absent while it is
+/// waiting to be (re)started.
+fn launchd_print_pid(print: &str) -> Option<&str> {
+    print
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid = "))
+        .map(str::trim)
+        .filter(|pid| !pid.is_empty() && pid.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn wait_for_launchd_unload(target: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while launchd_print(target).is_some() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn bootstrap_launchd(domain: &str, plist: &Path) -> anyhow::Result<()> {
+    let plist = plist.to_string_lossy();
+    let mut attempt = 1;
+    loop {
+        match run("launchctl", &["bootstrap", domain, &plist]) {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < LAUNCHD_BOOTSTRAP_ATTEMPTS => {
+                eprintln!("{error:#}; retrying");
+                attempt += 1;
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+/// Wait until a new process of the job (not `previous`, the one replaced)
+/// holds the data dir: launchd accepting the job only means it will try to
+/// start it.
+fn wait_for_launchd_engine(
+    data_dir: &Path,
+    target: &str,
+    previous: Option<&str>,
+) -> anyhow::Result<String> {
+    let deadline = Instant::now() + ENGINE_START_TIMEOUT;
+    loop {
+        let job_pid = launchd_print(target)
+            .as_deref()
+            .and_then(launchd_print_pid)
+            .map(str::to_owned);
+        if let Some(pid) = job_pid
+            && Some(pid.as_str()) != previous
+            && engine_lock_holder(data_dir).as_deref() == Some(pid.as_str())
+        {
+            return Ok(pid);
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "{LAUNCHD_LABEL} is installed, but its engine did not start within {}s; see {}",
+                ENGINE_START_TIMEOUT.as_secs(),
+                data_dir.join("daemon.log").display()
+            );
+        }
+        // `holder` briefly takes the lock itself; leave the engine room to.
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn require_launchd_login_session() -> anyhow::Result<()> {
+    let domain = launchd_domain()?;
+    if !Command::new("launchctl")
+        .args(["print", &domain])
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        bail!(
+            "No macOS GUI login session ({domain}). Log in at the Mac, then run `zerun daemon install`. For an SSH-only session, run `zerun headless` directly, for example inside tmux."
+        );
+    }
+    Ok(())
 }
 
 fn render_launchd_plist(exe: &Path, env: &[(String, String)], log: &Path) -> String {
@@ -432,6 +583,85 @@ mod tests {
             ),
             "/src/target/debug/zerun"
         );
+    }
+
+    #[test]
+    fn launchd_uses_current_for_managed_cli_and_preserves_other_executables() {
+        let home = Path::new("/home/test user");
+        assert_eq!(
+            launchd_exec_path(&home.join(".zerun/app/0.3.0/zerun"), Some(home)),
+            home.join(".zerun/app/current/zerun"),
+        );
+        for path in [
+            "/Applications/Zerun.app/Contents/MacOS/zerun",
+            "/src/target/debug/zerun",
+        ] {
+            assert_eq!(
+                launchd_exec_path(Path::new(path), Some(home)),
+                Path::new(path)
+            );
+        }
+        assert_eq!(
+            launchd_exec_path(Path::new("/src/zerun"), None),
+            Path::new("/src/zerun")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launchd_follows_the_cli_symlink_to_the_managed_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_root = home.join(".zerun/app");
+        std::fs::create_dir_all(app_root.join("0.3.0")).unwrap();
+        std::fs::write(app_root.join("0.3.0/zerun"), "").unwrap();
+        std::os::unix::fs::symlink(app_root.join("0.3.0"), app_root.join("current")).unwrap();
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(app_root.join("current/zerun"), bin.join("zerun")).unwrap();
+        assert_eq!(
+            launchd_exec_path(&bin.join("zerun"), Some(&home)),
+            app_root.join("current/zerun"),
+        );
+        // Another executable reached through a symlink keeps its own path.
+        let source = tmp.path().join("target/debug/zerun");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "").unwrap();
+        std::os::unix::fs::symlink(&source, bin.join("zerun-dev")).unwrap();
+        assert_eq!(
+            launchd_exec_path(&bin.join("zerun-dev"), Some(&home)),
+            bin.join("zerun-dev"),
+        );
+    }
+
+    #[test]
+    fn install_skips_only_an_engine_that_is_not_the_launch_agent() {
+        // Nothing running, or the agent's own engine (a reinstall).
+        assert_eq!(foreign_engine(None, None), None);
+        assert_eq!(foreign_engine(None, Some("41")), None);
+        assert_eq!(foreign_engine(Some("41"), Some("41")), None);
+        // The desktop app's engine, with or without a loaded agent.
+        assert_eq!(foreign_engine(Some("42"), None), Some("42"));
+        assert_eq!(foreign_engine(Some("42"), Some("41")), Some("42"));
+        assert_eq!(foreign_engine(Some("unknown"), Some("41")), Some("unknown"));
+    }
+
+    #[test]
+    fn launchd_print_pid_reads_only_a_running_job() {
+        let running = "gui/501/work.puqing.zerun = {\n\tactive count = 1\n\tstate = running\n\n\tpid = 4242\n\tlast exit code = 0\n}\n";
+        assert_eq!(launchd_print_pid(running), Some("4242"));
+        let waiting =
+            "gui/501/work.puqing.zerun = {\n\tstate = not running\n\tlast exit code = 1\n}\n";
+        assert_eq!(launchd_print_pid(waiting), None);
+        assert_eq!(launchd_print_pid("\tpid = \n"), None);
+    }
+
+    #[test]
+    fn curl_installer_honours_the_engine_already_running_exit() {
+        let installer = include_str!("../../../edge/src/install.sh").replace("\r\n", "\n");
+        assert!(installer.contains(&format!(
+            "{ENGINE_ALREADY_RUNNING_EXIT}) service=engine_running"
+        )));
     }
 
     #[test]

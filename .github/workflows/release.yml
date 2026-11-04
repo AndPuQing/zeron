@@ -2,15 +2,15 @@ name: release
 
 # Build release artifacts and publish them:
 #   - Linux headless tarballs (x86_64 + aarch64) via scripts/package-linux.sh
-#   - macOS dmg (Apple silicon) via scripts/package-macos.sh
+#   - macOS dmg and headless CLI (Apple silicon) via scripts/package-macos.sh
 #   - Windows per-user installer, portable zip, and updater exe (x86_64) via
 #     scripts/package-windows.ps1
 #   - Android signed ARM64 APK (arm64-v8a)
 # then create a GitHub Release AND upload the client-fetched artifacts to the
 # `zerun-releases` R2 bucket (served at edge.550w.host/releases/* for
 # `curl -fsSL https://edge.550w.host/install.sh | sh`), bumping latest.txt.
-# R2 keeps the newest two releases: install.sh reads latest.txt and both
-# updaters build their file names from manifest.json's version, so older
+# R2 keeps the newest two releases: install.sh and both updaters build their
+# file names from manifest.json's version (and verify its sha256), so older
 # releases are never downloaded — scripts/prune-r2-releases.sh deletes the
 # artifacts of the releases that just left that window after each publish.
 # Manual downloads (dmg, portable zip, installer exe) stay on GitHub Releases
@@ -148,7 +148,7 @@ jobs:
             echo "NOTARY_KEY_ID=$AC_API_KEY_ID"
             echo "NOTARY_ISSUER_ID=$AC_API_ISSUER_ID"
           } >>"$GITHUB_ENV"
-      - name: package dmg
+      - name: package desktop and headless CLI
         run: scripts/package-macos.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -250,7 +250,7 @@ jobs:
           cd "$RUNNER_TEMP/zerun-release-assets"
           ls
           for platform in linux-x86_64.tar.gz linux-aarch64.tar.gz \
-              macos-arm64.dmg macos-arm64-app.tar.gz \
+              macos-arm64.dmg macos-arm64-app.tar.gz macos-arm64.tar.gz \
               windows-x86_64.zip windows-x86_64.exe windows-x86_64-setup.exe; do
             test -f "zerun-$ver-$platform" \
               || { echo "missing artifact for tag v$ver: $platform — check builds and Cargo.toml version"; exit 1; }
@@ -339,24 +339,25 @@ jobs:
             done
           fi
           # Only the artifacts a client fetches from the edge: install.sh
-          # resolves the headless tarball from latest.txt, the desktop updater
-          # (crates/update) resolves its tarball / in-place Windows exe from
-          # manifest.json's version, and the Android updater does the same for
-          # the APK. The dmg, portable zip, installer exe and standalone
-          # .sha256 are manual-download only — README points at GitHub
-          # Releases — and would add ~130 MB per release of dead weight.
+          # resolves the headless tarball from manifest.json's version, the
+          # desktop updater (crates/update) does the same for its tarball /
+          # in-place Windows exe, and the Android updater for the APK. The
+          # dmg, portable zip, installer exe and standalone .sha256 are
+          # manual-download only — README points at GitHub Releases — and
+          # would add ~130 MB per release of dead weight.
           for name in \
             "zerun-$VERSION-linux-x86_64.tar.gz" \
             "zerun-$VERSION-linux-aarch64.tar.gz" \
             "zerun-$VERSION-macos-arm64-app.tar.gz" \
+            "zerun-$VERSION-macos-arm64.tar.gz" \
             "zerun-$VERSION-windows-x86_64.exe" \
             "zerun-$VERSION-android.apk"; do
             f="$RUNNER_TEMP/zerun-release-assets/$name"
             test -f "$f" || { echo "missing artifact: $name"; exit 1; }
             put "$name" "$f"
           done
-          # manifest.json: version + per-artifact sha256 — the auto-updater
-          # (crates/update) verifies downloads against it. Published before
+          # manifest.json: version + per-artifact sha256 — install.sh and the
+          # auto-updater (crates/update) verify downloads against it. Published before
           # latest.txt so no client ever sees a version without its checksums.
           put manifest.json manifest.json
           printf '%s' "$VERSION" > latest.txt

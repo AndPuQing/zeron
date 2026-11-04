@@ -75,6 +75,8 @@ jobs:
       - name: Use the alternate pool's selected Xcode
         if: inputs.macos_runner == 'xcode-27'
         run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
+      - name: Headless CLI installer and standalone signing
+        run: python3 scripts/tests/test_macos_headless.py -v
       - name: Rust toolchain
         run: |
           rustup update stable --no-self-update
@@ -104,7 +106,7 @@ jobs:
       - name: Build tests and the application
         run: |
           cargo nextest run --config-file scripts/ci/nextest.toml --no-run --locked \
-            -p zeron-update -p zeron-preview -p zeron-ui -p zeron-text -p zeron \
+            -p zeron-update -p zeron-preview -p zeron-ui -p zeron-text -p zeron -p zeron-cli -p zeron-launch \
             --features zeron-ui/browser-fixture --lib --bins --tests
       - name: Build fixtures
         if: inputs.fixtures
@@ -117,9 +119,9 @@ jobs:
           # tests run on Linux in ios-core. The attachment filters cover file staging, chips and
           # external Finder drops, whose paths and file metadata are platform-specific.
           cargo nextest run --config-file scripts/ci/nextest.toml --no-fail-fast --locked \
-            -p zeron-update -p zeron-preview -p zeron-ui -p zeron-text -p zeron \
+            -p zeron-update -p zeron-preview -p zeron-ui -p zeron-text -p zeron -p zeron-cli -p zeron-launch \
             --features zeron-ui/browser-fixture --lib --bins --tests \
-            -E 'package(zeron-update) | package(zeron-preview) | binary_id(zeron::cli) | (binary_id(zeron-text::coretext) & !test(=break_opportunities_match_cf_tokenizer)) | (binary_id(zeron-ui) & (test(native_diff_font_geometry) | test(/notify::tests::/) | test(/^attachments::tests::/) | test(/composer::attachment_chip_tests::/) | test(/shell::chat_dropzone_tests::/) | test(=queue::tests::queue_rows_label_attachment_chips_and_file_only_sends) | test(=transcript::tests::user_bubbles_project_attachment_chips_in_place_of_the_strip) | test(=transcript::tests::sent_chips_show_upload_progress_until_their_bytes_land)))'
+            -E 'package(zeron) | package(zeron-cli) | package(zeron-launch) | package(zeron-update) | package(zeron-preview) | (binary_id(zeron-text::coretext) & !test(=break_opportunities_match_cf_tokenizer)) | (binary_id(zeron-ui) & (test(native_diff_font_geometry) | test(/notify::tests::/) | test(/^attachments::tests::/) | test(/composer::attachment_chip_tests::/) | test(/shell::chat_dropzone_tests::/) | test(=queue::tests::queue_rows_label_attachment_chips_and_file_only_sends) | test(=transcript::tests::user_bubbles_project_attachment_chips_in_place_of_the_strip) | test(=transcript::tests::sent_chips_show_upload_progress_until_their_bytes_land)))'
       - name: Native browser regression and screenshots
         if: inputs.fixtures
         timeout-minutes: 7

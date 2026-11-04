@@ -5,6 +5,9 @@
 //! (`zerun headless` and the other engine subcommands, run in the helper) and
 //! the zgx app all start it through here, without linking the engine.
 
+mod engine_lock;
+pub use engine_lock::engine_lock_holder;
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
