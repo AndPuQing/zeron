@@ -9,8 +9,8 @@ name: release
 # then create a GitHub Release AND upload the client-fetched artifacts to the
 # `zerun-releases` R2 bucket (served at edge.550w.host/releases/* for
 # `curl -fsSL https://edge.550w.host/install.sh | sh`), bumping latest.txt.
-# R2 keeps the newest two releases: install.sh reads latest.txt and both
-# updaters build their file names from manifest.json's version, so older
+# R2 keeps the newest two releases: install.sh and both updaters build their
+# file names from manifest.json's version (and verify its sha256), so older
 # releases are never downloaded — scripts/prune-r2-releases.sh deletes the
 # artifacts of the releases that just left that window after each publish.
 # Manual downloads (dmg, portable zip, installer exe) stay on GitHub Releases
@@ -295,12 +295,12 @@ jobs:
             done
           fi
           # Only the artifacts a client fetches from the edge: install.sh
-          # resolves the headless tarball from latest.txt, the desktop updater
-          # (crates/update) resolves its tarball / in-place Windows exe from
-          # manifest.json's version, and the Android updater does the same for
-          # the APK. The dmg, portable zip, installer exe and standalone
-          # .sha256 are manual-download only — README points at GitHub
-          # Releases — and would add ~130 MB per release of dead weight.
+          # resolves the headless tarball from manifest.json's version, the
+          # desktop updater (crates/update) does the same for its tarball /
+          # in-place Windows exe, and the Android updater for the APK. The
+          # dmg, portable zip, installer exe and standalone .sha256 are
+          # manual-download only — README points at GitHub Releases — and
+          # would add ~130 MB per release of dead weight.
           for name in \
             "zerun-$VERSION-linux-x86_64.tar.gz" \
             "zerun-$VERSION-linux-aarch64.tar.gz" \
@@ -313,8 +313,8 @@ jobs:
             npx wrangler@4 r2 object put "zerun-releases/$name" \
               --file "$f" --remote
           done
-          # manifest.json: version + per-artifact sha256 — the auto-updater
-          # (crates/update) verifies downloads against it. Published before
+          # manifest.json: version + per-artifact sha256 — install.sh and the
+          # auto-updater (crates/update) verify downloads against it. Published before
           # latest.txt so no client ever sees a version without its checksums.
           npx wrangler@4 r2 object put zerun-releases/manifest.json \
             --file manifest.json --remote

@@ -48,9 +48,35 @@ case "$plat:$arch" in
 esac
 
 # --- download ----------------------------------------------------------------
-ver="$(curl -fsSL "$BASE/releases/latest.txt" | tr -d '[:space:]')"
-[ -n "$ver" ] || { echo "zerun install: could not resolve latest version" >&2; exit 1; }
+# manifest.json names the release and the sha256 of each artifact, exactly as
+# the built-in updater reads it; the download is never used without a match.
+# Whitespace is dropped first so the lookups do not depend on its layout.
+manifest="$(curl -fsSL "$BASE/releases/manifest.json")" \
+  || { echo "zerun install: could not fetch the release manifest ($BASE/releases/manifest.json)" >&2; exit 1; }
+manifest="$(printf '%s' "$manifest" | tr -d '[:space:]')"
+ver="$(printf '%s' "$manifest" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')"
+case "$ver" in
+  '' | *[!0-9.]*) echo "zerun install: could not resolve the latest version from the release manifest" >&2; exit 1 ;;
+esac
 file="zerun-$ver-$plat-$arch.tar.gz"
+expected_sha="$(printf '%s' "$manifest" | awk -v key="\"$file\":{\"sha256\":\"" '{
+  i = index($0, key)
+  if (i) { rest = substr($0, i + length(key)); print substr(rest, 1, index(rest, "\"") - 1) }
+}' | tr 'A-F' 'a-f')"
+case "$expected_sha" in
+  *[!0-9a-f]* | '') expected_sha="" ;;
+esac
+if [ "${#expected_sha}" -ne 64 ]; then
+  echo "zerun install: the release manifest has no sha256 for $file — refusing to install it." >&2
+  exit 1
+fi
+sha256_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1"
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1"
+  fi | awk '{ print $1 }' | tr 'A-F' 'a-f'
+}
 data_root="$HOME/.zerun"
 app_root="$data_root/app"
 dest="$app_root/$ver"
@@ -58,6 +84,10 @@ dest="$app_root/$ver"
 # Probe before changing a working installation or starting its service. The
 # desktop and headless modes share one binary, including CPAL's ALSA linkage.
 verify_release() {
+  if [ "$plat" = macos ] && ! codesign --verify --strict "$1/zerun"; then
+    echo "zerun install: the executable's code signature is missing or invalid — refusing to install it." >&2
+    return 1
+  fi
   if ! "$1/zerun" --version >/dev/null; then
     echo "zerun install: the downloaded executable could not start; see the loader error above." >&2
     if [ "$plat" = linux ]; then
@@ -85,6 +115,15 @@ else
   tmp="$(mktemp -d)"
   echo "downloading zerun $ver ($plat-$arch)…"
   curl -fSL --progress-bar "$BASE/releases/$file" -o "$tmp/$file"
+  actual_sha="$(sha256_file "$tmp/$file")"
+  if [ -z "$actual_sha" ]; then
+    echo "zerun install: neither sha256sum nor shasum is available to verify the download." >&2
+    exit 1
+  fi
+  if [ "$actual_sha" != "$expected_sha" ]; then
+    echo "zerun install: checksum mismatch for $file (expected $expected_sha, got $actual_sha) — refusing to install it." >&2
+    exit 1
+  fi
   mkdir -p "$app_root"
   stage="$(mktemp -d "$app_root/.stage-$ver.XXXXXX")"
   tar -xzf "$tmp/$file" -C "$stage" --strip-components=1

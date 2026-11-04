@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Keep the `zerun-releases` R2 bucket to what clients actually fetch.
 #
-# Nothing in the product downloads an older release: install.sh resolves the
-# headless tarball from `latest.txt`, and the desktop updater
-# (crates/update/src/lib.rs, windows.rs) and the Android updater
+# Nothing in the product downloads an older release: install.sh, the desktop
+# updater (crates/update/src/lib.rs, windows.rs) and the Android updater
 # (AndroidUpdater.kt) build their file names from `manifest.json`'s version. So
 # every version but the newest is dead weight for clients, and the release
 # workflow uploads only the handful of per-release artifacts that are fetched:

@@ -1,5 +1,6 @@
 """Offline CLI installation and macOS standalone signing regressions."""
 import os
+import hashlib
 import json
 import platform
 from pathlib import Path
@@ -26,6 +27,7 @@ class HeadlessInstall(unittest.TestCase):
         self.write_exe("uname", 'case "$1" in -s) echo Darwin;; -m) echo "${TEST_ARCH:-arm64}";; esac')
         self.write_exe("sysctl", 'echo "${TEST_ARM:-1}"')
         self.write_exe("launchctl", '[ "${TEST_GUI:-1}" = 1 ]')
+        self.write_exe("codesign", '[ "$1 $2" = "--verify --strict" ] && [ -x "$3" ] && [ "${TEST_UNSIGNED:-0}" = 0 ]')
         self.write_exe("systemctl", 'echo unexpected-systemd >> "$HOME/unexpected"; exit 1')
         self.env = {
             "HOME": str(self.home), "USER": "tester",
@@ -51,9 +53,23 @@ class HeadlessInstall(unittest.TestCase):
 esac'''
         binary.write_text("#!/bin/sh\n" + body + "\n")
         binary.chmod(0o755)
-        with tarfile.open(self.site / (name + ".tar.gz"), "w:gz") as archive:
+        tarball = self.site / (name + ".tar.gz")
+        with tarfile.open(tarball, "w:gz") as archive:
             archive.add(package, arcname=name)
         (self.site / "latest.txt").write_text(version)
+        self.manifest(version, {tarball.name: hashlib.sha256(tarball.read_bytes()).hexdigest()})
+
+    def manifest(self, version, files):
+        # The release workflow writes jq's pretty-printed layout.
+        (self.site / "manifest.json").write_text(json.dumps(
+            {"version": version, "files": {name: {"sha256": sha} for name, sha in files.items()}}, indent=2))
+
+    def assert_rejected(self, result, message):
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+        self.assertEqual((self.home / ".zerun/app/current").resolve().name, "9.9.9")
+        self.assertEqual(sorted(p.name for p in (self.home / ".zerun/app").iterdir()),
+                         ["9.9.9", "current"])
 
     def install(self, **extra):
         return subprocess.run(
@@ -122,6 +138,24 @@ esac'''
         self.assertEqual(subprocess.check_output([str(broken / "zerun"), "--version"], text=True).strip(),
                          "zerun 9.9.9")
         self.assertEqual(sorted(p.name for p in broken.parent.iterdir()), ["9.9.9", "current"])
+
+    def test_download_must_match_the_manifest_and_be_signed(self):
+        self.assertEqual(self.install().returncode, 0)
+        previous = (self.home / "daemon-installs").read_text()
+        self.release("9.9.10")
+        name = "zerun-9.9.10-macos-arm64.tar.gz"
+        self.manifest("9.9.10", {name: "0" * 64})
+        self.assert_rejected(self.install(), "checksum mismatch")
+        self.manifest("9.9.10", {"zerun-9.9.10-linux-x86_64.tar.gz": "0" * 64})
+        self.assert_rejected(self.install(), "no sha256")
+        (self.site / "manifest.json").unlink()
+        self.assert_rejected(self.install(), "release manifest")
+        self.release("9.9.10")
+        self.assert_rejected(self.install(TEST_UNSIGNED="1"), "code signature")
+        self.assertEqual((self.home / "daemon-installs").read_text(), previous)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.home / ".zerun/app/current").resolve().name, "9.9.10")
 
     @unittest.skipUnless(shutil.which("jq"), "jq required for R2 prune plan")
     def test_prune_keeps_current_cli_and_removes_old_cli_artifacts(self):
