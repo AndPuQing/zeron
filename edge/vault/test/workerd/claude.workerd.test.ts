@@ -167,13 +167,17 @@ describe("claude setup token", () => {
 
   it("past its expiry, the account needs a reconnect", async () => {
     const { userId, caller, device } = await setup();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     value(
       await vault().putCredential(caller, "claude", {
-        material: { oauthToken: TOKEN, expiresAt: Date.now() + 50 },
+        material: { oauthToken: TOKEN, expiresAt: now + MINUTE },
         authorizedDevices: [device.deviceId]
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(value(await vault().status(caller)).connections.find((c) => c.provider === "claude")?.status).toBe("connected");
+    // Advance past expiry after the upload has finished, independent of RPC latency.
+    clock.mockReturnValue(now + MINUTE + 1);
     // Visible in status without any grant having to notice first.
     let status = value(await vault().status(caller));
     expect(status.connections.find((c) => c.provider === "claude")?.status).toBe("needsReconnect");
