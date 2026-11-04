@@ -8,6 +8,10 @@ final class DocumentPreviewViewController: UIViewController {
     private var document: DocumentPreview?
     private var source = false
     private var request: Task<Void, Never>?
+    /// The reader agreed to open a file beyond the chat's workspace.
+    private var allowOutside = false
+    /// A confirmation that arrived before the view was on screen.
+    private var pendingConfirmation: UIAlertController?
     private lazy var relay: FrameRelay = FrameRelay { [weak self] in
         guard let self else { return }
         self.list.apply(self.engine.frame())
@@ -89,11 +93,19 @@ final class DocumentPreviewViewController: UIViewController {
         status.text = "Loading document…"
         retry.isHidden = true
         spinner.startAnimating()
-        let client = self.client, chatId = self.chatId, path = self.path
+        let client = self.client, chatId = self.chatId, path = self.path, allowOutside = self.allowOutside
         request = Task { @MainActor [weak self] in
             do {
-                let doc = try await client.readDocument(chatId: chatId, path: path)
+                let read = try await client.readDocument(chatId: chatId, path: path, allowOutside: allowOutside)
                 guard !Task.isCancelled, let self else { return }
+                let doc: DocumentPreview
+                switch read {
+                case let .ready(document):
+                    doc = document
+                case let .needsConfirmation(_, deviceName, outsidePath):
+                    self.confirmOutside(device: deviceName, path: outsidePath)
+                    return
+                }
                 self.document = doc
                 self.spinner.stopAnimating()
                 self.state.isHidden = !doc.text.isEmpty
@@ -115,6 +127,44 @@ final class DocumentPreviewViewController: UIViewController {
                 self.status.text = CloudStore.message(error)
                 self.retry.isHidden = false
             }
+        }
+    }
+
+    /// Nothing of the file has been read yet: it opens only after the reader
+    /// agrees, and Cancel leaves it unread.
+    private func confirmOutside(device: String, path: String) {
+        spinner.stopAnimating()
+        status.text = nil
+        let alert = UIAlertController(
+            title: "Open this file?",
+            message: "This file is outside the chat's folder.\n\n\(device): \(path)",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in self?.leave() })
+        alert.addAction(UIAlertAction(title: "Open anyway", style: .default) { [weak self] _ in
+            guard let self else { return }
+            self.allowOutside = true
+            self.loadDocument()
+        })
+        if view.window == nil {
+            pendingConfirmation = alert
+        } else {
+            present(alert, animated: true)
+        }
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if let alert = pendingConfirmation {
+            pendingConfirmation = nil
+            present(alert, animated: true)
+        }
+    }
+
+    private func leave() {
+        if navigationController?.viewControllers.first === self || navigationController == nil {
+            dismiss(animated: true)
+        } else {
+            navigationController?.popViewController(animated: true)
         }
     }
 
