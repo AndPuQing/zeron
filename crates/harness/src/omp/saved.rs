@@ -79,9 +79,16 @@ impl OmpHarness {
             let end = (offset + 50).min(files.len());
             let mut sessions = vec![];
             for path in &files[offset..end] {
-                let records = read_records(path)?;
-                if let Some(session) = metadata(&records, path, &identity)? {
-                    sessions.push(session);
+                // One oversized, partial, changing or unsupported transcript
+                // (often the newest, still being written) must not hide the
+                // rest of the page; only directory access fails the listing.
+                let entry = read_records(path).and_then(|r| metadata(&r, path, &identity));
+                match entry {
+                    Ok(Some(session)) => sessions.push(session),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::debug!(path = %path.display(), %error, "skipping OMP transcript");
+                    }
                 }
             }
             Ok(SavedSessionPage {
@@ -191,32 +198,10 @@ impl OmpHarness {
 }
 fn inventory(roots: &[PathBuf]) -> Result<Vec<PathBuf>, HarnessError> {
     let mut files = vec![];
-    let mut seen = HashSet::new();
-    let mut count = 0;
-    let mut dirs: Vec<_> = roots.iter().cloned().map(|r| (r, 0)).collect();
-    while let Some((dir, depth)) = dirs.pop() {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e.into()),
-        };
-        for entry in entries {
-            let entry = entry?;
-            count += 1;
-            if count > 20000 {
-                return Err(error("OMP discovery exceeded 20000 entries."));
-            }
-            let kind = entry.file_type()?;
-            if kind.is_dir() && depth < 2 {
-                dirs.push((entry.path(), depth + 1));
-            } else if kind.is_file() && entry.path().extension().is_some_and(|e| e == "jsonl") {
-                let path = entry.path().canonicalize()?;
-                if seen.insert(path.clone()) {
-                    files.push(path);
-                }
-            }
-        }
-    }
+    super::discovery::visit_files(roots, |path| {
+        files.push(path);
+        Ok(false)
+    })?;
     files.sort_by_cached_key(|p| {
         (
             std::cmp::Reverse(p.metadata().and_then(|m| m.modified()).ok()),
@@ -558,6 +543,106 @@ mod tests {
         .unwrap();
         let harness = OmpHarness::new().with_agent_dir(dir.path());
         (dir, harness, path)
+    }
+    #[tokio::test]
+    async fn large_stores_page_history_without_counting_logs_or_artifact_transcripts() {
+        let (dir, harness, source) = fixture();
+        let project = source.parent().unwrap();
+        // The old scanner failed before returning even its first page.
+        for index in 0..20_001 {
+            std::fs::write(project.join(format!("output-{index}.log")), "").unwrap();
+        }
+        let template = std::fs::read_to_string(&source).unwrap();
+        for index in 0..50 {
+            let id = format!("22222222-2222-3333-4444-{index:012}");
+            std::fs::write(
+                project.join(format!("session-{index}.jsonl")),
+                template.replace("11111111-2222-3333-4444-555555555555", &id),
+            )
+            .unwrap();
+        }
+        let artifacts = project.join("source");
+        std::fs::create_dir(&artifacts).unwrap();
+        std::fs::write(artifacts.join("not-history.jsonl"), "invalid tool output").unwrap();
+        let child_id = "33333333-2222-3333-4444-555555555555";
+        let child = artifacts.join("child.jsonl");
+        std::fs::write(
+            &child,
+            template.replace("11111111-2222-3333-4444-555555555555", child_id),
+        )
+        .unwrap();
+        let first = harness.saved_sessions(None).await.unwrap();
+        assert_eq!(first.sessions.len(), 50);
+        let second = harness
+            .saved_sessions(first.next_cursor.as_deref())
+            .await
+            .unwrap();
+        assert_eq!(second.sessions.len(), 1);
+        assert!(second.next_cursor.is_none());
+        let ids: HashSet<_> = first
+            .sessions
+            .iter()
+            .chain(&second.sessions)
+            .map(|s| &s.native_id)
+            .collect();
+        assert_eq!(ids.len(), 51);
+        assert!(!ids.iter().any(|id| id.as_str() == child_id));
+        assert_eq!(
+            harness
+                .saved_session_history(&first.sessions[0])
+                .await
+                .unwrap()
+                .messages
+                .len(),
+            3
+        );
+        let store = sessions::Store::new(None, Some(dir.path().to_owned()));
+        let missing = store.resolve(child_id, dir.path()).unwrap_err().to_string();
+        assert!(
+            missing.contains("was not found"),
+            "artifacts are not fallback sessions; lookup must finish without an entry-limit error: {missing}"
+        );
+        // An explicit runtime-owned index can still resume a known child.
+        store
+            .remember(child_id, &child.canonicalize().unwrap())
+            .unwrap();
+        assert_eq!(
+            store.resolve(child_id, dir.path()).unwrap(),
+            child.canonicalize().unwrap()
+        );
+        assert!(
+            source.exists(),
+            "discovery never mutates native transcripts"
+        );
+    }
+
+    #[tokio::test]
+    async fn unreadable_top_level_transcripts_do_not_fail_the_history_page() {
+        let (dir, harness, source) = fixture();
+        let store = dir.path().join("sessions");
+        let template = std::fs::read_to_string(&source).unwrap();
+        // A partial line, as in a session OMP is still writing.
+        std::fs::write(store.join("partial.jsonl"), b"{\"type\":").unwrap();
+        std::fs::write(
+            store.join("future.jsonl"),
+            template
+                .replace("11111111-2222-3333-4444-555555555555", "future-id")
+                .replace("\"version\":3", "\"version\":9"),
+        )
+        .unwrap();
+        File::create(store.join("oversized.jsonl"))
+            .unwrap()
+            .set_len(MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        let page = harness.saved_sessions(None).await.unwrap();
+        assert_eq!(
+            page.sessions
+                .iter()
+                .map(|s| s.native_id.as_str())
+                .collect::<Vec<_>>(),
+            ["11111111-2222-3333-4444-555555555555"]
+        );
+        assert!(page.next_cursor.is_none());
     }
     #[tokio::test]
     async fn a_provider_with_no_history_has_an_empty_page() {
