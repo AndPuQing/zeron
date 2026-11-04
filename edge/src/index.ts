@@ -10,6 +10,13 @@
  *   POST /auth/refresh                — WorkOS refresh → fresh tokens
  *   GET  /auth/orgs                   — caller's active org memberships
  *   POST /auth/orgs                   — create org + admin membership
+ *   POST /auth/orgs/:orgId/invitations — admin invites addresses
+ *   GET|PATCH /auth/me                — the caller's name and email
+ *   PATCH /auth/orgs/:orgId           — admin renames the org
+ *   GET  /auth/orgs/:orgId/members    — members (membership ids, never user ids)
+ *   PATCH|DELETE /auth/orgs/:orgId/members/:membershipId — admin: role / remove
+ *   GET  /auth/orgs/:orgId/invitations — admin: pending + recently expired
+ *   DELETE /auth/orgs/:orgId/invitations/:id, POST …/:id/resend — admin
  *   GET  /auth/cli/callback           — headless sign-in paste-code page
  *   GET  /session/:chatId/ws          — loro-protocol room (wss upgrade)
  *   GET  /tail/:chatId                — L2 instant-open tail JSON (§5)
@@ -81,6 +88,8 @@ import { sandboxProvider } from "./cloud/providers";
 import { FakeProvider } from "./cloud/providers/fake";
 import { runnerChatGate, runnerDeviceGate } from "./runner-access";
 import { runnerRefusal } from "./runner-policy";
+import { handleOnboardingRoute } from "./onboarding-routes";
+import { handlePluginKeyRoute } from "./plugin-keys";
 import { handleVaultRoute } from "./vault-routes";
 import { handleUserDirectoryRoute, UserDirectory } from "./user-directory";
 import installSh from "./install.sh";
@@ -166,6 +175,11 @@ export default {
       const fake = env.AUTH_MODE === "dev" ? sandboxProvider(env, "fake") : undefined;
       return fake instanceof FakeProvider ? json({ sandboxes: fake.snapshot() }) : json({ error: "not_found" }, 404);
     }
+
+    const onboardingRouted = await handleOnboardingRoute(request, env, auth, url);
+    if (onboardingRouted) return onboardingRouted;
+    const pluginKeysRouted = await handlePluginKeyRoute(request, env, auth, url);
+    if (pluginKeysRouted) return pluginKeysRouted;
 
     const cloudRouted = await handleCloudRoute(request, env, auth, url);
     if (cloudRouted) return cloudRouted;

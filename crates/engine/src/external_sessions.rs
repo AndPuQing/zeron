@@ -602,6 +602,7 @@ impl ExternalSessionImporter {
             Some(space) => space,
             None => {
                 let space = Space {
+                    icon: None,
                     id: crate::new_id(),
                     device_id: self.inner.docs.device_id().into(),
                     path: source.cwd.clone(),

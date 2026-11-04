@@ -60,6 +60,7 @@ fn setup(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<Shell>, &mut Vis
                         state: zeron_proto::ChangeRequestState::Open,
                         base_ref: "main".into(),
                         head_ref: branch,
+                        signals: None,
                     }),
                     updated_at: Utc::now(),
                 });
@@ -242,7 +243,7 @@ fn board_rows_open_pull_requests_where_settings_send_them(cx: &mut TestAppContex
 
 /// A pull request link in a message, clicked where the transcript painted
 /// it, opens where Settings says while "Open links in Zeron" is on and in the
-/// default browser while it is off (#956). "Open in Zeron" from the link's
+/// default browser while it is off. "Open in Zeron" from the link's
 /// menu always stays in Zeron.
 #[gpui::test]
 fn transcript_pull_request_links_open_where_settings_send_them(cx: &mut TestAppContext) {

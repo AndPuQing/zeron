@@ -308,8 +308,8 @@ class PriorityAndLockTests(unittest.TestCase):
         self.assertEqual(d.position, 0)
 
     def test_the_lock_is_not_counted_twice_once_its_run_holds_runners(self):
-        snap = Snapshot([waiter(5, 1, macos=2)], [held_(pr=90, macos=4), held_(macos=4)], locked={90})
-        self.assertEqual(decide(5, need(macos=2), snap, self.BIG).used["macos"], 8)
+        snap = Snapshot([waiter(5, 1, macos=2)], [held_(pr=90, macos=5), held_(macos=4)], locked={90})
+        self.assertEqual(decide(5, need(macos=2), snap, self.BIG).used["macos"], 9)
 
     def test_two_locks_do_not_wait_for_each_other(self):
         big = {"total": 20, "macos": 5, "windows": 10}

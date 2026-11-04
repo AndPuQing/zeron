@@ -59,6 +59,10 @@ LINUX_SETUP = [".github/actions/linux-ci/**", "scripts/ci/apt-install.sh", "scri
 NEXTEST = ["scripts/ci/nextest.toml"]
 
 SUITE_INPUTS: dict[str, list[str]] = {
+    # Separate Cargo workspace. All shared crates are inputs; its lockfile
+    # and renderer patches are hashed through apps/zgx, independently of GPUI.
+    "experimental": [".github/workflows/experimental-desktop.yml", "apps/zgx/**", "apps/zeron/**", "crates/**",
+                     "scripts/experimental-desktop.sh"],
     "core": [".github/workflows/ui-tests.yml", "scripts/ci/test-core.sh"] + LINUX_SETUP + NEXTEST,
     "ui": [".github/workflows/ui-tests.yml", "scripts/test-linux-browser.sh", "scripts/test-browser-storage.py"]
           + LINUX_SETUP + NEXTEST,
@@ -83,7 +87,8 @@ SUITE_INPUTS: dict[str, list[str]] = {
 # The workspace packages each suite builds and tests (their dependencies are added).
 SUITE_PACKAGES: dict[str, list[str]] = {
     "core": ["zeron-harness", "zeron-engine", "zeron-sync", "zeron-update", "zeron-doc", "zeron-preview",
-             "zeron-visual", "zeron-visual-gpu", "zeron-term-link", "zeron-mcp", "zeron-proto", "zeron-rpc", "zeron-orb", "zeron-voice-session", "zeron-voice-media"],
+             "zeron-visual", "zeron-visual-gpu", "zeron-term-link", "zeron-mcp", "zeron-proto", "zeron-rpc", "zeron-orb", "zeron-voice-session", "zeron-voice-media",
+             "zeron-cli", "zeron-launch", "zeron-notify"],
     "ui": ["zeron-ui"],
     "voice": ["zeron-audio", "zeron-voice-media"],
     "windows": ["zeron-ui", "zeron-harness", "zeron", "zeron-update", "zeron-proto", "zeron-engine",

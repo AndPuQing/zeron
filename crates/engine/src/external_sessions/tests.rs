@@ -215,6 +215,7 @@ fn request(cwd: &str) -> RunRequest {
         require_native_resume: false,
         worktree: None,
         mcp: None,
+        extra_mcp: vec![],
         env: Default::default(),
     }
 }

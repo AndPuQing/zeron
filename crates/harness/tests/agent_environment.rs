@@ -62,6 +62,7 @@ async fn observe(harness: AcpHarness, value: &str) {
         resume: None,
         require_native_resume: false,
         mcp: None,
+        extra_mcp: vec![],
         env: Default::default(),
     };
     let mut stream = harness.run(req, controls).await.unwrap();
@@ -150,6 +151,7 @@ async fn native_runs_and_model_probes_receive_their_provider_binding() {
             resume: None,
             require_native_resume: false,
             mcp: None,
+            extra_mcp: vec![],
             env: Default::default(),
         };
         let mut stream = harness.run(request, controls).await.unwrap();

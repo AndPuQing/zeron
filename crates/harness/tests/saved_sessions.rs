@@ -732,6 +732,7 @@ async fn claude_strict_resume_rejects_missing_copies_and_a_different_native_id()
         require_native_resume: true,
         worktree: None,
         mcp: None,
+        extra_mcp: vec![],
         env: Default::default(),
     };
     let (_missing_mailbox, missing_controls) = controls();
@@ -973,6 +974,7 @@ mod codex {
                 require_native_resume: true,
                 worktree: None,
                 mcp: None,
+                extra_mcp: vec![],
                 env: Default::default(),
             };
             let mut events = harness.run(request, controls).await.unwrap();

@@ -91,6 +91,7 @@ jobs:
             .github
             crates
             apps/zeron
+            apps/zgx
       - name: Planner and admission tests
         run: python3 -m unittest discover -s scripts/tests -p 'test_ci_*.py'
       - id: plan
@@ -230,9 +231,17 @@ jobs:
     with:
       pass-key: ${{ fromJSON(needs.plan.outputs.keys).android || '' }}
 
+  experimental:
+    needs: [plan, admit]
+    if: fromJSON(needs.plan.outputs.suites).experimental
+    uses: ./.github/workflows/experimental-desktop.yml
+    with:
+      pass-key: ${{ fromJSON(needs.plan.outputs.keys).experimental || '' }}
+      macos_runner: ${{ inputs.macos_runner || 'macos-15' }}
+
   result:
     name: CI result
-    needs: [plan, admit, linux-core, linux-ui, cursor, edge, installer, voice, windows, macos, frame-source, ios, android, coretext]
+    needs: [plan, admit, linux-core, linux-ui, cursor, edge, installer, voice, windows, macos, frame-source, ios, android, coretext, experimental]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

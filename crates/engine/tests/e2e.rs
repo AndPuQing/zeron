@@ -43,6 +43,7 @@ fn run_request(prompt: &str) -> RunRequest {
         worktree: None,
         resume: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     }
 }
 
@@ -2648,6 +2649,7 @@ async fn real_claude_sees_uploaded_image_inline() {
         resume: None,
         worktree: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     };
     core.doc_host
         .queue_command(

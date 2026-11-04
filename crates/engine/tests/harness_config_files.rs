@@ -12,6 +12,7 @@ async fn configuration_discovery_is_metadata_only_and_does_not_launch_the_provid
     let registry = HarnessRegistry::new();
     registry.register_lazy(
         HarnessDescriptor {
+            icon: None,
             id: HarnessId::Codex,
             name: "Codex".into(),
             supports_steering: false,

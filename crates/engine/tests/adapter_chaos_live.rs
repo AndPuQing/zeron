@@ -129,6 +129,7 @@ impl Suite {
             worktree: None,
             require_native_resume: false,
             resume: None,
+            extra_mcp: Vec::new(),
         }
     }
 
@@ -1199,6 +1200,7 @@ fn restart_request(name: &str, cwd: &str, prompt: &str) -> RunRequest {
         worktree: None,
         require_native_resume: false,
         resume: None,
+        extra_mcp: Vec::new(),
     }
 }
 

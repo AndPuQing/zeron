@@ -13,6 +13,8 @@
 #   zeron-sync, zeron-update   lib only (session-sync-regressions)
 #   zeron-term-link   terminal transport library
 #   zeron-visual, zeron-visual-gpu   script sandbox and renderer libraries
+#   zeron-cli, zeron-launch, zeron-notify   `zerun`'s command line, the engine
+#                  helper's start-up and the zerun-dev:// links, shared by the apps
 #   zeron-engine   lib + the integration tests named below. Engine has many other
 #                  integration binaries (live agents etc.) that no workflow ran, so
 #                  they are listed instead of globbed to avoid compiling them.
@@ -48,6 +50,7 @@ exec cargo nextest run --config-file scripts/ci/nextest.toml --locked --no-fail-
   -p zeron-harness -p zeron-engine -p zeron-sync -p zeron-update -p zeron-doc -p zeron-preview \
   -p zeron-visual -p zeron-visual-gpu -p zeron-term-link \
   -p zeron-mcp -p zeron-proto -p zeron-rpc -p zeron-orb -p zeron-voice-session -p zeron-voice-media \
+  -p zeron-cli -p zeron-launch -p zeron-notify \
   --features zeron-harness/native-fixture \
   --lib --bins "${tests[@]}" \
   -E '(not ((package(zeron-proto) & not test(voice)) | (package(zeron-rpc) & kind(lib)))) & (not binary_id(zeron-engine::e2e) | test(=publish_visual_lands_in_the_live_turn))' "$@"

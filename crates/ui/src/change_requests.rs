@@ -480,6 +480,7 @@ mod tests {
             checkout_id: Some("checkout".into()),
             repository_id: None,
             github_repo: None,
+            icon: None,
             created_at: Utc.timestamp_opt(0, 0).unwrap(),
         }
     }
@@ -498,6 +499,7 @@ mod tests {
                 state: ChangeRequestState::Open,
                 base_ref: "main".into(),
                 head_ref: "feature/pr".into(),
+                signals: None,
             }),
             updated_at: Utc.timestamp_opt(1, 0).unwrap(),
         }

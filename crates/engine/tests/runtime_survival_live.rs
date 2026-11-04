@@ -115,6 +115,7 @@ fn run(
         worktree: None,
         require_native_resume: false,
         resume: None,
+        extra_mcp: Vec::new(),
     }
 }
 

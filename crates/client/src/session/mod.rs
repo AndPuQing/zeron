@@ -1205,6 +1205,7 @@ impl SessionHandle {
                     worktree: request.worktree.clone(),
                     mcp: None,
                     env: Default::default(),
+                    extra_mcp: Vec::new(),
                 };
                 self.core.queue_command(
                     &device_id,

@@ -57,6 +57,7 @@ fn request(cwd: &Path) -> RunRequest {
         ]
         .into_iter()
         .collect(),
+        extra_mcp: Vec::new(),
     }
 }
 

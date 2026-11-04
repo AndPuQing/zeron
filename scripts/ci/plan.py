@@ -53,6 +53,7 @@ from reuse import matches  # noqa: E402
 # pass is recorded under. Keep in step with the reusable workflows
 # (scripts/tests/test_ci_plan.py checks).
 SUITE_JOBS: dict[str, list[tuple[str, str]]] = {
+    "experimental": [("experimental-desktop", "macos")],
     "core": [("core-tests", "linux")],  # ui-tests.yml
     "ui": [("ui-tests", "linux")],  # ui-tests.yml (UI + Linux browser)
     "cursor": [("cursor-compatibility", "linux")],  # cursor-compatibility.yml
@@ -101,7 +102,15 @@ MOBILE_CORE = [
 VOICE_PATHS = ["crates/audio/**", "crates/voice-media/**", "dist/voice/**", "scripts/package-voice-runtime.py",
                "scripts/codex-voice-remote-smoke.py", "scripts/tests/*voice*", ".github/workflows/voice-tests.yml"]
 
+EXPERIMENTAL_PATHS = CARGO + [
+    "apps/zgx/**", "apps/zeron/**", "crates/engine/**", "crates/harness/**",
+    "crates/cli/**", "crates/launch/**", "crates/update/**", "crates/notify/**",
+    "crates/proto/**", "crates/theme/**", "crates/visual/**", "crates/visual-gpu/**", "crates/zatex/**",
+    "scripts/experimental-desktop.sh", ".github/workflows/experimental-desktop.yml",
+]
+
 BROAD: dict[str, list[str]] = {
+    "experimental": EXPERIMENTAL_PATHS,
     "core": CARGO + ["crates/**", "apps/zeron/**", "scripts/ci/**", ".github/actions/linux-ci/**",
                      ".github/workflows/ui-tests.yml"],
     "ui": CARGO + ["crates/**", "scripts/ci/**", ".github/actions/linux-ci/**",
@@ -133,8 +142,10 @@ FAST_PATHS: dict[str, list[str]] = {
     "voice": VOICE_PATHS,
     "windows": CARGO + ["apps/zeron/**", "dist/windows/**", "scripts/test-windows-*.ps1",
                         "scripts/package-windows.ps1", ".github/actions/windows-ci-setup/**",
-                        ".github/workflows/windows.yml", "crates/update/**"],
-    "macos": CARGO + ["scripts/package-macos*.sh", "scripts/tests/test_macos_headless.py", "scripts/tests/*voice_remote*", "apps/zeron/**", "crates/update/**", "crates/preview/**", "crates/text/**",
+                        ".github/workflows/windows.yml", "crates/update/**", "crates/cli/**",
+                        "crates/launch/**"],
+    "macos": CARGO + ["scripts/package-macos*.sh", "scripts/tests/test_macos_headless.py", "scripts/tests/*voice_remote*", "apps/zeron/**", "crates/update/**", "crates/cli/**", "crates/launch/**",
+                      "crates/preview/**", "crates/text/**",
                       "edge/package.json", "edge/package-lock.json", "scripts/run-macos-browser-fixture.sh",
                       "scripts/test-browser-storage.py", "scripts/ci/run-macos-fixture.sh",
                       "dist/macos/Info.plist", ".github/workflows/macos.yml"],

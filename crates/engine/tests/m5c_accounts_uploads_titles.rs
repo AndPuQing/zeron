@@ -983,6 +983,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         worktree: None,
         resume: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     };
     core.sessions
         .dispatch(chat_id, HarnessId::Mock, request, None)
@@ -1033,6 +1034,7 @@ async fn titling_e2e_names_chat_and_renames_worktree_branch() {
         worktree: None,
         resume: None,
         env: Default::default(),
+        extra_mcp: Vec::new(),
     };
     core.sessions
         .dispatch(chat_id, HarnessId::Mock, request, None)

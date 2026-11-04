@@ -1181,6 +1181,7 @@ impl Client {
             checkout_id: None,
             repository_id: None,
             github_repo: None,
+            icon: None,
             created_at: Utc::now(),
         };
         let id = space.id.clone();
