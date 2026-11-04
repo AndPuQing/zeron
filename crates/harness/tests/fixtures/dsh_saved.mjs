@@ -2,14 +2,21 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-const [home, action, compression = 'zstd', copyID] = process.argv.slice(2);
-const require = createRequire(join(home, 'profiles', 'package.json'));
+const [home, action, compression = 'zstd', copyID, packages] = process.argv.slice(2);
+const require = createRequire(packages || join(home, 'profiles', 'package.json'));
 const load = async name => import(pathToFileURL(require.resolve(name)).href);
-const [{ Context }, { default: Persistence }, { Session, SESSION_FORMAT_VERSION }, projections] = await Promise.all([
+const [{ Context }, persistenceModule, { Session, SESSION_FORMAT_VERSION }, projections] = await Promise.all([
   load('@deepseek-ai/cordis'), load('@deepseek-ai/dsh-session-persistence-jsonl'), load('@deepseek-ai/dsh-session'), load('@deepseek-ai/dsh-session-format-catalog/message-projections'),
 ]);
 const ctx = new Context();
-const persistence = new Persistence(ctx, { root: join(home, 'sessions'), compression });
+const persistenceConfig = { root: join(home, 'sessions'), compression };
+let persistence;
+if (typeof persistenceModule.default === 'function') {
+  persistence = new persistenceModule.default(ctx, persistenceConfig);
+} else {
+  await ctx.plugin(persistenceModule, persistenceConfig).await();
+  persistence = ctx.get('sessionPersistence');
+}
 try {
   if (action === 'create') {
     for (const busy of [false, true]) {

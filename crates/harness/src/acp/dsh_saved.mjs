@@ -12,13 +12,15 @@ let input = '';
 for await (const chunk of process.stdin) { input += chunk; if (input.length > 65536) throw new Error('Invalid import request'); }
 const request = JSON.parse(input);
 let require;
-for (const base of [join(request.home, 'profiles', request.profile, 'package.json'), join(request.home, 'profiles', 'package.json')]) {
+// `packages` anchors the packages the installed `dsh` ships (the desktop app's
+// archive or the npm package); older releases kept them beside the profiles.
+for (const base of [request.packages, join(request.home, 'profiles', request.profile, 'package.json'), join(request.home, 'profiles', 'package.json')].filter(Boolean)) {
   const candidate = createRequire(base);
   try { candidate.resolve('@deepseek-ai/dsh-session-persistence-jsonl'); require = candidate; break; } catch {}
 }
 if (!require) throw new Error('Install the dsh profile packages before importing saved sessions.');
 const load = async name => import(pathToFileURL(require.resolve(name)).href);
-const [{ Context }, { default: Persistence }, { Session }, { buildForkSeed }, projections] = await Promise.all([
+const [{ Context }, persistenceModule, { Session }, { buildForkSeed }, projections] = await Promise.all([
   load('@deepseek-ai/cordis'), load('@deepseek-ai/dsh-session-persistence-jsonl'),
   load('@deepseek-ai/dsh-session'), load('@deepseek-ai/dsh-session/fork'),
   load('@deepseek-ai/dsh-session-format-catalog/message-projections'),
@@ -41,7 +43,15 @@ for (const project of await readdir(root, { withFileTypes: true })) {
   }
 }
 const ctx = new Context();
-const persistence = new Persistence(ctx, { root, compression: compression ?? 'zstd' });
+const persistenceConfig = { root, compression: compression ?? 'zstd' };
+let persistence;
+if (typeof persistenceModule.default === 'function') {
+  persistence = new persistenceModule.default(ctx, persistenceConfig);
+} else {
+  // 0.2.1 ships the backend as a cordis plugin that provides `sessionPersistence`.
+  await ctx.plugin(persistenceModule, persistenceConfig).await();
+  persistence = ctx.get('sessionPersistence');
+}
 const restored = (handle, events) => Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, 'shared-frozen', projections.currentSessionMessageProjections);
 const text = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(p => p.text ?? '').filter(Boolean).join('\n') : '';
 function running(events) {
