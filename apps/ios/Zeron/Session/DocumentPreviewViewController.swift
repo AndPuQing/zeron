@@ -130,8 +130,8 @@ final class DocumentPreviewViewController: UIViewController {
         }
     }
 
-    /// Nothing of the file has been read yet: it opens only after the reader
-    /// agrees, and Cancel leaves it unread.
+    /// The preview opens only after the reader agrees. Chunk-capable hosts
+    /// also defer reading; older hosts already returned the withheld contents.
     private func confirmOutside(device: String, path: String) {
         spinner.stopAnimating()
         status.text = nil

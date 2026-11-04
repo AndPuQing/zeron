@@ -19,18 +19,24 @@ it open; the viewer does not scroll to headings or lines. Back returns to the
 previous document, with its position and view, or to the conversation.
 
 Files inside the conversation's workspace open directly. A file outside it, and
-any file in a conversation whose folder is the host's home folder, opens only
-after a confirmation that names the host device and the file's full path:
-**Open anyway** reads it, **Cancel** leaves it unread. This applies to links in
-the conversation and inside documents alike.
+any file in a conversation whose folder is the host's home folder, requires
+a confirmation that names the host device and the file's full path. With a host
+that supports chunked reads, **Open anyway** reads it and **Cancel** leaves it
+unread. This applies to links in the conversation and inside documents alike.
 
 Credential locations are never previewed, even after confirmation. The host
 refuses them after resolving symbolic links: `~/.ssh`, `~/.aws`, `~/.gnupg`,
 `~/.config/gcloud`, `~/.kube`, `~/.docker/config.json`, `~/.netrc`,
 `~/.git-credentials`, `~/.npmrc`, `~/.pypirc`, `~/Library/Keychains`, and
 Zerun's own data folder (`~/.zerun`, apart from the conversation folders under
-its `scratch` and `worktrees`). A host that predates chunked reads applies only
-the confirmation, not this list.
+its `scratch` and `worktrees`).
+
+Older hosts fall back to the existing single-response file-read API. That API
+returns the contents before the phone can determine whether confirmation is
+needed: the phone withholds the preview until **Open anyway**, but **Cancel**
+cannot undo the read or transfer. Such hosts do not enforce the credential list,
+and large files can exceed the relay's message limit. Update the execution host
+to get chunked transfer and confirmation before file contents are read.
 
 Local raster images use the existing chat image reader and remain limited to the
 chat's folder. Network images stay links; HTML is not executed. Formatting
