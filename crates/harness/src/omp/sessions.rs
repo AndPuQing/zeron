@@ -72,26 +72,42 @@ impl Store {
         let file = self.resolve(id, cwd)?;
         Ok(vec!["--resume".into(), file.display().to_string()])
     }
+    /// Blocking: the fallback walks the native store. Async callers run it
+    /// off the runtime.
     pub fn resolve(&self, id: &str, _cwd: &Path) -> Result<PathBuf, HarnessError> {
-        let mut candidates = vec![];
+        self.resolve_within(id, MAX_CONTENT_SCAN)
+    }
+    fn resolve_within(&self, id: &str, scan_limit: usize) -> Result<PathBuf, HarnessError> {
         if let Some(file) = json_file(&self.key(id))["sessionFile"].as_str() {
-            candidates.push(PathBuf::from(file));
-        }
-        for file in candidates {
+            let file = PathBuf::from(file);
             if matches_id(&file, id) {
                 return Ok(file.canonicalize()?);
             }
         }
+        // OMP and native copies name transcripts `<timestamp>_<id>.jsonl`, so a
+        // name match finds the session without opening unrelated files. Only an
+        // exact name may select a child transcript inside an artifact directory.
+        let suffix = format!("_{id}.jsonl");
+        let exact = format!("{id}.jsonl");
         let mut found = None;
-        super::discovery::visit_files_for_resume(&self.roots(), |path| {
-            if matches_id(&path, id) {
+        let mut unnamed = vec![];
+        super::discovery::visit_files_for_resume(&self.roots(), |path, artifact| {
+            let named = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(&suffix) || name == exact);
+            if named && matches_id(&path, id) {
                 found = Some(path);
-                Ok(true)
-            } else {
-                Ok(false)
+                return Ok(true);
             }
+            if !named && !artifact && unnamed.len() < scan_limit {
+                unnamed.push(path);
+            }
+            Ok(false)
         })?;
-        if let Some(path) = found {
+        // A renamed top-level transcript is still found by its header, but the
+        // number of files opened for that is bounded.
+        if let Some(path) = found.or_else(|| unnamed.into_iter().find(|p| matches_id(p, id))) {
             return Ok(path);
         }
         Err(HarnessError::Protocol(format!(
@@ -106,6 +122,9 @@ impl Store {
         roots
     }
 }
+/// How many top-level transcripts not named for the requested id resume may
+/// open to read their headers.
+const MAX_CONTENT_SCAN: usize = 4096;
 fn json_file(path: &Path) -> Value {
     std::fs::read(path)
         .ok()
@@ -146,6 +165,10 @@ fn matches_id(path: &Path, id: &str) -> bool {
         }
         budget -= 1;
         if let Ok(value) = serde_json::from_str::<Value>(&line) {
+            // A transcript has one header; another identity ends the read.
+            if value["type"] == "session" && value["id"] != id {
+                return false;
+            }
             records.push(value);
         }
     }
@@ -159,8 +182,15 @@ mod tests {
     use super::*;
     fn omp_session(id: &str, cwd: &Path) -> PathBuf {
         let dir = cwd.join("sessions/project");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("2026-01-01T00-00-00-000Z_{id}.jsonl"));
+        omp_file(
+            &dir.join(format!("2026-01-01T00-00-00-000Z_{id}.jsonl")),
+            id,
+            cwd,
+        )
+    }
+    fn omp_file(path: &Path, id: &str, cwd: &Path) -> PathBuf {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let path = path.to_path_buf();
         let mut file = std::fs::File::create(&path).unwrap();
         use std::io::Write;
         writeln!(
@@ -246,6 +276,65 @@ mod tests {
         assert!(missing.unwrap_err().to_string().contains("was not found"));
     }
 
+    #[test]
+    fn resume_fallback_matches_names_first_and_bounds_the_header_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        let named = omp_session("named-id", &agent);
+        let renamed = omp_file(
+            &agent.join("sessions/project/renamed.jsonl"),
+            "renamed-id",
+            &agent,
+        );
+        // A file named for the id but holding another identity is rejected.
+        omp_file(
+            &agent.join("sessions/project/2026-01-01T00-00-00-000Z_forged-id.jsonl"),
+            "other-id",
+            &agent,
+        );
+        let store = Store::new(Some(dir.path().join("index")), Some(agent));
+        // With no header reads allowed, the name alone still finds a session.
+        assert_eq!(
+            store.resolve_within("named-id", 0).unwrap(),
+            named.canonicalize().unwrap()
+        );
+        assert!(store.resolve_within("renamed-id", 0).is_err());
+        assert_eq!(
+            store.resolve("renamed-id", dir.path()).unwrap(),
+            renamed.canonicalize().unwrap()
+        );
+        assert!(store.resolve("forged-id", dir.path()).is_err());
+        assert!(
+            store
+                .resolve("missing-id", dir.path())
+                .unwrap_err()
+                .to_string()
+                .contains("was not found")
+        );
+    }
+    #[test]
+    fn resume_fallback_finds_child_copies_in_artifacts_only_by_exact_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let agent = dir.path().join("agent");
+        let parent = omp_session("parent-id", &agent);
+        let artifacts = parent.with_extension("");
+        // Native copies are written beside their source: `<timestamp>_<id>.jsonl`.
+        let copy = omp_file(
+            &artifacts.join("2026-02-01T00-00-00_copy-id.jsonl"),
+            "copy-id",
+            &agent,
+        );
+        omp_file(&artifacts.join("subagent.jsonl"), "child-id", &agent);
+        let store = Store::new(Some(dir.path().join("index")), Some(agent));
+        assert_eq!(
+            store.resolve("copy-id", dir.path()).unwrap(),
+            copy.canonicalize().unwrap()
+        );
+        assert!(
+            store.resolve("child-id", dir.path()).is_err(),
+            "artifact contents are never scanned by header"
+        );
+    }
     #[test]
     fn remember_round_trips_and_missing_file_is_not_recreated() {
         let dir = tempfile::tempdir().unwrap();

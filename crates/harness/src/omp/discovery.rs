@@ -23,19 +23,21 @@ fn artifact_dir(path: &Path) -> bool {
 /// roots may be symlinked and are deduplicated by their canonical identity.
 pub(super) fn visit_files(
     roots: &[PathBuf],
-    visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
+    mut visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
 ) -> Result<(), HarnessError> {
-    walk(roots, IoPolicy::Report, visit)
+    walk(roots, IoPolicy::Report, false, |path, _| visit(path))
 }
 
 /// Resume is a best-effort search: an unreadable directory must not prevent
 /// finding the requested identity in another directory or configured root.
 /// Listing remains strict so a partial inventory is never presented as complete.
+/// Resume also descends into artifact directories, flagging their files, so a
+/// child transcript copy written beside its source stays reachable by name.
 pub(super) fn visit_files_for_resume(
     roots: &[PathBuf],
-    visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
+    visit: impl FnMut(PathBuf, bool) -> Result<bool, HarnessError>,
 ) -> Result<(), HarnessError> {
-    walk(roots, IoPolicy::Skip, visit)
+    walk(roots, IoPolicy::Skip, true, visit)
 }
 
 #[derive(Clone, Copy)]
@@ -77,7 +79,8 @@ fn open_dir(
 fn walk(
     roots: &[PathBuf],
     policy: IoPolicy,
-    mut visit: impl FnMut(PathBuf) -> Result<bool, HarnessError>,
+    artifacts: bool,
+    mut visit: impl FnMut(PathBuf, bool) -> Result<bool, HarnessError>,
 ) -> Result<(), HarnessError> {
     let mut visited = HashMap::new();
     let mut files = HashSet::new();
@@ -88,8 +91,8 @@ fn walk(
         let Some(entries) = open_dir(&root, 0, &mut visited, policy)? else {
             continue;
         };
-        let mut stack = vec![(entries, 0)];
-        while let Some((entries, depth)) = stack.last_mut() {
+        let mut stack = vec![(entries, 0, false)];
+        while let Some((entries, depth, inside)) = stack.last_mut() {
             let Some(entry) = entries.next() else {
                 stack.pop();
                 continue;
@@ -101,15 +104,19 @@ fn walk(
                 continue;
             };
             let path = entry.path();
-            if kind.is_dir() && *depth < 2 && !artifact_dir(&path) {
+            if kind.is_dir() && *depth < 2 {
+                let artifact = *inside || artifact_dir(&path);
+                if artifact && !artifacts {
+                    continue;
+                }
                 let depth = *depth + 1;
                 if let Some(entries) = open_dir(&path, depth, &mut visited, policy)? {
-                    stack.push((entries, depth));
+                    stack.push((entries, depth, artifact));
                 }
             } else if kind.is_file()
                 && path.extension().is_some_and(|e| e == "jsonl")
                 && files.insert(path.clone())
-                && visit(path)?
+                && visit(path, *inside)?
             {
                 return Ok(());
             }
@@ -165,13 +172,13 @@ mod tests {
         let roots = [invalid, good];
         assert!(visit_files(&roots, |_| Ok(false)).is_err());
         let mut found = vec![];
-        visit_files_for_resume(&roots, |path| {
+        visit_files_for_resume(&roots, |path, _| {
             found.push(path);
             Ok(true)
         })
         .unwrap();
         assert_eq!(found, [transcript.canonicalize().unwrap()]);
-        let error = visit_files_for_resume(&roots, |_| {
+        let error = visit_files_for_resume(&roots, |_, _| {
             Err(HarnessError::Protocol("visitor failure".into()))
         })
         .unwrap_err();
@@ -207,7 +214,7 @@ mod tests {
         for roots in [vec![denied.clone(), good.clone()], vec![good, denied]] {
             assert!(visit_files(&roots, |_| Ok(false)).is_err());
             let mut found = vec![];
-            visit_files_for_resume(&roots, |path| {
+            visit_files_for_resume(&roots, |path, _| {
                 found.push(path);
                 Ok(false)
             })
@@ -247,14 +254,24 @@ mod tests {
             Ok(false)
         })
         .unwrap();
+        let parent = project
+            .join("session.with.dots.jsonl")
+            .canonicalize()
+            .unwrap();
+        assert_eq!(found, vec![parent.clone()]);
+        // Resume may look inside artifacts, but must know which files they are.
+        let mut found = HashSet::new();
+        visit_files_for_resume(&[root.into()], |p, artifact| {
+            found.insert((p, artifact));
+            Ok(false)
+        })
+        .unwrap();
         assert_eq!(
             found,
-            vec![
-                project
-                    .join("session.with.dots.jsonl")
-                    .canonicalize()
-                    .unwrap()
-            ]
+            HashSet::from([
+                (parent, false),
+                (artifacts.join("child.jsonl").canonicalize().unwrap(), true),
+            ])
         );
     }
 

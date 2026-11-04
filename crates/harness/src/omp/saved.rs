@@ -79,9 +79,16 @@ impl OmpHarness {
             let end = (offset + 50).min(files.len());
             let mut sessions = vec![];
             for path in &files[offset..end] {
-                let records = read_records(path)?;
-                if let Some(session) = metadata(&records, path, &identity)? {
-                    sessions.push(session);
+                // One oversized, partial, changing or unsupported transcript
+                // (often the newest, still being written) must not hide the
+                // rest of the page; only directory access fails the listing.
+                let entry = read_records(path).and_then(|r| metadata(&r, path, &identity));
+                match entry {
+                    Ok(Some(session)) => sessions.push(session),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::debug!(path = %path.display(), %error, "skipping OMP transcript");
+                    }
                 }
             }
             Ok(SavedSessionPage {
@@ -609,6 +616,34 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn unreadable_top_level_transcripts_do_not_fail_the_history_page() {
+        let (dir, harness, source) = fixture();
+        let store = dir.path().join("sessions");
+        let template = std::fs::read_to_string(&source).unwrap();
+        // A partial line, as in a session OMP is still writing.
+        std::fs::write(store.join("partial.jsonl"), b"{\"type\":").unwrap();
+        std::fs::write(
+            store.join("future.jsonl"),
+            template
+                .replace("11111111-2222-3333-4444-555555555555", "future-id")
+                .replace("\"version\":3", "\"version\":9"),
+        )
+        .unwrap();
+        File::create(store.join("oversized.jsonl"))
+            .unwrap()
+            .set_len(MAX_SOURCE_BYTES + 1)
+            .unwrap();
+        let page = harness.saved_sessions(None).await.unwrap();
+        assert_eq!(
+            page.sessions
+                .iter()
+                .map(|s| s.native_id.as_str())
+                .collect::<Vec<_>>(),
+            ["11111111-2222-3333-4444-555555555555"]
+        );
+        assert!(page.next_cursor.is_none());
+    }
     #[tokio::test]
     async fn a_provider_with_no_history_has_an_empty_page() {
         let dir = tempfile::tempdir().unwrap();
