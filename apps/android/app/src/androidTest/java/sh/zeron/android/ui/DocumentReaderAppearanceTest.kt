@@ -8,6 +8,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry
 import androidx.test.runner.lifecycle.Stage
@@ -69,8 +71,10 @@ class DocumentReaderAppearanceTest {
         instrumentation.runOnMainSync {
             activity!!.setContent {
                 ZeronTheme(Appearance(theme)) {
-                    Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest) {
-                        DocumentContent(model.client.value!!, "chat-deploy", entry, {}, {})
+                    Dialog(onDismissRequest = {}, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                            DocumentContent(model.client.value!!, "chat-deploy", entry, {}, {})
+                        }
                     }
                 }
             }

@@ -46,7 +46,8 @@ final class DocumentReaderAppearanceTests: XCTestCase {
             .flatMap(\.windows).first { $0.isKeyWindow }
         let scene = try XCTUnwrap(oldWindow?.windowScene)
         let window = UIWindow(windowScene: scene)
-        window.frame = scene.coordinateSpace.bounds
+        window.frame = scene.effectiveGeometry.coordinateSpace.bounds
+        window.tintColor = Palette.accent
         defer { window.isHidden = true; oldWindow?.makeKeyAndVisible() }
         let path = "/workspace/docs/getting-started-with-remote-documents.md"
         let doc = DocumentPreview(path: path, text: text, markdown: true, truncated: false, deviceId: "host", cwd: "/workspace")
