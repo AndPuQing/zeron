@@ -547,6 +547,16 @@ pub fn detect_install() -> InstallKind {
         .clone()
 }
 
+/// `path` with every symlink resolved, or unchanged when it cannot be (it
+/// does not exist, or the platform's canonical form is not comparable).
+fn resolved_path(path: &Path) -> PathBuf {
+    if cfg!(unix) {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned())
+    } else {
+        path.to_owned()
+    }
+}
+
 fn detect_install_from(exe: &Path, home: Option<&Path>) -> InstallKind {
     detect_install_from_for_os(exe, home, std::env::consts::OS)
 }
@@ -563,10 +573,13 @@ fn detect_install_from_for_os(exe: &Path, home: Option<&Path>, os: &str) -> Inst
     if !managed_updates_supported(os) {
         return InstallKind::Unmanaged;
     }
+    // Linux's `current_exe` resolves symlinks, but macOS reports the path the
+    // binary was started through, such as `~/.local/bin/zerun` or
+    // `app/current/zerun`. Compare resolved paths so both see the versioned dir.
+    let exe = &resolved_path(exe);
     if let Some(home) = home {
-        // `current_exe` resolves the `current` symlink to the versioned dir.
         let app_root = home.join(".zerun").join("app");
-        if exe.starts_with(&app_root) {
+        if exe.starts_with(&app_root) || exe.starts_with(resolved_path(&app_root)) {
             return InstallKind::Managed { app_root };
         }
     }
@@ -1979,6 +1992,39 @@ mod tests {
                 Some(Path::new("/home/u")),
                 "linux",
             ),
+            InstallKind::Unmanaged
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn install_kind_detection_follows_the_cli_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_root = home.join(".zerun/app");
+        std::fs::create_dir_all(app_root.join("0.1.1")).unwrap();
+        std::fs::write(app_root.join("0.1.1/zerun"), "").unwrap();
+        std::os::unix::fs::symlink(app_root.join("0.1.1"), app_root.join("current")).unwrap();
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(app_root.join("current/zerun"), bin.join("zerun")).unwrap();
+        for exe in [bin.join("zerun"), app_root.join("current/zerun")] {
+            assert_eq!(
+                detect_install_from(&exe, Some(&home)),
+                InstallKind::Managed {
+                    app_root: app_root.clone()
+                },
+                "{}",
+                exe.display()
+            );
+        }
+        // A symlink to a binary outside the installation stays unmanaged.
+        let source = tmp.path().join("target/release/zerun");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "").unwrap();
+        std::os::unix::fs::symlink(&source, tmp.path().join("zerun")).unwrap();
+        assert_eq!(
+            detect_install_from(&tmp.path().join("zerun"), Some(&home)),
             InstallKind::Unmanaged
         );
     }

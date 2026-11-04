@@ -266,15 +266,18 @@ fn exec_path_for(exe: &Path, home: Option<&Path>) -> String {
 }
 
 /// A managed CLI update swaps `current`; launchd must not keep starting the
-/// resolved old version after `zerun update` restarts the service.
+/// resolved old version after `zerun update` restarts the service. macOS's
+/// `current_exe` keeps the path the binary was started through (for example
+/// `~/.local/bin/zerun`), so compare with symlinks resolved on both sides.
 fn launchd_exec_path(exe: &Path, home: Option<&Path>) -> PathBuf {
-    if let Some(root) = home.map(|home| home.join(".zerun/app"))
-        && exe.starts_with(&root)
-    {
-        root.join("current/zerun")
-    } else {
-        exe.to_owned()
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_owned());
+    if let Some(root) = home.map(|home| home.join(".zerun/app")) {
+        let exe = resolved(exe);
+        if exe.starts_with(&root) || exe.starts_with(resolved(&root)) {
+            return root.join("current/zerun");
+        }
     }
+    exe.to_owned()
 }
 
 fn require_launchd_login_session() -> anyhow::Result<()> {
@@ -485,6 +488,33 @@ mod tests {
         assert_eq!(
             launchd_exec_path(Path::new("/src/zerun"), None),
             Path::new("/src/zerun")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn launchd_follows_the_cli_symlink_to_the_managed_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let app_root = home.join(".zerun/app");
+        std::fs::create_dir_all(app_root.join("0.3.0")).unwrap();
+        std::fs::write(app_root.join("0.3.0/zerun"), "").unwrap();
+        std::os::unix::fs::symlink(app_root.join("0.3.0"), app_root.join("current")).unwrap();
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::os::unix::fs::symlink(app_root.join("current/zerun"), bin.join("zerun")).unwrap();
+        assert_eq!(
+            launchd_exec_path(&bin.join("zerun"), Some(&home)),
+            app_root.join("current/zerun"),
+        );
+        // Another executable reached through a symlink keeps its own path.
+        let source = tmp.path().join("target/debug/zerun");
+        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+        std::fs::write(&source, "").unwrap();
+        std::os::unix::fs::symlink(&source, bin.join("zerun-dev")).unwrap();
+        assert_eq!(
+            launchd_exec_path(&bin.join("zerun-dev"), Some(&home)),
+            bin.join("zerun-dev"),
         );
     }
 
