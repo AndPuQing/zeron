@@ -72,6 +72,7 @@ pub mod source_control;
 pub mod spaces;
 pub mod terminals;
 pub mod titles;
+pub mod tool_output;
 mod transcript_history;
 pub mod transcript_search;
 pub mod uploads;

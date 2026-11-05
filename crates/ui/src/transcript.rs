@@ -13730,6 +13730,7 @@ mod tests {
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
+            output_lines: None,
         };
         let entry = assistant(
             "a1",
@@ -14987,6 +14988,7 @@ mod tests {
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
+            output_lines: None,
         }
     }
 
@@ -15112,6 +15114,7 @@ mod tests {
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
+            output_lines: None,
         }
     }
 
