@@ -78,11 +78,69 @@ impl AcpHarness {
         }
         let home = self.dsh_saved_home()?;
         let profile = super::dsh_profile();
-        let input = serde_json::to_vec(&json!({"action": action, "home": home, "root": self.dsh_saved_root()?, "profile": profile, "identity": identity, "cursor": cursor, "session": session})).map_err(|e| error(e.to_string()))?;
+        let packages = self.dsh_saved_packages();
+        let input = serde_json::to_vec(&json!({"action": action, "home": home, "root": self.dsh_saved_root()?, "profile": profile, "identity": identity, "cursor": cursor, "session": session, "packages": packages})).map_err(|e| error(e.to_string()))?;
         let node = crate::executable::find_on_paths("node", vec![])
             .ok_or_else(|| error("Node.js is required to read dsh's native history."))?;
         helper(&node, &input, &self.environment).await
     }
+
+    fn dsh_saved_packages(&self) -> Option<PathBuf> {
+        match self.resolve_launch().ok()? {
+            super::Launch::Program(program, _) => installed_package(&program),
+            _ => None,
+        }
+    }
+}
+
+/// Resolve the selected CLI's package, including pnpm's script shims. Read
+/// literal targets only; never execute a shim to discover its dependencies.
+fn installed_package(executable: &Path) -> Option<PathBuf> {
+    let executable = executable.canonicalize().ok()?;
+    let bin = executable.parent()?;
+    let mut entries = vec![executable.clone()];
+    if std::fs::metadata(&executable).ok()?.len() <= 16 * 1024
+        && let Ok(shim) = std::fs::read_to_string(&executable)
+    {
+        // Recent pnpm shims record the absolute target; older ones use
+        // a quoted path relative to the shim directory.
+        for target in shim
+            .lines()
+            .filter_map(|s| s.strip_prefix("# cmd-shim-target="))
+        {
+            let target = Path::new(target.trim());
+            if target.is_absolute() {
+                entries.push(target.to_path_buf());
+            }
+        }
+        for quoted in shim.split('"') {
+            let target = ["$basedir/", "$basedir_abs/", "$basedir_win/"]
+                .iter()
+                .find_map(|prefix| quoted.strip_prefix(prefix));
+            if let Some(target) = target.filter(|s| !s.contains(['$', '`', '\n', '\r'])) {
+                entries.push(bin.join(target));
+            }
+        }
+    }
+    // npm's Windows launchers sit beside node_modules rather than linking
+    // into the package. Package identity is checked below for every layout.
+    entries.push(bin.join("node_modules/@deepseek-ai/dsh/package.json"));
+    entries
+        .into_iter()
+        .filter_map(|entry| entry.canonicalize().ok())
+        .find_map(|entry| {
+            entry
+                .ancestors()
+                .skip(1)
+                .take(4)
+                .map(|dir| dir.join("package.json"))
+                .find(|manifest| {
+                    std::fs::read_to_string(manifest)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                        .is_some_and(|package| package["name"] == "@deepseek-ai/dsh")
+                })
+        })
 }
 async fn helper<T: serde::de::DeserializeOwned>(
     node: &Path,
@@ -159,7 +217,7 @@ mod tests {
             }
         }
     }
-    async fn fixture(home: &Path, action: &str, compression: &str, copy: &str) {
+    async fn fixture(home: &Path, action: &str, compression: &str, copy: &str, packages: &Path) {
         let script = home.join("fixture.mjs");
         fs::write(&script, include_str!("../../tests/fixtures/dsh_saved.mjs")).unwrap();
         let output = tokio::process::Command::new("node")
@@ -168,6 +226,7 @@ mod tests {
             .arg(action)
             .arg(compression)
             .arg(copy)
+            .arg(packages)
             .output()
             .await
             .unwrap();
@@ -187,16 +246,58 @@ mod tests {
             .unwrap();
         assert!(page.sessions.is_empty() && page.next_cursor.is_none());
     }
+    #[test]
+    fn installed_packages_follow_npm_symlinks_and_pnpm_shims() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let package = root.join("global/version/node_modules/@deepseek-ai/dsh");
+        fs::create_dir_all(package.join("lib")).unwrap();
+        fs::write(package.join("lib/bin.js"), "// fixture").unwrap();
+        fs::write(
+            package.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh"}"#,
+        )
+        .unwrap();
+        let bin = root.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let symlink = bin.join("dsh-link");
+        std::os::unix::fs::symlink(package.join("lib/bin.js"), &symlink).unwrap();
+        assert_eq!(
+            installed_package(&symlink),
+            Some(package.join("package.json"))
+        );
+
+        let shim = bin.join("dsh");
+        for script in [
+            format!("#!/bin/sh\n# cmd-shim-target={}\n", package.join("lib/bin.js").display()),
+            "#!/bin/sh\nexec node \"$basedir/../global/version/node_modules/@deepseek-ai/dsh/lib/bin.js\" \"$@\"\n".into(),
+            "#!/bin/sh\nexec node \"$basedir_abs/../global/version/node_modules/@deepseek-ai/dsh/lib/bin.js\" \"$@\"\n".into(),
+        ] {
+            fs::write(&shim, script).unwrap();
+            assert_eq!(installed_package(&shim), Some(package.join("package.json")));
+        }
+        // Do not execute shell expansions or guess a different global install.
+        fs::write(&shim, "exec node \"$basedir/$(echo ../global/version)/node_modules/@deepseek-ai/dsh/lib/bin.js\"").unwrap();
+        assert_eq!(installed_package(&shim), None);
+        fs::write(package.join("package.json"), r#"{"name":"other"}"#).unwrap();
+        assert_eq!(installed_package(&symlink), None);
+    }
     #[tokio::test]
-    #[ignore = "requires installed dsh packages: ZERON_DSH_TEST_PACKAGES=<profiles directory>"]
+    #[ignore = "requires an installed npm/pnpm dsh, or ZERON_DSH_TEST_PACKAGES=<profiles directory>"]
     async fn native_plain_and_compressed_copies_preserve_source_tools_and_resume_independently() {
-        let packages =
-            std::env::var_os("ZERON_DSH_TEST_PACKAGES").expect("set ZERON_DSH_TEST_PACKAGES");
+        let profiles = std::env::var_os("ZERON_DSH_TEST_PACKAGES");
+        let packages = profiles
+            .as_ref()
+            .map(|p| PathBuf::from(p).join("package.json"))
+            .or_else(|| AcpHarness::dsh().dsh_saved_packages())
+            .expect("install dsh or set ZERON_DSH_TEST_PACKAGES");
         for compression in ["none", "zstd"] {
             let home = tempfile::tempdir().unwrap();
             fs::create_dir(home.path().join("sessions")).unwrap();
-            std::os::unix::fs::symlink(&packages, home.path().join("profiles")).unwrap();
-            fixture(home.path(), "create", compression, "").await;
+            if let Some(profiles) = &profiles {
+                std::os::unix::fs::symlink(profiles, home.path().join("profiles")).unwrap();
+            }
+            fixture(home.path(), "create", compression, "", &packages).await;
             let mut originals = vec![];
             snapshot(&home.path().join("sessions"), &mut originals);
             let harness = AcpHarness::dsh().with_saved_session_home(home.path());
@@ -223,7 +324,14 @@ mod tests {
                     .len(),
                 history.messages.len()
             );
-            fixture(home.path(), "resume", compression, &copy.native_id).await;
+            fixture(
+                home.path(),
+                "resume",
+                compression,
+                &copy.native_id,
+                &packages,
+            )
+            .await;
             for (path, bytes) in originals {
                 assert_eq!(fs::read(path).unwrap(), bytes, "source bytes changed");
             }
