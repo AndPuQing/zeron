@@ -2355,6 +2355,7 @@ mod tests {
         fold_event_into_parts(
             &mut folded,
             &AgentEvent::ToolResult {
+                exit_code: None,
                 id: "t".into(),
                 is_error: false,
                 output: None,
@@ -2582,6 +2583,8 @@ mod tests {
         fold_event_into_parts(
             &mut folded,
             &AgentEvent::ToolResult {
+                image_payloads: Vec::new(),
+                preview_paths: Vec::new(),
                 id: "c1".into(),
                 is_error: true,
                 output: Some(full.clone()),

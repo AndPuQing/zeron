@@ -149,6 +149,7 @@ impl Normalizer {
                     }
                 });
                 events.push(AgentEvent::ToolResult {
+                    exit_code: None,
                     preview_paths: Vec::new(),
                     image_payloads: crate::tool_images::images_in_content(frame.pointer("/result/content")),
                     id,

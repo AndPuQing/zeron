@@ -134,6 +134,7 @@ impl ServerTools {
             }
             seen.completed = true;
             let event = AgentEvent::ToolResult {
+                exit_code: None,
                 id: id.clone(),
                 is_error: true,
                 output: Some("The turn ended before this tool returned a result.".into()),
@@ -198,6 +199,7 @@ impl ServerTools {
             let (is_error, output) = result(&block.content);
             seen.completed = true;
             events.push(AgentEvent::ToolResult {
+                exit_code: None,
                 id: id.clone(),
                 is_error: is_error || block.is_error == Some(true),
                 output,

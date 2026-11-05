@@ -960,7 +960,7 @@ mod tests {
         let exported = tools
             .call(
                 EXPORT_TEMPLATE,
-                json!({ "id": "midnight", "path": "/Users/x/.ssh/x.zeron-template" }),
+                json!({ "id": "midnight", "path": "/work/private/x.zeron-template" }),
             )
             .await
             .unwrap();

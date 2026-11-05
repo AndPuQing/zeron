@@ -2442,11 +2442,13 @@ impl Inner {
                 diff,
                 preview_paths,
                 image_payloads,
+                exit_code,
             } if !image_payloads.is_empty() => {
                 let stored = self
                     .store_tool_result_images(chat_id, &parents, &id, image_payloads)
                     .await;
                 vec![AgentEvent::ToolResult {
+                    exit_code,
                     id,
                     is_error,
                     output,
@@ -5853,6 +5855,7 @@ mod tests {
         let payload = || AgentEvent::Subagent {
             parent_tool_use_id: "child".into(),
             event: Box::new(AgentEvent::ToolResult {
+                exit_code: None,
                 id: "tool-1".into(),
                 is_error: false,
                 output: None,
@@ -5961,6 +5964,7 @@ mod tests {
         assert!(journal.contains(&serde_json::to_string(&preview_paths[0]).unwrap()));
 
         let bad = AgentEvent::ToolResult {
+            exit_code: None,
             id: "tool-2".into(),
             is_error: false,
             output: None,

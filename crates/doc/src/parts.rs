@@ -1350,6 +1350,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &AgentEvent::ToolResult {
+                exit_code: None,
                 id: "t".into(),
                 is_error: false,
                 output: None,
@@ -1361,6 +1362,7 @@ mod tests {
         fold_event_into_parts(
             &mut parts,
             &AgentEvent::ToolResult {
+                exit_code: None,
                 id: "t".into(),
                 is_error: false,
                 output: None,
@@ -1586,6 +1588,8 @@ mod tests {
                 },
             },
             AgentEvent::ToolResult {
+                image_payloads: Vec::new(),
+                preview_paths: Vec::new(),
                 id: "c".into(),
                 is_error: exit_code.is_some_and(|c| c != 0),
                 output: Some(output.into()),
@@ -1707,6 +1711,8 @@ mod tests {
                     },
                 },
                 AgentEvent::ToolResult {
+                    image_payloads: Vec::new(),
+                    preview_paths: Vec::new(),
                     id: "c".into(),
                     is_error: false,
                     output: Some("hunter2-but-unlabelled\n".into()),
@@ -1782,6 +1788,8 @@ mod tests {
                 },
             },
             AgentEvent::ToolResult {
+                image_payloads: Vec::new(),
+                preview_paths: Vec::new(),
                 id: "r".into(),
                 is_error: false,
                 output: Some("API_KEY=hunter2".into()),

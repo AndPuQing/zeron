@@ -7068,6 +7068,9 @@ mod tool_image_release_tests {
             id: id.into(),
             role: MessageRole::Assistant,
             parts: vec![MessagePart::Tool {
+                exit_code: None,
+                output_lines: None,
+                output_truncated: false,
                 id: format!("{id}-tool"),
                 call: zeron_proto::ToolCall::Unknown {
                     name: "screenshot".into(),

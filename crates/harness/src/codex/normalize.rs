@@ -1054,6 +1054,8 @@ mod tests {
                 },
             },
             AgentEvent::ToolResult {
+                image_payloads: Vec::new(),
+                preview_paths: Vec::new(),
                 id: "m1".into(),
                 is_error: false,
                 output: Some("secret file contents\n".repeat(10)),

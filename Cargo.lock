@@ -13740,6 +13740,7 @@ dependencies = [
  "zeron-rpc",
  "zeron-sync",
  "zeron-term-link",
+ "zeron-theme",
  "zeron-update",
  "zeron-visual",
  "zip",
@@ -13813,6 +13814,7 @@ dependencies = [
  "zeron-doc",
  "zeron-proto",
  "zeron-rpc",
+ "zeron-theme",
  "zeron-visual",
 ]
 
@@ -13866,7 +13868,7 @@ version = "0.3.28"
 
 [[package]]
 name = "zeron-plugin-guard"
-version = "0.2.136"
+version = "0.3.28"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -13898,9 +13900,14 @@ dependencies = [
  "uuid",
  "webrtc",
  "windows-sys 0.61.2",
+ "zeron-preview-label",
  "zeron-proto",
  "zeron-sync",
 ]
+
+[[package]]
+name = "zeron-preview-label"
+version = "0.3.28"
 
 [[package]]
 name = "zeron-proto"

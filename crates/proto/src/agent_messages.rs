@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn malformed_headers_remain_ordinary_messages() {
         for (label, id) in [("", "id"), ("name", ""), ("name", "has space"), ("name", "[id]")] {
-            let text = agent_message(label, id, "body");
+            let text = format!("{PREFIX}{label}{REPLY}{id}.]\n\nbody");
             assert!(agent_message_sender(&text).is_none(), "{text:?}");
         }
     }

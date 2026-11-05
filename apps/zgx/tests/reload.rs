@@ -1134,6 +1134,10 @@ fn a_reload_keeps_the_history_behind_and_ahead() {
     app.frames(30);
     app.host.shared("sessions", Value::Nil).set(Value::from_json(TWO_SESSIONS).unwrap());
     app.frames(60);
+    // Launch selects the most recent session. Visit a new chat explicitly
+    // so there is history on both sides of the session tested below.
+    app.click("#shell-sidebar >> \"New chat\"");
+    app.frames(30);
     app.click("#shell-sidebar >> \"Fix the build\"");
     app.frames(30);
     app.click("#shell-sidebar >> \"Write the docs\"");
@@ -1147,7 +1151,8 @@ fn a_reload_keeps_the_history_behind_and_ahead() {
     assert_eq!(app.error(), None, "the reload failed");
     assert_eq!(arrow(&mut app, "Back"), back, "Back after the reload");
     assert_eq!(arrow(&mut app, "Forward"), forward, "Forward after the reload");
-    // Forward to the docs, back twice past the build to home: as it was.
+    // Forward to the docs, then back through the build and new chat to
+    // the session selected at launch: as it was.
     app.click("role:button \"Forward\"");
     app.frames(30);
     assert!(arrow(&mut app, "Forward").contains("disabled"), "nothing ahead of the docs: {}", arrow(&mut app, "Forward"));
@@ -1155,5 +1160,29 @@ fn a_reload_keeps_the_history_behind_and_ahead() {
     app.frames(30);
     app.click("role:button \"Back\"");
     app.frames(30);
-    assert!(arrow(&mut app, "Back").contains("disabled"), "home is the first place: {}", arrow(&mut app, "Back"));
+    app.click("role:button \"Back\"");
+    app.frames(30);
+    assert!(arrow(&mut app, "Back").contains("disabled"), "the launch session is the first place: {}", arrow(&mut app, "Back"));
+}
+
+/// The window's width changed in one step mid-conversation (maximized, a
+/// panel's page taking its width at once): the reading place stays where it
+/// stood in the view, the rows above it rewrapped and all.
+#[test]
+fn a_width_changed_in_one_step_keeps_the_reading_place() {
+    let log: Log = Rc::default();
+    let mut app = mid_history(&log);
+    let needle = reading_anchor(&mut app);
+    let (from, _) = place_of(&mut app, &needle).unwrap();
+    let mut trace = Vec::new();
+    for (label, w) in [("narrower", 800.), ("wider", 1400.)] {
+        app.ui.scene.borrow_mut().resize(w, 800.);
+        for f in 1..=20 {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            app.frame();
+            trace.push((format!("{label} {f}"), place_of(&mut app, &needle).map_or(i32::MIN, |p| p.0)));
+        }
+    }
+    let moved = drift(&trace, from);
+    assert!(moved.is_empty(), "the reading place moved as the width changed in one step:\n{}", moved.join("\n"));
 }

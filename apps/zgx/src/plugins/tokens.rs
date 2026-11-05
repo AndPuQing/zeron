@@ -144,12 +144,12 @@ mod tests {
 
     #[test]
     fn a_token_says_nothing_of_its_path_and_finds_it_again() {
-        let a = file("/Users/ada/secret/plan.md");
-        assert_eq!(a, file("/Users/ada/secret/plan.md"));
-        assert_ne!(a, file("/Users/ada/secret/plan2.md"));
+        let a = file("/work/private/plan.md");
+        assert_eq!(a, file("/work/private/plan.md"));
+        assert_ne!(a, file("/work/private/plan2.md"));
         assert!(!a.contains("plan") && a.len() == 17, "{a}");
-        assert_eq!(path_of(&a).as_deref(), Some("/Users/ada/secret/plan.md"));
-        assert_eq!(path_of("/Users/ada/secret/plan.md"), None);
+        assert_eq!(path_of(&a).as_deref(), Some("/work/private/plan.md"));
+        assert_eq!(path_of("/work/private/plan.md"), None);
         let b = block(&Value::from("x^2"));
         assert_eq!(block_of(&b).map(|v| crate::auth::text(&v)).as_deref(), Some("x^2"));
     }

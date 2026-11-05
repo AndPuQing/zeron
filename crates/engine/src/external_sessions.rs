@@ -550,6 +550,9 @@ impl ExternalSessionImporter {
                             output,
                             is_error,
                         } => MessagePart::Tool {
+                            exit_code: None,
+                            output_lines: None,
+                            output_truncated: false,
                             id,
                             call: zeron_doc::sanitize_tool_call(call),
                             is_error: *is_error,
@@ -632,6 +635,7 @@ impl ExternalSessionImporter {
                 }
             });
         receipt.row = Some(Chat {
+            child_kind: None,
             id: receipt.chat_id.clone(),
             device_id: self.inner.docs.device_id().into(),
             title: Some(source.title.clone()),

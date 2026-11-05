@@ -1,5 +1,5 @@
 //! Development switches, read from the environment: on in debug builds
-//! alone, never in a release or the beta. Each one lets whoever sets the
+//! alone, never in a release. Each one lets whoever sets the
 //! environment past a decision the user makes:
 //! - `ZERUN_ZGX_DEV_PLUGINS` loads unsigned plugins with all they ask for;
 //! - `ZERUN_ZGX_REVIEW` / `ZERUN_ZGX_TEMPLATE_REVIEW` serve devtools (click,
@@ -22,9 +22,8 @@ pub const SWITCHES: &[&str] = &[
     "ZGX_INSPECT_SOCKET",
 ];
 
-/// The switches scripts/smoke.sh drives a release build with (as it does
-/// `--inspect`): read by any build but the beta, which ignores its
-/// arguments too. `ZERUN_ZGX_UI` runs other scripts as the app's;
+/// The switches scripts/smoke.sh drives the standalone preview with.
+/// `ZERUN_ZGX_UI` runs other scripts as the app's;
 /// `ZERUN_ZGX_NO_BROWSER` hands the sign-in page to a file.
 pub const SMOKE_SWITCHES: &[&str] = &["ZERUN_ZGX_UI", "ZERUN_ZGX_NO_BROWSER"];
 
@@ -36,9 +35,9 @@ pub fn switch(name: &str) -> Option<OsString> {
     switch_in(ON, name)
 }
 
-/// The smoke switch `name`'s value, in any build but the beta.
+/// The smoke switch `name`'s value for the separately installed preview.
 pub fn smoke_switch(name: &str) -> Option<OsString> {
-    switch_in(!cfg!(feature = "beta"), name)
+    switch_in(true, name)
 }
 
 /// `switch`, in a build that does (`on`) or doesn't read them.
@@ -55,7 +54,7 @@ pub fn inspect_asked() -> bool {
 mod tests {
     use super::*;
 
-    /// R28: a release build (or the beta) reads no development switch, set
+    /// R28: a release build reads no development switch, set
     /// or not. (`PATH` is set in every test run: read as if it were one.)
     #[test]
     fn a_release_build_reads_no_development_switch() {

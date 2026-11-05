@@ -1,6 +1,15 @@
 # Writing a Zerun template
 
-A template is a whole interface for Zerun, like a WordPress theme. It's a folder holding any part of Zerun's own Luau app: `app.luau`, `screens/`, `ds/`, `assets/`. Zerun runs its window from its own app with your template laid over it, so any file you leave out is Zerun's own. One template is in use at a time. Agents make and change templates through Zerun's MCP tools; this guide is the whole reference.
+A template is a whole interface for Zerun, like a WordPress theme. It's a folder holding any part of Zerun's own Luau app: `app.luau`, `screens/`, `ds/`, `assets/`. Zerun runs its window from its own app with your template laid over it, so any file you leave out is Zerun's own. One template is in use at a time. Colours are separate: the person picks a theme, and it's worn over whichever template runs (see Colours and themes). Agents make and change templates through Zerun's MCP tools; this guide is the whole reference.
+
+## Zerun's templates
+
+Two come with Zerun, listed first on the Templates page, by Zerun:
+
+- **Zerun v3** (id `zeron`), the default. The chat and its panel are rounded cards set into the window under the title bar, and chats can sit side by side: drag one from the sidebar (or a pane's head) to a chat's edge, up to 6 (`screens/shell/split.luau`).
+- **Zerun v2** (id `zeron-v2`), the single-page layout from before Zerun v3: one chat at a time, no cards. It's a template like yours, laying 8 files over the default (`ui/templates/zeron-v2/` in Zerun's source). Zerun installs it and updates it with each version, and it can't be deleted.
+
+To make one from either, `create_template` with `from` set to its id.
 
 ## How it runs
 
@@ -8,11 +17,11 @@ A template is a whole interface for Zerun, like a WordPress theme. It's a folder
 - Saving a file rewrites only what changed, and the window reloads **in place**. State is kept wherever both versions have the module.
 - **Fallback, per file:** a file that fails (to load, to build, or later) is replaced by Zerun's own copy of that file alone. You get one notice, and `template_status` names it with its error. Save it again to retry.
 - **Fallback, whole:** if your `app.luau` fails, the whole window goes back to Zerun's own and the template shows as broken.
-- **The way back from any template:** View → Use Zerun's Template (in the menu bar, or the bar Zerun draws at the window's top on Linux and Windows), Revert on a preview's bar, holding ⌥ as Zerun opens, or launching it with `--zeron-template`. Each starts **safe mode**: Zerun's own interface runs whatever `.active` says, the terminals templates opened are closed, and it stays so across launches until the person picks a template on Zerun's Templates page. A template that crashes Zerun at launch twice in a row starts it too.
+- **The way back from any template:** View → Use Zerun v3 (in the menu bar, or the bar Zerun draws at the window's top on Linux and Windows), Revert on a preview's toast, holding ⌥ as Zerun opens, or launching it with `--zeron-template`. Each starts **safe mode**: Zerun's own interface runs whatever `.active` says, the terminals templates opened are closed, and it stays so across launches until the person picks a template on Zerun's Templates page. A template that crashes Zerun at launch twice in a row starts it too.
 
 ## Preview until the person keeps it
 
-A template is Zerun's own code, so it can do anything Zerun can, but only once the person has **kept** it in Zerun's own window. Until then it runs as a **preview**: it draws as it likes, under a bar Zerun draws ("Agent template · Keep… / Revert"), and Zerun refuses what it asks of the host's powers. That means terminals, the account, plugins, switching or changing templates, writing files, and sending to agents or answering for them.
+A template is Zerun's own code, so it can do anything Zerun can, but only once the person has **kept** it in Zerun's own window. Until then it runs as a **preview**: it draws as it likes, under a toast Zerun draws ("Previewing <name>", with Keep and Revert), and Zerun refuses what it asks of the host's powers. That means terminals, the account, plugins, switching or changing templates, writing files, and sending to agents or answering for them.
 
 - Every template you make or switch to with these tools starts as a preview. So does one installed signed by this device, and one changed since it was kept: what the person keeps is the template's files as they were, so an edit after that is a preview again until they keep it again.
 - Keep opens Zerun's own sheet in a window of its own. Only that window records the decision, in Zerun's app data, never the engine's. No tool, IPC call or plugin can keep a template for the person.
@@ -27,10 +36,12 @@ The line this holds is agents that reach Zerun only through its MCP tools, and a
 
 ```
 zeron-template.json    id, name, description, author, version, zeron_version
+theme.luau             your template's own theme, as data (see Colours and themes)
 app.luau               the root: the window, built from the rest
 screens/shell/         the window: init.luau (its frame), sidebar.luau, title_bar.luau,
-                       page.luau (the routed page), settings.luau (Settings' list),
-                       route.luau (where it is), appearance.luau
+                       page.luau (the routed page, its cards and split chats),
+                       split.luau (which chats sit side by side), settings.luau
+                       (Settings' list), route.luau (where it is), appearance.luau
 screens/chat/          a chat: home.luau (a new chat), session.luau, composer.luau, store.luau
 screens/files/         the files pane
 screens/panel/         the side panel (terminals, tabs)
@@ -48,12 +59,24 @@ assets/                icons and art
 
 Zerun's interface is written in zgx. A template that follows these stays fast, keeps people's place and survives updates.
 
-1. **Values live in the theme.** Colours, type, spacing, radii and shadows are tokens: `$text.primary`, `$space.3`, `$radius.lg`, and Zerun's own under `$zeron.…` (declared in `ds/tokens.luau`). Change the look in `ds/themes/*.json` and `ds/tokens.luau` first; every component follows. A deliberate raw value is `ui.raw(value, "why")`. `zgx lint` flags any other.
+1. **Values live in the theme.** Colours, type, spacing, radii and shadows are tokens (a raw colour doesn't follow the person's theme): `$text.primary`, `$space.3`, `$radius.lg`, and Zerun's own under `$zeron.…` (declared in `ds/tokens.luau`). Change the look in `ds/themes/*.json` and `ds/tokens.luau` first; every component follows. A deliberate raw value is `ui.raw(value, "why")`. `zgx lint` flags any other.
 2. **Corners are concentric.** Anything inside a rounded box takes its radius less the inset between them, hover washes and selections included. `control.nest(outer, inset…)` in `ds/control.luau` works it out.
 3. **Data changes in place.** A list is a keyed `ui.each` with its row as state (`function(item, i, row)`), so rows stay theirs as others come and go. A value that changes is read through a function or a state bound to its prop. `ui.presence`/`ui.switch` are for real swaps (loading, empty, one page to another), keyed by which kind shows, **never by data**: a key made from data rebuilds the part on every change, losing focus and scroll.
 4. **Reloads are cheap and quiet.** A reload rebuilds nodes but keeps keyed state. Nothing should animate or call the engine just because a reload happened. An effect owns what it makes: a timer started in an effect stops when the effect runs again.
 5. **Keep Zerun's element names.** Plugins place by `#id` and `.class` (`describe_elements`). The stable ones are `#sidebar`, `.session-row`, `#session-header`, `.message`, `#chat-composer`, `#new-chat-background`, `.file-row`, `.file-tab`, `.panel-tab` and the `.md-*` blocks. Keep them, with what they `provide`, wherever you redraw those parts, and plugins keep working on your template. A plugin aimed at one you dropped says "Not shown in this template".
 6. **Every save must parse.** A file with a syntax error falls back to Zerun's. A broken `ds/` file can take whole screens with it. Write a file whole, then save.
+
+## Colours and themes
+
+The theme is the person's choice, not the template's. They pick one for light and one for dark on Zerun's Themes page (Settings → Themes: Zerun's built-in themes, VS Code themes they import, and each template's own), and it's worn over whichever template runs. So your template works with every theme, and no theme needs a template.
+
+- **Draw with tokens** (rule 1). A theme sets every colour token (`$text.primary`, `$accent`, `$border`, `$zeron.window`, `$zeron.syntax.*` and the rest) through `ds/palettes`. A raw colour, `ui.raw` included, stays as written under every theme.
+- **A theme of your own** goes in `theme.luau` at the template's root: `return { name = "Ink", dark = { … }, light = { … } }`, a palette for each scheme you have, in `ds/palettes`' shape: `background`, `raised`, `text`, `muted`, `faint`, `accent`, `danger`, `warning`, `success`, `syntax` (12 colours: comment, keyword, string, number, type, function, property, variable, punctuation, tag, attribute, invalid) and, if you like, `shell`, `card`, `terminal` and `ansi` (16). It must be data: a table of strings, numbers and tables, no code. Zerun reads it as data to list it on the Themes page as your template's theme.
+- **Themes of the person's own** are made with the theme tools (`create_theme`, docs/themes.md), not with a template.
+- **It's a suggestion.** Your theme is worn for a scheme only while the person hasn't chosen one for that scheme. A theme with only `dark` fills only dark. Anyone can pick it on the Themes page and wear it with any template.
+- Your `ds/themes/zeron-{light,dark}.json` still sets the rest of the look (type, spacing, radii, glass), and its colours show wherever no theme is worn.
+
+Zerun's built-in themes used to be templates (`theme-<key>`, colour-only). They aren't any more: a launch moves anyone on one to the default template with that theme chosen, and removes the folders Zerun wrote for them. A folder of yours under such an id is never touched.
 
 ## The loop
 

@@ -82,3 +82,13 @@ the matching engine, and runs both sets of checks. It does not publish a release
 
 See [plugins](docs/plugins.md), [templates](docs/templates.md) and
 [localization](docs/i18n.md) for their development interfaces.
+
+## Layout and themes
+
+The default interface has resizable sidebars, a browser and terminal panel,
+and keyboard navigation. Settings → Themes manages built-in and imported
+themes independently of interface templates. Templates can be previewed before
+keeping them; the host menu always offers a way back to the default interface.
+
+On Linux, browser tabs need WebKitGTK 4.1 at runtime. Without it, the panel
+shows a placeholder for the page.

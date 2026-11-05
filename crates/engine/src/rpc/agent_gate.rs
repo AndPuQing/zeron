@@ -33,6 +33,7 @@ pub(super) struct Calling {
     /// Its sandbox and access: what a chat it makes may have at most. `None`
     /// for Zeron's voice orchestrator (the person speaking).
     pub ceiling: Option<(SandboxLevel, AccessMode)>,
+    pub plan: bool,
 }
 
 /// The `Title (short-id)` label a header names a chat by.
@@ -64,6 +65,7 @@ impl EngineRpc {
         Calling {
             id: chat_id.to_owned(),
             label: label(chat, chat_id),
+            plan: chat.and_then(|c| c.config.as_ref()).is_some_and(|c| c.plan),
             ceiling,
         }
     }
@@ -103,6 +105,9 @@ impl EngineRpc {
                         }
                         config["sandbox"] = json!(sandbox);
                         config["access"] = json!(access);
+                    }
+                    if calling.as_ref().is_some_and(|c| c.plan && c.ceiling.is_some()) {
+                        config["plan"] = json!(true);
                     }
                     Ok(params)
                 }
@@ -231,6 +236,8 @@ mod tests {
         let (_temp, core) = core().await;
         chat(&core, "careful", "Careful", "read-only", "supervised").await;
         let rpc = core.rpc_service();
+        rpc.handle(methods::MUTATE, json!({"op":"setChatConfig", "chatId":"careful",
+            "config":{"harness":"codex","sandbox":"read-only","access":"supervised","plan":true}})).await.unwrap();
         with_caller(
             agent("careful"),
             rpc.handle(
@@ -244,6 +251,7 @@ mod tests {
         let child = core.workspace.chat("child").unwrap().unwrap().config.unwrap();
         assert_eq!(child.sandbox, zeron_proto::SandboxLevel::ReadOnly);
         assert_eq!(child.access, zeron_proto::AccessMode::Supervised);
+        assert!(child.plan);
 
         // A Cloud child is capped before it goes anywhere.
         let gated = with_caller(agent("careful"), async {
@@ -257,6 +265,7 @@ mod tests {
         .unwrap();
         assert_eq!(gated["config"]["sandbox"], "read-only");
         assert_eq!(gated["config"]["access"], "supervised");
+        assert_eq!(gated["config"]["plan"], true);
 
         // An agent whose chat isn't known here gets the least, not the most.
         let gated = with_caller(agent("nowhere"), async {

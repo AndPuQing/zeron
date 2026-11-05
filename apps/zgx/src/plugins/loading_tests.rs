@@ -398,7 +398,7 @@ return ui.column {
     ui.row {
         id = "row",
         class = "file-row",
-        provide = { file = ui.call_sync("zeron.file_token", "/Users/ada/secret/plan.md") },
+        provide = { file = ui.call_sync("zeron.file_token", "/work/private/plan.md") },
         ui.text { class = "file-name", "plan.md" },
     },
     ui.div {
@@ -458,7 +458,7 @@ fn a_plugin_reads_no_path_or_text_it_was_not_allowed() {
     let item = plugin(&root, "files", &READS_PLACE.replace("PLUGIN", "files"), &["ui.add", "files.read", "messages.read"], &[], &[]);
     let (mut b, _) = app_of(&root, FILE_APP, &[item], vec![]);
     b.frames(3);
-    assert!(b.text("sdk-file").contains("path=/Users/ada/secret/plan.md"), "{}", b.text("sdk-file"));
+    assert!(b.text("sdk-file").contains("path=/work/private/plan.md"), "{}", b.text("sdk-file"));
     assert!(b.text("sdk-code").contains("source=export TOKEN=hunter2"), "{}", b.text("sdk-code"));
     // (Still a token, raw.)
     assert!(!b.text("raw-file").contains("secret"));

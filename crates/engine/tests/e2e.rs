@@ -3959,6 +3959,8 @@ async fn a_commands_whole_output_is_read_from_its_hosts_journal() {
                     },
                 },
                 AgentEvent::ToolResult {
+                    image_payloads: Vec::new(),
+                    preview_paths: Vec::new(),
                     id: "t1".into(),
                     is_error: false,
                     output: Some(output.clone()),
@@ -3972,6 +3974,8 @@ async fn a_commands_whole_output_is_read_from_its_hosts_journal() {
                     },
                 },
                 AgentEvent::ToolResult {
+                    image_payloads: Vec::new(),
+                    preview_paths: Vec::new(),
                     id: "r1".into(),
                     is_error: false,
                     output: Some("fn main() {}".into()),

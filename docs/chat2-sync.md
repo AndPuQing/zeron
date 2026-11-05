@@ -46,7 +46,7 @@ Stops new whales being born. No protocol changes; additive on the existing s2 ro
   claude harness emits none.
 - Old readers: both fields are already serde-additive; old app versions render the
   summary as if it were the output. Acceptable.
-- **Exception: command output tail (2026-11-03, user decision, #1168).** A command
+- **Command output tail.** A command
   (Exec) tool part keeps the redacted end of its output: its last **10 lines or
   1 KB**, whichever is less, plus additive `exitCode`, `outputBytes` (the whole
   output's size) and `outputTruncated` (written only when earlier output was cut).

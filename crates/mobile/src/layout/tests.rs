@@ -1691,6 +1691,7 @@ fn tool_result_images_only_load_in_expanded_details() {
         id: "tool".into(),
         call: zeron_proto::ToolCall::ReadFile { path: "/outside/shot.png".into() },
         resolved: true, is_error: false, output: None, diff: None,
+        exit_code: None, output_lines: None, output_truncated: false,
         output_ref: None, output_bytes: None, diff_ref: None, diff_stats: None,
         subagent_ref: None, subagent_status: None, subagent_tail: None,
         preview_paths: vec!["/uploads/stored-image.png".into()],

@@ -168,6 +168,9 @@ mod tests {
     #[test]
     fn peer_forks_settle_running_subagents_and_keep_recorded_answers() {
         let chip = |id: &str, status| MessagePart::Tool {
+            exit_code: None,
+            output_lines: None,
+            output_truncated: false,
             id: id.into(),
             call: zeron_proto::ToolCall::Unknown { name: "Agent: scout".into(), input: None },
             is_error: false,

@@ -365,9 +365,6 @@ impl MessageBody {
 pub(crate) struct ContentBlock {
     #[serde(rename = "type", default)]
     pub kind: String,
-    /// Server tool results are content blocks in assistant messages.
-    #[serde(default)]
-    pub content: Value,
     #[serde(default)]
     pub text: String,
     /// A `thinking` block's (summarized) text.
