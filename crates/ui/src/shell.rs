@@ -14845,6 +14845,7 @@ mod tests {
             last_seen_at: None,
             room_gen: None,
             parent_chat_id: None,
+            child_kind: None,
         }
     }
 
@@ -17982,6 +17983,7 @@ mod exit_regressions {
                         harness_session_cwd: None,
                         harness_session_harness: None,
                         parent_chat_id: None,
+                        child_kind: None,
                         space_id: Some("other".into()),
                         last_seen_at: None,
                         room_gen: None,
