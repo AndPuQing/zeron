@@ -13728,6 +13728,8 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         };
         let entry = assistant(
             "a1",
@@ -14983,6 +14985,8 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         }
     }
 
@@ -15106,6 +15110,8 @@ mod tests {
             subagent_status: Some(SubagentStatus::Running),
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         }
     }
 

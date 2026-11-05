@@ -147,6 +147,13 @@ struct DocPartJson {
     /// Uploads copies of images embedded in a tool result (additive).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     preview_paths: Option<Vec<String>>,
+    /// A command's exit status (additive; command tools only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i32>,
+    /// `output` is the END of a longer command output (additive; written
+    /// only when true): the UI says earlier output was trimmed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    output_truncated: Option<bool>,
 }
 
 /// App parts → doc part json (mirror of `toDocParts`).
@@ -200,6 +207,8 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             subagent_status,
             subagent_tail,
             preview_paths,
+            exit_code,
+            output_truncated,
         } => DocPartJson {
             id: id.clone(),
             kind: "tool".into(),
@@ -224,6 +233,8 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             }),
             subagent_tail: subagent_tail.clone(),
             preview_paths: (!preview_paths.is_empty()).then(|| preview_paths.clone()),
+            exit_code: *exit_code,
+            output_truncated: output_truncated.then_some(true),
             ..Default::default()
         },
         MessagePart::Input {
@@ -317,6 +328,8 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 }),
                 subagent_tail: p.subagent_tail,
                 preview_paths: p.preview_paths.unwrap_or_default(),
+                exit_code: p.exit_code,
+                output_truncated: p.output_truncated.unwrap_or(false),
             },
             None => MessagePart::Text {
                 id: p.id,
@@ -608,7 +621,11 @@ impl SessionDoc {
 
     /// [`push_message`](Self::push_message), but inserted before the last
     /// `from_end` entries of the messages list (clamped to its start).
-    pub fn insert_message_before_last(&self, from_end: usize, entry: &SessionMessageEntry) -> Result<(), DocError> {
+    pub fn insert_message_before_last(
+        &self,
+        from_end: usize,
+        entry: &SessionMessageEntry,
+    ) -> Result<(), DocError> {
         let messages = self.doc.get_list("messages");
         let at = messages.len().saturating_sub(from_end);
         let map = messages.insert_container(at, LoroMap::new())?;
@@ -1155,6 +1172,12 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
             )),
         )?;
     }
+    if let Some(exit_code) = doc_part.exit_code {
+        map.insert("exitCode", exit_code as i64)?;
+    }
+    if let Some(truncated) = doc_part.output_truncated {
+        map.insert("outputTruncated", truncated)?;
+    }
     Ok(())
 }
 
@@ -1323,6 +1346,14 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
                 .get("previewPaths")
                 .and_then(|value| serde_json::from_value(value.clone()).ok())
                 .unwrap_or_default(),
+            exit_code: obj
+                .get("exitCode")
+                .and_then(|x| x.as_i64())
+                .and_then(|x| i32::try_from(x).ok()),
+            output_truncated: obj
+                .get("outputTruncated")
+                .and_then(|x| x.as_bool())
+                .unwrap_or(false),
         });
     }
     if let Some(message) = obj.get("message").and_then(|x| x.as_str()) {
@@ -1645,6 +1676,12 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
             )),
         )?;
     }
+    if let Some(exit_code) = doc_part.exit_code {
+        map.insert("exitCode", exit_code as i64)?;
+    }
+    if let Some(truncated) = doc_part.output_truncated {
+        map.insert("outputTruncated", truncated)?;
+    }
     if let Some(text) = &doc_part.text {
         // Defensive path only — the fold never rewrites earlier text.
         if let Some(loro::ValueOrContainer::Container(loro::Container::Text(t))) = map.get("text") {
@@ -1950,7 +1987,11 @@ mod tests {
         w.count_duration_from(now - 1_000);
         w.finish(&[], MessageStatus::Complete).unwrap();
         let entry = &doc.read_entries().unwrap()[0];
-        assert_eq!(entry.created_at, now - 5_000, "the entry's own time is kept");
+        assert_eq!(
+            entry.created_at,
+            now - 5_000,
+            "the entry's own time is kept"
+        );
         let duration = entry.duration_ms.unwrap();
         assert!((60_000..65_000).contains(&duration), "{duration}");
     }
@@ -1974,6 +2015,8 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         };
         let doc = SessionDoc::init("c1").unwrap();
         let mut w = SegmentWriter::begin(&doc, "e1", "dev", 1).unwrap();
@@ -2039,6 +2082,8 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         };
         w.sync(std::slice::from_ref(&part)).unwrap();
         if let MessagePart::Tool {
@@ -2092,6 +2137,8 @@ mod tests {
             subagent_status: None,
             subagent_tail: None,
             preview_paths: Vec::new(),
+            exit_code: None,
+            output_truncated: false,
         };
         let parts = vec![
             tool(
@@ -2338,6 +2385,7 @@ mod tests {
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             },
         );
         writer.sync(&folded).unwrap();
@@ -2438,8 +2486,10 @@ mod tests {
             &mut folded,
             &AgentEvent::ToolCall {
                 id: "t1".into(),
-                call: ToolCall::Exec {
-                    command: "ls".into(),
+                call: ToolCall::EditFile {
+                    path: "/w/a.rs".into(),
+                    old_string: None,
+                    new_string: None,
                 },
             },
         );
@@ -2457,6 +2507,7 @@ mod tests {
                 }),
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             },
         );
         crate::parts::apply_sidecar_refs("chat-2", &mut folded);
@@ -2492,6 +2543,71 @@ mod tests {
         }
     }
 
+    /// A command's tail, exit code and trimmed flag land in the doc on its
+    /// result (an in-place update of the part pushed with its call) and read
+    /// back as written.
+    #[test]
+    fn a_command_tail_round_trips_through_the_doc() {
+        let doc = SessionDoc::init("chat-4").unwrap();
+        let mut writer = SegmentWriter::begin(&doc, "a1", "dev-a", 5).unwrap();
+        let mut folded = Vec::new();
+        fold_event_into_parts(
+            &mut folded,
+            &AgentEvent::ToolCall {
+                id: "c1".into(),
+                call: ToolCall::Exec {
+                    command: "cargo test".into(),
+                },
+            },
+        );
+        writer.sync(&folded).unwrap();
+        let full: String = (1..=80).map(|i| format!("line {i}\n")).collect();
+        fold_event_into_parts(
+            &mut folded,
+            &AgentEvent::ToolResult {
+                id: "c1".into(),
+                is_error: true,
+                output: Some(full.clone()),
+                diff: None,
+                exit_code: Some(101),
+            },
+        );
+        writer.sync(&folded).unwrap();
+        writer.finish(&folded, MessageStatus::Complete).unwrap();
+        let entries = doc.read_entries().unwrap();
+        match &entries[0].parts[0] {
+            MessagePart::Tool {
+                output: Some(tail),
+                output_bytes,
+                exit_code,
+                output_truncated,
+                is_error,
+                ..
+            } => {
+                assert!(*is_error);
+                assert_eq!(*exit_code, Some(101));
+                assert!(*output_truncated);
+                assert_eq!(*output_bytes, Some(full.len() as u64));
+                assert_eq!(tail.lines().count(), crate::parts::COMMAND_TAIL_MAX_LINES);
+                assert!(tail.ends_with("line 80"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // And from a fresh replica of the doc's bytes (what a client reads).
+        let snapshot = doc.export_snapshot().unwrap();
+        let replica = loro::LoroDoc::new();
+        replica.import(&snapshot).unwrap();
+        let entries = SessionDoc::from_doc(replica).read_entries().unwrap();
+        assert!(matches!(
+            &entries[0].parts[0],
+            MessagePart::Tool {
+                exit_code: Some(101),
+                output_truncated: true,
+                ..
+            }
+        ));
+    }
+
     /// Old pre-strip docs carry inline `output`/`diff` — they must still read
     /// back (schema changes are serde-additive ONLY; old readers, old docs).
     #[test]
@@ -2521,6 +2637,8 @@ mod tests {
                 subagent_status: None,
                 subagent_tail: None,
                 preview_paths: Vec::new(),
+                exit_code: None,
+                output_truncated: false,
             }],
             created_at: 1,
             device_id: "dev-a".into(),

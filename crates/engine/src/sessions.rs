@@ -727,7 +727,9 @@ impl SessionsEngine {
         if !self.turn_in_flight(chat_id) {
             return None;
         }
-        lock(&self.inner.runs).get(chat_id).map(|h| h.runtime_config.harness_id)
+        lock(&self.inner.runs)
+            .get(chat_id)
+            .map(|h| h.runtime_config.harness_id)
     }
 
     /// Mark the provider-switch seam for a send about to run on `harness_id`
@@ -2401,6 +2403,7 @@ impl Inner {
                                 is_error: true,
                                 output: None,
                                 diff: None,
+                                exit_code: None,
                                 preview_paths: Vec::new(),
                                 image_payloads: Vec::new(),
                             },
@@ -3796,6 +3799,8 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_status,
                 subagent_tail,
                 preview_paths,
+                exit_code,
+                output_truncated,
             } => MessagePart::Tool {
                 id: id.clone(),
                 call: sanitize_tool_call(call),
@@ -3815,6 +3820,8 @@ fn render_parts(parts: &[MessagePart]) -> Vec<MessagePart> {
                 subagent_status: *subagent_status,
                 subagent_tail: subagent_tail.clone(),
                 preview_paths: preview_paths.clone(),
+                exit_code: *exit_code,
+                output_truncated: *output_truncated,
             },
             other => other.clone(),
         })
@@ -5004,8 +5011,11 @@ async fn drive_run(
             let current_runtime = lock(&inner.runs).get(&chat_id).is_some_and(|run| {
                 run.run_id == run_id && !run.retiring.load(std::sync::atomic::Ordering::Acquire)
             });
-            if current_runtime && !interrupted && idle_since.is_some()
-                && !inner.has_pending_steers(&chat_id, &run_id) {
+            if current_runtime
+                && !interrupted
+                && idle_since.is_some()
+                && !inner.has_pending_steers(&chat_id, &run_id)
+            {
                 let completed = lock(&inner.statuses).get(&chat_id).and_then(|s| {
                     (s.status == SessionStatus::Idle
                         && s.last_turn_outcome
@@ -5892,15 +5902,35 @@ mod tests {
         if let AgentEvent::Subagent { event, .. } = &mut different {
             if let AgentEvent::ToolResult { image_payloads, .. } = event.as_mut() {
                 let mut png = std::io::Cursor::new(Vec::new());
-                image::DynamicImage::new_rgb8(2, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
-                image_payloads[0].data_base64 = base64::engine::general_purpose::STANDARD.encode(png.into_inner());
+                image::DynamicImage::new_rgb8(2, 2)
+                    .write_to(&mut png, image::ImageFormat::Png)
+                    .unwrap();
+                image_payloads[0].data_base64 =
+                    base64::engine::general_purpose::STANDARD.encode(png.into_inner());
             }
         }
-        let changed = sessions.inner.prepare_generated_image("chat", different, &mut std::collections::HashSet::new()).await;
-        let AgentEvent::Subagent { event, .. } = &changed[0] else { panic!("owner") };
-        let AgentEvent::ToolResult { preview_paths: changed_paths, .. } = event.as_ref() else { panic!("result") };
-        assert_ne!(changed_paths, preview_paths, "a reused tool id must not overwrite history");
-        assert_eq!(uploads.read_chunk(&preview_paths[0], 0, &[]).unwrap().data, png_b64);
+        let changed = sessions
+            .inner
+            .prepare_generated_image("chat", different, &mut std::collections::HashSet::new())
+            .await;
+        let AgentEvent::Subagent { event, .. } = &changed[0] else {
+            panic!("owner")
+        };
+        let AgentEvent::ToolResult {
+            preview_paths: changed_paths,
+            ..
+        } = event.as_ref()
+        else {
+            panic!("result")
+        };
+        assert_ne!(
+            changed_paths, preview_paths,
+            "a reused tool id must not overwrite history"
+        );
+        assert_eq!(
+            uploads.read_chunk(&preview_paths[0], 0, &[]).unwrap().data,
+            png_b64
+        );
         sessions.inner.publish("chat", &events[0]);
         let journal =
             serde_json::to_string(&sessions.inner.journal.replay("chat", 0).unwrap()).unwrap();
@@ -6097,7 +6127,11 @@ mod tests {
         std::io::Write::write_all(&mut f, b"{\"seq\":3,\"event\":{\"type\":\"done\"").unwrap();
         assert_eq!(
             sessions.inner.journal_harness_session("started-only"),
-            Some(("s1".into(), "/a".into(), Some(zeron_proto::HarnessId::ClaudeCode)))
+            Some((
+                "s1".into(),
+                "/a".into(),
+                Some(zeron_proto::HarnessId::ClaudeCode)
+            ))
         );
     }
 
@@ -6221,9 +6255,12 @@ mod tests {
             .unwrap();
         let mut request = request();
         request.prompt.clear();
-        core.sessions
-            .inner
-            .remember_harness_session("idle", "old-native-thread", &request.cwd, HarnessId::Codex);
+        core.sessions.inner.remember_harness_session(
+            "idle",
+            "old-native-thread",
+            &request.cwd,
+            HarnessId::Codex,
+        );
         core.sessions.start_idle("idle", request).await.unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -6267,7 +6304,10 @@ mod tests {
                 SessionStatus::Idle
             );
             assert_eq!(
-                core.workspace.chat_harness_session("idle").unwrap().session_id,
+                core.workspace
+                    .chat_harness_session("idle")
+                    .unwrap()
+                    .session_id,
                 "new-native-thread"
             );
             let events = core.sessions.inner.journal.replay("idle", 0).unwrap();
@@ -7116,7 +7156,13 @@ mod agent_environment_tests {
             .await
             .unwrap();
         let mut first = started.recv().await.unwrap();
-        eventually(|| sessions.inner.resume_for(chat, "/tmp", HarnessId::Codex).is_some()).await;
+        eventually(|| {
+            sessions
+                .inner
+                .resume_for(chat, "/tmp", HarnessId::Codex)
+                .is_some()
+        })
+        .await;
         let voice = if owner == "voice" {
             Some(
                 lock(&sessions.inner.runs)

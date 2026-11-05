@@ -39,9 +39,9 @@ impl RegistryAgent {
     pub fn new(registry_id: &str) -> Option<Self> {
         let valid = !registry_id.is_empty()
             && registry_id.len() <= 64
-            && registry_id
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_' | b'.'))
+            && registry_id.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'-' | b'_' | b'.')
+            })
             && registry_id.as_bytes()[0].is_ascii_alphanumeric();
         valid.then(|| Self(intern(&format!("{REGISTRY_SLUG_PREFIX}{registry_id}"))))
     }
@@ -247,18 +247,34 @@ mod registry_slug_tests {
     fn registry_agents_round_trip_as_namespaced_slugs() {
         let id = HarnessId::from_slug("acp.gemini").expect("a registry slug");
         assert_eq!(id.as_str(), "acp.gemini");
-        assert_eq!(id.registry().map(RegistryAgent::registry_id), Some("gemini"));
-        assert_eq!(serde_json::to_value(id).unwrap(), serde_json::json!("acp.gemini"));
+        assert_eq!(
+            id.registry().map(RegistryAgent::registry_id),
+            Some("gemini")
+        );
+        assert_eq!(
+            serde_json::to_value(id).unwrap(),
+            serde_json::json!("acp.gemini")
+        );
         let back: HarnessId = serde_json::from_value(serde_json::json!("acp.gemini")).unwrap();
         assert_eq!(back, id);
         // Interned: the same slug is the same id, whichever way it came.
-        assert_eq!(RegistryAgent::new("gemini").map(HarnessId::Registry), Some(id));
+        assert_eq!(
+            RegistryAgent::new("gemini").map(HarnessId::Registry),
+            Some(id)
+        );
         // A built-in's slug stays the built-in, never a registry agent.
         assert_eq!(HarnessId::from_slug("cursor"), Some(HarnessId::Cursor));
         let cursor: HarnessId = serde_json::from_value(serde_json::json!("claude-code")).unwrap();
         assert_eq!(cursor, HarnessId::ClaudeCode);
         // Not a registry id: refused, as an unknown slug always was.
-        for bad in ["acp.", "acp.Gemini", "acp.../x", "acp.-x", "gemini", "acp.a/b"] {
+        for bad in [
+            "acp.",
+            "acp.Gemini",
+            "acp.../x",
+            "acp.-x",
+            "gemini",
+            "acp.a/b",
+        ] {
             assert_eq!(HarnessId::from_slug(bad), None, "{bad}");
         }
         assert!(serde_json::from_value::<HarnessId>(serde_json::json!("nope")).is_err());
@@ -751,6 +767,25 @@ pub struct WorktreeSpec {
 /// life of a run.
 pub const LIVE_PLAN_TOOL_ID: &str = "acp-plan";
 
+/// Bytes of a command's output a harness adapter puts on its
+/// [`AgentEvent::ToolResult`]: the END of it, where a build's error or a
+/// test run's summary is. The doc keeps far less (a 10-line / 1 KB tail);
+/// this bounds what the run journal holds per command.
+pub const COMMAND_OUTPUT_CAP: usize = 32 * 1024;
+
+/// The last [`COMMAND_OUTPUT_CAP`] bytes of a command's output, started on a
+/// char boundary; `None` when it printed nothing.
+pub fn command_output_cap(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut start = text.len().saturating_sub(COMMAND_OUTPUT_CAP);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(text[start..].to_owned())
+}
+
 /// A decoded tool invocation, reduced to the fields each kind renders.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
@@ -1137,13 +1172,20 @@ pub enum AgentEvent {
         id: String,
         is_error: bool,
         /// Tool output text, capped by the emitting harness (ACP tool-call
-        /// content; claude/codex adapters never populate it). The doc-side
-        /// fold applies its own byte cap before anything persists.
+        /// content; the claude/codex adapters send a command's output only,
+        /// its last [`COMMAND_OUTPUT_CAP`] bytes). The doc-side fold keeps a
+        /// short redacted tail of a command's output and drops every other
+        /// tool's before anything persists.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         output: Option<String>,
         /// Inline file diff for edit-shaped tools (ACP `Diff` content).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<ToolDiff>,
+        /// A command's exit status, when the harness reported one (Claude
+        /// Code's Bash, Codex's command execution). Absent for other tools,
+        /// a command still running in the background, or one that never ran.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
         /// Uploads paths of images that were embedded in this result. The
         /// engine fills this before journaling; adapters leave it empty.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]

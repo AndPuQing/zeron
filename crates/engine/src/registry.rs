@@ -896,6 +896,7 @@ fn full_registry() -> HarnessRegistry {
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             },
             AgentEvent::ToolCall {
                 id: "mock-tool-2".into(),
@@ -911,6 +912,7 @@ fn full_registry() -> HarnessRegistry {
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             },
             AgentEvent::TextDelta {
                 text: "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*".into(),

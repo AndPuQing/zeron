@@ -363,6 +363,7 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
         diff: None,
         preview_paths: Vec::new(),
         image_payloads: Vec::new(),
+        exit_code: Some(1),
     }));
 
     // fileChange (single add): WriteFile, refreshed at completion.
@@ -387,6 +388,7 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
         diff: None,
         preview_paths: Vec::new(),
         image_payloads: Vec::new(),
+        exit_code: None,
     }));
 
     // mcpToolCall with failed status.
@@ -405,6 +407,7 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
         diff: None,
         preview_paths: Vec::new(),
         image_payloads: Vec::new(),
+        exit_code: None,
     }));
 
     // webSearch lifecycle.
@@ -421,6 +424,7 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
         diff: None,
         preview_paths: Vec::new(),
         image_payloads: Vec::new(),
+        exit_code: None,
     }));
 
     // Completion-only todoList still opens and closes the lifecycle.
@@ -440,6 +444,7 @@ async fn happy_path_maps_deltas_items_usage_and_done() {
         diff: None,
         preview_paths: Vec::new(),
         image_payloads: Vec::new(),
+        exit_code: None,
     }));
 
     // Streamed agentMessage must not re-emit its completed text…
@@ -1627,6 +1632,7 @@ async fn child_thread_routing_tags_and_never_settles_parent() {
             diff: None,
             preview_paths: Vec::new(),
             image_payloads: Vec::new(),
+            exit_code: Some(0),
         }),
     }));
     // The parent's steer (a userMessage item on the CHILD thread) arrives as
@@ -2032,6 +2038,7 @@ async fn view_image_reads_as_a_file_read() {
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             },
         ]
     );

@@ -108,6 +108,7 @@ fn fanout_settle(i: usize) -> Vec<AgentEvent> {
             diff: None,
             preview_paths: Vec::new(),
             image_payloads: Vec::new(),
+            exit_code: None,
         },
         fanout_tag(
             i,
@@ -323,6 +324,7 @@ impl Harness for MockHarness {
                             diff: None,
                             preview_paths: Vec::new(),
                             image_payloads: Vec::new(),
+                            exit_code: None,
                         });
                         send("All 128 tests pass.");
                     } else {
@@ -546,6 +548,7 @@ impl Harness for MockHarness {
                         diff: None,
                         preview_paths: Vec::new(),
                         image_payloads: Vec::new(),
+                        exit_code: None,
                     },
                 ]
             })
@@ -586,6 +589,7 @@ impl Harness for MockHarness {
                     diff: None,
                     preview_paths: Vec::new(),
                     image_payloads: Vec::new(),
+                    exit_code: None,
                 };
                 let done = AgentEvent::Done {
                     status: DoneStatus::Completed,
@@ -753,6 +757,7 @@ impl Harness for MockHarness {
                         diff: None,
                         preview_paths: Vec::new(),
                         image_payloads: Vec::new(),
+                        exit_code: None,
                     },
                 ]
             })
@@ -811,6 +816,7 @@ impl Harness for MockHarness {
                         diff: None,
                         preview_paths: Vec::new(),
                         image_payloads: Vec::new(),
+                        exit_code: None,
                     });
                     events.push(AgentEvent::TextDelta {
                         text: format!("Update {} written.\n\n", active + 1),
@@ -994,6 +1000,7 @@ fn background_run(
                 diff: None,
                 preview_paths: Vec::new(),
                 image_payloads: Vec::new(),
+                exit_code: None,
             });
             listed.push(zeron_proto::BackgroundTask {
                 can_stop: true,
