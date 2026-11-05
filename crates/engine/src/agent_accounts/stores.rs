@@ -17,8 +17,8 @@
 //!   file (running `devin acp` processes keep the key they started with).
 //!   Add account = the ACP `authenticate` `devin-browser` method with a
 //!   throwaway `XDG_DATA_HOME`: Devin's own PKCE loopback, whose
-//!   `redirect_uri` port is reported for remote tunnelling. The identity is
-//!   learned from the usage probe and written back into the slot.
+//!   `redirect_uri` port is reported for remote tunnelling. The account uses
+//!   a local key label unless a previously saved identity is available.
 //! - **OpenCode** — `$XDG_DATA_HOME/opencode/auth.json` (default
 //!   `~/.local/share/opencode/`): one entry PER model provider (`{type:
 //!   "oauth", access, refresh, expires, accountId?}` or `{type: "api",
@@ -44,9 +44,8 @@
 //!   accounts through `hermes auth add` (device code; Hermes appends to its
 //!   own pool under its own lock). It never rewrites the pool.
 //!
-//! Opaque tokens (Pi's Claude login, Copilot tokens) carry no identity: a
-//! live entry is matched to its slot by token, else identified ONCE per token
-//! with a read-only profile call (`/api/oauth/profile`, GitHub `/user`). A
+//! Opaque Claude and Copilot tokens are matched only to local saved slots;
+//! unknown tokens stay unnamed without a profile request. A
 //! Copilot login on a self-hosted GitHub Enterprise Server (a host zeron
 //! never sends the token to) gets a local identity instead — its host and a
 //! SHA-256 fingerprint of the token — so it still switches; its usage is
@@ -146,18 +145,6 @@ pub(super) fn cli_name(harness: HarnessId) -> &'static str {
         HarnessId::Muse => "muse",
         HarnessId::Mock => "mock",
         HarnessId::Registry(agent) => agent.registry_id(),
-    }
-}
-
-/// The vendor behind a per-provider store key, for usage reasons.
-pub(super) fn upstream_vendor(store_key: &str) -> &'static str {
-    match store_key {
-        "openai" | "openai-codex" => "OpenAI",
-        "anthropic" => "Anthropic",
-        "github-copilot" | "copilot" => "GitHub",
-        "nous" => "Nous",
-        "xai-oauth" | "xai" => "xAI",
-        _ => "the provider",
     }
 }
 
@@ -302,7 +289,7 @@ pub(super) fn devin_api_key(credentials: &serde_json::Value) -> Option<String> {
 }
 
 /// The Devin login in `credentials`: keyed by a digest of its key (the file
-/// holds no identity — the usage probe learns it).
+/// holds no identity, so keep any previously saved profile).
 pub(super) fn parse_devin_credentials(credentials: serde_json::Value) -> Option<Detected> {
     let key = devin_api_key(&credentials)?;
     let mut detected = Detected::known(
@@ -659,47 +646,18 @@ pub(super) fn merge_json_entry(
 
 // ── credential-defined endpoints ────────────────────────────────────────────
 
-/// Which hosts a credential-supplied endpoint may name before zeron sends
-/// that credential's secret there. A tampered or misconfigured store must
-/// never route a refresh token or API key to an arbitrary server.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum HostPolicy {
-    /// The vendor's own domains (and their subdomains).
-    Domains(&'static [&'static str]),
-    /// GitHub Enterprise Cloud with data residency: a single-label subdomain
-    /// of `ghe.com` (Copilot's `enterpriseUrl`). Self-hosted GHES hosts are
-    /// deliberately NOT accepted — a credential field alone never decides
-    /// where a GitHub token is sent. Such a login is identified locally
-    /// instead (see [`local_enterprise_identity`]): it lists and switches,
-    /// without usage.
-    GheCom,
-}
-
-/// Grok OIDC issuers (`oidc_issuer`, refresh only).
-pub(super) const GROK_ISSUERS: HostPolicy = HostPolicy::Domains(&["x.ai"]);
 /// Devin / Windsurf / Codeium domains: its API servers and sign-in pages.
 pub(super) const DEVIN_DOMAINS: &[&str] = &["codeium.com", "windsurf.com", "devin.ai"];
-/// Devin / Windsurf API servers (`api_server_url`).
-pub(super) const DEVIN_SERVERS: HostPolicy = HostPolicy::Domains(DEVIN_DOMAINS);
-/// The Nous portal (`portal_base_url` in Hermes' pool).
-pub(super) const NOUS_PORTALS: HostPolicy = HostPolicy::Domains(&["nousresearch.com"]);
 
-/// `raw` as a base url safe to send a secret to: `https`, a DNS host the
-/// policy allows, no userinfo, port, query or fragment, and no path beyond
-/// `/`. A bare host (how OpenCode and Pi store `enterpriseUrl`) reads as
-/// `https://host` under [`HostPolicy::GheCom`]. `allow_loopback`
-/// additionally admits `http://127.0.0.1|localhost:<port>` — tests' mock
-/// servers only, never production. `None` = don't send anything.
-pub(super) fn trusted_base(
-    raw: &str,
-    policy: HostPolicy,
-    allow_loopback: bool,
-) -> Option<reqwest::Url> {
+/// A GitHub Enterprise Cloud base for explicit sign-in: one tenant under
+/// `ghe.com`, HTTPS, without userinfo, port, query, fragment or a path.
+/// Bare hosts use HTTPS. Tests may additionally use a local HTTP mock.
+fn enterprise_base(raw: &str, allow_loopback: bool) -> Option<reqwest::Url> {
     let raw = raw.trim();
-    let candidate = match (raw.contains("://"), policy) {
-        (true, _) => raw.to_string(),
-        (false, HostPolicy::GheCom) => format!("https://{}", raw.trim_end_matches('/')),
-        (false, _) => return None,
+    let candidate = if raw.contains("://") {
+        raw.to_string()
+    } else {
+        format!("https://{}", raw.trim_end_matches('/'))
     };
     let url = reqwest::Url::parse(&candidate).ok()?;
     if !url.username().is_empty()
@@ -721,12 +679,9 @@ pub(super) fn trusted_base(
     }
     // `domain()` is `None` for IP literals: a secret never goes to a bare IP.
     let host = url.domain()?.to_ascii_lowercase();
-    let allowed = match policy {
-        HostPolicy::Domains(domains) => host_in(&host, domains),
-        HostPolicy::GheCom => host
-            .strip_suffix(".ghe.com")
-            .is_some_and(|tenant| !tenant.is_empty() && !tenant.contains('.')),
-    };
+    let allowed = host
+        .strip_suffix(".ghe.com")
+        .is_some_and(|tenant| !tenant.is_empty() && !tenant.contains('.'));
     allowed.then_some(url)
 }
 
@@ -767,7 +722,7 @@ pub(super) fn copilot_api_base(
     match str_field(entry, "enterpriseUrl") {
         None => Some(github_api.trim_end_matches('/').to_string()),
         Some(raw) => {
-            let url = trusted_base(&raw, HostPolicy::GheCom, allow_loopback)?;
+            let url = enterprise_base(&raw, allow_loopback)?;
             Some(match url.scheme() {
                 "https" => format!("https://api.{}", url.host_str()?),
                 _ => url.as_str().trim_end_matches('/').to_string(),
@@ -922,9 +877,8 @@ impl AgentAccounts {
         }
     }
 
-    /// Who an opaque live entry is: the slot already holding this exact
-    /// token, else the remembered answer for it, else one read-only profile
-    /// call (cached per token, so a list doesn't re-ask).
+    /// Match a live entry to a saved slot. Unknown opaque tokens stay
+    /// unidentified; no profile request is made while listing accounts.
     async fn identify_opaque(
         &self,
         harness: HarnessId,
@@ -954,73 +908,10 @@ impl AgentAccounts {
             let (account_key, profile) = local_enterprise_identity(store_key, &secret, entry);
             return Some(Detected::known(account_key, profile, entry.clone()).keyed(store_key));
         }
-        let fingerprint = format!("{store_key}:{}", hashed_key(&secret));
-        let cached = lock(&self.inner.identities).get(&fingerprint).cloned();
-        let (account_key, profile) = match cached {
-            Some(IdentityLookup::Known(key, profile)) => (key, profile),
-            Some(IdentityLookup::Failed(at)) if at.elapsed() < IDENTITY_RETRY => return None,
-            _ => {
-                let known = match upstream {
-                    Upstream::Anthropic => match str_field(entry, "access") {
-                        Some(access) => self.anthropic_identity(store_key, &access).await,
-                        None => None,
-                    },
-                    Upstream::Copilot => self.github_identity(store_key, &secret, entry).await,
-                    Upstream::OpenAi => None,
-                };
-                let lookup = match &known {
-                    Some((key, profile)) => IdentityLookup::Known(key.clone(), profile.clone()),
-                    None => IdentityLookup::Failed(Instant::now()),
-                };
-                lock(&self.inner.identities).insert(fingerprint, lookup);
-                known?
-            }
-        };
-        Some(Detected::known(account_key, profile, entry.clone()).keyed(store_key))
+        None
     }
 
-    /// Claude's profile for a live access token (`user:profile` scope).
-    async fn anthropic_identity(
-        &self,
-        store_key: &str,
-        access_token: &str,
-    ) -> Option<(String, SlotProfile)> {
-        let profile: serde_json::Value = self
-            .inner
-            .http
-            .get(&self.inner.endpoints.claude_profile)
-            .bearer_auth(access_token)
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .send()
-            .await
-            .ok()
-            .filter(|res| res.status().is_success())?
-            .json()
-            .await
-            .ok()?;
-        let account = profile.get("account")?;
-        let org = profile.get("organization").cloned().unwrap_or_default();
-        let email = str_field(account, "email_address")?;
-        let uuid = str_field(account, "uuid").unwrap_or_else(|| email.clone());
-        Some((
-            format!("{store_key}:{uuid}"),
-            SlotProfile {
-                email,
-                display_name: str_field(account, "display_name")
-                    .or_else(|| str_field(account, "full_name")),
-                organization: str_field(&org, "name"),
-                plan: claude_plan(
-                    str_field(&org, "organization_type").as_deref(),
-                    str_field(&org, "rate_limit_tier").as_deref(),
-                )
-                .map(|plan| format!("Claude {plan}"))
-                .or_else(|| Some("Claude".to_string())),
-                auth_kind: AgentAuthKind::Oauth,
-            },
-        ))
-    }
-
-    /// The GitHub user behind a Copilot login's GitHub token.
+    /// Identify a Copilot login only as part of its explicit OAuth sign-in.
     pub(super) async fn github_identity(
         &self,
         store_key: &str,

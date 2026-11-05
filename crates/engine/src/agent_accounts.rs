@@ -3,17 +3,16 @@
 //! `agent-accounts.ts`).
 //!
 //! Grok, Devin, OpenCode, Pi and Hermes live in [`stores`] (credential
-//! formats and detection), [`oauth`] (the sign-ins the engine drives itself)
-//! and [`usage`] (their quota probes); each module documents per provider
-//! what is supported and why. In short:
+//! formats and detection) and [`oauth`] (explicit sign-ins). Each module
+//! documents the supported account operations:
 //!
 //! | agent    | detect | switch | add account                    | usage |
 //! |----------|--------|--------|--------------------------------|-------|
-//! | Grok     | yes    | yes    | `grok login --device-auth`     | yes   |
-//! | Devin    | yes    | yes    | ACP `authenticate` (loopback)  | yes   |
-//! | OpenCode | yes    | yes    | ChatGPT loopback, Copilot code | yes   |
-//! | Pi       | yes    | yes    | ChatGPT loopback               | yes   |
-//! | Hermes   | yes    | no¹    | `hermes auth add` (device code) | yes  |
+//! | Grok     | yes    | yes    | `grok login --device-auth`     | no    |
+//! | Devin    | yes    | yes    | ACP `authenticate` (loopback)  | no    |
+//! | OpenCode | yes    | yes    | ChatGPT loopback, Copilot code | no    |
+//! | Pi       | yes    | yes    | ChatGPT loopback               | no    |
+//! | Hermes   | yes    | no¹    | `hermes auth add` (device code) | no   |
 //!
 //! ¹ Hermes keeps every account in its own credential pool and rotates
 //! through it itself; zeron lists the pool and adds to it through Hermes'
@@ -61,18 +60,10 @@
 //!    its callback port to [`zeron_preview::login`], so the requester can
 //!    forward its own loopback to it over the P2P link.
 //!
-//! Usage probes: all three providers expose the rate-limit view their own CLIs render
-//! (`/usage` in Claude Code, `/status` in Codex; Cursor's key has no quota view,
-//! so the probe exchanges it for a dashboard session and reads the
-//! `GetCurrentPeriodUsage` call the Cursor app itself makes). Usage is
-//! stale-while-revalidate: every list serves each account's last good probe
-//! (persisted to `agent-accounts/usage-cache.json`, so it survives restarts)
-//! with its fetch time; only `force_usage` hits the network, probing all
-//! accounts concurrently. The UI paints from a plain list, then forces one to
-//! update in place. A failed probe keeps the last good windows, records why
-//! (shown instead of "Usage unavailable"), and backs off — honouring
-//! `Retry-After` — before that account is probed again. Only 401/403 counts
-//! as a rejected token (and only then is a saved Claude slot refreshed).
+//! Account listing is local-only. Subscription usage and quota resets are
+//! left to the agent or provider dashboard, which owns its network configuration.
+//! `force_usage` is retained for RPC compatibility but never sends a request.
+//! Only usage reported by Muse runs is cached and shown here.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -88,8 +79,8 @@ use sha2::{Digest, Sha256};
 
 use zeron_proto::{
     AgentAccount, AgentAccountWarning, AgentAccountsSnapshot, AgentAuthKind, AgentLoginMode,
-    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, CodexResetCredit,
-    CodexResetCredits, CodexResetOutcome, HarnessId,
+    AgentLoginPoll, AgentLoginStart, AgentLoginStatus, AgentUsageWindow, CodexResetOutcome,
+    HarnessId,
 };
 
 use crate::repos::home_dir;
@@ -112,7 +103,6 @@ mod registry_login;
 mod provider_tests;
 pub use muse::MuseRunEnvironment;
 mod stores;
-mod usage;
 
 // Claude Code's public OAuth client (the one the CLI itself uses for the manual
 // "paste the code" flow — no secret involved, PKCE carries the proof).
@@ -121,7 +111,8 @@ const CLAUDE_REDIRECT: &str = "https://console.anthropic.com/oauth/code/callback
 const CLAUDE_SCOPES: &str = "org:create_api_key user:profile user:inference";
 const CLAUDE_TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
 const CLAUDE_PROFILE_URL: &str = "https://api.anthropic.com/api/oauth/profile";
-const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+pub(crate) const ACCOUNT_USAGE_UNAVAILABLE: &str =
+    "Account usage is not queried by Zerun. Check it in your agent or provider dashboard.";
 // Claude Code 2.1.x's automatic (loopback) login: the claude.ai authorize
 // page, the token endpoint it exchanges at, the page it sends the browser to
 // once the code is redeemed, and the scopes it asks for.
@@ -131,18 +122,6 @@ const CLAUDE_LOOPBACK_SUCCESS_URL: &str =
     "https://platform.claude.com/oauth/code/success?app=claude-code";
 const CLAUDE_LOOPBACK_SCOPES: &str = "org:create_api_key user:profile user:inference \
      user:sessions:claude_code user:mcp_servers user:file_upload user:plugins";
-const CODEX_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
-const CODEX_RESET_CREDITS_URL: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
-const CODEX_CONSUME_RESET_URL: &str =
-    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
-/// The Cursor dashboard's current-period usage RPC (Connect-style POST).
-const CURSOR_CURRENT_PERIOD_USAGE: &str = "aiserver.v1.DashboardService/GetCurrentPeriodUsage";
-/// The Grok Bot ("sand") quota: its own weekly window, separate from the plan's
-/// monthly buckets.
-const CURSOR_SAND_USAGE: &str = "aiserver.v1.DashboardService/GetSandUsageStatus";
-const CURSOR_DEFAULT_BACKEND: &str = "https://api2.cursor.sh";
-
 /// Claude Code stores these next to `claudeAiOauth` in the same credential
 /// blob, but they are machine-shared (MCP server OAuth, plugin secrets) and
 /// rotate independently of any account slot. On activate the live copies win.
@@ -154,10 +133,6 @@ const CLAUDE_SHARED_CREDENTIAL_KEYS: &[&str] = &[
     "pluginSecrets",
 ];
 
-/// A forced list re-probes an account only when its last attempt is older
-/// than this — the page's paint-then-refresh pair and Refresh mashing must
-/// not multiply provider calls (Anthropic's usage endpoint 429s eagerly).
-const FORCED_MIN_INTERVAL: Duration = Duration::from_secs(30);
 /// How long a Claude login swap waits for Claude Code to finish saving a
 /// refresh it has in flight (its token POST alone may take 30s).
 const CLAUDE_REFRESH_LOCK_WAIT: Duration = Duration::from_secs(45);
@@ -167,17 +142,6 @@ const CLAUDE_CREDENTIALS_TTL: Duration = Duration::from_secs(10);
 /// An abandoned login flow (dialog dismissed without Cancel) is reaped past this.
 const FLOW_TTL: Duration = Duration::from_secs(15 * 60);
 const HTTP_TIMEOUT: Duration = Duration::from_secs(8);
-
-/// A failed identity lookup is retried no sooner than this — an offline
-/// device must not call the profile endpoint on every list.
-const IDENTITY_RETRY: Duration = Duration::from_secs(5 * 60);
-
-/// A remembered identity lookup (see `Inner::identities`).
-#[derive(Clone)]
-enum IdentityLookup {
-    Known(String, SlotProfile),
-    Failed(Instant),
-}
 
 /// Filesystem knobs — env-resolved in production ([`AgentAccountsConfig::detect`]),
 /// explicit in tests.
@@ -403,7 +367,7 @@ struct Detected {
     store_key: Option<String>,
     /// `false` when the store carries no identity (Devin's bare API key):
     /// the profile is a placeholder, and a snapshot keeps whatever identity
-    /// a usage probe already wrote into the slot.
+    /// was previously saved in the slot.
     identity_known: bool,
 }
 
@@ -522,23 +486,16 @@ impl LoginFlow {
 
 // ── service ─────────────────────────────────────────────────────────────────
 
-/// One live usage probe: rate-limit windows plus the plan label the provider
-/// reported alongside them (Codex's usage endpoint carries a live `plan_type`,
-/// which supersedes the login-time JWT claim — plan changes show up here
-/// without a re-login). Claude's usage endpoint has no plan field.
+/// Usage reported by an agent run, persisted for its account view.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageSnapshot {
     windows: Vec<AgentUsageWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plan_label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    codex_reset_credits: Option<CodexResetCredits>,
 }
 
-/// Why a usage probe produced no windows. Drives the backoff and the reason
-/// the UI shows instead of a bare "Usage unavailable". Persisted with the
-/// usage cache so a relaunch neither forgets a Retry-After nor the reason.
+/// A failed HTTP request while explicitly refreshing a saved Claude login.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ProbeError {
@@ -556,28 +513,18 @@ enum ProbeError {
     },
     /// Never reached the provider (DNS/connect/TLS) or it didn't answer in time.
     Network { timeout: bool },
-    /// A 2xx whose body didn't carry the windows we parse (schema drift).
+    /// A 2xx whose body did not contain the expected login data.
     Schema,
-    /// The slot holds nothing probeable.
+    /// The saved login has no refresh credentials.
     #[serde(rename_all = "camelCase")]
     NoCredentials { why: NoCredentials },
-    /// The credentials name a server (issuer, API or portal url) outside the
-    /// provider's known hosts: nothing was sent.
-    UntrustedEndpoint,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum NoCredentials {
-    /// Codex API-key mode: no ChatGPT rate windows exist.
-    ApiKey,
     /// The slot has no access token / key at all.
     Missing,
-    /// Cursor's minted key is past its expiry.
-    KeyExpired,
-    /// The provider behind this login has no usage view zeron can read
-    /// (a Hermes API key for some other vendor, Pi's Copilot session).
-    Unsupported,
 }
 
 impl ProbeError {
@@ -592,110 +539,18 @@ impl ProbeError {
             ProbeError::Network { .. } => "network",
             ProbeError::Schema => "schema",
             ProbeError::NoCredentials { .. } => "no-credentials",
-            ProbeError::UntrustedEndpoint => "untrusted-endpoint",
-        }
-    }
-
-    fn status(&self) -> Option<u16> {
-        match self {
-            ProbeError::Unauthorized { status } | ProbeError::Http { status, .. } => Some(*status),
-            ProbeError::RateLimited { .. } => Some(429),
-            _ => None,
-        }
-    }
-
-    /// How long to leave the provider alone after this failure. A server-sent
-    /// Retry-After wins (clamped so a bogus value can't stall usage for a
-    /// day, nor a 0 turn into hammering).
-    fn backoff(&self) -> Duration {
-        const MIN: u64 = 30;
-        match self {
-            ProbeError::RateLimited { retry_after_secs } => {
-                Duration::from_secs(retry_after_secs.unwrap_or(5 * 60).clamp(MIN, 60 * 60))
-            }
-            ProbeError::Http {
-                status,
-                retry_after_secs,
-            } if *status >= 500 => {
-                Duration::from_secs(retry_after_secs.unwrap_or(60).clamp(MIN, 30 * 60))
-            }
-            // 404/400…: the request itself is wrong — retrying soon won't help.
-            ProbeError::Http { .. } | ProbeError::Schema => Duration::from_secs(15 * 60),
-            ProbeError::Network { .. } => Duration::from_secs(MIN),
-            // Lifted early when the slot's credentials change (re-login, the
-            // CLI refreshing its token) — see `UsageEntry::probe_due`.
-            ProbeError::Unauthorized { .. }
-            | ProbeError::NoCredentials { .. }
-            | ProbeError::UntrustedEndpoint => Duration::from_secs(10 * 60),
         }
     }
 }
 
-/// Per-account usage state, persisted to `agent-accounts/usage-cache.json`
-/// so the first list after launch paints the last known windows instantly.
-/// All times are epoch millis (they must survive a restart).
+/// Last usage reported by a run. Old probe metadata is ignored on deserialization.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UsageEntry {
-    /// The last SUCCESSFUL probe — kept through later failures (a 429 must
-    /// not blank meters that were right a minute ago).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     usage: Option<UsageSnapshot>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     fetched_at: Option<i64>,
-    /// The last probe's failure; cleared by the next success.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<ProbeError>,
-    /// Last probe attempt, success or failure.
-    #[serde(default)]
-    checked_at: i64,
-    /// No probe before this (Retry-After / backoff).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    retry_at: Option<i64>,
-    /// Fingerprint of the credentials the last failure was against.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    credentials: Option<String>,
-}
-
-impl UsageEntry {
-    /// Whether a forced list should probe this account now.
-    fn probe_due(&self, credentials: &str, now: i64) -> bool {
-        if now - self.checked_at < FORCED_MIN_INTERVAL.as_millis() as i64 {
-            return false;
-        }
-        match (self.retry_at, &self.error) {
-            (Some(at), Some(error)) if now < at => {
-                // A token rejection (or a credential-less slot) is about THAT
-                // credential: new credentials deserve a probe right away. A
-                // rate limit or outage is not, so it holds regardless.
-                matches!(
-                    error,
-                    ProbeError::Unauthorized { .. }
-                        | ProbeError::NoCredentials { .. }
-                        | ProbeError::UntrustedEndpoint
-                ) && self.credentials.as_deref() != Some(credentials)
-            }
-            _ => true,
-        }
-    }
-
-    fn record(&mut self, result: Result<UsageSnapshot, ProbeError>, credentials: String, now: i64) {
-        self.checked_at = now;
-        match result {
-            Ok(usage) => {
-                self.usage = Some(usage);
-                self.fetched_at = Some(now);
-                self.error = None;
-                self.retry_at = None;
-                self.credentials = None;
-            }
-            Err(error) => {
-                self.retry_at = Some(now + error.backoff().as_millis() as i64);
-                self.error = Some(error);
-                self.credentials = Some(credentials);
-            }
-        }
-    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -704,22 +559,14 @@ struct UsageCacheFile {
     entries: HashMap<String, UsageEntry>,
 }
 
-/// Network knobs — the real provider endpoints in production, a local mock
-/// in tests. `allow_slot_refresh = false` keeps a probe strictly read-only
-/// (the live diagnosis harness must never rotate a real refresh token).
+/// Explicit sign-in endpoints, replaced by local mocks in tests.
 #[derive(Debug, Clone)]
 struct ProbeEndpoints {
-    claude_usage: String,
     claude_token: String,
     /// Where the loopback login redeems its code (and reads the profile).
     claude_loopback_token: String,
     claude_profile: String,
-    codex_usage: String,
-    codex_reset_credits: String,
-    codex_consume_reset: String,
-    /// Grok's billing view (`/v1/billing?format=credits`).
-    grok_usage: String,
-    /// GitHub's REST root (`/user`, `/copilot_internal/user`).
+    /// GitHub's REST root (`/user`, for explicit sign-in only).
     github_api: String,
     /// GitHub's OAuth root (`/login/device/code`, `/login/oauth/access_token`).
     github_login: String,
@@ -728,32 +575,21 @@ struct ProbeEndpoints {
     /// The ChatGPT sign-in's loopback port — FIXED at 1455 by the client
     /// registration; tests bind any free port (0).
     openai_port: u16,
-    /// The Nous portal (`/api/oauth/account`).
-    nous_portal: String,
-    allow_slot_refresh: bool,
-    /// Test seam: admit `http://127.0.0.1` for credential-DEFINED endpoints
-    /// (Grok issuer, Devin server, …) so mock servers can stand in. Always
-    /// `false` in production — see [`stores::trusted_base`].
+    /// Test seam: admit `http://127.0.0.1` for sign-in mocks.
+    /// Always `false` in production.
     allow_loopback_http: bool,
 }
 
 impl Default for ProbeEndpoints {
     fn default() -> Self {
         Self {
-            claude_usage: CLAUDE_USAGE_URL.into(),
             claude_token: CLAUDE_TOKEN_URL.into(),
             claude_loopback_token: CLAUDE_LOOPBACK_TOKEN_URL.into(),
             claude_profile: CLAUDE_PROFILE_URL.into(),
-            codex_usage: CODEX_USAGE_URL.into(),
-            codex_reset_credits: CODEX_RESET_CREDITS_URL.into(),
-            codex_consume_reset: CODEX_CONSUME_RESET_URL.into(),
-            grok_usage: usage::GROK_USAGE_URL.into(),
             github_api: "https://api.github.com".into(),
             github_login: "https://github.com".into(),
             openai_auth: oauth::OPENAI_AUTH.into(),
             openai_port: oauth::OPENAI_LOOPBACK_PORT,
-            nous_portal: usage::NOUS_PORTAL.into(),
-            allow_slot_refresh: true,
             allow_loopback_http: false,
         }
     }
@@ -780,20 +616,12 @@ struct Inner {
     flows: Mutex<HashMap<String, LoginFlow>>,
     /// `"{harness}:{accountKey}"` → usage state; mirrored to disk.
     usage: Mutex<HashMap<String, UsageEntry>>,
-    /// Accounts with a usage probe in flight — overlapping forced lists (the
-    /// page's paint-then-refresh, two open windows) share one probe.
-    inflight_probes: Mutex<std::collections::HashSet<String>>,
     /// Slots with a token refresh in flight — a second refresh of the same
     /// (commonly single-use) refresh token would revoke the family.
     inflight_refreshes: Mutex<std::collections::HashSet<String>>,
     claude_credentials: Mutex<Option<CachedClaudeCredentials>>,
     /// Callback ports of logins run for another device (see module docs).
     callback_routes: zeron_preview::login::CallbackRoutes,
-    /// Who an opaque live token belongs to (Pi's Claude login, a Copilot
-    /// token), by token fingerprint — one profile call per token, not per
-    /// list; a failed lookup waits [`IDENTITY_RETRY`] before the next. See
-    /// [`stores`].
-    identities: Mutex<HashMap<String, IdentityLookup>>,
     /// Test seam: fixed CLI binaries per agent instead of PATH resolution.
     cli_overrides: Mutex<HashMap<HarnessId, PathBuf>>,
 }
@@ -804,8 +632,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// Releases single-flight markers on drop. RPC handlers are aborted when the
 /// client cancels or disconnects, so a marker removed only after the await
-/// would stay forever — and that account would never probe (or refresh)
-/// again until restart.
+/// would prevent another explicit refresh until restart.
 struct InflightGuard<'a> {
     set: &'a Mutex<std::collections::HashSet<String>>,
     keys: Vec<String>,
@@ -882,11 +709,9 @@ impl AgentAccounts {
                 ops: tokio::sync::Mutex::new(()),
                 flows: Mutex::new(HashMap::new()),
                 usage: Mutex::new(usage),
-                inflight_probes: Mutex::new(std::collections::HashSet::new()),
                 inflight_refreshes: Mutex::new(std::collections::HashSet::new()),
                 claude_credentials: Mutex::new(None),
                 callback_routes,
-                identities: Mutex::new(HashMap::new()),
                 cli_overrides: Mutex::new(HashMap::new()),
             }),
         }
@@ -936,18 +761,14 @@ impl AgentAccounts {
 
     /// Detect the CLIs, auto-snapshot the live logins, and assemble the view.
     ///
-    /// Usage is stale-while-revalidate: every list serves each account's last
-    /// good probe (memory, seeded from disk) with its fetch time, so a plain
-    /// list is offline-fast. `force_usage` additionally re-probes — all
-    /// accounts concurrently — skipping any still inside a Retry-After /
-    /// backoff window or probed in the last [`FORCED_MIN_INTERVAL`].
+    /// `force_usage` is accepted for compatibility; listing never probes a provider.
     pub async fn list(&self, force_usage: bool) -> Result<AgentAccountsSnapshot, EngineError> {
         let _ops = self.inner.ops.lock().await;
         self.list_locked(force_usage).await
     }
 
     /// Caller holds [`Inner::ops`].
-    async fn list_locked(&self, force_usage: bool) -> Result<AgentAccountsSnapshot, EngineError> {
+    async fn list_locked(&self, _force_usage: bool) -> Result<AgentAccountsSnapshot, EngineError> {
         let mut warnings: Vec<AgentAccountWarning> = Vec::new();
         // Per agent, the live logins' account keys — one for single-login
         // agents, one per model provider for OpenCode / Pi.
@@ -1045,30 +866,6 @@ impl AgentAccounts {
         let (hermes, hermes_active) = self.hermes_slots();
         active_keys.insert(HarnessId::Hermes, hermes_active);
         providers.push((HarnessId::Hermes, hermes));
-        if force_usage {
-            let targets: Vec<(HarnessId, &Slot, bool)> = providers
-                .iter()
-                .flat_map(|(harness, slots)| {
-                    let active = active_keys.get(harness);
-                    slots.iter().map(move |slot| {
-                        (
-                            *harness,
-                            slot,
-                            active.is_some_and(|keys| keys.contains(&slot.account_key)),
-                        )
-                    })
-                })
-                .collect();
-            self.refresh_usage(&targets).await;
-            // A probe can teach a slot who it is (Devin's key file names no
-            // one): show that in this very list.
-            for (harness, slots) in providers.iter_mut() {
-                if *harness == HarnessId::Devin {
-                    *slots = self.read_slots(*harness);
-                }
-            }
-        }
-        let now = now_ms();
         let usage = lock(&self.inner.usage).clone();
         let mut accounts: Vec<AgentAccount> = Vec::new();
         for (harness, slots) in &providers {
@@ -1076,15 +873,17 @@ impl AgentAccounts {
             let active_set = active_keys.get(&harness);
             for slot in slots {
                 let active = active_set.is_some_and(|keys| keys.contains(&slot.account_key));
-                let entry = usage.get(&usage_key(harness, &slot.account_key));
+                // Only Muse's run-reported usage is shown; ignore old provider probes.
+                let entry = usage
+                    .get(&usage_key(harness, &slot.account_key))
+                    .filter(|_| harness == HarnessId::Muse);
                 let snapshot = entry.and_then(|entry| entry.usage.as_ref());
                 accounts.push(AgentAccount {
                     id: slot.id.clone(),
                     harness,
                     email: Some(slot.profile.email.clone()),
-                    // A live plan from the usage probe (Codex `plan_type`)
-                    // supersedes the login-time snapshot; fall back to the
-                    // snapshot when no probe has succeeded yet.
+                    // A plan reported by a Muse run supersedes its saved label.
+                    // Other agents use only their local account profile.
                     plan_label: snapshot
                         .and_then(|usage| usage.plan_label.clone())
                         .or_else(|| slot.profile.plan.clone()),
@@ -1092,19 +891,10 @@ impl AgentAccounts {
                     usage_windows: snapshot
                         .map(|usage| usage.windows.clone())
                         .unwrap_or_default(),
-                    codex_reset_credits: snapshot
-                        .and_then(|usage| usage.codex_reset_credits.clone()),
+                    codex_reset_credits: None,
                     usage_fetched_at: entry.and_then(|entry| entry.fetched_at),
-                    usage_error: entry.and_then(|entry| {
-                        usage_error_message(
-                            harness,
-                            slot.store_key.as_deref(),
-                            active,
-                            entry.error.as_ref()?,
-                            entry,
-                            now,
-                        )
-                    }),
+                    usage_error: (harness != HarnessId::Muse)
+                        .then(|| ACCOUNT_USAGE_UNAVAILABLE.to_string()),
                     display_name: slot.profile.display_name.clone(),
                     organization: slot.profile.organization.clone(),
                     auth_kind: Some(slot.profile.auth_kind),
@@ -1129,7 +919,7 @@ impl AgentAccounts {
                     usage_windows: Vec::new(),
                     codex_reset_credits: None,
                     usage_fetched_at: None,
-                    usage_error: None,
+                    usage_error: Some(ACCOUNT_USAGE_UNAVAILABLE.to_string()),
                     display_name: u.profile.display_name.clone(),
                     organization: u.profile.organization.clone(),
                     auth_kind: Some(u.profile.auth_kind),
@@ -2858,7 +2648,7 @@ impl AgentAccounts {
             return Ok(());
         }
         // A store without identity (Devin's bare key) must not overwrite the
-        // identity a usage probe already wrote into the slot.
+        // identity was previously saved in the slot.
         let profile = match d.identity_known {
             true => d.profile.clone(),
             false => self
@@ -2920,9 +2710,8 @@ impl AgentAccounts {
     /// `.credentials.json` file only when the Keychain holds nothing. The
     /// file is a fallback Claude Code leaves behind (it is only deleted when
     /// a write migrates an EMPTY Keychain), so a stale one routinely sits
-    /// next to the live Keychain login — reading it first captured tokens
-    /// that expired days ago, and every usage probe for the active account
-    /// came back 401 ("Usage unavailable").
+    /// next to the live Keychain login. Prefer the current Keychain login
+    /// so a snapshot or explicit switch does not reuse stale tokens.
     async fn read_claude_credentials(&self) -> (Option<serde_json::Value>, Option<String>) {
         #[cfg(target_os = "macos")]
         if let Some(service) = &self.inner.config.claude_keychain_service {
@@ -3058,74 +2847,7 @@ impl AgentAccounts {
         write_file_atomic(&file, json.as_bytes(), true)
     }
 
-    // ── remaining usage ─────────────────────────────────────────────────────
-
-    /// Probe every due account concurrently and fold the outcomes into the
-    /// usage cache (then disk). Accounts inside a backoff window, probed a
-    /// moment ago, or already being probed by an overlapping list are left
-    /// alone — they keep serving their last known usage.
-    async fn refresh_usage(&self, targets: &[(HarnessId, &Slot, bool)]) {
-        let now = now_ms();
-        let mut probes = Vec::new();
-        let mut claimed = Vec::new();
-        {
-            let usage = lock(&self.inner.usage);
-            let mut inflight = lock(&self.inner.inflight_probes);
-            for &(harness, slot, active) in targets {
-                // Muse reports its usage from runs (`record_muse_usage`); a
-                // probe's fresh host has observed none.
-                if harness == HarnessId::Muse {
-                    continue;
-                }
-                let key = usage_key(harness, &slot.account_key);
-                let credentials = credentials_fingerprint(&slot.credentials);
-                if let Some(entry) = usage.get(&key)
-                    && !entry.probe_due(&credentials, now)
-                {
-                    tracing::debug!(
-                        provider = harness_slug(harness),
-                        slot = %slot.id,
-                        retry_at = ?entry.retry_at,
-                        "usage probe skipped (backoff or fresh)"
-                    );
-                    continue;
-                }
-                if !inflight.insert(key.clone()) {
-                    continue;
-                }
-                claimed.push(key.clone());
-                probes.push(async move {
-                    let result = self.probe_usage(harness, slot, active).await;
-                    (key, credentials, result)
-                });
-            }
-        }
-        let _release = InflightGuard {
-            set: &self.inner.inflight_probes,
-            keys: claimed,
-        };
-        if probes.is_empty() {
-            return;
-        }
-        let results = futures::future::join_all(probes).await;
-        let now = now_ms();
-        let mut usage = lock(&self.inner.usage);
-        for (key, credentials, result) in results {
-            usage
-                .entry(key)
-                .or_default()
-                .record(result, credentials, now);
-        }
-        // Drop entries for accounts that no longer have a slot (forgotten).
-        let live: std::collections::HashSet<String> = targets
-            .iter()
-            .map(|(harness, slot, _)| usage_key(*harness, &slot.account_key))
-            .collect();
-        usage.retain(|key, _| live.contains(key));
-        // Persist under the lock: overlapping lists must not interleave
-        // writes of the same file.
-        self.persist_usage(&usage);
-    }
+    // ── run-reported usage and explicit refresh ──────────────────────────────
 
     /// Write the usage cache; the caller holds [`Inner::usage`].
     fn persist_usage(&self, usage: &HashMap<String, UsageEntry>) {
@@ -3143,347 +2865,21 @@ impl AgentAccounts {
         }
     }
 
-    /// One account's probe. Never touches the cache (see [`Self::refresh_usage`]).
-    async fn probe_usage(
-        &self,
-        harness: HarnessId,
-        slot: &Slot,
-        is_active: bool,
-    ) -> Result<UsageSnapshot, ProbeError> {
-        let result = match harness {
-            HarnessId::ClaudeCode => self.claude_usage(slot, is_active).await,
-            HarnessId::Codex => self.codex_usage(slot).await,
-            HarnessId::Cursor => self.cursor_usage(slot).await,
-            HarnessId::Grok => self.grok_usage(slot, is_active).await,
-            HarnessId::Devin => self.devin_usage(slot).await,
-            HarnessId::Opencode | HarnessId::Pi | HarnessId::Hermes => {
-                self.keyed_usage(harness, slot).await
-            }
-            _ => Err(ProbeError::NoCredentials {
-                why: NoCredentials::Missing,
-            }),
-        };
-        if let Err(error) = &result {
-            // Expected, quiet outcomes (API-key logins have no windows).
-            if !matches!(error, ProbeError::NoCredentials { .. }) {
-                tracing::warn!(
-                    provider = harness_slug(harness),
-                    slot = %slot.id,
-                    active = is_active,
-                    class = error.class(),
-                    status = ?error.status(),
-                    backoff_s = error.backoff().as_secs(),
-                    "agent usage unavailable"
-                );
-            }
-        }
-        result
-    }
-
-    async fn claude_usage(
-        &self,
-        slot: &Slot,
-        is_active: bool,
-    ) -> Result<UsageSnapshot, ProbeError> {
-        let missing = ProbeError::NoCredentials {
-            why: NoCredentials::Missing,
-        };
-        let oauth = slot
-            .credentials
-            .get("claudeAiOauth")
-            .ok_or(missing.clone())?;
-        let access_token = str_field(oauth, "accessToken").ok_or(missing)?;
-        match self.claude_usage_request(&access_token).await {
-            // The stored expiry metadata can lie (a Claude Code regression
-            // wrote `expiresAt: 0` for fresh logins), so probe with the
-            // stored token first and rotate the slot-owned pair only after
-            // the endpoint actually REJECTED it (401/403) — a 429 or 5xx says
-            // nothing about the token, and a refresh there would burn a
-            // single-use refresh token for nothing. The active login is never
-            // rotated: the running CLI may hold its single-use refresh token.
-            Err(ProbeError::Unauthorized { status })
-                if !is_active
-                    && self.inner.endpoints.allow_slot_refresh
-                    && self.claude_slot_is_not_live(slot).await =>
-            {
-                match self.refresh_claude_slot(slot).await? {
-                    Some(fresh) => self.claude_usage_request(&fresh).await,
-                    // Refresh in flight elsewhere (single-flight) — report
-                    // the original rejection; the next probe sees the result.
-                    None => Err(ProbeError::Unauthorized { status }),
-                }
-            }
-            result => result,
-        }
-    }
-
-    /// One usage probe: GET the endpoint and parse windows.
-    async fn claude_usage_request(&self, access_token: &str) -> Result<UsageSnapshot, ProbeError> {
-        let body = probe_json(
-            "claude-code",
-            "usage",
-            self.inner
-                .http
-                .get(&self.inner.endpoints.claude_usage)
-                .bearer_auth(access_token)
-                .header("anthropic-beta", "oauth-2025-04-20")
-                .header("Content-Type", "application/json"),
-        )
-        .await?;
-        claude_usage_windows(&body).ok_or_else(|| schema_error("claude-code", &body))
-    }
-
-    async fn codex_usage(&self, slot: &Slot) -> Result<UsageSnapshot, ProbeError> {
-        // api-key mode has no ChatGPT rate windows.
-        let Some(tokens) = slot.credentials.get("tokens") else {
-            return Err(ProbeError::NoCredentials {
-                why: if str_field(&slot.credentials, "OPENAI_API_KEY").is_some() {
-                    NoCredentials::ApiKey
-                } else {
-                    NoCredentials::Missing
-                },
-            });
-        };
-        let access_token = str_field(tokens, "access_token").ok_or(ProbeError::NoCredentials {
-            why: NoCredentials::Missing,
-        })?;
-        let body = probe_json(
-            "codex",
-            "usage",
-            self.inner
-                .http
-                .get(&self.inner.endpoints.codex_usage)
-                .bearer_auth(&access_token)
-                .header(
-                    "chatgpt-account-id",
-                    str_field(tokens, "account_id").unwrap_or_default(),
-                ),
-        )
-        .await?;
-        if let Some(account_id) = str_field(&body, "account_id")
-            && account_id != slot.account_key
-        {
-            return Err(ProbeError::NoCredentials {
-                why: NoCredentials::Missing,
-            });
-        }
-        let reset_count = body
-            .pointer("/rate_limit_reset_credits/available_count")
-            .and_then(|count| count.as_u64());
-        let codex_reset_credits = match reset_count {
-            Some(0) => Some(CodexResetCredits {
-                available_count: 0,
-                credits: Vec::new(),
-            }),
-            _ => self.codex_reset_credits(slot).await.ok(),
-        };
-        // an exhausted account can report no windows yet still hold banked resets
-        let mut snapshot = codex_usage_snapshot(&body)
-            .or_else(|| {
-                codex_reset_credits.is_some().then(|| UsageSnapshot {
-                    plan_label: codex_plan(str_field(&body, "plan_type").as_deref()),
-                    ..Default::default()
-                })
-            })
-            .ok_or_else(|| schema_error("codex", &body))?;
-        snapshot.codex_reset_credits = codex_reset_credits;
-        Ok(snapshot)
-    }
-
-    async fn codex_reset_credits(&self, slot: &Slot) -> Result<CodexResetCredits, ProbeError> {
-        let (access_token, account_id) =
-            codex_slot_auth(slot).map_err(|_| ProbeError::NoCredentials {
-                why: NoCredentials::Missing,
-            })?;
-        let body = probe_json(
-            "codex",
-            "reset-credits",
-            self.inner
-                .http
-                .get(&self.inner.endpoints.codex_reset_credits)
-                .bearer_auth(access_token)
-                .header("chatgpt-account-id", account_id),
-        )
-        .await?;
-        parse_codex_reset_credits(&body).ok_or_else(|| schema_error("codex", &body))
-    }
-
+    /// Kept for older clients: quota resets must be performed in Codex itself.
     pub async fn consume_codex_reset_credit(
         &self,
-        account_id: &str,
-        credit_id: &str,
-        idempotency_key: &str,
+        _account_id: &str,
+        _credit_id: &str,
+        _idempotency_key: &str,
     ) -> Result<CodexResetOutcome, EngineError> {
-        if credit_id.is_empty() || idempotency_key.is_empty() {
-            return Err(EngineError::Other("Select a reset and try again.".into()));
-        }
-        if let Some(detected) = self.detect_codex() {
-            self.snapshot_detected(HarnessId::Codex, &detected)?;
-        }
-        let slot = self
-            .read_slots(HarnessId::Codex)
-            .into_iter()
-            .find(|slot| slot.id == account_id)
-            .ok_or_else(|| EngineError::Other("This Codex account is no longer saved.".into()))?;
-        let (access_token, provider_account_id) = codex_slot_auth(&slot)?;
-        let usage: serde_json::Value = self
-            .inner
-            .http
-            .get(&self.inner.endpoints.codex_usage)
-            .bearer_auth(access_token)
-            .header("chatgpt-account-id", provider_account_id)
-            .send()
-            .await
-            .map_err(|e| EngineError::Other(format!("Could not verify Codex account: {e}")))?
-            .error_for_status()
-            .map_err(|e| EngineError::Other(format!("Could not verify Codex account: {e}")))?
-            .json()
-            .await
-            .map_err(|e| EngineError::Other(format!("Could not read Codex account: {e}")))?;
-        if str_field(&usage, "account_id").as_deref() != Some(provider_account_id) {
-            return Err(EngineError::Other(
-                "Codex returned a different account. Refresh Accounts and try again.".into(),
-            ));
-        }
-        let body: serde_json::Value = self
-            .inner
-            .http
-            .post(&self.inner.endpoints.codex_consume_reset)
-            .bearer_auth(access_token)
-            .header("chatgpt-account-id", provider_account_id)
-            .json(&serde_json::json!({
-                "redeem_request_id": idempotency_key,
-                "credit_id": credit_id,
-            }))
-            .send()
-            .await
-            .map_err(|e| EngineError::Other(format!("Could not use Codex reset: {e}")))?
-            .error_for_status()
-            .map_err(|e| EngineError::Other(format!("Could not use Codex reset: {e}")))?
-            .json()
-            .await
-            .map_err(|e| EngineError::Other(format!("Could not read Codex reset result: {e}")))?;
-        let outcome = str_field(&body, "code")
-            .ok_or_else(|| EngineError::Other("Codex returned an unknown reset result.".into()))?;
-        if outcome == "reset" || outcome == "already_redeemed" {
-            // keep the last known meters on screen but let the next forced list re-probe at once
-            let key = usage_key(HarnessId::Codex, &slot.account_key);
-            if let Some(entry) = lock(&self.inner.usage).get_mut(&key) {
-                entry.checked_at = 0;
-                entry.retry_at = None;
-            }
-        }
-        Ok(CodexResetOutcome { outcome })
+        Err(EngineError::Other(
+            "Quota resets are not performed by Zerun. Use Codex or the provider dashboard.".into(),
+        ))
     }
 
-    async fn cursor_usage(&self, slot: &Slot) -> Result<UsageSnapshot, ProbeError> {
-        // The SDK key tracks identity/expiry but has no quota view — the
-        // account numbers live on the dashboard API the Cursor app itself
-        // calls, reachable with a session minted from the key.
-        let api_key = str_field(&slot.credentials, "apiKey").ok_or(ProbeError::NoCredentials {
-            why: NoCredentials::Missing,
-        })?;
-        if !cursor_key_usable(&slot.credentials) {
-            return Err(ProbeError::NoCredentials {
-                why: NoCredentials::KeyExpired,
-            });
-        }
-        let backend = str_field(&slot.credentials, "backendUrl")
-            .unwrap_or_else(|| CURSOR_DEFAULT_BACKEND.to_string())
-            .trim_end_matches('/')
-            .to_string();
-        let session = probe_json(
-            "cursor",
-            "exchange",
-            self.inner
-                .http
-                .post(format!("{backend}/auth/exchange_user_api_key"))
-                .bearer_auth(api_key)
-                .json(&serde_json::json!({})),
-        )
-        .await?;
-        let access_token =
-            str_field(&session, "accessToken").ok_or_else(|| schema_error("cursor", &session))?;
-        let body = probe_json(
-            "cursor",
-            "usage",
-            self.inner
-                .http
-                .post(format!("{backend}/{CURSOR_CURRENT_PERIOD_USAGE}"))
-                .bearer_auth(&access_token)
-                .header("Connect-Protocol-Version", "1")
-                .json(&serde_json::json!({})),
-        )
-        .await?;
-        let mut windows = cursor_bucket_windows(&body);
-        if windows.is_empty() {
-            windows.extend(cursor_usage_window(&body));
-        }
-        if windows.is_empty() {
-            return Err(schema_error("cursor", &body));
-        }
-        // Best effort: a failed or absent Grok quota never hides the plan meters.
-        let sand = probe_json(
-            "cursor",
-            "grok",
-            self.inner
-                .http
-                .post(format!("{backend}/{CURSOR_SAND_USAGE}"))
-                .bearer_auth(&access_token)
-                .header("Connect-Protocol-Version", "1")
-                .json(&serde_json::json!({})),
-        )
-        .await
-        .ok();
-        // Cursor, Grok, Other: the weekly Grok quota sits between the two monthly buckets.
-        if let Some(grok) = sand.as_ref().and_then(cursor_grok_window) {
-            windows.insert(1.min(windows.len()), grok);
-        }
-        Ok(UsageSnapshot {
-            windows,
-            plan_label: None,
-            codex_reset_credits: None,
-        })
-    }
-
-    /// Whether `slot` is provably NOT the grant Claude Code runs on, so zeron
-    /// may rotate its refresh token. `is_active` alone isn't proof: it is
-    /// false whenever the live identity couldn't be read (`~/.claude.json`
-    /// mid-rewrite), and rotating the CLI's own refresh token logs it out.
-    async fn claude_slot_is_not_live(&self, slot: &Slot) -> bool {
-        let file = &self.inner.config.claude_config_file;
-        let cfg = read_json(file);
-        if cfg.is_none() && file.exists() {
-            return false;
-        }
-        let live_key = cfg.as_ref().and_then(|cfg| {
-            let oauth = cfg.get("oauthAccount")?;
-            str_field(oauth, "accountUuid").or_else(|| str_field(oauth, "emailAddress"))
-        });
-        if live_key.as_deref() == Some(slot.account_key.as_str()) {
-            return false;
-        }
-        let (live, warning) = self
-            .read_claude_credentials_cached(live_key.as_deref().unwrap_or_default())
-            .await;
-        if live.is_none() && warning.is_some() {
-            return false;
-        }
-        let refresh = |creds: &serde_json::Value| {
-            creds
-                .get("claudeAiOauth")
-                .and_then(|oauth| str_field(oauth, "refreshToken"))
-        };
-        live.as_ref()
-            .and_then(refresh)
-            .is_none_or(|live| Some(live) != refresh(&slot.credentials))
-    }
-
-    /// Refresh a saved Claude slot's expired access token so its usage stays
-    /// queryable. NEVER called for the active login. Single-flight per slot:
-    /// OAuth refresh tokens are commonly single-use, and a concurrent second
-    /// POST of the same one would revoke the family and brick the slot.
-    /// `Ok(None)` = another refresh of this slot is already in flight.
+    /// Refresh an expired saved Claude login only when the user switches to it.
+    /// Single-flight per slot: refresh tokens can be single-use.
+    /// `Ok(None)` means another refresh of this slot is already in flight.
     async fn refresh_claude_slot(&self, slot: &Slot) -> Result<Option<String>, ProbeError> {
         if !lock(&self.inner.inflight_refreshes).insert(slot.id.clone()) {
             return Ok(None);
@@ -3932,9 +3328,6 @@ fn codex_plan(plan: Option<&str>) -> Option<String> {
 /// primary (~18_000s) with a weekly secondary (604_800s). A bare "> 1 day =
 /// week" rule mislabeled the monthly window "Week"; thresholds in seconds
 /// leave the middle gaps to the nearest label rather than guessing a plan.
-fn codex_window_label(span_seconds: i64) -> &'static str {
-    zeron_proto::plan_usage::codex_window_label(span_seconds)
-}
 
 /// Compose a target Claude login with the machine's current shared fields.
 ///
@@ -4085,55 +3478,6 @@ fn parse_codex_auth(auth: serde_json::Value) -> Option<Detected> {
     })
 }
 
-fn codex_slot_auth(slot: &Slot) -> Result<(&str, &str), EngineError> {
-    let detected = parse_codex_auth(slot.credentials.clone())
-        .ok_or_else(|| EngineError::Other("This Codex login needs to be refreshed.".into()))?;
-    let tokens = slot.credentials.get("tokens");
-    let account_id = tokens
-        .and_then(|tokens| tokens.get("account_id"))
-        .and_then(|v| v.as_str());
-    let access_token = tokens
-        .and_then(|tokens| tokens.get("access_token"))
-        .and_then(|v| v.as_str());
-    match (account_id, access_token) {
-        (Some(account_id), Some(access_token))
-            if !access_token.is_empty()
-                && account_id == slot.account_key
-                && detected.account_key == slot.account_key =>
-        {
-            Ok((access_token, account_id))
-        }
-        _ => Err(EngineError::Other(
-            "This Codex login could not be verified for reset redemption.".into(),
-        )),
-    }
-}
-
-fn parse_codex_reset_credits(body: &serde_json::Value) -> Option<CodexResetCredits> {
-    let credits = body
-        .get("credits")?
-        .as_array()?
-        .iter()
-        .filter(|credit| {
-            credit.get("status").and_then(|v| v.as_str()) == Some("available")
-                && credit.get("reset_type").and_then(|v| v.as_str()) == Some("codex_rate_limits")
-        })
-        .filter_map(|credit| {
-            Some(CodexResetCredit {
-                id: str_field(credit, "id")?,
-                title: str_field(credit, "title").unwrap_or_else(|| "Full reset".into()),
-                description: str_field(credit, "description"),
-                expires_at: parse_when(credit.get("expires_at")),
-            })
-        })
-        .collect::<Vec<_>>();
-    Some(CodexResetCredits {
-        available_count: credits.len() as u64,
-        credits,
-    })
-}
-
-/// ISO string (Claude) or unix seconds (Codex) → timestamp.
 /// The Cursor SDK's credential store (`StoredSdkCredentials`, version 1):
 /// the named user API key its browser login minted, plus identity/expiry.
 fn parse_cursor_auth(auth: serde_json::Value) -> Option<Detected> {
@@ -4185,22 +3529,11 @@ fn cursor_key_usable(auth: &serde_json::Value) -> bool {
             .is_none_or(|ms| ms > now_ms())
 }
 
-fn parse_when(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
-    zeron_proto::plan_usage::parse_when(value)
-}
-
 fn usage_key(harness: HarnessId, account_key: &str) -> String {
     format!("{}:{account_key}", harness_slug(harness))
 }
 
-/// A short digest of a slot's credential blob — tells "same token that was
-/// rejected" from "the CLI refreshed / the user re-logged in". Never the
-/// secret itself: this lands in the usage cache file.
-fn credentials_fingerprint(credentials: &serde_json::Value) -> String {
-    crate::repos::hex(&Sha256::digest(credentials.to_string().as_bytes()))[..16].to_string()
-}
-
-/// Send one probe request and decode its JSON body, classifying every
+/// Send one explicit login refresh request and decode its JSON body, classifying every
 /// failure. Logs provider/step/status/class/Retry-After — never the request
 /// (bearer tokens) or the response body (it can echo account details).
 async fn probe_json(
@@ -4219,7 +3552,7 @@ async fn probe_json(
                 step,
                 class = error.class(),
                 connect = err.is_connect(),
-                "agent usage probe failed"
+                "agent login request failed"
             );
             return Err(error);
         }
@@ -4234,7 +3567,7 @@ async fn probe_json(
             status = status.as_u16(),
             class = error.class(),
             retry_after_s = ?retry_after_secs,
-            "agent usage probe failed"
+            "agent login request failed"
         );
         return Err(error);
     }
@@ -4243,7 +3576,7 @@ async fn probe_json(
             provider,
             step,
             class = "schema",
-            "agent usage probe: body is not JSON"
+            "agent login request: body is not JSON"
         );
         ProbeError::Schema
     })
@@ -4290,209 +3623,9 @@ fn schema_error(provider: &'static str, body: &serde_json::Value) -> ProbeError 
         provider,
         class = "schema",
         ?keys,
-        "agent usage probe: unexpected response shape"
+        "agent login request: unexpected response shape"
     );
     ProbeError::Schema
-}
-
-/// The UI's reason line for an account whose last probe failed. `None` for
-/// failures that need no explanation beyond the missing meters.
-fn usage_error_message(
-    harness: HarnessId,
-    store_key: Option<&str>,
-    active: bool,
-    error: &ProbeError,
-    entry: &UsageEntry,
-    now: i64,
-) -> Option<String> {
-    let provider = match (harness, store_key) {
-        (HarnessId::ClaudeCode, _) => "Anthropic",
-        (HarnessId::Codex, _) => "OpenAI",
-        (HarnessId::Cursor, _) => "Cursor",
-        (HarnessId::Grok, _) => "xAI",
-        (HarnessId::Devin, _) => "Devin",
-        (_, Some(key)) => stores::upstream_vendor(key),
-        _ => "the provider",
-    };
-    let retry = entry
-        .retry_at
-        .filter(|at| *at > now)
-        .map(|at| format!(" — retrying in {}", short_duration(at - now)))
-        .unwrap_or_default();
-    Some(match error {
-        ProbeError::RateLimited { .. } => format!("Rate limited by {provider}{retry}"),
-        // Devin's key never expires on its own: a rejection means it was
-        // revoked, whichever login it is.
-        ProbeError::Unauthorized { .. } if harness == HarnessId::Devin => {
-            "Signed out — sign in again".to_string()
-        }
-        ProbeError::Unauthorized { .. } if active => {
-            // The CLI owns (and refreshes) the live token; it just hasn't yet.
-            format!(
-                "Session expired — it refreshes the next time {} runs",
-                stores::cli_name(harness)
-            )
-        }
-        // Codex-style slots aren't refreshed in the background (their
-        // refresh tokens rotate); the CLI refreshes a switched-to login on
-        // its next run. Hermes refreshes its own pool.
-        ProbeError::Unauthorized { .. }
-            if matches!(
-                harness,
-                HarnessId::Codex | HarnessId::Opencode | HarnessId::Pi
-            ) =>
-        {
-            "Session expired — switch to it to refresh".to_string()
-        }
-        ProbeError::Unauthorized { .. } if harness == HarnessId::Hermes => {
-            "Session expired — it refreshes the next time hermes uses it".to_string()
-        }
-        ProbeError::Unauthorized { .. } => "Signed out — sign in again".to_string(),
-        ProbeError::Http { status, .. } if *status >= 500 => {
-            format!("{provider} is having trouble ({status}){retry}")
-        }
-        ProbeError::Http { status, .. } => format!("Usage check failed ({status})"),
-        ProbeError::Network { timeout: true } => format!("{provider} didn't respond{retry}"),
-        ProbeError::Network { .. } => format!("Couldn't reach {provider}{retry}"),
-        ProbeError::Schema => "Usage format changed — update zeron".to_string(),
-        ProbeError::NoCredentials {
-            why: NoCredentials::ApiKey,
-        } => "API keys have no plan usage".to_string(),
-        ProbeError::NoCredentials {
-            why: NoCredentials::KeyExpired,
-        } => "API key expired — connect again".to_string(),
-        ProbeError::NoCredentials {
-            why: NoCredentials::Missing,
-        } => return None,
-        ProbeError::NoCredentials {
-            why: NoCredentials::Unsupported,
-        } => "No usage view for this login".to_string(),
-        ProbeError::UntrustedEndpoint => {
-            "Usage skipped — this login names a server zeron doesn't recognize".to_string()
-        }
-    })
-}
-
-/// "45s" / "2m" / "3h" — the coarse countdown the reason line needs.
-fn short_duration(ms: i64) -> String {
-    let secs = (ms + 999) / 1000;
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", (secs + 59) / 60)
-    } else {
-        format!("{}h", (secs + 3599) / 3600)
-    }
-}
-
-/// A usage reply from `harness`'s plan endpoint (Claude's `/api/oauth/usage`,
-/// Codex's `/wham/usage`) as windows and the live plan label — for logins
-/// whose usage is read elsewhere (Cloud's, by the vault).
-pub(crate) fn usage_windows_from_reply(
-    harness: HarnessId,
-    body: &serde_json::Value,
-) -> Option<(Vec<AgentUsageWindow>, Option<String>)> {
-    let snapshot = match harness {
-        HarnessId::ClaudeCode => claude_usage_windows(body),
-        HarnessId::Codex => codex_usage_snapshot(body),
-        _ => None,
-    }?;
-    Some((snapshot.windows, snapshot.plan_label))
-}
-
-/// Codex `/wham/usage`: primary/secondary windows + the live plan.
-fn codex_usage_snapshot(body: &serde_json::Value) -> Option<UsageSnapshot> {
-    zeron_proto::plan_usage::codex(body).map(|(windows, plan_label)| UsageSnapshot {
-        windows,
-        plan_label,
-        codex_reset_credits: None,
-    })
-}
-
-/// Windows from Claude's `/api/oauth/usage`: the 5-hour session and weekly
-/// buckets, each a 0-100 `utilization` with an RFC3339 `resets_at`.
-fn claude_usage_windows(body: &serde_json::Value) -> Option<UsageSnapshot> {
-    zeron_proto::plan_usage::claude(body).map(|windows| UsageSnapshot {
-        windows,
-        plan_label: None,
-        codex_reset_credits: None,
-    })
-}
-
-/// The plan's two monthly buckets as Cursor itself reports them: first-party
-/// models (Composer, Grok, ...; `autoPercentUsed`) and third-party API models
-/// (`apiPercentUsed`). `totalSpend / limit` is wrong once bonus usage is
-/// granted on top of the paid allowance (it counts the bonus against the limit:
-/// 63989 / 7000 = 914% when Cursor shows 49%), so these are read as given.
-fn cursor_bucket_windows(body: &serde_json::Value) -> Vec<AgentUsageWindow> {
-    let Some(plan) = body.get("planUsage") else {
-        return Vec::new();
-    };
-    let resets_at = json_ms(body.get("billingCycleEnd"));
-    [
-        (zeron_proto::CURSOR_USAGE_CURSOR, "autoPercentUsed"),
-        (zeron_proto::CURSOR_USAGE_OTHER, "apiPercentUsed"),
-    ]
-    .into_iter()
-    .filter_map(|(label, field)| {
-        let percent = plan.get(field).and_then(|v| v.as_f64())?;
-        Some(AgentUsageWindow {
-            label: label.to_string(),
-            used_fraction: (percent / 100.0).clamp(0.0, 1.0) as f32,
-            resets_at,
-        })
-    })
-    .collect()
-}
-
-/// `GetSandUsageStatus`: the Grok Bot plan's weekly quota. `usagePercent` is
-/// read on the same 0-100 scale as the plan buckets (observed 0.177784 an hour
-/// into a fresh period), not as a 0-1 fraction.
-fn cursor_grok_window(body: &serde_json::Value) -> Option<AgentUsageWindow> {
-    let percent = body.get("usagePercent").and_then(|v| v.as_f64())?;
-    Some(AgentUsageWindow {
-        label: zeron_proto::CURSOR_USAGE_GROK.to_string(),
-        used_fraction: (percent / 100.0).clamp(0.0, 1.0) as f32,
-        resets_at: body
-            .get("nextResetTimestampUtc")
-            .and_then(|v| v.as_str())
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|t| t.with_timezone(&Utc)),
-    })
-}
-
-/// The billing-cycle window from Cursor's `GetCurrentPeriodUsage`. The blended
-/// percent is derived from spend/limit in cents: the payload's own
-/// `totalPercentUsed` disagrees with the number Cursor's UI narrates ("You've
-/// used 72% of your included usage" against `totalSpend`/`limit`, not the
-/// precomputed 11.5). proto3 JSON omits zero-valued fields, so an absent
-/// `limit` means unusable, not 0% — a synthetic 0% would render a healthy bar
-/// for an account whose usage nobody knows.
-fn cursor_usage_window(body: &serde_json::Value) -> Option<AgentUsageWindow> {
-    let plan = body.get("planUsage")?;
-    let limit = plan.get("limit").and_then(|v| v.as_f64())?;
-    if limit <= 0.0 {
-        return None;
-    }
-    let used = plan
-        .get("totalSpend")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    Some(AgentUsageWindow {
-        label: "Month".to_string(),
-        used_fraction: (used / limit) as f32,
-        resets_at: json_ms(body.get("billingCycleEnd")),
-    })
-}
-
-/// Unix-millis timestamp arriving as a JSON number or proto3 int64 string.
-fn json_ms(value: Option<&serde_json::Value>) -> Option<DateTime<Utc>> {
-    let ms = match value? {
-        serde_json::Value::Number(n) => n.as_i64()?,
-        serde_json::Value::String(s) => s.parse::<i64>().ok()?,
-        _ => return None,
-    };
-    DateTime::<Utc>::from_timestamp_millis(ms)
 }
 
 fn scan_openai_url(output: &str) -> Option<String> {
@@ -5189,64 +4322,6 @@ mod tests {
     }
 
     #[test]
-    fn codex_reset_credits_include_only_available_codex_resets() {
-        let body = serde_json::json!({
-            "available_count": 2,
-            "credits": [
-                {
-                    "id": "credit-1",
-                    "reset_type": "codex_rate_limits",
-                    "status": "available",
-                    "title": "Full reset (Weekly + 5 hr)",
-                    "expires_at": "2026-10-04T02:01:00Z"
-                },
-                { "id": "credit-2", "reset_type": "future_type", "status": "available" },
-                { "id": "credit-3", "reset_type": "codex_rate_limits", "status": "redeemed" }
-            ]
-        });
-        let parsed = parse_codex_reset_credits(&body).unwrap();
-        assert_eq!(parsed.available_count, 1);
-        assert_eq!(parsed.credits.len(), 1);
-        assert_eq!(parsed.credits[0].id, "credit-1");
-        assert_eq!(parsed.credits[0].title, "Full reset (Weekly + 5 hr)");
-        assert_eq!(
-            parsed.credits[0].expires_at,
-            Some("2026-10-04T02:01:00Z".parse().unwrap())
-        );
-    }
-
-    #[test]
-    fn codex_reset_auth_rejects_an_account_mismatch() {
-        let claims = serde_json::json!({
-            "email": "alice@example.com",
-            "https://api.openai.com/auth": { "chatgpt_account_id": "account-alice" }
-        });
-        let id_token = format!("x.{}.x", BASE64_URL.encode(claims.to_string()));
-        let credentials = serde_json::json!({
-            "tokens": {
-                "id_token": id_token,
-                "access_token": "access-token",
-                "account_id": "account-bob"
-            }
-        });
-        let detected = parse_codex_auth(credentials.clone()).unwrap();
-        let mut slot = Slot {
-            id: slot_id_for(HarnessId::Codex, &detected.account_key),
-            harness: HarnessId::Codex,
-            account_key: detected.account_key,
-            profile: detected.profile,
-            credentials,
-            claude_config: None,
-            saved_at: 0,
-            created_at: None,
-            store_key: None,
-        };
-        assert!(codex_slot_auth(&slot).is_err());
-        slot.credentials["tokens"]["account_id"] = serde_json::json!("account-alice");
-        assert_eq!(codex_slot_auth(&slot).unwrap().1, "account-alice");
-    }
-
-    #[test]
     fn plan_labels() {
         assert_eq!(
             claude_plan(Some("claude_max"), Some("default_claude_max_20x")).as_deref(),
@@ -5264,129 +4339,6 @@ mod tests {
         assert_eq!(codex_plan(Some("plus")).as_deref(), Some("ChatGPT Plus"));
         assert_eq!(codex_plan(Some("free")).as_deref(), Some("ChatGPT Free"));
         assert_eq!(codex_plan(None), None);
-    }
-
-    #[test]
-    fn codex_window_labels_track_the_window_span() {
-        // Codex free tier: one 30-day window (observed live:
-        // limit_window_seconds = 2_592_000) — NOT a week.
-        assert_eq!(codex_window_label(2_592_000), "Month");
-        // Plus: 5-hour primary + weekly secondary.
-        assert_eq!(codex_window_label(18_000), "Session");
-        assert_eq!(codex_window_label(604_800), "Week");
-        // Unknown/absent span falls back to the shortest label.
-        assert_eq!(codex_window_label(0), "Session");
-    }
-
-    #[test]
-    fn claude_usage_windows_map_buckets_and_percent() {
-        let body = serde_json::json!({
-            "five_hour": { "utilization": 6.0, "resets_at": "2026-04-08T18:59:59Z" },
-            "seven_day": { "utilization": 35.0, "resets_at": "2026-04-14T16:59:59Z" },
-            "extra_usage": { "is_enabled": true },
-        });
-        let snapshot = claude_usage_windows(&body).expect("windows");
-        assert_eq!(snapshot.plan_label, None);
-        let labels: Vec<_> = snapshot.windows.iter().map(|w| w.label.as_str()).collect();
-        assert_eq!(labels, ["Session", "Week"]);
-        assert!((snapshot.windows[0].used_fraction - 0.06).abs() < 1e-6);
-        assert!((snapshot.windows[1].used_fraction - 0.35).abs() < 1e-6);
-        assert_eq!(
-            snapshot.windows[1].resets_at,
-            Some(
-                "2026-04-14T16:59:59Z"
-                    .parse::<chrono::DateTime<Utc>>()
-                    .unwrap()
-            )
-        );
-    }
-
-    #[test]
-    fn claude_usage_windows_none_without_any_bucket() {
-        // A 200 with only `extra_usage` (no rate windows) is not a snapshot —
-        // the UI then says "Usage unavailable" instead of showing nothing.
-        assert!(claude_usage_windows(&serde_json::json!({ "extra_usage": {} })).is_none());
-        assert!(claude_usage_windows(&serde_json::json!({ "five_hour": {} })).is_none());
-    }
-
-    #[test]
-    fn cursor_buckets_read_cursors_own_percentages_not_spend_over_limit() {
-        // Observed Pro+ payload: $570 of bonus spend on a $70 allowance.
-        let body = serde_json::json!({
-            "billingCycleEnd": "1794158314000",
-            "planUsage": {
-                "totalSpend": 63989, "includedSpend": 7000, "bonusSpend": 56989,
-                "limit": 7000,
-                "autoPercentUsed": 48.918, "apiPercentUsed": 48.064,
-                "totalPercentUsed": 48.847,
-            },
-        });
-        let windows = cursor_bucket_windows(&body);
-        assert_eq!(windows.len(), 2);
-        assert_eq!(windows[0].label, "Cursor");
-        assert!((windows[0].used_fraction - 0.48918).abs() < 1e-4);
-        assert_eq!(windows[1].label, "Other");
-        assert!((windows[1].used_fraction - 0.48064).abs() < 1e-4);
-        assert!(windows[0].resets_at.is_some());
-        assert!(cursor_bucket_windows(&serde_json::json!({ "planUsage": {} })).is_empty());
-    }
-
-    #[test]
-    fn cursor_grok_window_is_weekly_percent() {
-        let window = cursor_grok_window(&serde_json::json!({
-            "usagePercent": 0.177784,
-            "nextResetTimestampUtc": "2026-11-04T18:46:22.484Z",
-        }))
-        .expect("window");
-        assert_eq!(window.label, "Grok");
-        assert!((window.used_fraction - 0.00177784).abs() < 1e-7);
-        assert_eq!(window.resets_at.unwrap().timestamp(), 1_793_817_982);
-        assert!(cursor_grok_window(&serde_json::json!({})).is_none());
-    }
-
-    #[test]
-    fn cursor_usage_window_derives_percent_from_spend_not_total_percent() {
-        // Real payload flavor (observed shape): proto3 JSON with string int64
-        // cycle bounds. `totalPercentUsed` (11.53) contradicts the derived
-        // 28846/40000 = 72.1% that Cursor's own UI narrates — derive.
-        let body = serde_json::json!({
-            "billingCycleStart": "1768399334000",
-            "billingCycleEnd": "1771077734000",
-            "planUsage": {
-                "totalSpend": 28846,
-                "includedSpend": 23222,
-                "bonusSpend": 5624,
-                "remaining": 11154,
-                "limit": 40000,
-                "totalPercentUsed": 11.5384,
-            },
-            "displayMessage": "You've used 72% of your included usage",
-        });
-        let window = cursor_usage_window(&body).expect("window");
-        assert_eq!(window.label, "Month");
-        assert!((window.used_fraction - 0.72115).abs() < 1e-5);
-        assert_eq!(
-            window.resets_at,
-            Some(chrono::DateTime::<Utc>::from_timestamp_millis(1_771_077_734_000).unwrap())
-        );
-    }
-
-    #[test]
-    fn cursor_usage_window_absent_limit_is_unusable_not_zero() {
-        // proto3 JSON omits zero-valued fields: an account with no usage-based
-        // spend simply lacks `limit` — never render a synthetic 0% bar.
-        assert!(cursor_usage_window(&serde_json::json!({ "planUsage": {} })).is_none());
-        assert!(cursor_usage_window(&serde_json::json!({ "planUsage": { "limit": 0 } })).is_none());
-    }
-
-    #[test]
-    fn cursor_usage_window_no_spend_is_zero_percent() {
-        let window = cursor_usage_window(&serde_json::json!({
-            "billingCycleEnd": 1771077734000i64,
-            "planUsage": { "limit": 40000 },
-        }))
-        .expect("window");
-        assert_eq!(window.used_fraction, 0.0);
     }
 
     #[test]
@@ -5591,7 +4543,6 @@ mod probe_tests {
                 resets_at: None,
             }],
             plan_label: None,
-            codex_reset_credits: None,
         }
     }
 
@@ -5666,18 +4617,6 @@ mod probe_tests {
     }
 
     #[test]
-    fn rate_limit_backoff_honours_retry_after_within_bounds() {
-        let limited = |secs| ProbeError::RateLimited {
-            retry_after_secs: secs,
-        };
-        assert_eq!(limited(Some(120)).backoff(), Duration::from_secs(120));
-        // Clamped: a 0 must not turn into hammering, a day must not stall usage.
-        assert_eq!(limited(Some(0)).backoff(), Duration::from_secs(30));
-        assert_eq!(limited(Some(86_400)).backoff(), Duration::from_secs(3600));
-        assert_eq!(limited(None).backoff(), Duration::from_secs(300));
-    }
-
-    #[test]
     fn retry_after_parses_seconds_and_http_dates() {
         let now = Utc::now();
         let mut headers = reqwest::header::HeaderMap::new();
@@ -5690,91 +4629,11 @@ mod probe_tests {
     }
 
     #[test]
-    fn a_failure_keeps_the_last_good_usage_and_backs_off() {
-        let mut entry = UsageEntry::default();
-        entry.record(Ok(snapshot()), "creds".into(), 1_000);
-        assert!(entry.error.is_none());
-        let later = 1_000 + FORCED_MIN_INTERVAL.as_millis() as i64 + 1;
-        entry.record(
-            Err(ProbeError::RateLimited {
-                retry_after_secs: Some(120),
-            }),
-            "creds".into(),
-            later,
-        );
-        // The meters that were right a minute ago survive the 429.
-        assert_eq!(entry.usage, Some(snapshot()));
-        assert_eq!(entry.fetched_at, Some(1_000));
-        // Inside the Retry-After window nothing re-probes — not even with
-        // fresh credentials, since a rate limit isn't about the token.
-        let inside = later + 60_000;
-        assert!(!entry.probe_due("creds", inside));
-        assert!(!entry.probe_due("new-creds", inside));
-        assert!(entry.probe_due("creds", later + 121_000));
-    }
-
-    #[test]
-    fn a_rejected_token_reprobes_once_the_credentials_change() {
-        let mut entry = UsageEntry::default();
-        entry.record(
-            Err(ProbeError::Unauthorized { status: 401 }),
-            "old".into(),
-            1_000,
-        );
-        let soon = 1_000 + FORCED_MIN_INTERVAL.as_millis() as i64 + 1;
-        assert!(!entry.probe_due("old", soon));
-        assert!(entry.probe_due("refreshed", soon));
-    }
-
-    #[test]
-    fn usage_errors_read_as_reasons() {
-        let mut entry = UsageEntry::default();
-        entry.record(
-            Err(ProbeError::RateLimited {
-                retry_after_secs: Some(120),
-            }),
-            "c".into(),
-            0,
-        );
-        let message = |harness, active, error: &ProbeError| {
-            usage_error_message(harness, None, active, error, &entry, 0)
-        };
-        assert_eq!(
-            message(
-                HarnessId::ClaudeCode,
-                true,
-                &ProbeError::RateLimited {
-                    retry_after_secs: Some(120)
-                }
-            )
-            .as_deref(),
-            Some("Rate limited by Anthropic — retrying in 2m")
-        );
-        assert_eq!(
-            message(
-                HarnessId::ClaudeCode,
-                false,
-                &ProbeError::Unauthorized { status: 401 }
-            )
-            .as_deref(),
-            Some("Signed out — sign in again")
-        );
-        assert_eq!(
-            message(
-                HarnessId::Codex,
-                false,
-                &ProbeError::NoCredentials {
-                    why: NoCredentials::Missing
-                }
-            ),
-            None
-        );
-    }
-
-    #[test]
     fn the_usage_cache_file_round_trips() {
-        let mut entry = UsageEntry::default();
-        entry.record(Ok(snapshot()), "c".into(), 5);
+        let entry = UsageEntry {
+            usage: Some(snapshot()),
+            fetched_at: Some(5),
+        };
         let file = UsageCacheFile {
             entries: HashMap::from([("claude-code:acct".to_string(), entry)]),
         };
@@ -5783,7 +4642,6 @@ mod probe_tests {
         let entry = &back.entries["claude-code:acct"];
         assert_eq!(entry.usage, Some(snapshot()));
         assert_eq!(entry.fetched_at, Some(5));
-        // The fingerprint is a digest, never the credential blob.
         assert!(!json.contains("accessToken"));
     }
 }
@@ -6273,36 +5131,76 @@ mod login_tests {
     }
 
     #[tokio::test]
-    async fn the_live_claude_grant_is_never_refreshed_when_its_identity_is_unreadable() {
+    async fn claude_account_lists_drop_cached_quota_without_network_or_token_refresh() {
         let tmp = tempfile::tempdir().unwrap();
-        let (usage_url, _) = fixed_server("401 Unauthorized", "{}").await;
-        let (token_url, refreshes) = fixed_server(
-            "200 OK",
-            r#"{"access_token":"x","refresh_token":"y","expires_in":3600}"#,
-        )
-        .await;
+        let (url, hits) = fixed_server("401 Unauthorized", "{}").await;
         let endpoints = ProbeEndpoints {
-            claude_usage: usage_url,
-            claude_token: token_url,
+            claude_token: url.clone(),
+            claude_profile: url,
             ..Default::default()
         };
+        let accounts = AgentAccounts::with_endpoints(
+            config(tmp.path()),
+            endpoints.clone(),
+            Default::default(),
+        );
+        write_live_claude(tmp.path(), "acct-a", "a@example.com", "live");
+        let saved = claude_slot("acct-b", "b@example.com", "saved-refresh", 1);
+        accounts.write_slot(&saved).unwrap();
+        accounts.list(false).await.unwrap();
+        let live_before = std::fs::read(config(tmp.path()).claude_creds_file()).unwrap();
+        {
+            let mut cache = lock(&accounts.inner.usage);
+            for slot in accounts.read_slots(HarnessId::ClaudeCode) {
+                cache.insert(
+                    usage_key(HarnessId::ClaudeCode, &slot.account_key),
+                    UsageEntry {
+                        usage: Some(UsageSnapshot {
+                            windows: vec![AgentUsageWindow {
+                                label: "Session".into(),
+                                used_fraction: 0.8,
+                                resets_at: None,
+                            }],
+                            ..Default::default()
+                        }),
+                        fetched_at: Some(now_ms()),
+                        ..Default::default()
+                    },
+                );
+            }
+            accounts.persist_usage(&cache);
+        }
+        // Exercise a previous release's on-disk cache after restarting the engine.
         let accounts =
             AgentAccounts::with_endpoints(config(tmp.path()), endpoints, Default::default());
-        write_live_claude(tmp.path(), "acct-a", "a@example.com", "live");
-        accounts.list(false).await.unwrap();
-        // Claude Code is mid-rewrite of ~/.claude.json: no live identity, so
-        // the slot reads as inactive — but it shares the CLI's refresh token.
-        write(&config(tmp.path()).claude_config_file, "{\"oauthAcc");
-
-        accounts.list(true).await.unwrap();
-        assert_eq!(refreshes.load(std::sync::atomic::Ordering::SeqCst), 0);
-        let slot = accounts
-            .read_slot(
-                HarnessId::ClaudeCode,
-                &slot_id_for(HarnessId::ClaudeCode, "acct-a"),
-            )
-            .unwrap();
-        assert_eq!(slot.credentials["claudeAiOauth"]["refreshToken"], "rt");
+        for forced in [false, true] {
+            let snapshot = accounts.list(forced).await.unwrap();
+            let rows: Vec<_> = snapshot
+                .accounts
+                .iter()
+                .filter(|a| a.harness == HarnessId::ClaudeCode)
+                .collect();
+            assert_eq!(rows.len(), 2);
+            assert!(rows.iter().any(|row| row.active));
+            for row in rows {
+                assert!(row.switchable);
+                assert!(row.usage_windows.is_empty());
+                assert_eq!(row.usage_fetched_at, None);
+                assert_eq!(row.usage_error.as_deref(), Some(ACCOUNT_USAGE_UNAVAILABLE));
+            }
+        }
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(
+            std::fs::read(config(tmp.path()).claude_creds_file()).unwrap(),
+            live_before
+        );
+        assert_eq!(
+            accounts
+                .read_slot(HarnessId::ClaudeCode, &saved.id)
+                .unwrap()
+                .credentials,
+            saved.credentials
+        );
     }
 
     #[tokio::test]

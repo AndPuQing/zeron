@@ -654,30 +654,6 @@ impl CloudClient {
             .map_err(Failure::into_error)
     }
 
-    /// `GET /vault/{orgId}/accounts/{provider}/{slot}/usage` — the provider's
-    /// usage reply for one login, read by the vault.
-    pub async fn vault_usage(
-        &self,
-        provider: VaultProvider,
-        slot: &str,
-    ) -> Result<serde_json::Value, EngineError> {
-        #[derive(Deserialize)]
-        struct Usage {
-            body: serde_json::Value,
-        }
-        self.target()?
-            .call::<Usage>(
-                reqwest::Method::GET,
-                &["vault", "accounts", provider.as_str(), slot, "usage"],
-                &[],
-                None,
-                "Cloud account usage",
-            )
-            .await
-            .map(|usage| usage.body)
-            .map_err(Failure::into_error)
-    }
-
     /// `PATCH /vault/{orgId}/credentials/{provider}` with `{authorizedDevices}`.
     pub async fn authorize(
         &self,
