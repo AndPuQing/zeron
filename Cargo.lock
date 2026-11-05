@@ -13734,6 +13734,7 @@ dependencies = [
  "zeron-launch",
  "zeron-mcp",
  "zeron-notify",
+ "zeron-plugin-guard",
  "zeron-preview",
  "zeron-proto",
  "zeron-rpc",
@@ -13861,6 +13862,14 @@ dependencies = [
 [[package]]
 name = "zeron-orb"
 version = "0.3.28"
+
+[[package]]
+name = "zeron-plugin-guard"
+version = "0.2.136"
+dependencies = [
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "zeron-preview"

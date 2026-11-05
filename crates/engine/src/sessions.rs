@@ -2689,6 +2689,10 @@ impl Inner {
     /// originating chat + device so the agent's side chats link back here.
     /// None when the engine serves no port or its executable is unknown.
     ///
+    /// The bearer is the agent-scoped one (`{data_dir}/ipc-token-agent`): it
+    /// reaches what the MCP tools need and nothing that decides, signs,
+    /// updates or hands out credentials ([`zeron_rpc::agent_allowed`]).
+    ///
     /// The IPC bearer travels as a file PATH (`ZERON_IPC_TOKEN_FILE`), not as
     /// `ZERON_IPC_TOKEN`: some harnesses hand this env to their CLI on the
     /// command line (Claude's inline `--mcp-config`), where any local user can
@@ -4437,7 +4441,7 @@ async fn drive_run(
     let mut reap_deferred_until: Option<tokio::time::Instant> = None;
     // The reaper last deferred for background work. Its end is not idleness
     // either: the agent reports the drained set a moment before the turn the
-    // completion wakes, and reaping in that gap lost the wake (issue #831).
+    // completion wakes, and reaping in that gap lost the wake (issue an earlier change).
     let mut held_for_background = false;
     let steerable = harness.supports_steering();
     let stops_turn_in_place = steerable && harness.stops_turn_in_place();
@@ -6622,7 +6626,7 @@ mod tests {
     /// The badge counts what the lanes card lists: this chat's spawn chips.
     /// In the live claude 2.1.310 shape a forked skill streams under its
     /// Skill call, and each agent it spawns under that agent's own call, a
-    /// chip of the skill's doc (#999: a chat badged "3" over an empty card).
+    /// chip of the skill's doc (an earlier change: a chat badged "3" over an empty card).
     #[tokio::test]
     async fn running_subagents_count_only_this_chats_spawn_chips() {
         use super::*;

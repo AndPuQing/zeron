@@ -9,6 +9,7 @@ import {
   handleRunnerPublicRoute
 } from "../../src/cloud/routes";
 import type { Env } from "../../src/env";
+import { dialDeviceRoom } from "../../src/device-link";
 import { deviceParam, forward } from "../../src/forward";
 import { runnerChatGate, runnerDeviceGate } from "../../src/runner-access";
 import { previewRoute } from "../../src/preview-route";
@@ -147,8 +148,7 @@ export default {
         if (refusedDevice) return refusedDevice;
       }
       if (parts[2] === "ws") {
-        const role = url.searchParams.get("role") === "host" ? "host" : "client";
-        return forward(env.DEVICE_ROOMS, room, request, auth, "/ws", `?role=${role}&connId=${crypto.randomUUID()}`);
+        return dialDeviceRoom(env, auth, request, url, deviceId);
       }
       if (parts[2] === "nudge" && request.method === "POST") {
         autoWakeCloudDevice(env, ctx, auth, deviceId);

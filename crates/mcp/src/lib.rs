@@ -31,11 +31,11 @@ pub use zeron::{Origin, Zeron};
 pub struct McpConfig {
     /// Loopback IPC port of the engine to proxy (`ZERUN_IPC_PORT`, default 27655).
     pub ipc_port: u16,
-    /// The engine's data dir, whose `ipc-token` authenticates the IPC dial
+    /// The engine's data dir, whose `ipc-token-agent` authenticates IPC
     /// (`ZERUN_DATA_DIR`, resolved by `zeron_proto::identity`). The token
-    /// itself is resolved at every dial — `ZERON_IPC_TOKEN`, then the
-    /// `ZERON_IPC_TOKEN_FILE` the engine injects, then `{data_dir}/ipc-token`
-    /// — so a long-lived server follows the engine across restarts.
+    /// is resolved at every dial from `ZERON_IPC_TOKEN_FILE` or
+    /// `{data_dir}/ipc-token-agent`, never the app's full token, so a
+    /// long-lived server follows restarts with only agent permissions.
     pub data_dir: Option<std::path::PathBuf>,
     /// The chat whose agent spawned this server, when injected by the engine.
     pub origin: Origin,

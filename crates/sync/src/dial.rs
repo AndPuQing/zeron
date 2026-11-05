@@ -38,7 +38,15 @@ pub type WsStream = crate::socket::Connection<MaybeTlsStream<crate::socket::Prog
 /// [`crate::wake::notify_online`] so sibling sockets waiting out a reconnect
 /// backoff redial immediately instead of sleeping through the recovery.
 pub async fn connect_ws(url: &str) -> Result<WsStream, WsError> {
-    connect_ws_request(url.into_client_request()?, None).await
+    connect_ws_with_headers(url).await.map(|(ws, _)| ws)
+}
+
+/// Dial through the selected edge route, preserving the upgrade response
+/// headers used to verify the device room's caller.
+pub async fn connect_ws_with_headers(
+    url: &str,
+) -> Result<(WsStream, tokio_tungstenite::tungstenite::http::HeaderMap), WsError> {
+    connect_request_with_headers(url.into_client_request()?, None).await
 }
 
 /// The routed dialer also accepts explicit headers and framing limits.
@@ -46,6 +54,15 @@ pub async fn connect_ws_request(
     request: Request,
     config: Option<WebSocketConfig>,
 ) -> Result<WsStream, WsError> {
+    connect_request_with_headers(request, config)
+        .await
+        .map(|(ws, _)| ws)
+}
+
+async fn connect_request_with_headers(
+    request: Request,
+    config: Option<WebSocketConfig>,
+) -> Result<(WsStream, tokio_tungstenite::tungstenite::http::HeaderMap), WsError> {
     // Bound DNS, all TCP attempts, TLS and HTTP upgrade together. Some
     // callers (notably the host relay) have no outer connection deadline.
     tokio::time::timeout(
@@ -67,7 +84,7 @@ async fn connect_routed(
     request: Request,
     config: Option<WebSocketConfig>,
     router: &std::sync::Arc<crate::edge_route::Router>,
-) -> Result<WsStream, WsError> {
+) -> Result<(WsStream, tokio_tungstenite::tungstenite::http::HeaderMap), WsError> {
     let url = reqwest::Url::parse(&request.uri().to_string()).ok();
     let Some(url) = url.filter(|url| router.index(url).is_some()) else {
         return connect_ws_inner(request, config).await;
@@ -93,10 +110,10 @@ async fn connect_routed(
             .await
             .unwrap_or_else(|_| Err(dial_timeout()));
         match result {
-            Ok(connection) => {
+            Ok((connection, headers)) => {
                 router.succeeded(index);
                 connection.progress.set_route(router.clone(), index);
-                return Ok(connection);
+                return Ok((connection, headers));
             }
             Err(error) => {
                 let transport = match &error {
@@ -124,7 +141,7 @@ async fn connect_routed(
 async fn connect_ws_inner(
     request: Request,
     config: Option<WebSocketConfig>,
-) -> Result<WsStream, WsError> {
+) -> Result<(WsStream, tokio_tungstenite::tungstenite::http::HeaderMap), WsError> {
     let uri = request.uri();
     let host = uri
         .host()
@@ -145,13 +162,16 @@ async fn connect_ws_inner(
     // Best-effort: a socket that works without NODELAY beats no socket.
     let _ = stream.set_nodelay(true);
     let (stream, progress) = crate::socket::ProgressIo::new(stream);
-    let (ws, _response) =
+    let (ws, response) =
         tokio_tungstenite::client_async_tls_with_config(request, stream, config, None).await?;
     crate::wake::notify_online();
-    Ok(crate::socket::Connection {
-        socket: ws,
-        progress,
-    })
+    Ok((
+        crate::socket::Connection {
+            socket: ws,
+            progress,
+        },
+        response.headers().clone(),
+    ))
 }
 
 /// Race TCP connects over an already-ordered address list: one new attempt per
@@ -251,6 +271,7 @@ mod tests {
                                 if let Some(protocol) = request.headers().get("sec-websocket-protocol") {
                                     response.headers_mut().insert("sec-websocket-protocol", protocol.clone());
                                 }
+                                response.headers_mut().insert("x-zerun-test-caller", "app".parse().unwrap());
                                 match status {
                                     Some(status) => Err(Response::builder().status(status).body(None).unwrap()),
                                     None => Ok(response),
@@ -296,9 +317,10 @@ mod tests {
         let mut config = WebSocketConfig::default();
         config.max_message_size = Some(1024);
         config.max_frame_size = Some(1024);
-        let mut socket = connect_routed(request, Some(config), &router)
+        let (mut socket, headers) = connect_routed(request, Some(config), &router)
             .await
             .unwrap();
+        assert_eq!(headers["x-zerun-test-caller"], "app");
         let first = seen_a.recv().await.unwrap();
         let second = seen_b.recv().await.unwrap();
         assert_eq!(first.uri().path_and_query(), second.uri().path_and_query());
