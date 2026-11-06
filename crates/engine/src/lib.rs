@@ -50,6 +50,7 @@ pub mod desktop_notify;
 pub mod diff_sync;
 pub mod doc_host;
 pub mod external_sessions;
+mod folder_entry;
 mod fs_watch;
 pub mod harness_updates;
 pub(crate) mod home_index;
