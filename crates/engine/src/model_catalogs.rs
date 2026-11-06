@@ -165,7 +165,7 @@ async fn list_inner(
             "model discovery context changed; retry".into(),
         ));
     }
-    let catalog = match result {
+    let mut catalog = match result {
         Some(Ok(Ok(catalog))) if !catalog.models.is_empty() => catalog,
         Some(Ok(Err(error))) if !CatalogFailure::classify(&error).allows_stale() => {
             // Claude intentionally offers its manifest even while logged out.
@@ -202,6 +202,12 @@ async fn list_inner(
             }
         }
     };
+    // dsh can advertise a provider-scoped routing id as the row's name when its
+    // live catalog is unavailable; heal catalogs cached in that state too, so
+    // reopening the picker never shows `["local","group/deepseek-flash"]`.
+    if harness.id() == zeron_proto::HarnessId::Dsh {
+        zeron_harness::acp::relabel_dsh_models(&mut catalog.models, &harness.environment());
+    }
     tracing::info!(harness = ?harness.id(), source = catalog.source, binary_path = %context.binary_path.display(), binary_version = ?context.binary_version, model_count = catalog.models.len(), "Model discovery");
     Ok(catalog.models)
 }
@@ -233,6 +239,11 @@ mod tests {
         cached: std::sync::atomic::AtomicBool,
         failure: std::sync::Mutex<String>,
         harness: zeron_proto::HarnessId,
+        /// Rows the fixture advertises, when a test needs something other than
+        /// the default `live` model.
+        rows: std::sync::Mutex<Option<Vec<Model>>>,
+        /// `DSH_HOME` this fixture launches with (dsh label tests).
+        dsh_home: std::sync::Mutex<Option<std::path::PathBuf>>,
     }
     impl Probe {
         fn new() -> Arc<Self> {
@@ -244,7 +255,12 @@ mod tests {
                 cached: false.into(),
                 failure: std::sync::Mutex::new("offline".into()),
                 harness: zeron_proto::HarnessId::Codex,
+                rows: std::sync::Mutex::new(None),
+                dsh_home: std::sync::Mutex::new(None),
             })
+        }
+        fn rows(&self) -> Vec<Model> {
+            self.rows.lock().unwrap().clone().unwrap_or_else(models)
         }
     }
     use std::sync::atomic::Ordering::SeqCst;
@@ -268,13 +284,25 @@ mod tests {
         fn model_context(&self) -> Result<Option<ModelContext>, HarnessError> {
             Ok(Some(context(&self.account.load(SeqCst).to_string())))
         }
+        fn environment(&self) -> Arc<zeron_harness::environment::EnvironmentSnapshot> {
+            let mut snapshot = zeron_harness::environment::EnvironmentSnapshot::default();
+            if let Some(home) = self.dsh_home.lock().unwrap().as_ref() {
+                snapshot.entries.insert(
+                    "DSH_HOME".into(),
+                    zeron_harness::environment::EnvironmentEntry::Set {
+                        value: home.to_string_lossy().into_owned(),
+                    },
+                );
+            }
+            Arc::new(snapshot)
+        }
         fn fallback_models(&self) -> Vec<Model> {
             let mut rows = models();
             rows[0].id = "static".into();
             rows
         }
         async fn models(&self) -> Result<Vec<Model>, HarnessError> {
-            Ok(models())
+            Ok(self.rows())
         }
         async fn model_catalog(&self, force: bool) -> Result<ModelCatalog, HarnessError> {
             self.forced.store(force, SeqCst);
@@ -285,7 +313,7 @@ mod tests {
                 return Err(HarnessError::Protocol(self.failure.lock().unwrap().clone()));
             }
             Ok(ModelCatalog {
-                models: models(),
+                models: self.rows(),
                 source: if self.cached.load(SeqCst) {
                     "cache"
                 } else {
@@ -444,6 +472,35 @@ mod tests {
         let (result, _) = tokio::join!(list(dir.path(), probe.clone(), false), swap);
         assert!(result.is_err());
         assert!(!dir.path().join("model-catalogs").exists());
+    }
+
+    #[tokio::test]
+    async fn cached_dsh_routing_ids_use_the_configured_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let dsh_home = tempfile::tempdir().unwrap();
+        let patch = "- id: llm-pi-ai\n  config:\n    providers:\n      local:\n        models:\n          - id: group/deepseek-flash\n            name: DeepSeek V4.1 Flash (group)\n";
+        // The profile name comes from the machine, so make both shipped
+        // profiles resolve the same configured row.
+        for profile in ["acp", "acp-plus"] {
+            let profile = dsh_home.path().join("profiles").join(profile);
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join("cordis.patch.yml"), patch).unwrap();
+        }
+        let mut probe = Probe::new();
+        {
+            let probe = Arc::get_mut(&mut probe).unwrap();
+            probe.harness = zeron_proto::HarnessId::Dsh;
+            *probe.dsh_home.get_mut().unwrap() = Some(dsh_home.path().to_path_buf());
+            *probe.rows.get_mut().unwrap() = Some(vec![Model {
+                id: "[\"local\",\"group/deepseek-flash\"]".into(),
+                label: "group/deepseek-flash".into(),
+                description: None,
+                reasoning_levels: vec![],
+                options: vec![],
+            }]);
+        }
+        let rows = list(dir.path(), probe, true).await.unwrap();
+        assert_eq!(rows[0].label, "DeepSeek V4.1 Flash (group)");
     }
 
     #[test]

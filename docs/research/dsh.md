@@ -45,6 +45,12 @@ Model-discovery cache invalidation tracks `.credentials.yaml` and
 `cordis.patch.yml` below `DSH_HOME`, plus `package.json` and `cordis.patch.yml`
 in the selected profile directory.
 
+When the adapter only echoes a provider-scoped id (its live catalog could not
+resolve the route), Zerun prefers the name configured for that provider/model
+in the home or profile `cordis.patch.yml`, then falls back to a readable form
+of the id. This only relabels advertised rows; it never adds a model the agent
+did not offer.
+
 Model, command, and skill discovery creates short-lived ACP sessions. Zerun
 adds a process-local `--patch` overlay that redirects session logs and JSON
 workspace/projection storage to a private temporary directory and disables

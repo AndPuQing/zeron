@@ -1271,6 +1271,20 @@ pub(crate) fn dsh_home() -> PathBuf {
     )
 }
 
+/// Relabel provider-scoped dsh model rows (`["local","group/…"]`) that came
+/// back without their configured or readable name.
+///
+/// Live discovery applies this already; the engine also runs it over cached
+/// catalogs so a catalog written while dsh could not resolve its provider
+/// names never surfaces a routing id in the picker.
+pub fn relabel_dsh_models(
+    models: &mut [Model],
+    environment: &crate::environment::EnvironmentSnapshot,
+) {
+    let home = dsh_discovery::data_home(environment);
+    dsh_discovery::enrich_model_labels(models, &home, &dsh_profile());
+}
+
 /// Which profile to boot. `acp` ships with dsh and auto-initializes on first
 /// use; `acp-plus` is the extended out-of-tree ACP bundle (session/load,
 /// additionalDirectories, elicitation, steering) the user installs with
@@ -3088,6 +3102,9 @@ impl AcpHarness {
                 .request("session/new", json!({ "cwd": cwd, "mcpServers": [] }))
                 .await?;
             let mut models = models_from_session(&session, &(self.spec.models)());
+            if self.spec.id == HarnessId::Dsh {
+                relabel_dsh_models(&mut models, &self.environment);
+            }
             if self.spec.id == HarnessId::Copilot {
                 // Copilot can advertise Auto twice (the synthetic default
                 // plus the account catalog). Preserve the first row's label.

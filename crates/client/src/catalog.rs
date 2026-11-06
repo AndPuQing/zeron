@@ -569,6 +569,16 @@ pub fn model_label(harness: &str, model_id: &str) -> String {
     {
         return found.label.clone();
     }
+    // dsh persists the selected model as a provider-scoped JSON tuple. A live
+    // catalog's learned label wins; without one, show the model instead of the
+    // routing id (`["local","group/deepseek-flash"]`).
+    if harness == "dsh"
+        && let Some((_, model)) = zeron_proto::split_provider_model(model_id)
+    {
+        let learned =
+            learned_label(harness, model_id).filter(|label| label != model_id && label != &model);
+        return learned.unwrap_or_else(|| zeron_proto::display_model_name(&model));
+    }
     learned_label(harness, model_id)
         .or_else(|| curated_label(model_id, &curated_catalog(harness)))
         .unwrap_or_else(|| model_id.to_owned())
@@ -693,6 +703,16 @@ mod tests {
         }
         assert_eq!(harness_label("future-agent"), "future-agent");
         assert_eq!(fallback_models("copilot")[0].id, "auto");
+        // dsh stores provider-scoped tuples; without a live label the row
+        // must not print the routing id.
+        assert_eq!(
+            model_label("dsh", "[\"local\",\"group/deepseek-flash\"]"),
+            "DeepSeek Flash"
+        );
+        assert_eq!(
+            model_label("dsh", "[\"deepseek-official\",\"deepseek-v4-pro\"]"),
+            "DeepSeek V4 Pro"
+        );
     }
 
     #[test]
