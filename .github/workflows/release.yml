@@ -20,6 +20,8 @@ name: release
 # Cargo.toml (bump it in the same commit), or run manually via
 # workflow_dispatch (builds only by default; publish_run_id + publish_tag
 # recover publication from a matching tag whose platform builds all passed).
+# If macOS was cancelled before acquiring a runner, rebuild_macos supplements
+# that run's artifacts from the same tag using the selected Apple Silicon pool.
 
 on:
   push:
@@ -34,6 +36,15 @@ on:
         description: Existing version tag for publication recovery, e.g. v0.3.2
         type: string
         default: ''
+      rebuild_macos:
+        description: Rebuild a macOS job cancelled before runner acquisition; requires publish_run_id and publish_tag
+        type: boolean
+        default: false
+      macos_runner:
+        description: Apple Silicon runner pool
+        type: choice
+        default: macos-15
+        options: [macos-15, xcode-27]
 
 permissions:
   contents: write
@@ -100,8 +111,8 @@ jobs:
   #     key (raw .p8 contents), for notarytool. All three present → the package
   #     script notarizes and staples the app + dmg (no Gatekeeper warning).
   macos:
-    if: inputs.publish_run_id == ''
-    runs-on: macos-15 # Stable Apple Silicon runner with the existing native packager
+    if: inputs.publish_run_id == '' || (inputs.rebuild_macos && github.ref == 'refs/heads/dev' && inputs.publish_tag != '')
+    runs-on: ${{ inputs.macos_runner || 'macos-15' }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -111,6 +122,11 @@ jobs:
       AC_API_ISSUER_ID: ${{ secrets.AC_API_ISSUER_ID }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.publish_tag || github.ref }}
+      - name: Use the alternate pool's selected Xcode
+        if: inputs.macos_runner == 'xcode-27'
+        run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -209,6 +225,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: 808eccb28c4b8ff2386cb40c20704b22
       SOURCE_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
       RELEASE_TAG: ${{ inputs.publish_tag || github.ref_name }}
+      REBUILD_MACOS: ${{ inputs.rebuild_macos || false }}
+      MACOS_RESULT: ${{ needs.macos.result }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -231,16 +249,29 @@ jobs:
           assert run['head_sha'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(), 'Tag does not match the source build'
           assert run['head_branch'] == os.environ['RELEASE_TAG'], 'Source build has a different tag'
           required = {'android / build', 'linux (ubuntu-24.04)', 'linux (ubuntu-24.04-arm)', 'macos', 'windows', 'cursor-compatibility / cursor-compatibility', 'cursor-compatibility / rust-tests'}
-          builds = [job for job in jobs if job['name'] != 'publish']
+          builds = [job for job in jobs if job['name'] != 'publish' and (job['name'] in required or job['conclusion'] != 'skipped')]
           assert required <= {job['name'] for job in builds}, 'Missing platform or test jobs'
+          if os.environ['REBUILD_MACOS'] == 'true':
+              assert os.environ['MACOS_RESULT'] == 'success', 'Replacement macOS build did not pass'
+              macos = next(job for job in builds if job['name'] == 'macos')
+              assert macos['conclusion'] == 'cancelled' and not macos.get('runner_name') and not macos['steps'], 'Source macOS job was not cancelled before acquiring a runner'
+              builds = [job for job in builds if job['name'] != 'macos']
           assert all(job['conclusion'] == 'success' for job in builds), 'Source builds did not all pass'
-          print('Source builds all passed and match the release tag')
+          print('Required builds passed and match the release tag')
           PY
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: ${{ runner.temp }}/zerun-release-assets
           merge-multiple: true
           run-id: ${{ env.SOURCE_RUN_ID }}
+          github-token: ${{ github.token }}
+      - name: Download replacement macOS artifacts
+        if: inputs.rebuild_macos
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: macos-ARM64
+          path: ${{ runner.temp }}/zerun-release-assets
+          run-id: ${{ github.run_id }}
           github-token: ${{ github.token }}
       - name: version guard (tag == artifact version)
         run: |
