@@ -80,6 +80,7 @@ import sh.zeron.android.transcript.TranscriptState
 import sh.zeron.android.transcript.TranscriptImageRef
 import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
+import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
 import uniffi.zeron_core.SessionHandle
@@ -473,8 +474,14 @@ private fun Banner(c: ComposerState, connectivity: ConnectivityState?, onRetry: 
         connectivity == ConnectivityState.OFFLINE -> "Offline — sends are saved"
         !c.room.connected && retryAt != null -> "Reconnecting in ${maxOf(1L, (retryAt - now) / 1000)}s"
         else -> null
-    } ?: return
-    StatusBanner(text, if (c.sendState == SendState.FAILED) "Retry" to onRetry else null)
+    }
+    if (text != null) {
+        StatusBanner(text, if (c.sendState == SendState.FAILED) "Retry" to onRetry else null)
+    } else if (c.live.indicator == ChatIndicator.WORKING && !c.live.turnRunning) {
+        // `indicator` includes active side chats, while `turnRunning` is
+        // limited to this chat so the stop/queue controls remain safe.
+        StatusBanner("Side chat working…", null)
+    }
 }
 
 /** Whose logins an error card's "Log in" opens: Cloud's for a Cloud chat, else the host's. */
