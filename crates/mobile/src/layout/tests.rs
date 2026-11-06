@@ -1890,3 +1890,46 @@ fn ordinary_document_markdown_remains_formatted() {
             .any(|l| l.url == "next.md")
     }));
 }
+
+
+/// Agent references use the same parser on both phones; the link hit remains
+/// host-addressed even for an absolute path outside the chat's working folder.
+#[test]
+fn agent_file_citations_render_labels_and_link_hits_on_mobile() {
+    let source = concat!(
+        ":codex-file-citation{path=\"/home/user/Cloud Drive/spec_origin.pdf\" purpose=\"source\"}\n\n",
+        "Claude: `src/main.rs:42`\n\n",
+        "【F:src/lib.rs†L2-L4】\n\n",
+        "```3:5:src/app.rs\nlet x = 1;\n```",
+    );
+    let mut w = worker(390.0);
+    w.input = debug_input(
+        vec![DebugEntry {
+            id: "citations".into(),
+            user: false,
+            text: source.into(),
+            streaming: false,
+        }],
+        false,
+    );
+    let frame = w.pass();
+    let displays: Vec<_> = (0..frame.row_count())
+        .filter_map(|i| frame.display(i))
+        .collect();
+    let text: String = displays.iter().map(|d| d.text.as_str()).collect();
+    assert!(text.contains("spec_origin.pdf"));
+    assert!(!text.contains("codex-file-citation") && !text.contains("purpose="));
+    let links: Vec<_> = displays
+        .iter()
+        .flat_map(|d| &d.links)
+        .map(|l| l.url.as_str())
+        .collect();
+    for target in [
+        "file:///home/user/Cloud%20Drive/spec_origin.pdf",
+        "src/main.rs#L42",
+        "src/lib.rs#L2-L4",
+        "src/app.rs#L3-L5",
+    ] {
+        assert!(links.contains(&target), "missing {target}: {links:?}");
+    }
+}

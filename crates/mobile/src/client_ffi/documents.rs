@@ -146,6 +146,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn agent_citation_targets_decode_on_the_phone_without_a_local_file_lookup() {
+        assert_eq!(
+            resolve_link("file:///home/user/Cloud%20Drive/spec_origin.pdf", None),
+            Some("/home/user/Cloud Drive/spec_origin.pdf".into())
+        );
+        assert_eq!(
+            resolve_link("src/main.rs#L12-L20", None),
+            Some("src/main.rs".into())
+        );
+        assert_eq!(
+            resolve_link("file:///home/user/a%23b%25.pdf", None),
+            Some("/home/user/a#b%.pdf".into())
+        );
+    }
+
+    #[test]
     fn transcript_links_use_the_desktop_grammar() {
         for (link, expected) in [
             ("/home/user/docs/readme.md#L10", "/home/user/docs/readme.md"),

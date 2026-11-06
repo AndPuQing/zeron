@@ -847,7 +847,17 @@ fn normalize_history(
         if let Some(blocks) = content.as_array() {
             for block in blocks {
                 match block["type"].as_str() {
-                    Some("text") => { if let Some(text) = block["text"].as_str() { parts.push(SavedHistoryPart::Text(text.into())); } }
+                    Some("text") => {
+                        if let Some(text) = block["text"].as_str() {
+                            let mut text = text.to_owned();
+                            if let Some(citations) = block["citations"].as_array() {
+                                for citation in citations {
+                                    if let Some(link) = crate::citations::claude_citation(citation) { text.push_str(&link); }
+                                }
+                            }
+                            parts.push(SavedHistoryPart::Text(text));
+                        }
+                    }
                     Some("thinking") => { if let Some(text) = block["thinking"].as_str() { parts.push(SavedHistoryPart::Reasoning(text.into())); } }
                     Some("tool_use") => {
                         let result = block["id"].as_str().and_then(|id| results.get(id));

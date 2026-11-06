@@ -335,6 +335,7 @@ impl Replay {
             }
         }
         if matches!(kind, "user_message_chunk" | "agent_message_chunk")
+            && super::normalize::chunk_text(update).is_none()
             && update["content"]["type"] != "text"
         {
             self.history
@@ -359,6 +360,17 @@ impl Replay {
 mod tests {
     use super::*;
     use crate::Harness;
+    #[test]
+    fn replay_retains_resource_citations_without_an_omission_notice() {
+        let mut replay = Replay::default();
+        replay.push(&serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"resource_link","uri":"file:///docs/spec.pdf","name":"spec.pdf"}})).unwrap();
+        let history = replay.finish();
+        assert!(history.notice.is_none());
+        assert!(
+            matches!(&history.messages[0].parts[0], SavedHistoryPart::Text(text) if text.contains("file:///docs/spec.pdf"))
+        );
+    }
+
     #[test]
     fn replay_preserves_reasoning_tools_and_replaces_tool_shape_updates() {
         let mut replay = Replay::default();

@@ -343,6 +343,35 @@ fn safe_relative_path(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn agent_file_citations_resolve_inside_or_outside_the_owning_host_root() {
+        use zeron_markdown::{Block, parse_full};
+        for (source, expected) in [
+            (
+                r#":codex-file-citation{path="/project/docs/a file.pdf" purpose="source"}"#,
+                owned(0, link("docs/a file.pdf", None, None)),
+            ),
+            (
+                r#":codex-file-citation{path="/other/spec.pdf" purpose="source"}"#,
+                FileLinkResolution::Outside(outside_link("/other/spec.pdf")),
+            ),
+            (
+                "【F:src/main.rs†L12-L20】",
+                owned(0, link("src/main.rs", Some(12), None)),
+            ),
+        ] {
+            let tree = parse_full(source);
+            let Block::Paragraph { runs } = &tree.blocks[0].block else {
+                panic!("missing file link")
+            };
+            let target = runs
+                .iter()
+                .find_map(|run| run.style.link.as_deref())
+                .unwrap();
+            assert_eq!(first_root_owning(target, ["/project"]), Some(expected));
+        }
+    }
+
     fn link(path: &str, line: Option<u32>, column: Option<u32>) -> WorkspaceFileLink {
         WorkspaceFileLink {
             path: path.into(),

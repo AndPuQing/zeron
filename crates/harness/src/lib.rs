@@ -26,6 +26,7 @@ use zeron_proto::{
     SteeringMode, UserInputAnswer, UserInputQuestion,
 };
 
+mod citations;
 pub mod environment;
 pub mod config_files;
 

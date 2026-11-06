@@ -30,6 +30,35 @@ fn assistant(parent: &str, id: &str, content: Value, stop: &str) -> Value {
 }
 
 #[tokio::test]
+async fn claude_import_keeps_citation_urls_without_treating_titles_as_paths() {
+    let (_root, harness, path) = claude_fixture(vec![
+        user(None, USER, json!("Read the sources")),
+        assistant(
+            USER,
+            ASSISTANT,
+            json!([{"type":"text","text":"Answer","citations":[
+                {"type":"web_search_result_location","url":"https://example.com/spec","title":"Specification"},
+                {"type":"page_location","document_index":0,"document_title":"unmapped.pdf","start_page_number":1}
+            ]}]),
+            "end_turn",
+        ),
+    ]);
+    let before = std::fs::read(&path).unwrap();
+    let source = harness
+        .saved_sessions(None)
+        .await
+        .unwrap()
+        .sessions
+        .remove(0);
+    let history = harness.saved_session_history(&source).await.unwrap();
+    assert!(
+        matches!(&history.messages[1].parts[0], SavedHistoryPart::Text(text)
+        if text.contains("https://example.com/spec") && !text.contains("file://") && !text.contains("unmapped.pdf"))
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[tokio::test]
 async fn claude_history_displays_server_tools_without_exposing_encrypted_results() {
     let (_root, harness, _path) = claude_fixture(vec![
         user(None, USER, json!("Use the server tools")),

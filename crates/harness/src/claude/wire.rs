@@ -225,6 +225,8 @@ pub(crate) struct Delta {
     pub text: String,
     #[serde(default)]
     pub thinking: String,
+    #[serde(default)]
+    pub citation: Value,
 }
 
 /// An `assistant` or `user` frame (an Anthropic API message envelope).
@@ -383,6 +385,8 @@ pub(crate) struct ContentBlock {
     /// A `tool_result`'s content: a string, or an array of content blocks.
     #[serde(default)]
     pub content: Value,
+    #[serde(default)]
+    pub citations: Value,
 }
 
 #[derive(Debug, Default, Deserialize)]

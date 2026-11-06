@@ -259,7 +259,13 @@ fn link_runs(
 /// marker or chat mention already means something else.
 fn is_plain_code_span(run: &InlineRun) -> bool {
     run.style.code
-        && run.style.link.is_none()
+        && run.style.link.as_deref().is_none_or(|target| {
+            // Explicit path:line spans are linked by the shared parser for
+            // remote/mobile chats. Local probes may still enrich their labels
+            // and resolve them to the owning root, as for bare file spans.
+            run.style.file_label.as_deref() == Some(run.text.as_str())
+                && zeron_markdown::code_location_target(&run.text).as_deref() == Some(target)
+        })
         && run.style.image.is_none()
         && run.style.task.is_none()
 }
@@ -523,6 +529,23 @@ mod tests {
         );
         assert_eq!(fixture.target(&linked, "https://example.com/top.md"), None);
         assert_eq!(fixture.target(&linked, "~/nope.md"), None);
+    }
+
+    #[test]
+    fn explicit_location_links_keep_their_authored_presentation() {
+        let fixture = Fixture::new();
+        let tree = fixture.tree("[`top.md:12`](top.md#L12)");
+        let linked = fixture.linked(&tree, &fixture.roots(true), true);
+        assert_eq!(linked, tree);
+        let remote = fixture.linked(
+            &fixture.tree("`src/main.rs:42`"),
+            &fixture.roots(false),
+            false,
+        );
+        assert_eq!(
+            fixture.target(&remote, "src/main.rs:42").as_deref(),
+            Some("src/main.rs#L42")
+        );
     }
 
     #[test]
