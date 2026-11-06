@@ -353,7 +353,7 @@ mod tests {
             ),
             (
                 r#":codex-file-citation{path="/other/spec.pdf" purpose="source"}"#,
-                outside_link("/other/spec.pdf"),
+                FileLinkResolution::Outside(outside_link("/other/spec.pdf")),
             ),
             (
                 "【F:src/main.rs†L12-L20】",
