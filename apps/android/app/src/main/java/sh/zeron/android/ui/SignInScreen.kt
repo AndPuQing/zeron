@@ -51,7 +51,7 @@ fun SignInScreen(model: AppModel) {
         verticalArrangement = Arrangement.Center,
     ) {
         Image(
-            painterResource(R.drawable.ic_launcher_foreground),
+            painterResource(R.drawable.zerun_app_icon),
             null,
             Modifier.size(148.dp)
                 .clip(MaterialShapes.Cookie12Sided.toShape())

@@ -4,6 +4,23 @@ The desktop product is Zerun; the Rust workspace package stays `zeron`.
 Release builds require the native toolchain and system libraries for each host.
 All scripts write artifacts under `target/package/`.
 
+## App icons
+
+The approved orange portrait and its masks live in `dist/artwork`. Generate
+the desktop, mobile and web app icons together using Python and Pillow:
+
+```sh
+uv run --with pillow==13.0.0 python scripts/make-app-icons.py
+uv run --with pillow==13.0.0 python scripts/make-app-icons.py --check
+```
+
+The generator keeps the macOS tile's existing alpha mask and shadow, produces
+all Windows ICO sizes, and supplies square opaque iOS light, dark and grayscale
+tinted variants. Android gets density-specific adaptive portrait and monochrome
+layers within the launcher safe region; the launcher owns the final shape.
+The website's light/dark favicons and Apple touch icon share these assets.
+No model request or mobile SDK is needed to regenerate the icons.
+
 ## Linux
 
 ```sh
