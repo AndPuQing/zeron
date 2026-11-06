@@ -1,0 +1,42 @@
+name: App icons
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/app-icons.yml'
+      - 'scripts/make-app-icons.py'
+      - 'scripts/tests/test_app_icons.py'
+      - 'dist/artwork/**'
+      - 'dist/zeron.*'
+      - 'dist/macos/icon-1024.png'
+      - 'dist/windows/zeron.ico'
+      - 'apps/ios/Zeron/Assets.xcassets/AppIcon.appiconset/**'
+      - 'apps/ios/Zeron/Assets.xcassets/zeron-logo.imageset/**'
+      - 'apps/android/app/src/main/res/**'
+      - 'apps/android/app/src/main/java/sh/zeron/android/ui/SignInScreen.kt'
+      - 'apps/android/icons/zeron.svg'
+      - 'apps/landing/public/assets/zeron-*.png'
+      - 'apps/landing/public/favicon.svg'
+      - 'apps/landing/public/index.html'
+      - 'apps/zgx/ui/assets/favicons/zeron.png'
+      - 'apps/zgx/ui/assets/icons/ui/zeron-logo.svg'
+      - 'apps/zgx/ui/ds/icon_svgs.luau'
+      - 'crates/ui/assets/icons/zeron-logo.svg'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install image validation dependency
+        run: |
+          python3 -m venv "$RUNNER_TEMP/icon-check"
+          "$RUNNER_TEMP/icon-check/bin/pip" install Pillow==13.0.0
+      - name: Validate app-store and launcher assets
+        run: |
+          "$RUNNER_TEMP/icon-check/bin/python" scripts/tests/test_app_icons.py -v
