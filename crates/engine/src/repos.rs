@@ -1828,7 +1828,7 @@ fn list_folders_blocking(target: &Path) -> Result<FolderListing, EngineError> {
         if name.starts_with('.') {
             continue;
         }
-        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        let is_dir = crate::folder_entry::is_directory(&entry.path(), entry.file_type().ok());
         let is_repo = is_dir && entry.path().join(".git").exists();
         entries.push(FolderEntry {
             name,

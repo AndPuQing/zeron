@@ -94,7 +94,9 @@ impl HomeIndex {
                     batch.items.push(HomePath {
                         lower: path.to_lowercase(),
                         path,
-                        is_dir: entry.file_type().is_some_and(|kind| kind.is_dir()),
+                        // Keep the link searchable as a folder without walking
+                        // its target (follow_links remains false).
+                        is_dir: crate::folder_entry::is_directory(entry.path(), entry.file_type()),
                     });
                     if batch.items.len() >= 512 && batch.flush() >= MAX_ENTRIES {
                         return ignore::WalkState::Quit;
@@ -329,5 +331,36 @@ mod tests {
                 "dev/comet/src/main.rs"
             ]
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_links_are_searchable_without_indexing_their_targets() {
+        use std::os::unix::fs::symlink;
+
+        let (_dir, root) = home(&["real/child.txt"]);
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join("nested")).unwrap();
+        std::fs::write(outside.path().join("nested/outside.txt"), b"").unwrap();
+        symlink("real", root.join("alias-internal")).unwrap();
+        symlink(outside.path(), root.join("alias-external")).unwrap();
+        symlink("real/child.txt", root.join("alias-file")).unwrap();
+        symlink("missing", root.join("alias-broken")).unwrap();
+        symlink("alias-cycle", root.join("alias-cycle")).unwrap();
+        symlink(&root, root.join("alias-home")).unwrap();
+        let index = HomeIndex::build(&root, &AtomicBool::new(false));
+        assert_eq!(
+            paths(&index, "alias", NameKinds::Directories),
+            ["alias-home", "alias-external", "alias-internal"]
+        );
+        assert!(paths(&index, "outside", NameKinds::FilesAndDirectories).is_empty());
+        assert!(
+            index
+                .entries
+                .iter()
+                .all(|entry| !entry.path.starts_with("alias-") || !entry.path.contains('/'))
+        );
+        assert_eq!(paths(&index, "child", NameKinds::Files), ["real/child.txt"]);
+        assert!(paths(&index, "alias-file", NameKinds::Files).contains(&"alias-file".into()));
     }
 }

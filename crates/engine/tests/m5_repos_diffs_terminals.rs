@@ -615,6 +615,60 @@ async fn folder_lister_flags_and_ordering() {
     assert!(!file.is_dir);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn folder_lister_browses_directory_symlinks_without_rewriting_paths() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let browse = tmp.path().join("browse");
+    let target = tmp.path().join("target");
+    std::fs::create_dir_all(&browse).unwrap();
+    std::fs::create_dir_all(target.join("repo/.git")).unwrap();
+    std::fs::create_dir_all(target.join("repo/child")).unwrap();
+    std::fs::create_dir_all(target.join("plain")).unwrap();
+    std::fs::write(target.join("file.txt"), "fixture").unwrap();
+    symlink(&target, browse.join("absolute")).unwrap();
+    symlink("../target/repo", browse.join("relative-repo")).unwrap();
+    symlink("../target/plain", browse.join("plain")).unwrap();
+    symlink("../target/file.txt", browse.join("file-link")).unwrap();
+    symlink("../missing", browse.join("broken")).unwrap();
+    symlink("loop", browse.join("loop")).unwrap();
+    symlink(&target, browse.join(".hidden-link")).unwrap();
+
+    let repos = test_repos(&tmp.path().join("data"));
+    let listing = repos
+        .list_folders(Some(browse.to_string_lossy().into_owned()))
+        .await
+        .expect("broken links must not fail the listing");
+    let directories: Vec<_> = listing.entries.iter().filter(|e| e.is_dir).collect();
+    assert_eq!(
+        directories
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect::<Vec<_>>(),
+        ["absolute", "plain", "relative-repo"]
+    );
+    assert!(!directories[0].is_repo && !directories[1].is_repo);
+    assert!(directories[2].is_repo);
+    assert!(!listing.entries.iter().any(|e| e.name == ".hidden-link"));
+    for name in ["file-link", "broken", "loop"] {
+        let entry = listing.entries.iter().find(|e| e.name == name).unwrap();
+        assert!(!entry.is_dir && !entry.is_repo, "{name}");
+    }
+
+    // Following a link browses its target, but Parent Folder must return to
+    // the link's containing directory rather than the target's parent.
+    let link = browse.join("relative-repo");
+    let nested = repos
+        .list_folders(Some(link.to_string_lossy().into_owned()))
+        .await
+        .unwrap();
+    assert_eq!(Path::new(&nested.path), link);
+    assert_eq!(Path::new(&nested.path).parent(), Some(browse.as_path()));
+    assert!(nested.entries.iter().any(|e| e.name == "child" && e.is_dir));
+}
+
 #[tokio::test]
 async fn folder_lister_caps_at_500_with_truncated_flag() {
     let tmp = tempfile::tempdir().expect("tempdir");
