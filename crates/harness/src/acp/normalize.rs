@@ -127,23 +127,39 @@ pub(crate) fn cap_text(text: &str, cap: usize) -> String {
     out
 }
 
-/// The text of a `ContentBlock` (`{type: "text", text}`); non-text blocks
-/// (image, audio, resource, resource_link) render as nothing.
-fn content_block_text(block: &Value) -> Option<&str> {
-    (block.get("type").and_then(Value::as_str) == Some("text"))
-        .then(|| block.get("text").and_then(Value::as_str))
-        .flatten()
+/// Text and explicit resource references. Image/audio payloads have their own
+/// display path; resource IDs without a navigable URI are never guessed.
+fn content_block_text(block: &Value) -> Option<std::borrow::Cow<'_, str>> {
+    match block.get("type")?.as_str()? {
+        "text" => block.get("text")?.as_str().map(std::borrow::Cow::Borrowed),
+        "resource_link" | "resource" => {
+            let resource = if block["type"] == "resource" {
+                block.get("resource")?
+            } else {
+                block
+            };
+            let uri = resource.get("uri")?.as_str()?;
+            let name = resource
+                .get("title")
+                .or_else(|| resource.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or(uri);
+            crate::citations::resource_link(uri, name)
+                .map(|link| std::borrow::Cow::Owned(format!("\n\n{link}\n\n")))
+        }
+        _ => None,
+    }
 }
 
 /// A `ContentChunk`'s streamed text (`{content: {type: "text", ...}}`).
 pub(crate) fn chunk_text(update: &Value) -> Option<String> {
     let text = content_block_text(update.get("content")?)?;
-    (!text.is_empty()).then(|| text.to_owned())
+    (!text.is_empty()).then(|| text.into_owned())
 }
 
 /// Joined text of a tool call's `content` array, capped; `None` when empty.
 fn tool_output(update: &Value) -> Option<String> {
-    let parts: Vec<&str> = update
+    let parts: Vec<std::borrow::Cow<'_, str>> = update
         .get("content")?
         .as_array()?
         .iter()
@@ -784,6 +800,26 @@ mod tests {
     }
 
     #[test]
+    fn resource_citations_survive_acp_message_and_tool_content() {
+        for content in [
+            serde_json::json!({"type":"resource_link","uri":"file:///docs/a%20file.pdf","name":"a file.pdf"}),
+            serde_json::json!({"type":"resource","resource":{"uri":"file:///docs/a%20file.pdf","name":"a file.pdf","text":"document excerpt"}}),
+        ] {
+            let update = serde_json::json!({"sessionUpdate":"agent_message_chunk","content":content});
+            let expected = "\n\n[a file\\.pdf](<file:///docs/a%20file.pdf>)\n\n";
+            assert_eq!(
+                map_update(&update),
+                [AgentEvent::TextDelta {
+                    text: expected.into()
+                }]
+            );
+            let output = serde_json::json!({"content":[{"type":"content","content":content}]});
+            assert_eq!(tool_output(&output).as_deref(), Some(expected));
+        }
+        assert!(map_update(&serde_json::json!({"sessionUpdate":"agent_message_chunk","content":{"type":"resource_link","uri":"javascript:alert(1)","name":"source"}})).is_empty());
+    }
+
+    #[test]
     fn message_and_thought_chunks_map_to_deltas() {
         let update = json!({
             "sessionUpdate": "agent_message_chunk",
@@ -803,7 +839,7 @@ mod tests {
             map_update(&thought),
             vec![AgentEvent::ReasoningDelta { text: "hmm".into() }]
         );
-        // Non-text blocks render as nothing.
+        // Images keep their separate rendering path.
         let image = json!({
             "sessionUpdate": "agent_message_chunk",
             "content": { "type": "image", "data": "...", "mimeType": "image/png" },

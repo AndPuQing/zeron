@@ -6,8 +6,11 @@
 //! - [`mend`] auto-closes hanging inline markers in the streaming *display*
 //!   parse only; the canonical tree settles honestly on completion.
 
+mod citations;
 pub mod mend;
 pub mod parser;
+
+pub use citations::code_location as code_location_target;
 
 pub use parser::{
     Block, BlockTree, IncrementalParser, InlineRun, InlineStyle, TopBlock, parse_full,

@@ -309,13 +309,25 @@ fn subagent_message(
     parent: &str,
     f: &MessageFrame,
     server_tools: &mut ServerTools,
+    streamed_citations: &std::collections::HashSet<String>,
 ) -> Vec<AgentEvent> {
     let mut out = Vec::new();
     for b in f.message.blocks() {
         let event = match b.kind.as_str() {
-            "text" if !b.text.is_empty() => Some(AgentEvent::TextDelta {
-                text: format!("{}\n\n", b.text.trim_end()),
-            }),
+            "text" if !b.text.is_empty() => {
+                let mut text = b.text.trim_end().to_owned();
+                if let Some(citations) = b.citations.as_array() {
+                    for citation in citations {
+                        if let Some(link) = crate::citations::claude_citation(citation)
+                            && !streamed_citations.contains(&link)
+                        {
+                            text.push_str(&link);
+                        }
+                    }
+                }
+                text.push_str("\n\n");
+                Some(AgentEvent::TextDelta { text })
+            }
             "thinking" if !b.thinking.trim().is_empty() => Some(AgentEvent::ReasoningDelta {
                 text: format!("{}\n\n", b.thinking.trim_end()),
             }),
@@ -523,6 +535,9 @@ struct TypedFork {
 /// resume turns them into the done→Working→done wake.
 pub(crate) struct Normalizer {
     saw_init: bool,
+    /// Citation deltas already shown for each native message scope; the full
+    /// assistant envelope may repeat them or provide ones not streamed.
+    streamed_citations: std::collections::HashMap<String, std::collections::HashSet<String>>,
     server_tools: ServerTools,
     compactions: std::collections::HashMap<String, CompactionState>,
     last_model: Option<String>,
@@ -573,6 +588,7 @@ impl Normalizer {
     pub fn new() -> Self {
         Self {
             saw_init: false,
+            streamed_citations: std::collections::HashMap::new(),
             server_tools: ServerTools::default(),
             compactions: std::collections::HashMap::new(),
             last_model: None,
@@ -878,7 +894,12 @@ impl Normalizer {
         };
         let events = if assistant {
             note_commands(&f, &mut self.command_calls);
-            subagent_message(&chip, &f, &mut self.server_tools)
+            subagent_message(
+                &chip,
+                &f,
+                &mut self.server_tools,
+                &std::collections::HashSet::new(),
+            )
         } else {
             // Disk replay shows tool results only, the same as before. Image
             // bytes on those results are kept; a scale note is not a message.
@@ -1205,6 +1226,11 @@ impl Normalizer {
             // `AgentEvent::Subagent` instead — the engine routes them to the
             // subagent's own doc.
             Frame::StreamEvent(f) => {
+                if f.event.kind == "message_start" {
+                    let scope = f.parent_tool_use_id.as_deref()
+                        .map(|p| self.route(p).to_owned()).unwrap_or_default();
+                    self.streamed_citations.remove(&scope);
+                }
                 if f.event.kind == "content_block_start" {
                     let parent = f
                         .parent_tool_use_id
@@ -1241,6 +1267,19 @@ impl Normalizer {
                 }
                 if f.event.kind != "content_block_delta" {
                     return Vec::new();
+                }
+                if f.event.delta.kind == "citations_delta" {
+                    let scope = f.parent_tool_use_id.as_deref()
+                        .map(|p| self.route(p).to_owned()).unwrap_or_default();
+                    return crate::citations::claude_citation(&f.event.delta.citation)
+                        .map(|text| {
+                            self.streamed_citations.entry(scope).or_default().insert(text.clone());
+                            let event = AgentEvent::TextDelta { text };
+                            match &f.parent_tool_use_id {
+                                Some(parent) => tag(self.route(parent), event),
+                                None => event,
+                            }
+                        }).into_iter().collect();
                 }
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = self.route(parent);
@@ -1282,13 +1321,16 @@ impl Normalizer {
             }
 
             Frame::Assistant(f) => {
+                let scope = f.parent_tool_use_id.as_deref()
+                        .map(|p| self.route(p).to_owned()).unwrap_or_default();
+                let mut streamed_citations = self.streamed_citations.remove(&scope).unwrap_or_default();
                 note_commands(&f, &mut self.command_calls);
                 if let Some(parent) = &f.parent_tool_use_id {
                     let parent = &self.route(parent).to_owned();
                     if self.fork_repeat(parent, f.uuid.as_deref()) {
                         return Vec::new();
                     }
-                    return subagent_message(parent, &f, &mut self.server_tools);
+                    return subagent_message(parent, &f, &mut self.server_tools, &streamed_citations);
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
                 // them; a task may finish before a `task_started` arrives. A
@@ -1367,6 +1409,16 @@ impl Normalizer {
                             .collect::<Vec<_>>()
                     })
                     .collect();
+                for block in f.message.blocks().filter(|block| block.kind == "text") {
+                    if let Some(citations) = block.citations.as_array() {
+                        for citation in citations {
+                            if let Some(text) = crate::citations::claude_citation(citation)
+                                && streamed_citations.insert(text.clone()) {
+                                out.push(AgentEvent::TextDelta { text });
+                            }
+                        }
+                    }
+                }
                 self.last_model = f.message.model.clone().or(self.last_model.take());
                 // Input-side usage of this message: prompt + both cache
                 // counters. All-zero means the provider never populated them
@@ -2027,6 +2079,46 @@ mod tests {
         let events = normalize_one(raw);
         assert_eq!(events.len(), 2, "usage + done");
         events.into_iter().nth(1).expect("done event")
+    }
+
+    #[test]
+    fn claude_citations_keep_urls_and_do_not_duplicate_streamed_sources() {
+        let citation = serde_json::json!({"type":"web_search_result_location","url":"https://example.com/spec","title":"Spec [2026]"});
+        let delta = serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"citations_delta","citation":citation}}});
+        let envelope = serde_json::json!({"type":"assistant","message":{"content":[{"type":"text","text":"Answer","citations":[citation]}]}});
+        let parse = |value: &Value| crate::claude::wire::parse_frame(&value.to_string()).unwrap();
+        let mut norm = Normalizer::new();
+        let first = norm.normalize(parse(&delta), false);
+        assert!(
+            matches!(first.as_slice(), [AgentEvent::TextDelta{text}] if text.contains("https://example.com/spec") && text.contains("\\[2026\\]"))
+        );
+        let repeated = norm.normalize(parse(&envelope), false);
+        assert!(
+            !repeated
+                .iter()
+                .any(|event| matches!(event, AgentEvent::TextDelta { .. }))
+        );
+        let next = norm.normalize(parse(&envelope), false);
+        assert_eq!(
+            next.iter()
+                .filter(|event| matches!(event, AgentEvent::TextDelta { .. }))
+                .count(),
+            1
+        );
+
+        let mut child_delta = delta.clone();
+        child_delta["parent_tool_use_id"] = "child".into();
+        assert!(
+            matches!(norm.normalize(parse(&child_delta), false).as_slice(), [AgentEvent::Subagent{parent_tool_use_id,event}] if parent_tool_use_id == "child" && matches!(&**event,AgentEvent::TextDelta{..}))
+        );
+        let mut child_envelope = envelope.clone();
+        child_envelope["parent_tool_use_id"] = "child".into();
+        let events = norm.normalize(parse(&child_envelope), false);
+        assert!(!events.iter().any(|event| matches!(event,
+            AgentEvent::Subagent {event, ..} if matches!(&**event,
+                AgentEvent::TextDelta{text} if text.contains("https://example.com/spec")))));
+        let opaque = serde_json::json!({"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"citations_delta","citation":{"type":"page_location","document_index":0,"document_title":"unknown.pdf"}}}});
+        assert!(norm.normalize(parse(&opaque), false).is_empty());
     }
 
     #[test]

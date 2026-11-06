@@ -34,8 +34,9 @@ pub struct InlineStyle {
     pub link: Option<String>,
     /// The label to show instead of `text` for a file link whose text is the
     /// path itself (an inline-code span) rather than a label the author
-    /// wrote. Never set by the parser; `None` shows `text`. When set, copy
-    /// and selection still map back to `text`.
+    /// wrote. Explicit path:line code references initially keep their full
+    /// text here; a host may shorten it after resolving the file. `None`
+    /// shows `text`. Copy and selection still map back to `text`.
     pub file_label: Option<String>,
     pub image: Option<InlineImage>,
     pub task: Option<TaskMarker>,
@@ -171,7 +172,13 @@ fn parse_breaking(source: &str, offset: usize, options: Options, breaks: bool) -
     // in its first pass); a message must never take the app down with it.
     // Such a source renders as its plain text.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        parse_rewritten(source, offset, options, breaks)
+        if let Some(rewritten) = crate::citations::rewrite(source, options) {
+            let mut tree = parse_rewritten(&rewritten.text, 0, options, breaks);
+            rewritten.restore_ranges(&mut tree, offset);
+            tree
+        } else {
+            parse_rewritten(source, offset, options, breaks)
+        }
     }))
     .unwrap_or_else(|_| BlockTree {
         blocks: vec![Arc::new(TopBlock {
@@ -1412,6 +1419,10 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             runs: parse_inline_container(cur, &InlineStyle::default()),
         }],
         Tag::CodeBlock(kind) => {
+            let reference = match &kind {
+                CodeBlockKind::Fenced(info) => crate::citations::code_reference(info),
+                _ => None,
+            };
             let language = match kind {
                 CodeBlockKind::Fenced(info) => {
                     let lang = info.split_whitespace().next().unwrap_or("");
@@ -1435,7 +1446,17 @@ fn parse_started_block(cur: &mut Cursor) -> Vec<Block> {
             if code.ends_with('\n') {
                 code.pop();
             }
-            vec![Block::CodeBlock { language, code }]
+            if let Some((label, target)) = reference {
+                vec![
+                    Block::Paragraph { runs: vec![InlineRun {
+                        text: label,
+                        style: InlineStyle { link: Some(target), ..InlineStyle::default() },
+                    }] },
+                    Block::CodeBlock { language: None, code },
+                ]
+            } else {
+                vec![Block::CodeBlock { language, code }]
+            }
         }
         Tag::BlockQuote(_) => vec![Block::BlockQuote {
             children: parse_block_sequence(cur),
@@ -1707,6 +1728,10 @@ fn parse_inline_event(cur: &mut Cursor, runs: &mut Vec<InlineRun>, style: &Inlin
         Event::Code(t) => {
             let mut s = style.clone();
             s.code = true;
+            if s.link.is_none() {
+                s.link = crate::citations::code_location(&t);
+                if s.link.is_some() { s.file_label = Some(t.to_string()); }
+            }
             push(runs, t.into_string(), s);
         }
         Event::InlineMath(tex) => {
@@ -1886,7 +1911,7 @@ fn autolink_runs(runs: Vec<InlineRun>) -> Vec<InlineRun> {
             push_text_autolinked(&mut out, &run.text, &run.style);
         }
     }
-    out
+    crate::citations::link_locations(out)
 }
 
 fn push_text_autolinked(runs: &mut Vec<InlineRun>, text: &str, style: &InlineStyle) {
