@@ -80,6 +80,7 @@ import sh.zeron.android.transcript.TranscriptState
 import sh.zeron.android.transcript.TranscriptImageRef
 import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
+import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.ConnectivityState
 import uniffi.zeron_core.SendState
 import uniffi.zeron_core.SessionHandle
@@ -149,6 +150,10 @@ fun SessionScreen(
     val sideChatBusy by model.sideChatBusy.collectAsState()
     val workspace by model.workspace.collectAsState()
     val connectivity by model.connectivity.collectAsState()
+    // The parent indicator also includes its own terminal activity. Child
+    // rows retain the core's nested side-chat aggregation without that
+    // ambiguity.
+    val sideChatWorking = model.sideChats(chatId).any { it.indicator == ChatIndicator.WORKING }
     LaunchedEffect(chatId) {
         model.sessionEvents.collect { if (it == chatId) { composer = handle.composer(); canFork = handle.canFork() } }
     }
@@ -372,7 +377,7 @@ fun SessionScreen(
                     CloudCreditsNotice(nudges, onAddCredits = onOpenBilling)
                 }
                 Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) { Banner(composer, connectivity?.state, onRetry = { runCatching { handle.retryDelivery() } }, cloud = if (isCloud) model.cloud else null, chatId = chatId, deviceId = row?.deviceId) }
+                    Box(Modifier.weight(1f)) { Banner(composer, connectivity?.state, onRetry = { runCatching { handle.retryDelivery() } }, cloud = if (isCloud) model.cloud else null, chatId = chatId, deviceId = row?.deviceId, sideChatWorking = sideChatWorking) }
                     CompanionStrip(companions, onTap = { section -> onShowCompanions?.invoke(section) ?: run { companionsSheet = section; showCompanions = true } }, modifier = if (companions.isEmpty) Modifier else Modifier.padding(vertical = 6.dp))
                 }
                 val input = composer.openInput
@@ -447,7 +452,7 @@ private val FADE = 44.dp
 
 /** The status pill above the composer (iOS SessionChrome banner). */
 @Composable
-private fun Banner(c: ComposerState, connectivity: ConnectivityState?, onRetry: () -> Unit, cloud: sh.zeron.android.core.CloudStore? = null, chatId: String = "", deviceId: String? = null) {
+private fun Banner(c: ComposerState, connectivity: ConnectivityState?, onRetry: () -> Unit, cloud: sh.zeron.android.core.CloudStore? = null, chatId: String = "", deviceId: String? = null, sideChatWorking: Boolean = false) {
     // Reconnect countdowns tick each second.
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val retryAt = c.room.retryAtMs
@@ -473,8 +478,12 @@ private fun Banner(c: ComposerState, connectivity: ConnectivityState?, onRetry: 
         connectivity == ConnectivityState.OFFLINE -> "Offline — sends are saved"
         !c.room.connected && retryAt != null -> "Reconnecting in ${maxOf(1L, (retryAt - now) / 1000)}s"
         else -> null
-    } ?: return
-    StatusBanner(text, if (c.sendState == SendState.FAILED) "Retry" to onRetry else null)
+    }
+    if (text != null) {
+        StatusBanner(text, if (c.sendState == SendState.FAILED) "Retry" to onRetry else null)
+    } else if (sideChatWorking) {
+        StatusBanner("Side chat working…", null)
+    }
 }
 
 /** Whose logins an error card's "Log in" opens: Cloud's for a Cloud chat, else the host's. */

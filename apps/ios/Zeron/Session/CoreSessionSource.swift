@@ -129,6 +129,14 @@ final class CoreSessionSource: SessionSource {
             chips.append(ComposerChip(id: "plan", title: config.plan ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
         }
         next.chips = chips
+        // The workspace indicator includes active side chats, while
+        // `turnRunning` deliberately describes only this chat's own turn so
+        // stop/queue controls cannot interrupt a sibling. Surface the
+        // descendant activity in the status pill without changing controls.
+        // The aggregate indicator also includes this chat's terminal activity.
+        // Inspect child rows so a native terminal cannot be mislabeled as a
+        // side chat.
+        let sideChatWorking = app?.sideChats(of: chatId).contains { $0.status == .working } == true
         if let sendFailure {
             next.banner = .failed(sendFailure)
         } else if c.sendState == .failed {
@@ -145,6 +153,8 @@ final class CoreSessionSource: SessionSource {
             next.banner = .offline
         } else if !c.room.connected, let retry = c.room.retryAtMs {
             next.banner = .reconnecting(in: max(1, Int((retry - Int64(Date().timeIntervalSince1970 * 1000)) / 1000)))
+        } else if sideChatWorking {
+            next.banner = .working(since: nil, word: "Side chat working")
         }
         next.uploadProgress = c.transferProgress
         // Working state is shown at the transcript tail (layout engine), not here.
