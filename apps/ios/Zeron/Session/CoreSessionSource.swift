@@ -133,7 +133,10 @@ final class CoreSessionSource: SessionSource {
         // `turnRunning` deliberately describes only this chat's own turn so
         // stop/queue controls cannot interrupt a sibling. Surface the
         // descendant activity in the status pill without changing controls.
-        let sideChatWorking = c.live.indicator == .working && !c.live.turnRunning
+        // The aggregate indicator also includes this chat's terminal activity.
+        // Inspect child rows so a native terminal cannot be mislabeled as a
+        // side chat.
+        let sideChatWorking = app?.sideChats(of: chatId).contains { $0.status == .working } == true
         if let sendFailure {
             next.banner = .failed(sendFailure)
         } else if c.sendState == .failed {
