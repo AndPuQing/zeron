@@ -1243,6 +1243,8 @@ mod tests {
         });
         view.update(cx, |view, cx| {
             assert!(view.pages.is_empty() && view.error.is_none());
+            // Stands in for the load task, which would start a real worker.
+            view.task = None;
             let generation = view.generation;
             view.events_ended(generation, cx);
             assert_eq!(view.error.as_deref(), Some(UNREADABLE));
