@@ -31,6 +31,7 @@ pub mod model;
 pub mod mutations;
 mod pdf_preview;
 mod pdf_render;
+mod pdf_scan;
 pub mod preview;
 mod rename;
 pub mod search;

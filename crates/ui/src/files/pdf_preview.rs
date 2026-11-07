@@ -6,19 +6,24 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures::StreamExt;
+use futures::future::Either;
 use gpui::{
-    AnyElement, Bounds, Context, FocusHandle, ListAlignment, ListState, Pixels, Render,
+    AnyElement, Bounds, Context, FocusHandle, ListAlignment, ListOffset, ListState, Pixels, Render,
     RenderImage, ScrollHandle, Task, Window, div, img, list, prelude::*, px,
 };
+use sha2::{Digest, Sha256};
 
 use super::client::{FilesRequestContext, WorkspaceFilesClient};
-use super::pdf_render::{PageSize, PdfWorker, RenderRequest, WorkerEvent, requested_width_px};
+use super::pdf_render::{
+    PageSize, PdfWorker, RenderRequest, WorkerEvent, abandon, budgeted_widths, is_abandoned,
+    retained_bytes,
+};
 use crate::icons::{self, icon};
 use crate::theme::Theme;
 
 /// Rendered pages kept per document, counting the CPU frame GPUI retains
-/// for atlas re-uploads as well as the GPU copy. Visible pages are never
-/// evicted to meet it.
+/// for atlas re-uploads as well as the GPU copy. The pages drawn are sized
+/// to fit it together and are never evicted; the rest are, farthest first.
 const MAX_RETAINED_BYTES: usize = 96 * 1024 * 1024;
 const PAGE_GAP: f32 = 12.0;
 const PAGE_PADDING: f32 = 16.0;
@@ -27,7 +32,15 @@ const CONTROLS_CLEARANCE: f32 = 52.0;
 /// Zoom relative to fitting the widest page to the panel.
 const ZOOM_STEPS: [f32; 9] = [0.5, 0.67, 0.8, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
 const FIT_ZOOM: usize = 3;
+/// The largest page side, in points, the layout trusts: 200 inches, PDF's
+/// own limit. Larger, empty or non-finite sizes come from broken files.
+const MAX_PAGE_POINTS: f32 = 14_400.0;
+/// How often the view checks the worker against its deadlines.
+const WATCHDOG_TICK: Duration = Duration::from_millis(500);
 const OLD_HOST_ERROR: &str = "Unsupported workspace image format";
+const TOO_SLOW: &str = "This PDF took too long to render.";
+const UNREADABLE: &str = "This PDF couldn't be read.";
+const PAGE_FAILED: &str = "This page couldn't be rendered";
 
 pub(super) fn is_pdf(path: &str) -> bool {
     path.rsplit_once('.')
@@ -44,16 +57,40 @@ fn load_error_message(error: String) -> String {
     }
 }
 
+fn plausible(points: f32) -> bool {
+    points.is_finite() && points > 0.0 && points <= MAX_PAGE_POINTS
+}
+
 /// The display scale, in logical pixels per PDF point, that draws the widest
-/// page `zoom` times the width available in a `viewport_width` panel.
+/// page `zoom` times the width available in a `viewport_width` panel. A page
+/// with an implausible width doesn't count, so one broken page can't shrink
+/// the rest.
 fn display_scale(pages: &[PageSize], viewport_width: f32, zoom: f32) -> f32 {
     let widest = pages
         .iter()
         .map(|page| page.width)
-        .fold(0.0_f32, f32::max)
-        .max(1.0);
+        .filter(|&width| plausible(width))
+        .fold(0.0_f32, f32::max);
+    let widest = if widest > 0.0 { widest } else { 612.0 };
     let available = (viewport_width - 2.0 * PAGE_PADDING).max(48.0);
     available * zoom / widest
+}
+
+/// The size a page is laid out at, in points: an implausible side is clamped
+/// (or, when empty or non-finite, replaced by Letter's) so it can't break
+/// the list's layout.
+fn layout_size(page: PageSize) -> PageSize {
+    let side = |points: f32, fallback: f32| {
+        if points.is_finite() && points > 0.0 {
+            points.clamp(1.0, MAX_PAGE_POINTS)
+        } else {
+            fallback
+        }
+    };
+    PageSize {
+        width: side(page.width, 612.0),
+        height: side(page.height, 792.0),
+    }
 }
 
 struct RenderedPage {
@@ -72,9 +109,13 @@ pub(super) struct PdfPreview {
     worker: Option<PdfWorker>,
     pages: Vec<PageSize>,
     rendered: HashMap<usize, RenderedPage>,
+    /// Rasters that failed to render, never requested again.
+    failed: HashSet<RenderRequest>,
     error: Option<String>,
     suspended: bool,
     list: ListState,
+    /// Where the list was when the view was suspended, to return to.
+    resume: Option<ListOffset>,
     /// The horizontal pan of pages zoomed wider than the panel.
     pan: ScrollHandle,
     zoom: usize,
@@ -82,7 +123,11 @@ pub(super) struct PdfPreview {
     scale_factor: f32,
     /// The display scale the list last measured its rows at.
     measured_scale: f32,
-    /// Requests from the rows drawn this frame, top first.
+    /// The rows drawn this frame, top first, whatever their raster's state.
+    drawn: Vec<usize>,
+    /// The raster width each drawn page wants, within the memory budget.
+    targets: HashMap<usize, u32>,
+    /// The drawn pages' missing rasters, top first.
     wanted: Vec<RenderRequest>,
     #[cfg(test)]
     requested: Vec<RenderRequest>,
@@ -112,14 +157,18 @@ impl PdfPreview {
             worker: None,
             pages: Vec::new(),
             rendered: HashMap::new(),
+            failed: HashSet::new(),
             error: None,
             suspended: false,
             list,
+            resume: None,
             pan: ScrollHandle::new(),
             zoom: FIT_ZOOM,
             bounds: Bounds::default(),
             scale_factor: 1.0,
             measured_scale: 0.0,
+            drawn: Vec::new(),
+            targets: HashMap::new(),
             wanted: Vec::new(),
             #[cfg(test)]
             requested: Vec::new(),
@@ -140,16 +189,27 @@ impl PdfPreview {
         }
     }
 
+    /// Drop the document and its rasters, keeping the reading position.
     pub fn suspend(&mut self, cx: &mut Context<Self>) {
+        if !self.pages.is_empty() {
+            self.resume = Some(self.list.logical_scroll_top());
+        }
         self.generation = self.generation.wrapping_add(1);
         self.task = None;
         self.suspended = true;
+        self.clear(cx);
+        cx.notify();
+    }
+
+    fn clear(&mut self, cx: &mut Context<Self>) {
         self.pages.clear();
+        self.failed.clear();
+        self.drawn.clear();
+        self.targets.clear();
         self.wanted.clear();
         self.list.reset(0);
         self.measured_scale = 0.0;
         self.release(cx);
-        cx.notify();
     }
 
     pub fn activate(&mut self, cx: &mut Context<Self>) {
@@ -161,7 +221,15 @@ impl PdfPreview {
     pub fn deleted(&mut self, cx: &mut Context<Self>) {
         self.suspend(cx);
         self.suspended = false;
+        self.resume = None;
         self.error = Some("This PDF was removed from the workspace.".into());
+    }
+
+    /// Show `message` in place of the document and let its worker go.
+    fn fail(&mut self, message: String, cx: &mut Context<Self>) {
+        self.clear(cx);
+        self.error = Some(message);
+        cx.notify();
     }
 
     pub fn reload(&mut self, cx: &mut Context<Self>) {
@@ -213,8 +281,8 @@ impl PdfPreview {
             )
             .await
             {
-                futures::future::Either::Left((result, _)) => result,
-                futures::future::Either::Right(_) => Err("PDF preview timed out".to_string()),
+                Either::Left((result, _)) => result,
+                Either::Right(_) => Err("PDF preview timed out".to_string()),
             };
             let bytes = match result {
                 Ok(bytes) => bytes,
@@ -229,24 +297,64 @@ impl PdfPreview {
                     return;
                 }
             };
+            let (bytes, hash) = executor
+                .spawn(async move {
+                    let hash: [u8; 32] = Sha256::digest(&bytes).into();
+                    (bytes, hash)
+                })
+                .await;
             let (sender, mut events) = futures::channel::mpsc::unbounded();
-            let started = this.update(cx, |view, _| {
-                if view.accepts(generation) {
-                    view.worker = Some(PdfWorker::spawn(bytes, sender));
-                    true
-                } else {
-                    false
+            let started = this.update(cx, |view, cx| {
+                if !view.accepts(generation) {
+                    return false;
+                }
+                // A file whose renderer already overran a deadline keeps at
+                // most that one thread.
+                if is_abandoned(&hash) {
+                    view.fail(TOO_SLOW.into(), cx);
+                    return false;
+                }
+                match PdfWorker::spawn(bytes, sender) {
+                    Ok(worker) => {
+                        view.worker = Some(worker);
+                        true
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "could not start the PDF renderer");
+                        view.fail("The PDF renderer couldn't start.".into(), cx);
+                        false
+                    }
                 }
             });
             if !matches!(started, Ok(true)) {
                 return;
             }
-            while let Some(event) = events.next().await {
-                if this
-                    .update(cx, |view, cx| view.handle(generation, event, cx))
-                    .is_err()
-                {
-                    return;
+            let mut tick = Box::pin(executor.timer(WATCHDOG_TICK));
+            loop {
+                match futures::future::select(events.next(), tick).await {
+                    Either::Left((Some(event), pending)) => {
+                        tick = pending;
+                        if this
+                            .update(cx, |view, cx| view.handle(generation, event, cx))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    Either::Left((None, _)) => {
+                        let _ = this.update(cx, |view, cx| view.events_ended(generation, cx));
+                        return;
+                    }
+                    Either::Right(((), _)) => {
+                        let overdue =
+                            this.update(cx, |view, cx| view.check_deadline(generation, hash, cx));
+                        if !matches!(overdue, Ok(false)) {
+                            // Dropping the receiver drops whatever the
+                            // abandoned worker still sends.
+                            return;
+                        }
+                        tick = Box::pin(executor.timer(WATCHDOG_TICK));
+                    }
                 }
             }
         }));
@@ -256,6 +364,33 @@ impl PdfPreview {
         !self.suspended && generation == self.generation
     }
 
+    /// The worker exited; nothing more will arrive from it.
+    fn events_ended(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if !self.accepts(generation) {
+            return;
+        }
+        self.worker = None;
+        if self.pages.is_empty() && self.error.is_none() {
+            self.error = Some(UNREADABLE.into());
+            cx.notify();
+        }
+    }
+
+    /// Abandon a worker that overran its deadline: its thread can't be
+    /// stopped, so the view stops waiting on it and its file isn't opened
+    /// again this session. Returns whether the view stopped watching.
+    fn check_deadline(&mut self, generation: u64, hash: [u8; 32], cx: &mut Context<Self>) -> bool {
+        if !self.accepts(generation) {
+            return true;
+        }
+        if !self.worker.as_ref().is_some_and(PdfWorker::overdue) {
+            return false;
+        }
+        abandon(hash);
+        self.fail(TOO_SLOW.into(), cx);
+        true
+    }
+
     fn handle(&mut self, generation: u64, event: WorkerEvent, cx: &mut Context<Self>) {
         if !self.accepts(generation) {
             return;
@@ -263,8 +398,15 @@ impl PdfPreview {
         match event {
             WorkerEvent::Opened(Ok(pages)) => {
                 self.list.reset(pages.len());
+                if let Some(resume) = self.resume.take()
+                    && resume.item_ix < pages.len()
+                {
+                    self.list.scroll_to(resume);
+                }
                 self.pages = pages;
-                self.measured_scale = 0.0;
+                // `reset` left every row unmeasured, so the first frame
+                // needn't remeasure (which would rescale a restored offset).
+                self.measured_scale = self.scale();
             }
             WorkerEvent::Opened(Err(error)) => {
                 self.worker = None;
@@ -276,41 +418,55 @@ impl PdfPreview {
                 height,
                 pixels,
             } => {
-                let Some(frame) = image::RgbaImage::from_raw(width, height, pixels) else {
-                    return;
-                };
-                let image = Arc::new(RenderImage::new(vec![image::Frame::new(frame)]));
-                let bytes = width as usize * height as usize * 4 * 2;
-                if let Some(old) = self.rendered.insert(
-                    request.page,
-                    RenderedPage {
-                        width_px: request.width_px,
-                        image,
-                        bytes,
-                    },
-                ) {
-                    cx.defer(move |cx| cx.drop_image(old.image, None));
+                if let Some(worker) = &self.worker {
+                    worker.finished(request);
                 }
-                self.evict(cx);
+                // A raster for a width the page no longer wants, after a zoom
+                // or a scroll, is dropped rather than shown.
+                if self.targets.get(&request.page) == Some(&request.width_px)
+                    && let Some(frame) = image::RgbaImage::from_raw(width, height, pixels)
+                {
+                    let image = Arc::new(RenderImage::new(vec![image::Frame::new(frame)]));
+                    if let Some(old) = self.rendered.insert(
+                        request.page,
+                        RenderedPage {
+                            width_px: request.width_px,
+                            image,
+                            bytes: retained_bytes(width, height),
+                        },
+                    ) {
+                        cx.defer(move |cx| cx.drop_image(old.image, None));
+                    }
+                    self.evict(cx);
+                }
             }
             WorkerEvent::Failed { request } => {
+                if let Some(worker) = &self.worker {
+                    worker.finished(request);
+                }
                 tracing::debug!(page = request.page, "PDF page failed to render");
+                self.failed.insert(request);
             }
         }
         cx.notify();
     }
 
-    /// Drop rendered pages outside the drawn range, farthest first, until the
-    /// retained pixels fit [`MAX_RETAINED_BYTES`].
+    /// Drop rendered pages that weren't drawn, farthest first, until the
+    /// retained pixels fit [`MAX_RETAINED_BYTES`]. The drawn pages' widths
+    /// are budgeted to fit it on their own.
     fn evict(&mut self, cx: &mut Context<Self>) {
-        let visible: HashSet<usize> = self.wanted.iter().map(|request| request.page).collect();
-        let anchor = self.wanted.first().map_or(0, |request| request.page);
+        let drawn: HashSet<usize> = self.drawn.iter().copied().collect();
+        let anchor = self
+            .drawn
+            .first()
+            .copied()
+            .unwrap_or_else(|| self.list.logical_scroll_top().item_ix);
         let mut total: usize = self.rendered.values().map(|page| page.bytes).sum();
         let mut candidates: Vec<usize> = self
             .rendered
             .keys()
             .copied()
-            .filter(|page| !visible.contains(page))
+            .filter(|page| !drawn.contains(page))
             .collect();
         candidates.sort_by_key(|page| std::cmp::Reverse(page.abs_diff(anchor)));
         let mut dropped = Vec::new();
@@ -332,6 +488,50 @@ impl PdfPreview {
         }
     }
 
+    /// Once the list has laid out: size the drawn pages' rasters to fit the
+    /// memory budget together, and hand the ones missing to the worker. Runs
+    /// every frame, so requests for rows no longer drawn are withdrawn.
+    fn sync_requests(&mut self) {
+        let scale = self.scale();
+        let drawn: Vec<(usize, PageSize, f32)> = self
+            .drawn
+            .iter()
+            .filter_map(|&page| {
+                let size = *self.pages.get(page)?;
+                Some((page, size, (layout_size(size).width * scale).max(1.0)))
+            })
+            .collect();
+        let sizes: Vec<(PageSize, f32)> = drawn
+            .iter()
+            .map(|&(_, size, width)| (size, width))
+            .collect();
+        let widths = budgeted_widths(&sizes, self.scale_factor, MAX_RETAINED_BYTES);
+        self.targets = drawn.iter().map(|&(page, ..)| page).zip(widths).collect();
+        self.wanted = drawn
+            .iter()
+            .filter_map(|&(page, ..)| {
+                let request = RenderRequest {
+                    page,
+                    width_px: *self.targets.get(&page)?,
+                };
+                let current = self
+                    .rendered
+                    .get(&page)
+                    .is_some_and(|rendered| rendered.width_px == request.width_px);
+                (!current && !self.failed.contains(&request)).then_some(request)
+            })
+            .collect();
+        #[cfg(test)]
+        for request in &self.wanted {
+            if !self.requested.contains(request) {
+                self.requested.push(*request);
+            }
+        }
+        if let Some(worker) = &self.worker {
+            worker.want(self.wanted.clone());
+        }
+    }
+
     fn set_zoom(&mut self, zoom: usize, cx: &mut Context<Self>) {
         let zoom = zoom.min(ZOOM_STEPS.len() - 1);
         if zoom != self.zoom {
@@ -348,38 +548,30 @@ impl PdfPreview {
         )
     }
 
-    /// One row of the page list: the page at the current scale, its raster
-    /// once one exists, and a request for the raster this width wants.
+    /// One row of the page list: the page at the current scale, with its
+    /// raster once one exists. Drawing it records it for the frame's
+    /// requests, made once the whole list has laid out.
     fn render_page(&mut self, page: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::of(cx);
-        let Some(size) = self.pages.get(page).copied() else {
+        let Some(size) = self.pages.get(page).copied().map(layout_size) else {
             return div().into_any_element();
         };
+        if !self.drawn.contains(&page) {
+            self.drawn.push(page);
+        }
         let scale = self.scale();
         let width = (size.width * scale).max(1.0);
         let height = (size.height * scale).max(1.0);
-        let request = RenderRequest {
-            page,
-            width_px: requested_width_px(width, self.scale_factor),
-        };
-        if self
-            .rendered
-            .get(&page)
-            .is_none_or(|rendered| rendered.width_px != request.width_px)
-            && !self.wanted.contains(&request)
-        {
-            self.wanted.push(request);
-            #[cfg(test)]
-            self.requested.push(request);
-            if let Some(worker) = &self.worker {
-                worker.want(self.wanted.clone());
-            }
-        }
         // A stale-resolution raster stands in until the sharper one lands.
         let raster = self
             .rendered
             .get(&page)
             .map(|rendered| rendered.image.clone());
+        let failed = raster.is_none()
+            && self
+                .targets
+                .get(&page)
+                .is_some_and(|&width_px| self.failed.contains(&RenderRequest { page, width_px }));
         div()
             .w_full()
             .pt(px(if page == 0 { PAGE_PADDING } else { 0.0 }))
@@ -399,7 +591,18 @@ impl PdfPreview {
                     .bg(gpui::white())
                     .border_1()
                     .border_color(theme.border)
-                    .when_some(raster, |el, raster| el.child(img(raster).size_full())),
+                    .when_some(raster, |el, raster| el.child(img(raster).size_full()))
+                    .when(failed, |el| {
+                        el.flex()
+                            .items_center()
+                            .justify_center()
+                            .px(px(8.0))
+                            .text_size(px(11.0))
+                            .font_family(theme.font_sans.clone())
+                            // The page stays white in either theme.
+                            .text_color(gpui::rgb(0x6e6e6e))
+                            .child(PAGE_FAILED)
+                    }),
             )
             .into_any_element()
     }
@@ -487,6 +690,9 @@ impl Render for PdfPreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::of(cx);
         self.scale_factor = window.scale_factor();
+        // The list's rows record themselves as they draw; the canvas below,
+        // laid out after the list, turns them into requests.
+        self.drawn.clear();
         let mut root = div()
             .id("file-pdf-preview")
             .debug_selector(|| "file-pdf-preview".into())
@@ -514,12 +720,10 @@ impl Render for PdfPreview {
                 self.measured_scale = scale;
                 self.list.remeasure();
             }
-            // The rows drawn this frame name the rasters still wanted.
-            self.wanted.clear();
             let widest = self
                 .pages
                 .iter()
-                .map(|page| page.width)
+                .map(|&page| layout_size(page).width)
                 .fold(0.0_f32, f32::max);
             let content_width =
                 (widest * scale + 2.0 * PAGE_PADDING).max(f32::from(self.bounds.size.width));
@@ -552,6 +756,7 @@ impl Render for PdfPreview {
                             view.bounds = bounds;
                             cx.notify();
                         }
+                        view.sync_requests();
                     });
                 },
                 |_, _, _, _| {},
@@ -606,6 +811,29 @@ mod tests {
         assert!((display_scale(&pages, 824.0, 2.0) - 2.0 * fit).abs() < 1e-4);
         // A panel narrower than the padding still draws something.
         assert!(display_scale(&pages, 10.0, 1.0) > 0.0);
+        // A broken page neither shrinks the others nor breaks the layout.
+        let broken = [
+            pages[0],
+            PageSize {
+                width: f32::INFINITY,
+                height: 10.0,
+            },
+            PageSize {
+                width: 1e30,
+                height: f32::NAN,
+            },
+        ];
+        assert_eq!(
+            display_scale(&broken, 824.0, 1.0),
+            display_scale(&pages[..1], 824.0, 1.0)
+        );
+        assert_eq!(
+            layout_size(broken[2]),
+            PageSize {
+                width: MAX_PAGE_POINTS,
+                height: 792.0,
+            }
+        );
     }
 
     #[derive(Default)]
@@ -712,6 +940,7 @@ mod tests {
         // A requested page arrives as a raster; suspension drops it and the
         // worker, and late events from the old generation are ignored.
         view.update(cx, |view, _| {
+            view.targets = HashMap::from([(0, 256)]);
             view.wanted = vec![RenderRequest {
                 page: 0,
                 width_px: 256,
@@ -849,19 +1078,33 @@ mod tests {
         );
         view.read_with(cx, |view, _| {
             assert!(view.list.logical_scroll_top().item_ix > 30);
-            let drawn: HashSet<_> = view.wanted.iter().map(|request| request.page).collect();
-            assert!(!drawn.contains(&0), "the top page is no longer wanted");
+            assert!(!view.drawn.contains(&0), "the top page is no longer drawn");
+            assert!(view.wanted.iter().all(|request| request.page != 0));
         });
 
-        // Zooming widens every page, so their rasters are re-requested wider.
-        let before = view.read_with(cx, |view, _| view.wanted.first().copied().unwrap());
+        // Zooming widens every page; the drawn pages' rasters still fit the
+        // budget together.
+        let scale = view.read_with(cx, |view, _| view.scale());
         let zoom_in = cx.debug_bounds("pdf-zoom-in").unwrap().center();
         cx.simulate_click(zoom_in, Modifiers::default());
         draw(cx);
         view.read_with(cx, |view, _| {
             assert_eq!(view.zoom, FIT_ZOOM + 1);
-            let after = view.wanted.first().copied().unwrap();
-            assert!(after.width_px > before.width_px, "{before:?} -> {after:?}");
+            assert!((view.scale() / scale - 1.25).abs() < 1e-3);
+            assert!(!view.drawn.is_empty());
+            let retained: usize = view
+                .drawn
+                .iter()
+                .map(|page| {
+                    let (width, height) = crate::files::pdf_render::raster_size(
+                        view.pages[*page],
+                        view.targets[page],
+                    )
+                    .unwrap();
+                    retained_bytes(width, height)
+                })
+                .sum();
+            assert!(retained <= MAX_RETAINED_BYTES, "{retained}");
         });
         // Zoomed past the panel, the vertical wheel still pages and only a
         // horizontal one pans.
@@ -877,5 +1120,132 @@ mod tests {
         assert_eq!(view.read_with(cx, |view, _| view.pan.offset().x), px(0.0));
         wheel(cx, -400.0, 0.0);
         assert!(view.read_with(cx, |view, _| view.pan.offset().x) < px(0.0));
+
+        // Switching away and back returns to the same page.
+        let top = view.read_with(cx, |view, _| view.list.logical_scroll_top().item_ix);
+        view.update(cx, |view, cx| {
+            view.suspend(cx);
+            view.activate(cx);
+        });
+        for _ in 0..200 {
+            cx.run_until_parked();
+            if view.read_with(cx, |view, _| view.pages.len() == 40) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        draw(cx);
+        let restored = view.read_with(cx, |view, _| view.list.logical_scroll_top().item_ix);
+        assert!(top > 30 && restored + 1 >= top, "{top} -> {restored}");
+    }
+
+    /// A view with `pages` loaded and its worker running.
+    fn loaded(cx: &mut gpui::TestAppContext, pages: usize) -> gpui::Entity<PdfPreview> {
+        use gpui::AppContext as _;
+        cx.background_executor.allow_parking();
+        let transport = Arc::new(PdfTransport {
+            mime: "application/pdf",
+            pages,
+            ..Default::default()
+        });
+        let view = cx.new(|cx| {
+            let client = WorkspaceFilesClient::with_transport(transport, context());
+            PdfPreview::new("docs/pages.pdf".into(), context(), client, cx)
+        });
+        settle(cx, |view| view.pages.len() == pages, &view);
+        view.update(cx, |view, _| {
+            view.bounds = Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(800.0), px(600.0)),
+            );
+            view.scale_factor = 2.0;
+        });
+        view
+    }
+
+    fn placeholder_image() -> Arc<RenderImage> {
+        Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(1, 1),
+        )]))
+    }
+
+    #[gpui::test]
+    fn drawn_pages_over_the_budget_are_not_evicted(cx: &mut gpui::TestAppContext) {
+        let view = loaded(cx, 3);
+        view.update(cx, |view, cx| {
+            // Two drawn pages over the budget between them, and one that
+            // isn't drawn.
+            for page in 0..3 {
+                view.rendered.insert(
+                    page,
+                    RenderedPage {
+                        width_px: 64,
+                        image: placeholder_image(),
+                        bytes: 60 * 1024 * 1024,
+                    },
+                );
+            }
+            view.drawn = vec![1, 2];
+            view.evict(cx);
+            let mut kept: Vec<_> = view.rendered.keys().copied().collect();
+            kept.sort_unstable();
+            assert_eq!(kept, vec![1, 2]);
+            view.evict(cx);
+            assert_eq!(view.rendered.len(), 2, "they don't evict each other later");
+        });
+    }
+
+    #[gpui::test]
+    fn results_follow_the_current_targets(cx: &mut gpui::TestAppContext) {
+        let view = loaded(cx, 2);
+        view.update(cx, |view, cx| {
+            let generation = view.generation;
+            view.drawn = vec![0];
+            view.sync_requests();
+            let request = view.wanted[0];
+            assert_eq!(view.targets[&0], request.width_px);
+
+            // A raster for another width, from before a zoom, is dropped.
+            let rendered = |width_px: u32| WorkerEvent::Rendered {
+                request: RenderRequest { page: 0, width_px },
+                width: width_px,
+                height: width_px / 2,
+                pixels: vec![255; width_px as usize * (width_px / 2) as usize * 4],
+            };
+            view.handle(generation, rendered(request.width_px + 64), cx);
+            assert!(!view.rendered.contains_key(&0));
+            view.handle(generation, rendered(request.width_px), cx);
+            assert_eq!(view.rendered[&0].width_px, request.width_px);
+            view.sync_requests();
+            assert!(view.wanted.is_empty());
+
+            // A page that fails isn't asked for again.
+            view.drawn = vec![1];
+            view.sync_requests();
+            let failed = view.wanted[0];
+            view.handle(generation, WorkerEvent::Failed { request: failed }, cx);
+            view.sync_requests();
+            assert!(view.wanted.is_empty(), "{:?}", view.wanted);
+            assert!(view.failed.contains(&failed));
+        });
+    }
+
+    #[gpui::test]
+    fn a_worker_that_stops_early_is_an_error(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        let transport = Arc::new(PdfTransport {
+            mime: "application/pdf",
+            ..Default::default()
+        });
+        let view = cx.new(|cx| {
+            let client = WorkspaceFilesClient::with_transport(transport, context());
+            PdfPreview::new("docs/square.pdf".into(), context(), client, cx)
+        });
+        view.update(cx, |view, cx| {
+            assert!(view.pages.is_empty() && view.error.is_none());
+            let generation = view.generation;
+            view.events_ended(generation, cx);
+            assert_eq!(view.error.as_deref(), Some(UNREADABLE));
+        });
     }
 }
