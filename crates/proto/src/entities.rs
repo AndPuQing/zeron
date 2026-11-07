@@ -978,7 +978,8 @@ pub struct ReadWorkspaceFileRequest {
     pub path: String,
 }
 
-/// Workspace images travel in bounded relay frames, independently of text reads.
+/// Workspace images and PDFs (`ReadWorkspaceImage`) travel in bounded relay
+/// frames, independently of text reads.
 pub const MAX_WORKSPACE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 pub const WORKSPACE_IMAGE_CHUNK_BYTES: usize = 384 * 1024;
 

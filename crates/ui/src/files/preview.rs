@@ -19,7 +19,7 @@ use zeron_proto::{
 use super::{
     FileColumn, FilesCloseDisposition, FilesEvent, FilesSurface,
     client::{FilesRequestContext, WorkspaceFilesClient},
-    document::{DocumentKey, DocumentPhase, FileDocument},
+    document::{DocumentKey, DocumentPhase, FileDocument, MediaPreview},
     toolbar, toolbar_button,
 };
 use crate::{
@@ -529,8 +529,8 @@ impl FilesSurface {
         }
         self.preview.images_visible = false;
         for document in self.preview.documents.values() {
-            if let Some(view) = &document.image {
-                view.update(cx, |view, cx| view.suspend(cx));
+            if let Some(media) = &document.media {
+                media.suspend(cx);
             }
         }
     }
@@ -541,9 +541,9 @@ impl FilesSurface {
             .active
             .as_ref()
             .and_then(|path| self.preview.documents.get(path))
-            .and_then(|d| d.image.clone())
+            .and_then(|d| d.media.clone())
         {
-            let focus = view.read(cx).focus.clone();
+            let focus = view.focus(cx);
             window.defer(cx, move |window, cx| focus.focus(window, cx));
             return;
         }
@@ -1157,9 +1157,8 @@ impl FilesSurface {
             );
             self.read_file(path, cx);
         } else if self.preview.documents.get(&path).is_some_and(|d| {
-            d.image.is_none()
-                && (super::image_preview::is_image(&path)
-                    || (d.file.is_none() && d.read_task.is_none()))
+            d.media.is_none()
+                && (MediaPreview::handles(&path) || (d.file.is_none() && d.read_task.is_none()))
         }) {
             self.read_file(path, cx);
         } else {
@@ -1170,8 +1169,8 @@ impl FilesSurface {
     }
 
     fn read_file(&mut self, path: String, cx: &mut Context<Self>) {
-        if super::image_preview::is_image(&path) {
-            self.read_image_file(path, cx);
+        if MediaPreview::handles(&path) {
+            self.read_media_file(path, cx);
             return;
         }
         let Some(context) = self.request_context.clone() else {
@@ -1248,7 +1247,7 @@ impl FilesSurface {
         cx.notify();
     }
 
-    fn read_image_file(&mut self, path: String, cx: &mut Context<Self>) {
+    fn read_media_file(&mut self, path: String, cx: &mut Context<Self>) {
         // A rename can give an edited text buffer an image extension. Never
         // discard that buffer (or an in-flight save) to create a preview.
         if self.preview.documents.get(&path).is_some_and(|d| {
@@ -1266,14 +1265,21 @@ impl FilesSurface {
             return;
         };
         let client = WorkspaceFilesClient::new(engine, context.clone());
-        let view =
-            cx.new(|cx| super::image_preview::ImagePreview::new(path.clone(), context, client, cx));
+        let media = if super::pdf_preview::is_pdf(&path) {
+            MediaPreview::Pdf(
+                cx.new(|cx| super::pdf_preview::PdfPreview::new(path.clone(), context, client, cx)),
+            )
+        } else {
+            MediaPreview::Image(cx.new(|cx| {
+                super::image_preview::ImagePreview::new(path.clone(), context, client, cx)
+            }))
+        };
         if !self.preview.images_visible {
-            view.update(cx, |view, cx| view.suspend(cx));
+            media.suspend(cx);
         }
         if let Some(document) = self.preview.documents.get_mut(&path) {
             document.begin_load();
-            document.image = Some(view);
+            document.media = Some(media);
             document.file = None;
             document.editor = None;
             document.editor_events = None;
@@ -1736,21 +1742,21 @@ impl FilesSurface {
     }
 
     pub(super) fn reconcile_document(&mut self, path: String, cx: &mut Context<Self>) {
-        if super::image_preview::is_image(&path)
+        if MediaPreview::handles(&path)
             && !self.preview.documents.get(&path).is_some_and(|d| {
                 d.is_dirty() || d.pending_save.is_some() || matches!(d.phase, DocumentPhase::Saving)
             })
         {
             if self.preview.documents.contains_key(&path) {
                 if self.preview.images_visible && self.preview.active.as_deref() == Some(&path) {
-                    self.read_image_file(path, cx);
-                } else if let Some(view) = self
+                    self.read_media_file(path, cx);
+                } else if let Some(media) = self
                     .preview
                     .documents
                     .get(&path)
-                    .and_then(|d| d.image.clone())
+                    .and_then(|d| d.media.clone())
                 {
-                    view.update(cx, |view, cx| view.suspend(cx));
+                    media.suspend(cx);
                 }
             }
             return;
@@ -1875,8 +1881,8 @@ impl FilesSurface {
         for (document_path, document) in &mut self.preview.documents {
             if path_is_same_or_descendant(document_path, path) {
                 document.mark_deleted();
-                if let Some(view) = &document.image {
-                    view.update(cx, |view, cx| view.deleted(cx));
+                if let Some(media) = &document.media {
+                    media.deleted(cx);
                 }
                 changed = true;
             }
@@ -1903,17 +1909,15 @@ impl FilesSurface {
             .collect::<Vec<_>>();
         let image_renames: HashSet<_> = renames
             .iter()
-            .filter(|(old, new)| {
-                super::image_preview::is_image(old) || super::image_preview::is_image(new)
-            })
+            .filter(|(old, new)| MediaPreview::handles(old) || MediaPreview::handles(new))
             .map(|(_, new)| new.clone())
             .collect();
         for (old_document_path, new_document_path) in &renames {
             let Some(mut document) = self.preview.documents.remove(old_document_path) else {
                 continue;
             };
-            if let Some(view) = document.image.take() {
-                view.update(cx, |view, cx| view.suspend(cx));
+            if let Some(media) = document.media.take() {
+                media.suspend(cx);
             }
             document.generation = document.generation.wrapping_add(1);
             let needs_review =
@@ -2696,20 +2700,17 @@ impl FilesSurface {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.target_change_pending && super::image_preview::is_image(path) {
-            return centered_state(
-                "Workspace changed. Image preview suspended.",
-                theme.text_muted,
-            );
+        if self.target_change_pending && MediaPreview::handles(path) {
+            return centered_state("Workspace changed. Preview suspended.", theme.text_muted);
         }
         self.preview.images_visible = true;
         if let Some(view) = self
             .preview
             .documents
             .get(path)
-            .and_then(|d| d.image.clone())
+            .and_then(|d| d.media.clone())
         {
-            view.update(cx, |view, cx| view.activate(cx));
+            view.activate(cx);
             return view.into_any_element();
         }
         self.apply_pending_external_reload(path, window, cx);
@@ -4986,7 +4987,7 @@ mod markdown_buffer_tests {
                 assert!(document.is_dirty());
                 assert!(document.is_editable());
                 assert_eq!(document.editor.as_ref(), Some(&editor));
-                assert!(document.image.is_none());
+                assert!(document.media.is_none());
                 assert!(matches!(
                     document.phase,
                     DocumentPhase::ExternallyModified { .. }
@@ -4996,7 +4997,7 @@ mod markdown_buffer_tests {
                 document.phase = DocumentPhase::Ready;
                 assert!(document.can_save());
                 let pending = document.begin_save("unsaved text".into()).unwrap();
-                surface.read_image_file("drawing.svg".into(), cx);
+                surface.read_media_file("drawing.svg".into(), cx);
                 let document = &surface.preview.documents["drawing.svg"];
                 assert_eq!(document.pending_save.as_ref(), Some(&pending));
                 assert_eq!(document.editor.as_ref(), Some(&editor));

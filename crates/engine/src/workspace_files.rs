@@ -1588,6 +1588,9 @@ fn read_image_blocking(
         "svg" => "image/svg+xml",
         "bmp" => "image/bmp",
         "tif" | "tiff" => "image/tiff",
+        // The desktop Files panel renders PDFs itself; the bytes travel the
+        // same bounded, owner-routed path as images.
+        "pdf" => "application/pdf",
         _ => {
             return Err(WorkspaceFilesError::Unsupported(
                 "Unsupported workspace image format".into(),
@@ -1599,9 +1602,14 @@ fn read_image_blocking(
     }
     let before = checked_file_metadata(root, relative)?;
     if before.len() > MAX_WORKSPACE_IMAGE_BYTES as u64 {
-        return Err(WorkspaceFilesError::Unsupported(
-            "Image exceeds 8 MiB preview limit".into(),
-        ));
+        let kind = if mime == "application/pdf" {
+            "PDF"
+        } else {
+            "Image"
+        };
+        return Err(WorkspaceFilesError::Unsupported(format!(
+            "{kind} exceeds 8 MiB preview limit"
+        )));
     }
     let mut file = std::fs::File::open(root.join(relative.as_path()))
         .map_err(|e| WorkspaceFilesError::Io(e.to_string()))?;
@@ -3971,6 +3979,28 @@ mod image_tests {
         request.expected_content_hash = None;
         request.offset = usize::MAX;
         assert!(read_image_blocking(&root, &path, &request).is_err());
+    }
+    #[test]
+    fn workspace_pdfs_travel_the_image_path_with_their_own_type() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        std::fs::write(root.join("doc.PDF"), b"%PDF-1.4\n%%EOF\n").unwrap();
+        let path = WorkspaceRelativePath::file("doc.PDF").unwrap();
+        let mut request = request();
+        request.path = "doc.PDF".into();
+        let chunk = read_image_blocking(&root, &path, &request).unwrap();
+        assert_eq!(chunk.mime_type, "application/pdf");
+        assert!(chunk.done);
+        std::fs::write(
+            root.join("doc.PDF"),
+            vec![0; zeron_proto::MAX_WORKSPACE_IMAGE_BYTES + 1],
+        )
+        .unwrap();
+        let error = read_image_blocking(&root, &path, &request).unwrap_err();
+        assert!(error.to_string().contains("PDF exceeds"), "{error}");
+        std::fs::write(root.join("notes.docx"), b"PK").unwrap();
+        let other = WorkspaceRelativePath::file("notes.docx").unwrap();
+        assert!(read_image_blocking(&root, &other, &request).is_err());
     }
     fn chunk_request(path: &str, allow_outside: bool) -> zeron_proto::ReadWorkspaceTextChunkRequest {
         zeron_proto::ReadWorkspaceTextChunkRequest {
