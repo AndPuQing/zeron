@@ -4557,7 +4557,7 @@ impl DocHost {
         self.resolve_attachment_refs(&mut prompt, &mut attachments);
         if send == QueueSend::Steer {
             match sessions
-                .steer_at(
+                .steer_now(
                     chat_id,
                     &prompt,
                     Some(message_id.clone()),
@@ -6004,8 +6004,10 @@ impl DocHost {
         {
             tracing::warn!(chat = %chat_id, error = %err, "canonical user-message write failed");
         }
+        // A steer is read at once: while a command runs, its turn stops in
+        // place first (the runtime and its background work stay).
         match sessions
-            .steer_at(chat_id, &prompt, message_id.clone(), issued_at, execution)
+            .steer_now(chat_id, &prompt, message_id.clone(), issued_at, execution)
             .await?
         {
             SteerOutcome::Accepted => {
