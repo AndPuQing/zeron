@@ -1231,6 +1231,45 @@ mod tests {
     }
 
     #[gpui::test]
+    fn a_render_past_its_deadline_abandons_the_file(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext as _;
+        // Seven pages: bytes no other test opens, since the abandoned set
+        // lasts for the process.
+        let view = loaded(cx, 7);
+        let hash: [u8; 32] = Sha256::digest(pages_pdf(7)).into();
+        view.update(cx, |view, cx| {
+            let generation = view.generation;
+            let worker = view.worker.as_ref().unwrap();
+            worker.rendering_for(crate::files::pdf_render::RENDER_DEADLINE / 2);
+            assert!(!view.check_deadline(generation, hash, cx));
+            assert!(view.worker.is_some() && !is_abandoned(&hash));
+
+            let worker = view.worker.as_ref().unwrap();
+            worker
+                .rendering_for(crate::files::pdf_render::RENDER_DEADLINE + Duration::from_secs(1));
+            assert!(view.check_deadline(generation, hash, cx));
+            assert!(view.worker.is_none() && view.pages.is_empty());
+            assert_eq!(view.error.as_deref(), Some(TOO_SLOW));
+            assert!(is_abandoned(&hash));
+        });
+        // Opening the same file again doesn't start another worker.
+        let transport = Arc::new(PdfTransport {
+            mime: "application/pdf",
+            pages: 7,
+            ..Default::default()
+        });
+        let reopened = cx.new(|cx| {
+            let client = WorkspaceFilesClient::with_transport(transport, context());
+            PdfPreview::new("docs/pages.pdf".into(), context(), client, cx)
+        });
+        settle(cx, |view| view.error.is_some(), &reopened);
+        reopened.read_with(cx, |view, _| {
+            assert_eq!(view.error.as_deref(), Some(TOO_SLOW));
+            assert!(view.worker.is_none());
+        });
+    }
+
+    #[gpui::test]
     fn a_worker_that_stops_early_is_an_error(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext as _;
         let transport = Arc::new(PdfTransport {

@@ -38,6 +38,9 @@ pub(super) struct Scan {
     /// once hayro decrypts them.
     encrypted: bool,
     streams: Vec<ObjectIdentifier>,
+    /// Streams whose filter/length values were indirect and need the parsed
+    /// cross-reference table before their limits can be checked.
+    deferred: Vec<ObjectIdentifier>,
     decoded: u64,
 }
 
@@ -48,21 +51,20 @@ pub(super) fn before_parse(data: &[u8]) -> Result<Scan, String> {
         file_len: data.len(),
         encrypted: find(data, b"/Encrypt", 0).is_some(),
         streams: Vec::new(),
+        deferred: Vec::new(),
         decoded: 0,
     };
     let mut endstreams = Vec::new();
-    let mut at = 0;
-    while let Some(found) = find(data, b"endstream", at) {
+    let mut endstream_at = 0;
+    while let Some(found) = find(data, b"endstream", endstream_at) {
         endstreams.push(found);
-        at = found + 1;
+        endstream_at = found + 1;
     }
-    let mut at = 0;
-    while let Some(found) = find(data, b"obj", at) {
-        at = found + 3;
+    for found in object_headers(data) {
         if data[..found].ends_with(b"end") {
             continue;
         }
-        let mut reader = Reader::new_with(data, at);
+        let mut reader = Reader::new_with(data, found + 3);
         reader.skip_white_spaces_and_comments();
         if reader.peek_tag(b"<<").is_none() {
             continue;
@@ -72,7 +74,6 @@ pub(super) fn before_parse(data: &[u8]) -> Result<Scan, String> {
         };
         // Resume after the dictionary rather than the stream data, so an
         // object hidden inside another stream's bytes is still found.
-        at = reader.offset();
         reader.skip_white_spaces_and_comments();
         if reader.forward_tag(b"stream").is_none()
             || reader
@@ -86,13 +87,24 @@ pub(super) fn before_parse(data: &[u8]) -> Result<Scan, String> {
         let start = reader.offset();
         if let Some(id) = object_id(&data[..found]) {
             scan.streams.push(id);
+            if dict.get_ref(b"Filter").is_some()
+                || dict.get_ref(b"F").is_some()
+                || dict.get_ref(b"Length").is_some()
+                || dict.get_ref(b"Width").is_some()
+                || dict.get_ref(b"W").is_some()
+                || dict.get_ref(b"Height").is_some()
+                || dict.get_ref(b"H").is_some()
+            {
+                scan.deferred.push(id);
+            }
         }
         let filters = check_dict(&dict, scan.file_len)?;
-        // Measured even when the file looks encrypted: a `/Encrypt` anywhere
-        // in the bytes mustn't switch the check off, and encrypted data just
-        // fails to decode early.
+        // A direct dictionary is measured immediately; indirect values are
+        // checked again after hayro resolves the cross-reference table.
         let end = stream_end(data, &dict, start, &endstreams);
-        scan.measure(&filters, &data[start..], &data[start..end])?;
+        if !scan.encrypted {
+            scan.measure(&filters, &data[start..], &data[start..end])?;
+        }
     }
     Ok(scan)
 }
@@ -101,15 +113,21 @@ impl Scan {
     /// Check the streams again through the parsed document, which resolves
     /// indirect sizes and decrypts data the first pass couldn't measure.
     pub(super) fn after_parse(mut self, pdf: &Pdf) -> Result<(), String> {
-        for id in std::mem::take(&mut self.streams) {
+        let mut ids = if self.encrypted {
+            std::mem::take(&mut self.streams)
+        } else {
+            Vec::new()
+        };
+        ids.extend(std::mem::take(&mut self.deferred));
+        ids.sort_unstable();
+        ids.dedup();
+        for id in ids {
             let Some(stream) = pdf.xref().get::<Stream<'_>>(id) else {
                 continue;
             };
             let filters = check_dict(stream.dict(), self.file_len)?;
-            if self.encrypted {
-                let data = stream.raw_data();
-                self.measure(&filters, &data, &data)?;
-            }
+            let data = stream.raw_data();
+            self.measure(&filters, &data, &data)?;
         }
         Ok(())
     }
@@ -267,6 +285,115 @@ fn stream_end(data: &[u8], dict: &Dict<'_>, start: usize, endstreams: &[usize]) 
     }
     let next = endstreams.partition_point(|&at| at < start);
     endstreams.get(next).copied().unwrap_or(data.len())
+}
+
+/// Locate object keywords in PDF lexical text, skipping comments, literal
+/// strings and hexadecimal strings. Searching for the byte sequence `obj`
+/// directly treats examples embedded in page text as real objects and can
+/// reject an otherwise valid document before hayro sees it.
+fn object_headers(data: &[u8]) -> impl Iterator<Item = usize> + '_ {
+    let mut at = 0;
+    let mut literal_depth = 0usize;
+    let mut escaped = false;
+    let mut comment = false;
+    let mut hex = false;
+    std::iter::from_fn(move || {
+        loop {
+            while at < data.len() {
+                let byte = data[at];
+                if comment {
+                    at += 1;
+                    if matches!(byte, b'\n' | b'\r') {
+                        comment = false;
+                    }
+                    continue;
+                }
+                if literal_depth > 0 {
+                    at += 1;
+                    if escaped {
+                        escaped = false;
+                    } else if byte == b'\\' {
+                        escaped = true;
+                    } else if byte == b'(' {
+                        literal_depth += 1;
+                    } else if byte == b')' {
+                        literal_depth -= 1;
+                    }
+                    continue;
+                }
+                if hex {
+                    at += 1;
+                    if byte == b'>' {
+                        hex = false;
+                    }
+                    continue;
+                }
+                match byte {
+                    b'%' => {
+                        comment = true;
+                        at += 1;
+                    }
+                    b'(' => {
+                        literal_depth = 1;
+                        at += 1;
+                    }
+                    b'<' if data.get(at + 1) == Some(&b'<') => {
+                        // Dictionary opener `<<`, not a hexadecimal string.
+                        at += 2;
+                    }
+                    b'<' => {
+                        hex = true;
+                        at += 1;
+                    }
+                    b'o' if data.get(at..at + 3) == Some(b"obj") => {
+                        let end = at + 3;
+                        let boundary = |byte: Option<&u8>| {
+                            byte.is_none_or(|byte| byte.is_ascii_whitespace() || *byte == b'<')
+                        };
+                        let generation_end = at.checked_sub(1).map(|mut index| {
+                            while data.get(index).is_some_and(u8::is_ascii_whitespace) {
+                                index = index.saturating_sub(1);
+                            }
+                            index
+                        });
+                        let id_shape = generation_end
+                            .and_then(|index| data.get(index))
+                            .is_some_and(u8::is_ascii_digit)
+                            && generation_end
+                                .and_then(|index| index.checked_sub(1))
+                                .and_then(|index| data.get(index))
+                                .is_some_and(u8::is_ascii_whitespace);
+                        let candidate = if id_shape && boundary(data.get(end)) {
+                            object_id(&data[..at])
+                        } else {
+                            None
+                        };
+                        at = end;
+                        if candidate.is_some() {
+                            let header = at - 3;
+                            // Do not lex arbitrary compressed/binary stream bytes
+                            // as PDF text. The stream object itself was found by
+                            // the lexical scan; its bytes are not object headers.
+                            let object_end = find(data, b"endobj", at).unwrap_or(data.len());
+                            if let Some(stream) =
+                                find(data, b"stream", at).filter(|&p| p < object_end)
+                                && let Some(endstream) = find(data, b"endstream", stream + 6)
+                            {
+                                at = endstream.saturating_add(b"endstream".len());
+                                literal_depth = 0;
+                                escaped = false;
+                                comment = false;
+                                hex = false;
+                            }
+                            return Some(header);
+                        }
+                    }
+                    _ => at += 1,
+                }
+            }
+            return None;
+        }
+    })
 }
 
 /// The `N G` before an `obj` keyword.
@@ -508,6 +635,37 @@ mod tests {
                 b"/Filter [/ASCIIHexDecode /FlateDecode]",
                 hex(&zlib(b"hello")).as_bytes(),
             )],
+        );
+        assert_eq!(check(&pdf), Ok(()));
+    }
+
+    #[test]
+    fn indirect_filters_are_checked_after_cross_references_resolve() {
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        let buffer = [0u8; 64 * 1024];
+        for _ in 0..(MAX_STREAM_DECODED / buffer.len() as u64 + 1) {
+            encoder.write_all(&buffer).unwrap();
+        }
+        let compressed = encoder.finish().unwrap();
+        let mut pdf = pdf_with(
+            b"",
+            &[
+                stream(b"/Filter 6 0 R", &compressed),
+                b"/FlateDecode".to_vec(),
+            ],
+        );
+        // Point the page at object 5, whose filter is the indirect name in
+        // object 6. The direct pass cannot resolve that name.
+        let at = find(&pdf, b"/Contents 4 0 R", 0).unwrap();
+        pdf[at + b"/Contents ".len()] = b'5';
+        assert_eq!(check(&pdf), Err(EXPANDS.into()));
+    }
+
+    #[test]
+    fn object_examples_inside_literal_text_are_not_scanned_as_streams() {
+        let pdf = pdf_with(
+            b"BT (Example: 7 0 obj << /Length 999999999 >> stream\\ntext endstream endobj) Tj ET",
+            &[],
         );
         assert_eq!(check(&pdf), Ok(()));
     }

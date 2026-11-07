@@ -140,6 +140,13 @@ impl PdfWorker {
             None => false,
         }
     }
+
+    /// Pretend the worker has been rendering for `elapsed`.
+    #[cfg(test)]
+    pub(super) fn rendering_for(&self, elapsed: Duration) {
+        let since = Instant::now().checked_sub(elapsed).expect("a past instant");
+        self.queue().busy = Some((Busy::Rendering, since));
+    }
 }
 
 impl Drop for PdfWorker {
