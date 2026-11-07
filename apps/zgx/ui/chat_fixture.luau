@@ -102,24 +102,28 @@ ui.command {
 		end
 	end,
 }
--- The open session with subagents (the host says them, as it does from the
--- transcript's spawn chips): `subagents_running` has two working and one
+-- The open session with subagents in its transcript's spawn chips:
+-- `subagents_running` has two working and one
 -- done; opening one is noted (`open_subagent:<session>:<doc>`).
 do
 	local lanes = require("@app/screens/chat/lanes") :: any
 	lanes.open_subagent = function(session: string, sub: any)
 		note(`open_subagent:{session}:{sub.ref}`)
 	end
-	local published = ui.shared("chat.subagents", {} :: { any })
 	ui.command {
 		id = "subagents_running",
 		title = "Subagents run: two working, one done",
 		run = function()
-			published:set({
-				{ ref = "d1", title = "scan the repo", status = "running" },
-				{ ref = "d2", title = "read the docs", status = "running" },
-				{ ref = "d3", title = "find the flaky test", status = "done" },
-			})
+			store.messages:push {
+				id = "subagent-spawns",
+				role = "assistant",
+				text = "",
+				tools = {
+					{ id = "spawn1", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d1", title = "scan the repo", status = "running" } },
+					{ id = "spawn2", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d2", title = "read the docs", status = "running" } },
+					{ id = "spawn3", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d3", title = "find the flaky test", status = "done" } },
+				},
+			}
 		end,
 	}
 end
