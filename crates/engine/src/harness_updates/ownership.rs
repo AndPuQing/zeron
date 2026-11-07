@@ -309,6 +309,9 @@ pub(super) fn package_update(
             ];
             if let Some(home) = &home {
                 env.push(("PNPM_HOME".into(), home.to_string_lossy().into_owned()));
+                // …and refuses to install unless that directory is on PATH
+                // (put ahead of the child's PATH, see `run_command_output_watched`).
+                env.push(("PATH".into(), home.to_string_lossy().into_owned()));
             }
             let mut near = launcher_dir.clone();
             near.extend(home);
@@ -450,7 +453,9 @@ mod tests {
         );
         // A vendor's native install isn't package-managed.
         assert_eq!(owner("/home/u/.local/bin/claude"), None);
-        assert_eq!(owner("/usr/local/bin/codex"), None);
+        // Nothing real can answer here: this box's own /usr/local/bin/codex
+        // may well be an npm install.
+        assert_eq!(owner("/usr/local/bin/zeron-test-no-such-cli"), None);
     }
 
     #[cfg(unix)]

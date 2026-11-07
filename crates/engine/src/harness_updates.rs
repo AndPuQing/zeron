@@ -84,7 +84,7 @@ enum LatestSource {
     /// Muse's release channel manifest (see [`MUSE_CHANNELS`]).
     Muse,
     /// An agent from the ACP registry: the registry's current version
-    /// (`crate::acp_registry`), installed by Zeron.
+    /// (`crate::acp_registry`), installed by Zerun.
     Registry,
     /// The release Cursor's installer installs, which `cursor-agent update`
     /// fetches too.
@@ -177,7 +177,7 @@ fn homebrew_tap(receipt: &Path) -> Option<String> {
 
 enum UpdatePlan {
     /// An agent from the ACP registry: the registry's build, installed by
-    /// Zeron in a folder of its own.
+    /// Zerun in a folder of its own.
     Registry(zeron_proto::RegistryAgent),
     Command {
         executable: PathBuf,
@@ -377,8 +377,8 @@ struct CodexPackageManifest {
     path_dir: String,
 }
 
-/// Held for the complete standalone install so Zeron cannot race the Codex
-/// installer (which uses the same lock file) or another Zeron process.
+/// Held for the complete standalone install so Zerun cannot race the Codex
+/// installer (which uses the same lock file) or another Zerun process.
 struct InstallFileLock {
     file: File,
 }
@@ -535,7 +535,7 @@ fn provider(id: HarnessId) -> ProviderSpec {
         HarnessId::Antigravity => ProviderSpec {
             version_args: &["--version"],
             latest: LatestSource::AntigravityAcp,
-            // Zeron installs a pinned ACP server archive. It has no registered
+            // Zerun installs a pinned ACP server archive. It has no registered
             // self-update command; custom binaries remain installer-managed.
             update_args: None,
             manual_command: "Update the configured Antigravity ACP server",
@@ -727,7 +727,7 @@ fn manual_update_command(harness: HarnessId, executable: &Path, can_apply: bool)
     if harness == HarnessId::Antigravity
         && zeron_harness::acp::is_managed_antigravity_server(executable)
     {
-        return Some("Update Zeron to install this release".into());
+        return Some("Update Zerun to install this release".into());
     }
     // Homebrew owns it: the CLI's own updater would write a second copy.
     if let Some(package) = homebrew_package(executable).filter(|package| !package.is_node_runtime())
@@ -1480,6 +1480,12 @@ impl HarnessUpdateCoordinator {
         if self.settle_if_unmonitored(harness) {
             return Ok(());
         }
+        // A system package is its package manager's, whatever its own check
+        // says (distributions often strip that updater), so the row says who.
+        let latest = match latest {
+            Err(_) if !can_apply && system_package_path(&executable) => Ok(UpdateCheck::Manual),
+            latest => latest,
+        };
         let (latest, available) = match latest {
             Ok(UpdateCheck::Version(version)) => {
                 let dismissed = lock(&self.inner.prefs)
@@ -1879,7 +1885,7 @@ impl HarnessUpdateCoordinator {
         //
         // The wait for the lease can be long. Everything that decides what
         // runs is read again here, with nothing able to change it under us
-        // except the world outside Zeron: who owns the install now, and what's
+        // except the world outside Zerun: who owns the install now, and what's
         // installed now.
         let executable = match self.executable(harness) {
             Ok(executable) if self.is_checked_binary(harness, &executable) => executable,
@@ -1963,9 +1969,21 @@ impl HarnessUpdateCoordinator {
                 Err(error) => Err(error),
             },
             UpdatePlan::Scoop(app) => match self.begin_install(harness, &cancel) {
-                Ok(()) => run_command_output(&app.scoop, &["update", &app.app], UPDATE_TIMEOUT)
+                Ok(()) => {
+                    // Scoop finds its root by `SCOOP` (else `~\scoop`): a root
+                    // anywhere else is only that Scoop's when it's told.
+                    let root = app.root.to_string_lossy();
+                    let (program, args) = app.update_command();
+                    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+                    run_command_output_env(
+                        &program,
+                        &args,
+                        UPDATE_TIMEOUT,
+                        &[("SCOOP", root.as_ref())],
+                    )
                     .await
-                    .map(drop),
+                    .map(drop)
+                }
                 Err(error) => Err(error),
             },
             UpdatePlan::AntigravityArchive => {
@@ -3568,9 +3586,18 @@ async fn run_command_output_watched(
         .env("NO_COLOR", "1")
         .env("CLAUDE_CODE_ENTRYPOINT", "zerun");
     for (key, value) in NONINTERACTIVE_ENV.iter().chain(env) {
-        command.env(*key, *value);
+        if *key != "PATH" {
+            command.env(*key, *value);
+        }
     }
-    zeron_harness::compose_child_path(&mut command, executable);
+    // A `PATH` entry in `env` goes ahead of the composed PATH rather than
+    // replacing it (pnpm refuses to install unless its global bin is there).
+    let ahead: Vec<PathBuf> = env
+        .iter()
+        .filter(|(key, _)| *key == "PATH")
+        .flat_map(|(_, value)| std::env::split_paths(value).collect::<Vec<_>>())
+        .collect();
+    zeron_harness::compose_child_path_ahead(&mut command, executable, &ahead);
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command
@@ -3662,10 +3689,12 @@ async fn run_command_output_watched(
         );
         // The full output is in the log; the reason is almost always its
         // last line (npm's, brew's and the vendors' updaters all end there).
+        let how = match output.status.code() {
+            Some(code) => format!("failed (exit code {code})"),
+            None => "was stopped by a signal".to_owned(),
+        };
         return Err(format!(
-            "{} exited with {}{}",
-            executable.display(),
-            output.status,
+            "{name} {how}{}",
             failure_summary(detail)
                 .map(|line| format!(": {line}"))
                 .unwrap_or_default()
@@ -3734,11 +3763,24 @@ async fn read_tail_watched(
 /// The last line of `output` that says something (not blank, not a bare
 /// progress or box-drawing line), capped for a one-line status.
 fn failure_summary(output: &str) -> Option<String> {
-    let line = output
-        .lines()
-        .map(str::trim)
-        .rev()
-        .find(|line| line.chars().any(char::is_alphanumeric))?;
+    // Where to read more, not what went wrong.
+    const BOILERPLATE: &[&str] = &[
+        "for help, run",
+        "a complete log of this run can be found in",
+        "run with --verbose",
+        "run `brew",
+        "please report",
+    ];
+    let meaningful = |line: &&str| {
+        line.chars().any(char::is_alphanumeric) && {
+            let lower = line.to_ascii_lowercase();
+            !BOILERPLATE.iter().any(|noise| lower.contains(noise))
+        }
+    };
+    let lines = || output.lines().map(str::trim).rev();
+    let line = lines()
+        .find(meaningful)
+        .or_else(|| lines().find(|line| line.chars().any(char::is_alphanumeric)))?;
     Some(first_chars(line, 300).into_owned())
 }
 
@@ -3944,12 +3986,56 @@ impl ScoopApp {
         Ok(UpdatePlan::Scoop(self))
     }
 
+    /// The program and arguments that run `scoop update <app>` with this root's Scoop.
+    ///
+    /// Not through `shims\scoop.cmd`: it turns each `"` in its arguments into
+    /// `'`, and a batch file's arguments are always quoted when Zerun runs
+    /// one, so Scoop would be asked for `'update'`. The script the shim runs,
+    /// run as the shim runs it (with `-File`, which takes each argument as is).
+    fn update_command(&self) -> (PathBuf, Vec<String>) {
+        let script = self
+            .root
+            .join("apps")
+            .join("scoop")
+            .join("current")
+            .join("bin")
+            .join("scoop.ps1");
+        let powershell = std::env::var_os("SystemRoot")
+            .map(|root| {
+                Path::new(&root)
+                    .join("System32")
+                    .join("WindowsPowerShell")
+                    .join("v1.0")
+                    .join("powershell.exe")
+            })
+            .filter(|powershell| powershell.is_file());
+        match powershell {
+            Some(powershell) if script.is_file() => (
+                powershell,
+                vec![
+                    "-NoProfile".into(),
+                    "-NonInteractive".into(),
+                    "-ExecutionPolicy".into(),
+                    "Bypass".into(),
+                    "-File".into(),
+                    script.to_string_lossy().into_owned(),
+                    "update".into(),
+                    self.app.clone(),
+                ],
+            ),
+            _ => (self.scoop.clone(), vec!["update".into(), self.app.clone()]),
+        }
+    }
+
     /// The version this Scoop would install: its bucket's manifest for the
     /// app (`scoop update` refreshes buckets first when they're stale).
     fn latest(&self) -> Result<String, String> {
         let app_dir = self.root.join("apps").join(&self.app).join("current");
-        let receipt: serde_json::Value = std::fs::read_to_string(app_dir.join("install.json"))
-            .ok()
+        // Scoop 0.6 writes `scoop-install.json`; older Scoop wrote
+        // `install.json`, which Scoop still reads when the other is missing.
+        let receipt: serde_json::Value = ["scoop-install.json", "install.json"]
+            .iter()
+            .find_map(|name| std::fs::read_to_string(app_dir.join(name)).ok())
             .and_then(|text| serde_json::from_str(&text).ok())
             .ok_or_else(|| format!("Scoop's record of {} couldn't be read", self.app))?;
         let bucket = receipt
@@ -4134,6 +4220,7 @@ fn winget_upgrade_args(id: &str) -> Vec<&str> {
         "upgrade",
         "--id",
         id,
+        "--exact",
         "--silent",
         "--accept-package-agreements",
         "--accept-source-agreements",
@@ -5543,14 +5630,29 @@ esac
             HarnessId::ClaudeCode,
             std::path::Path::new("/home/test/.local/bin/claude")
         ));
-        let npm =
-            std::path::Path::new("/opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js");
+        // A global npm install, with that prefix's own npm (an update needs
+        // it, and it shouldn't matter whether this machine has npm on PATH).
+        let prefix = tempfile::tempdir().unwrap();
+        let (modules, npm_bin) = if cfg!(windows) {
+            (prefix.path().join("node_modules"), prefix.path().join("npm.cmd"))
+        } else {
+            (prefix.path().join("lib/node_modules"), prefix.path().join("bin/npm"))
+        };
+        let package = modules.join("@anthropic-ai/claude-code");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(npm_bin.parent().unwrap()).unwrap();
+        std::fs::write(&npm_bin, "").unwrap();
+        let cli = package.join("cli.js");
+        std::fs::write(&cli, "").unwrap();
+        let npm = cli.as_path();
         assert!(super::can_apply_update(HarnessId::ClaudeCode, npm));
         assert_eq!(super::claude_cask_channel(npm), None);
         assert_eq!(super::claude_package_manager_command(npm), None);
+        // Outside the system's own folders: on Linux, /usr/bin is left to the
+        // package manager (a_system_package_is_left_to_the_system_package_manager).
         assert!(super::can_apply_update(
             HarnessId::Pi,
-            std::path::Path::new("/usr/bin/pi")
+            std::path::Path::new("/opt/agents/bin/pi")
         ));
     }
 
@@ -6473,6 +6575,8 @@ esac
             Some(std::fs::canonicalize(&pnpm_home).unwrap())
         );
         assert_eq!(env("npm_config_confirm_modules_purge").as_deref(), Some("false"));
+        // pnpm refuses unless its global bin is on PATH, too.
+        assert_eq!(env("PATH"), env("PNPM_HOME"));
 
         let bun_bin = home.path().join("tools/bun/bin");
         std::fs::create_dir_all(&bun_bin).unwrap();
@@ -6489,6 +6593,41 @@ esac
             update.env,
             [("BUN_INSTALL".to_string(), home.path().join("tools/bun").to_string_lossy().into_owned())]
         );
+    }
+
+    /// A failure's line is what went wrong, not where to read more.
+    #[test]
+    fn a_failure_says_what_went_wrong_not_where_to_read_more() {
+        assert_eq!(
+            super::failure_summary(
+                "ERROR  The configured global bin directory \"/x\" is not in PATH\nFor help, run: pnpm help add\n"
+            )
+            .as_deref(),
+            Some("ERROR  The configured global bin directory \"/x\" is not in PATH")
+        );
+        assert_eq!(
+            super::failure_summary(
+                "npm error code EACCES\nnpm error path /usr/lib/node_modules\nnpm error A complete log of this run can be found in: /h/.npm/_logs/x.log\n"
+            )
+            .as_deref(),
+            Some("npm error path /usr/lib/node_modules")
+        );
+        assert_eq!(super::failure_summary("For help, run: x").as_deref(), Some("For help, run: x"));
+    }
+
+    /// An updater's PATH entry goes ahead of the child's PATH.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_owners_path_entry_goes_first() {
+        let output = super::run_command_output_env(
+            std::path::Path::new("/bin/sh"),
+            &["-c", "echo \"$PATH\""],
+            Duration::from_secs(10),
+            &[("PATH", "/owner/bin")],
+        )
+        .await
+        .unwrap();
+        assert!(output.starts_with("/owner/bin:"), "{output}");
     }
 
     /// Scoop's apps are known by their folder, and what's on offer is what
@@ -6528,6 +6667,75 @@ esac
         assert!(super::scoop_app_in(std::path::Path::new("/home/u/.local/bin/opencode")).is_none());
     }
 
+    /// Scoop 0.6 names its receipt `scoop-install.json` (older Scoop wrote
+    /// `install.json`, which it still reads): either says the bucket.
+    #[test]
+    fn a_scoop_receipt_is_read_under_either_name() {
+        let root = tempfile::tempdir().unwrap();
+        let scoop = root.path().join("scoop");
+        let current = scoop.join("apps/opencode/current");
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(scoop.join("shims")).unwrap();
+        std::fs::create_dir_all(scoop.join("buckets/main/bucket")).unwrap();
+        std::fs::write(scoop.join("shims/scoop.cmd"), "").unwrap();
+        std::fs::write(scoop.join("buckets/main/bucket/opencode.json"), r#"{"version":"1.19.5"}"#).unwrap();
+        // What Scoop 0.6.0 writes.
+        std::fs::write(current.join("scoop-install.json"), r#"{"bucket":"main","architecture":"64bit"}"#).unwrap();
+        let app = super::scoop_app_in(&current.join("opencode.exe")).unwrap();
+        assert_eq!(app.latest().as_deref(), Ok("1.19.5"));
+        // The newer name wins over a stale older receipt beside it.
+        std::fs::write(current.join("install.json"), r#"{"bucket":"gone","architecture":"64bit"}"#).unwrap();
+        assert_eq!(app.latest().as_deref(), Ok("1.19.5"));
+        std::fs::remove_file(current.join("scoop-install.json")).unwrap();
+        std::fs::write(current.join("install.json"), r#"{"bucket":"main","architecture":"64bit"}"#).unwrap();
+        assert_eq!(app.latest().as_deref(), Ok("1.19.5"));
+        // Installed from a pinned manifest (`scoop install opencode@1.19.0`):
+        // no bucket, and `scoop update` keeps it where it is.
+        std::fs::write(current.join("scoop-install.json"), r#"{"url":"C:\\scoop\\workspace\\opencode.json","architecture":"64bit"}"#).unwrap();
+        assert!(app.latest().unwrap_err().contains("which bucket"));
+    }
+
+    /// Scoop's `scoop.cmd` shim turns every `"` in its arguments into `'`,
+    /// and a batch file's arguments are always quoted when Zerun runs one:
+    /// through the shim, Scoop is asked for `'update'`, which it doesn't know.
+    /// The root's own `scoop.ps1` is run instead, as the shim itself does.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn scoop_is_asked_to_update_the_app_not_a_quoted_word() {
+        let root = tempfile::tempdir().unwrap();
+        let scoop = root.path().join("scoop");
+        let bin = scoop.join("apps/scoop/current/bin");
+        let current = scoop.join("apps/opencode/current");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::create_dir_all(scoop.join("shims")).unwrap();
+        let script = bin.join("scoop.ps1");
+        // Says what it was asked, and which root it was told.
+        std::fs::write(&script, "Write-Output (($args -join ',') + ' in ' + $env:SCOOP)\r\n").unwrap();
+        // Scoop 0.6.0's shim, as `scoop` writes it.
+        std::fs::write(
+            scoop.join("shims/scoop.cmd"),
+            format!(
+                "@rem {script}\r\n@echo off\r\nsetlocal enabledelayedexpansion\r\nset args=%*\r\n:: replace problem characters in arguments\r\nset args=%args:\"='%\r\nset args=%args:(=`(%\r\nset args=%args:)=`)%\r\nset invalid=\"='\r\nif !args! == !invalid! ( set args= )\r\npowershell -noprofile -ex unrestricted -file \"{script}\"  %args%\r\n",
+                script = script.display()
+            ),
+        )
+        .unwrap();
+        let app = super::scoop_app_in(&current.join("opencode.exe")).unwrap();
+        let (program, args) = app.update_command();
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let root_text = scoop.to_string_lossy().into_owned();
+        let output = super::run_command_output_env(
+            &program,
+            &args,
+            Duration::from_secs(60),
+            &[("SCOOP", root_text.as_str())],
+        )
+        .await
+        .unwrap();
+        assert_eq!(output, format!("update,opencode in {}", scoop.display()));
+    }
+
     /// Chocolatey's CLIs need an administrator, whichever agent: the exact
     /// command, and never the CLI's own updater (which asks, or writes a
     /// second copy).
@@ -6551,6 +6759,28 @@ esac
             let path = std::path::Path::new("/usr/bin/agent-cli");
             assert!(!super::can_apply_update(harness, path), "{harness:?}");
         }
+    }
+
+    /// Distributions often strip a CLI's own updater. That says nothing about
+    /// the package, so the row still says who updates it. `git` stands in:
+    /// it answers `version` like Grok, and has no `update`.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn a_system_package_whose_own_check_fails_still_says_who_updates_it() {
+        let git = std::path::PathBuf::from("/usr/bin/git");
+        if !git.is_file() {
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(HarnessRegistry::new());
+        registry.register(Arc::new(ExecutableHarness(git, HarnessId::Grok)));
+        let coordinator = super::HarnessUpdateCoordinator::new(temp.path(), registry);
+        coordinator.check_one(HarnessId::Grok).await.unwrap();
+        let status = coordinator.status(HarnessId::Grok);
+        assert_eq!(status.phase, HarnessUpdatePhase::ManualActionRequired);
+        assert_eq!(status.error, None);
+        assert!(!status.can_apply);
+        assert!(status.manual_command.is_some());
     }
 
     /// A tap's formula is upgraded by its full name, and only Homebrew's own
@@ -6616,8 +6846,10 @@ esac
 
     /// A harness whose CLI is wherever a file says, as PATH resolution finds
     /// a second copy that turns up ahead of the first.
+    #[cfg(unix)]
     struct MovingHarness(PathBuf);
 
+    #[cfg(unix)]
     #[async_trait]
     impl Harness for MovingHarness {
         fn id(&self) -> HarnessId {
@@ -6760,7 +6992,7 @@ mod winget_tests {
         let show = "Found opencode [SST.opencode]\r\nVersion: 1.4.2\r\nPublisher: SST\r\n";
         assert_eq!(parse_winget_show(show).as_deref(), Some("1.4.2"));
         assert_eq!(parse_winget_show("Gefunden opencode\nVersion: unbekannt\n"), None);
-        let error = winget_failure("SST.opencode", "winget exited with exit code: -1978335189: No available upgrade found.".into());
+        let error = winget_failure("SST.opencode", "winget failed (exit code -1978335189): No available upgrade found.".into());
         assert!(error.contains("WinGet has no newer SST.opencode"), "{error}");
         assert_eq!(winget_failure("x", "other".into()), "other");
     }
@@ -6790,7 +7022,9 @@ mod winget_tests {
     fn winget_upgrades_without_asking() {
         assert_eq!(
             winget_upgrade_args(OPENCODE_WINGET_ID).join(" "),
-            "upgrade --id SST.opencode --silent --accept-package-agreements \
+            // `--exact`: else `--id` matches by substring, and SST.opencode
+            // also matches SST.OpenCodeDesktop ("multiple packages found").
+            "upgrade --id SST.opencode --exact --silent --accept-package-agreements \
              --accept-source-agreements --disable-interactivity"
         );
     }

@@ -451,6 +451,24 @@ pub fn compose_child_path(cmd: &mut process::Command, exe: &std::path::Path) {
     apply_login_shell_env(cmd.as_std_mut());
 }
 
+/// [`compose_child_path`], with `ahead` before even the executable's own
+/// directory: what the program must find first (pnpm's global bin, which it
+/// refuses to install without).
+pub fn compose_child_path_ahead(
+    cmd: &mut process::Command,
+    exe: &std::path::Path,
+    ahead: &[std::path::PathBuf],
+) {
+    compose_path(
+        cmd.as_std_mut(),
+        ahead
+            .iter()
+            .map(std::path::PathBuf::as_path)
+            .chain(exe.parent().filter(|d| !d.as_os_str().is_empty())),
+    );
+    apply_login_shell_env(cmd.as_std_mut());
+}
+
 /// Apply the host-resolved run environment ([`RunRequest::env`] — credential
 /// broker output on a Cloud device) to an agent child. Call it after the
 /// driver's own env setup so the host's values win. Values are never logged.
@@ -824,7 +842,7 @@ pub fn supports_titles(id: HarnessId) -> bool {
 }
 
 /// Drivers that launch without the provider's own subagent tools when the
-/// run's Zeron server is side-chats-only ([`zeron_proto::McpServer::side_chats_only`]),
+/// run's Zerun server is side-chats-only ([`zeron_proto::McpServer::side_chats_only`]),
 /// and get them back on the next launch without it. Not Codex: its driver
 /// starts such a thread, but a thread keeps the multi-agent mode it last ran
 /// with (openai/codex rust-v0.153.4, codex-rs/core/src/session/mod.rs
