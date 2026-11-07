@@ -491,13 +491,18 @@
         "keep_active": "折叠时显示活跃会话",
         "devices_first": "设备优先",
         "projects_first": "项目优先",
-        "empty_projects": "空项目"
+        "empty_projects": "空项目",
+        "activity": "动态",
+        "activity_settings": "动态设置…"
       },
       "empty": "暂无会话",
       "resize": "调整侧边栏大小",
       "show_less": "显示更少",
       "empty_projects_word": "空项目",
-      "empty_projects": "{n, plural, other {# 个空项目}}"
+      "empty_projects": "{n, plural, other {# 个空项目}}",
+      "activity": "动态",
+      "working": "进行中",
+      "asleep": "已休眠"
     },
     "git": {
       "pull_request": "拉取请求",
@@ -2126,6 +2131,35 @@
       "yesterday": "昨天",
       "empty_title": "还没有历史记录",
       "off": "“保留历史记录”已关闭，访问的页面不会被保留。"
+    },
+    "activity": {
+      "title": "动态",
+      "terms": "动态 收件箱 侧边栏 进行中 休眠 稍后 归档 自动归档 闲置",
+      "description": "把需要你处理的会话放在一个列表里，最新的在最上面。进行中、休眠和已归档的会话收起在列表末尾。",
+      "view": {
+        "label": "动态侧边栏",
+        "description": "以动态方式显示侧边栏，而不是按项目或设备分组。也可以在侧边栏的 … 菜单中开启。",
+        "terms": "收件箱 视图 侧边栏 模式"
+      },
+      "list_section": "动态",
+      "working": {
+        "label": "将进行中的会话收进“进行中”",
+        "description": "代理运行时，会话移入“进行中”；停止或需要你时，回到列表顶部。",
+        "terms": "运行 代理 分组"
+      },
+      "sleep": {
+        "label": "休眠",
+        "description": "右键点击会话并选择“休眠”，它会进入“已休眠”直到你选的时间。如果它向你提问、需要批准或失败，会提前唤醒并回到顶部。",
+        "terms": "稍后 提醒 唤醒"
+      },
+      "archive_section": "归档",
+      "archive_after": {
+        "label": "归档闲置会话",
+        "description": "在这段时间内没有新动态的会话会移入“已归档”。已置顶、进行中、休眠以及等待你处理的会话不受影响。",
+        "terms": "自动 归档 闲置 旧 清理",
+        "never": "从不",
+        "days": "{n, plural, other {# 天后}}"
+      }
     }
   },
   "common": {
@@ -2428,6 +2462,64 @@
       "on_device": "在 {device} 上",
       "from_github": "来自 GitHub",
       "add_cloud_project": "添加项目"
+    },
+    "updates": {
+      "available": "有可用更新",
+      "button": "{n, plural, other {# 个更新}}",
+      "check_again": "再次检查",
+      "copied": "已复制。请在 {device} 上运行",
+      "copy_command": "复制命令",
+      "downloading": "正在下载…",
+      "failed": "更新失败",
+      "failed_named": "无法更新 {name}",
+      "installing": "正在安装…",
+      "manual": "需要手动更新",
+      "not_applied": "Zerun 未更新",
+      "not_applied_body": "它以相同版本重新启动了。你可以通过更新按钮重试。",
+      "offline": "离线",
+      "on_that_device": "请在该设备上更新",
+      "plan_agents": "智能体会等正在运行的任务完成",
+      "plan_chats": "{n, plural, other {将停止 # 个运行中的聊天。重新启动后会继续}}",
+      "plan_here": "为此设备下载 Zerun，然后请你重新启动",
+      "preparing": "正在准备…",
+      "ready": "{version} 已就绪。重新启动以完成",
+      "restart": "重新启动",
+      "retry": "重试更新",
+      "stops_chats": "{n, plural, other {将停止 # 个运行中的聊天，之后会继续}}",
+      "this_device": "此设备",
+      "title": "更新",
+      "update": "更新",
+      "update_all": "全部更新",
+      "update_anyway": "仍然更新",
+      "update_there": "{versions} · 请在该设备上更新",
+      "updated": "已更新",
+      "updated_to": "已更新到 {version}",
+      "verifying": "正在验证…",
+      "version": "版本 {version} 可用",
+      "view_steps": "查看步骤",
+      "waiting": "正在等待当前运行结束",
+      "all_title": "全部更新？",
+      "all_count": "{n, plural, other {# 项更新}}",
+      "all_count_devices": "{devices} 台设备上的 {n, plural, other {# 项更新}}",
+      "not_included": "不包括",
+      "skip": "跳过",
+      "skip_all": "全部跳过",
+      "skipped": "{n, plural, other {已跳过 # 项更新}}",
+      "skipped_body": "有更新的版本时会再次显示",
+      "undo": "撤销",
+      "skip_hint": "有新版本之前不再显示"
+    },
+    "activity": {
+      "wake": "唤醒",
+      "sleep": {
+        "title": "休眠",
+        "choice": "{name} · {when}",
+        "in_hour": "1 小时后",
+        "in_hours": "3 小时后",
+        "evening": "今晚",
+        "tomorrow": "明天",
+        "next_week": "下周"
+      }
     }
   },
   "onboarding": {
