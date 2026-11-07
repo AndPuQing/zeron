@@ -486,7 +486,7 @@ test("About says which Zerun this is, and that this app isn't what updates", fun
 	-- Copied for a bug report.
 	app:click(`{PAGE} >> role:button "Copy"`)
 	app:frames(6)
-	expect(app:tree()).to_contain("Version info copied")
+	expect(app:has('role:status >> "Version info copied"')).to_be(true)
 	-- The links open in the browser, the notes at this version's.
 	app:scroll(PAGE, 2000)
 	app:frames(4)

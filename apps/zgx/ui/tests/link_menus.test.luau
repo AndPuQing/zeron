@@ -23,10 +23,14 @@ local function item(name: string): string
 	return `menuitem "{name}"`
 end
 
--- The menu rows drawn now (a closed menu's are listed `hidden`).
+-- The menu rows drawn now (a closed menu's are listed `hidden`). Scope to
+-- the menu so a large window's truncated tree doesn't hide its rows.
 local function rows(app: any): { string }
 	local out = {}
-	for line in string.gmatch(app:tree(), "[^\n]+") do
+	if not app:has("role:menu") then
+		return out
+	end
+	for line in string.gmatch(app:tree("role:menu"), "[^\n]+") do
 		if string.find(line, " menuitem ", 1, true) and not string.find(line, "hidden", 1, true) then
 			table.insert(out, line)
 		end
