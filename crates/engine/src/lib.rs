@@ -52,6 +52,7 @@ pub mod doc_host;
 pub mod external_sessions;
 mod folder_entry;
 mod fs_watch;
+mod git_tree;
 pub mod harness_updates;
 pub(crate) mod home_index;
 mod http_error;
