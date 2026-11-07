@@ -1607,7 +1607,20 @@ impl View {
         }
         self.publish_session();
         self.keep_lease(id, lease, answer["expiresAtMs"].as_f64());
-        Ok(Value::record([("text", Value::from(answer["text"].as_str().unwrap_or_default()))]))
+        // Its files too, as the composer's chips: already on the chat's
+        // host (they went with the message), so saving names them again
+        // rather than sending them up a second time.
+        let attachments: Vec<Value> = answer["attachments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Json::as_str)
+            .map(queued_attachment)
+            .collect();
+        Ok(Value::record([
+            ("text", Value::from(answer["text"].as_str().unwrap_or_default())),
+            ("attachments", Value::List(attachments.into())),
+        ]))
     }
 
     /// Renews the lease halfway to each expiry, while it is still held.
@@ -1668,11 +1681,31 @@ impl View {
             "leaseId": lease.lease,
             "action": action,
         });
+        let target = chats.target(&chat);
         if action == "commit" {
             params["text"] = json!(args.field("text").map(text).unwrap_or_default());
             params["expectedTextHash"] = lease.hash.clone();
+            // The files it carries now (the composer's chips): the ones it
+            // had by their paths on the host, any added sent up first. (None
+            // given: it keeps the ones it had.)
+            if let Some(list) = args.field("attachments") {
+                let mut paths = Vec::new();
+                for a in list.list() {
+                    let path = a.field("path").map(text).unwrap_or_default();
+                    if path.is_empty() {
+                        continue;
+                    }
+                    if a.field("on_host").is_some_and(Value::truthy) {
+                        paths.push(path);
+                        continue;
+                    }
+                    let name = a.field("name").map(text).unwrap_or_else(|| path.clone());
+                    paths.push(upload(&path, &name, target.as_deref()).await?);
+                }
+                params["attachments"] = json!(paths);
+            }
         }
-        if let Some(t) = chats.target(&chat) {
+        if let Some(t) = &target {
             params["targetDeviceId"] = json!(t);
         }
         let answer = engine::get()
@@ -1723,6 +1756,32 @@ impl View {
             .map(|_| ())
             .map_err(|e| engine::outcome(&e))
     }
+}
+
+/// A queued message's file as the composer's chip: its path on the chat's
+/// host (or the `pending://` ref it travels by from another device), named
+/// as it was attached (an upload's id prefix off), a picture shown as one
+/// where it can be read.
+fn queued_attachment(path: &str) -> Value {
+    let base = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    let name = match base.split_once('-') {
+        Some((id, rest)) if id.len() == 8 && id.bytes().all(|b| b.is_ascii_hexdigit()) && !rest.is_empty() => rest,
+        _ => base,
+    };
+    let lower = name.to_ascii_lowercase();
+    let image = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".bmp", ".tiff"]
+        .iter()
+        .any(|e| lower.ends_with(e));
+    let mut fields = vec![
+        ("path", Value::from(path)),
+        ("name", Value::from(name)),
+        ("kind", Value::from(if image { "image" } else { "file" })),
+        ("on_host", Value::Bool(true)),
+    ];
+    if image && !path.starts_with("pending://") {
+        fields.push(("src", Value::from(path)));
+    }
+    Value::record(fields)
 }
 
 /// A command for a chat (`QueueCommand`): a run, an interrupt, an answer.
@@ -3571,6 +3630,220 @@ fn base64(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A queued message's files come back to an edit as chips named as they
+    /// were attached, already on the host, a picture shown where it can be.
+    #[test]
+    fn a_queued_file_is_a_chip_named_as_it_was_attached() {
+        let chip = super::queued_attachment("/data/uploads/9e97a72f-shot.png");
+        assert_eq!(chip.field("name"), Some(&Value::from("shot.png")));
+        assert_eq!(chip.field("kind"), Some(&Value::from("image")));
+        assert_eq!(chip.field("on_host"), Some(&Value::Bool(true)));
+        assert_eq!(chip.field("src"), Some(&Value::from("/data/uploads/9e97a72f-shot.png")));
+        let file = super::queued_attachment("/repo/notes/design-notes.txt");
+        assert_eq!(file.field("name"), Some(&Value::from("design-notes.txt")), "only an upload's id prefix goes");
+        assert_eq!(file.field("kind"), Some(&Value::from("file")));
+        assert_eq!(file.field("src"), None);
+        let remote = super::queued_attachment("pending://up-1/photo.jpg");
+        assert_eq!(remote.field("name"), Some(&Value::from("photo.jpg")));
+        assert_eq!(remote.field("kind"), Some(&Value::from("image")));
+        assert_eq!(remote.field("src"), None, "nothing here to show yet");
+        assert_eq!(remote.field("path"), Some(&Value::from("pending://up-1/photo.jpg")));
+    }
+
+    #[test]
+    fn a_reset_keeps_what_it_left_as_it_was() {
+        let built_of = |ids: &[&str]| -> std::collections::HashMap<Rc<str>, super::Built> {
+            ids.iter().map(|id| (Rc::from(*id), super::Built::default())).collect()
+        };
+        let mut before: Vec<super::Entry> = [
+            serde_json::json!({ "id": "a", "text": "same" }),
+            serde_json::json!({ "id": "b", "text": "was" }),
+            serde_json::json!({ "id": "gone", "text": "left" }),
+        ]
+        .into_iter()
+        .map(super::Entry::new)
+        .collect();
+        // (Settled: told from its sum alone.)
+        let mut no_plan = None;
+        super::settle(&mut before[0], 0, &mut no_plan);
+        assert!(before[0].json.is_none());
+        let now: Vec<super::Entry> = [
+            serde_json::json!({ "id": "a", "text": "same" }),
+            serde_json::json!({ "id": "b", "text": "now" }),
+            serde_json::json!({ "id": "new", "text": "came" }),
+        ]
+        .into_iter()
+        .map(super::Entry::new)
+        .collect();
+        let mut built = built_of(&["a", "b", "gone"]);
+        super::keep_unchanged(&mut built, &before, &now);
+        assert!(built.contains_key("a"));
+        assert!(!built.contains_key("b"), "changed");
+        assert!(!built.contains_key("gone"), "left the transcript");
+        assert!(!built.contains_key("new"), "never built");
+    }
+
+    #[test]
+    fn a_settled_entry_keeps_its_plan_and_grows_only_from_a_whole_copy() {
+        let plan = |text: &str| {
+            serde_json::json!({ "id": text, "role": "assistant", "parts": [
+                { "id": "p", "kind": "tool", "call": { "kind": "todo", "items": [{ "text": text, "status": "pending" }] } },
+            ] })
+        };
+        let mut older = None;
+        let (mut first, mut second) = (super::Entry::new(plan("first")), super::Entry::new(plan("second")));
+        // (Newest first, as a long chat's rows are built, and the other way.)
+        super::settle(&mut second, 1, &mut older);
+        super::settle(&mut first, 0, &mut older);
+        assert_eq!(older.as_ref().unwrap().1["call"]["items"][0]["text"], "second");
+        let open = super::Open { entries: vec![first, second], older_todo: older, ..super::Open::default() };
+        assert_eq!(super::todos(&open).list()[0].field("text"), Some(&Value::from("second")));
+        // Words for an entry whose copy is gone: out of step, so a reset comes.
+        let mut entries = open.entries;
+        let mut words = serde_json::json!({ "append": [{ "entry": "first", "part": "p", "text": "x", "len": 1 }] });
+        assert!(super::apply(&mut entries, &mut words).is_err());
+    }
+
+    /// The worker's fold, kept, is what folding here keeps.
+    #[test]
+    fn the_worker_folds_as_the_window_would() {
+        let entry = serde_json::json!({
+            "id": "e1", "role": "assistant", "status": "complete", "createdAt": 1000.0,
+            "parts": [
+                { "id": "t", "kind": "text", "text": "Some words" },
+                { "id": "k", "kind": "tool", "subagentRef": "doc--sub--1", "subagentStatus": "done",
+                  "call": { "kind": "mcp", "tool": "Agent: look", "server": "s" } },
+            ],
+        });
+        let context = Rc::new(super::RowContext { doc: "chat".into(), device: None, model: Some("Opus".into()) });
+        let here = super::built_for(&entry, &context, true);
+        let folding = super::folding(vec![(0, "e1".into(), entry.clone())], &context);
+        let folded = folding.results.recv().unwrap().pop().unwrap();
+        let mut open = super::Open { entries: vec![super::Entry::new(entry.clone())], ..super::Open::default() };
+        open.entries[0].json = None;
+        super::settle_off(&mut open, folded, &context);
+        let there = open.built.get("e1").expect("kept");
+        assert_eq!(there.row.as_ref().unwrap().to_json(), here.row.as_ref().unwrap().to_json());
+        assert_eq!(there.subagents.as_ref().map(|s| s[0].to_json()), here.subagents.as_ref().map(|s| s[0].to_json()));
+        assert_eq!(open.entries[0].sum, super::sum_of(&entry));
+    }
+
+    /// A row out of view holds what makes it, not itself: what it opens to is
+    /// the row it would have been, and a row with subagents still lists them.
+    #[test]
+    fn a_folded_row_opens_to_the_row_it_was() {
+        let entry = serde_json::json!({
+            "id": "e1", "role": "assistant", "status": "complete", "createdAt": 1000.0,
+            "parts": [
+                { "id": "t", "kind": "text", "text": "Some words ".repeat(200) },
+                { "id": "k", "kind": "tool", "subagentRef": "doc--sub--1", "subagentStatus": "done",
+                  "call": { "kind": "mcp", "tool": "Agent: look", "server": "s" } },
+            ],
+        });
+        let context = Rc::new(super::RowContext { doc: "chat".into(), device: None, model: Some("Opus".into()) });
+        let whole = super::built_for(&entry, &context, false);
+        let folded = super::built_for(&entry, &context, true);
+        let Some(Value::Folded(_)) = folded.row else { panic!("folded") };
+        let (whole_row, folded_row) = (whole.row.unwrap(), folded.row.unwrap());
+        // What a script gets, and what it reads of it.
+        assert_eq!(folded_row.to_json(), whole_row.to_json());
+        assert_eq!(folded_row.field("id").map(text).as_deref(), Some("e1"));
+        assert_eq!(folded.subagents.as_deref().map(<[Value]>::len), Some(1));
+        assert_eq!(folded.subagents, whole.subagents);
+        // It's kept small: words that repeat, a good deal less than they are.
+        let streaming = serde_json::json!({ "id": "e2", "role": "assistant", "status": "streaming", "parts": [] });
+        assert!(!matches!(super::built_for(&streaming, &context, true).row, Some(Value::Folded(_))), "still being written");
+    }
+
+    #[test]
+    fn what_a_kept_compressor_compresses_opens_again() {
+        let long = "words that repeat ".repeat(4000);
+        for input in [long.as_bytes(), b"short", b""] {
+            let out = super::compressed(input);
+            assert_eq!(miniz_oxide::inflate::decompress_to_vec(&out).unwrap(), input);
+        }
+        assert!(super::compressed(long.as_bytes()).len() < long.len() / 10);
+    }
+
+    #[test]
+    fn a_row_holds_each_of_its_repeats_once() {
+        let tool = || Value::record([("id", Value::from("t1")), ("kind", Value::from("exec")), ("call", Value::from("cargo build"))]);
+        let words = "the same words";
+        let mut row = Value::record([
+            ("text", Value::from(words)),
+            ("copy", Value::from(words)),
+            ("tools", Value::List(Rc::from([tool()]))),
+            ("blocks", Value::List(Rc::from([Value::record([("kind", Value::from("group")), ("tools", Value::List(Rc::from([tool()])))])]))),
+        ]);
+        let before = row.clone();
+        // (Built just now: nothing else holds its parts.)
+        drop(before.clone());
+        let same = row == before;
+        drop(before);
+        super::share_parts(&mut row, &mut super::Seen::default());
+        assert!(same);
+        let tools = row.field("tools").unwrap().list();
+        let grouped = row.field("blocks").unwrap().list()[0].field("tools").unwrap().list();
+        let (Value::Map(one), Value::Map(two)) = (&tools[0], &grouped[0]) else { panic!("records") };
+        assert!(Rc::ptr_eq(one, two), "one copy of a tool");
+        let (Some(Value::Str(text)), Some(Value::Str(copy))) = (row.field("text"), row.field("copy")) else { panic!("words") };
+        assert!(Rc::ptr_eq(text, copy), "one copy of its words");
+    }
+
+    /// A settled reply's tools are built once, for all its layouts, and read
+    /// exactly as they would built for each.
+    #[test]
+    fn a_settled_row_builds_each_tool_once_and_reads_the_same() {
+        let entry = serde_json::json!({
+            "id": "e", "role": "assistant", "status": "complete", "createdAt": 1000., "durationMs": 5000.,
+            "parts": [
+                { "id": "r", "kind": "reasoning", "text": "thinking it over" },
+                { "id": "t", "kind": "tool", "call": { "kind": "exec", "command": "cargo build" }, "output": "ok" },
+                { "id": "w", "kind": "text", "text": "Done." },
+            ],
+        });
+        let row = super::built_entry(&entry, "doc", None, None).unwrap();
+        assert_eq!(row, super::message(&entry, None).unwrap());
+        let tools = row.field("tools").unwrap().list();
+        let grouped = row.field("blocks").unwrap().list()[0].field("tools").unwrap().list();
+        let (Value::Map(one), Value::Map(two)) = (&tools[1], &grouped[1]) else { panic!("records") };
+        assert!(Rc::ptr_eq(one, two), "one tool, in both layouts");
+        // (Built for this row alone: nothing's kept for the next.)
+        assert!(super::ROW_BUILD.with_borrow(Option::is_none));
+    }
+
+    #[test]
+    fn another_views_rows_are_taken_only_as_they_are_here() {
+        let entries: Vec<super::Entry> = [
+            serde_json::json!({ "id": "a", "text": "same" }),
+            serde_json::json!({ "id": "b", "text": "theirs" }),
+        ]
+        .into_iter()
+        .map(super::Entry::new)
+        .collect();
+        let mut open = super::Open {
+            id: "chat".into(),
+            entries: [
+                serde_json::json!({ "id": "a", "text": "same" }),
+                serde_json::json!({ "id": "b", "text": "mine" }),
+            ]
+            .into_iter()
+            .map(super::Entry::new)
+            .collect(),
+            ..super::Open::default()
+        };
+        let theirs: std::collections::HashMap<Rc<str>, super::Built> =
+            [(Rc::from("a"), super::Built::default()), (Rc::from("b"), super::Built::default())].into_iter().collect();
+        // (Built for another model's name: none of it.)
+        open.built_model = Some(Some("mine".into()));
+        super::reuse_built(&mut open, &entries, &theirs, &Some(Some("theirs".into())));
+        assert!(open.built.is_empty());
+        open.built_model = None;
+        super::reuse_built(&mut open, &entries, &theirs, &Some(Some("theirs".into())));
+        assert!(open.built.contains_key("a"));
+        assert!(!open.built.contains_key("b"));
+        assert_eq!(open.built_model, Some(Some("theirs".into())));
+    }
 
     #[test]
     fn a_sent_pick_shows_its_page_over_its_number_and_words() {

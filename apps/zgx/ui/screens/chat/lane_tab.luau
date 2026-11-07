@@ -132,23 +132,70 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 			end
 		end)
 	end
-	-- (A split's pane: what its chat asks, and its queue, todos and tasks,
-	-- from its own session, as the window's composer shows them.)
-	local asks = if split
-		then Asks.bind {
-			id = function(): string?
-				return chat
-			end,
-			session = function(): any
-				return view.session:get()
-			end,
-			chosen = chosen,
-			asked = ui.state(`chat_split_asked_{chat}`, nil :: any),
-		}
-		else nil
+	local notice = ui.use_state(nil :: any)
+	-- What its chat asks, and its queue, todos and tasks, from its own
+	-- session, as the window's composer shows them.
+	local asks = Asks.bind {
+		id = function(): string?
+			return chat
+		end,
+		session = function(): any
+			return view.session:get()
+		end,
+		chosen = chosen,
+		asked = ui.state(`chat_split_asked_{chat}`, nil :: any),
+		say = function(tone: string, key: string)
+			notice:set({ tone = tone, text = locale.s(key), dismissable = true })
+		end,
+	}
 	local tray = ui.state(`chat_split_tray_{chat}`, nil :: any)
 	local session = view.session
-	local notice = ui.use_state(nil :: any)
+	local focus = ui.state(`chat_lane_focus_{chat}`, 0)
+	-- A queued message edited in its composer. (A split's pane: a press
+	-- focuses it, the window's composer doing this.)
+	local editing = ui.state(`chat_lane_editing_{chat}`, nil :: { item: string, aside: string, aside_cargo: { any }? }?)
+	local edits = Asks.queue_edits {
+		id = function(): string?
+			return chat
+		end,
+		text = draft,
+		editing = editing,
+		focus = function()
+			focus:add(1)
+		end,
+		say = function(tone: string, key: string)
+			notice:set({ tone = tone, text = locale.s(key), dismissable = true })
+		end,
+		cargo = function(): { any }
+			return Shared.peek_cargo(chat)
+		end,
+		set_cargo = function(list: { any })
+			Shared.set_cargo_of(chat, list)
+		end,
+	}
+	-- A tab closed mid-edit lets go of the edit, and made again finds its row
+	-- no longer held: the draft it set aside back. (A row gone is another
+	-- matter: it keeps the words, and saving says so.)
+	if not split then
+		ui.effect(function()
+			local e = editing:get()
+			local s = session:get()
+			if not e or not s or s.state == "loading" then
+				return
+			end
+			for _, row in s.queue or {} do
+				if row.id == e.item and not row.editing then
+					ui.batch(function()
+						editing:set(nil)
+						draft:set(e.aside)
+						if e.aside_cargo then
+							Shared.set_cargo_of(chat, e.aside_cargo)
+						end
+					end)
+				end
+			end
+		end)
+	end
 	local running = ui.computed(function(): boolean
 		local s = session:get()
 		return s ~= nil and s.running == true
@@ -344,12 +391,42 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		end
 		return where.plan() :: any
 	end
+	local lane_cargo = if split
+		then carried
+		else ui.computed(function(): { any }
+			return Shared.cargo_of(chat)
+		end)
+	local function remove_lane_cargo(id: string)
+		Shared.remove_cargo_of(chat, id)
+	end
 	return ds.Composer {
 		value = draft,
 		snap = if split then snap else nil,
-		cargo = if split then carried else nil,
+		cargo = lane_cargo,
 		-- (Its chips' × under the pointer, as the chat page's.)
-		on_remove_cargo = if split then remove_carried else nil,
+		on_remove_cargo = if split then remove_carried else remove_lane_cargo,
+		focus = focus,
+		on_attach = if split
+			then nil
+			else function()
+				ui.open_files({ title = ui.t("chat.composer.attach_files"):get(), multiple = true }):after(function(files: any)
+					if files and #files > 0 then
+						Shared.attach_files(files, chat)
+						focus:add(1)
+					end
+				end, function() end)
+			end,
+		on_paste_image = if split
+			then nil
+			else function(): boolean
+				store.paste_image():after(function(path: string?)
+					if type(path) == "string" and path ~= "" then
+						Shared.attach_files({ { name = "image.png", path = path } }, chat)
+						focus:add(1)
+					end
+				end, function() end)
+				return true
+			end,
 		-- (ds.Composer's placeholder is a string: read as the tab is made.)
 		-- (A split's pane is a chat of its own: the chat page's words.)
 		placeholder = locale.s(if split then "chat.composer.placeholder" else "chat.lane_tab.placeholder"),
@@ -386,6 +463,10 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		branches_empty = where.branches_empty,
 		branch_fixed = branch_fixed,
 		on_send = function(text: string)
+			if editing:peek() then
+				edits.finish("commit")
+				return
+			end
 			local words = string.match(text, "^%s*(.-)%s*$") or ""
 			if words == "" then
 				return
@@ -449,20 +530,23 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		can_always = if asks then asks.can_always else nil,
 		on_approve = if asks then asks.on_approve else nil,
 		on_deny = if asks then asks.on_deny else nil,
-		queue = if asks then asks.queue else nil,
-		can_steer = if asks then function(): boolean
+		queue = asks.queue,
+		can_steer = function(): boolean
 			return running:get()
-		end else nil,
-		on_queue_send = if asks then asks.on_queue_send else nil,
-		on_queue_remove = if asks then asks.on_queue_remove else nil,
-		on_queue_reorder = if asks then asks.on_queue_reorder else nil,
-		todos = if asks then asks.todos else nil,
-		tasks = if asks then asks.tasks else nil,
-		on_stop_task = if asks then function(task: string)
+		end,
+		on_queue_send = asks.on_queue_send,
+		on_queue_edit = if split then nil else edits.on_queue_edit,
+		on_queue_save = if split then nil else edits.on_queue_save,
+		on_queue_cancel = if split then nil else edits.on_queue_cancel,
+		on_queue_remove = asks.on_queue_remove,
+		on_queue_reorder = asks.on_queue_reorder,
+		todos = asks.todos,
+		tasks = asks.tasks,
+		on_stop_task = function(task: string)
 			store.stop_task(chat, task):after(function() end, function()
 				notice:set({ tone = "danger", text = locale.s("chat.composer.couldnt_stop_task"), dismissable = true })
 			end)
-		end else nil,
+		end,
 		tray = if split then tray else nil,
 	}
 end

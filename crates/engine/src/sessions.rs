@@ -1646,6 +1646,29 @@ impl SessionsEngine {
         issued_at: i64,
         execution: zeron_proto::ExecutionPolicy,
     ) -> Result<SteerOutcome, EngineError> {
+        self.steer_with(
+            chat_id,
+            prompt,
+            Vec::new(),
+            message_id,
+            issued_at,
+            execution,
+        )
+        .await
+    }
+
+    /// [`Self::steer_at`] carrying files: `attachments` (this device's
+    /// paths) ride the mailbox with the prompt, so a driver that inlines
+    /// images delivers them as images, as a run's do.
+    pub(crate) async fn steer_with(
+        &self,
+        chat_id: &str,
+        prompt: &str,
+        attachments: Vec<String>,
+        message_id: Option<String>,
+        issued_at: i64,
+        execution: zeron_proto::ExecutionPolicy,
+    ) -> Result<SteerOutcome, EngineError> {
         self.validate_imported_chat(chat_id)?;
         let policy = self.effective_execution(chat_id, execution);
         if lock(&self.inner.runs)
@@ -1686,7 +1709,7 @@ impl SessionsEngine {
         // message so a re-dispatch keeps it.
         let sent_with = self.last_request(chat_id).map(|mut request| {
             request.prompt = prompt.to_string();
-            request.attachments = Vec::new();
+            request.attachments = attachments.clone();
             Box::new(request)
         });
         let message = SteerMessage {
@@ -1696,7 +1719,7 @@ impl SessionsEngine {
                 zeron_proto::invocation::harness_prompt(delivered, harness_id)
             },
             message_id: Some(user_id.clone()),
-            attachments: Vec::new(),
+            attachments,
             config: None,
         };
         // Saturation is backpressure, not a dead runtime. Waiting for room
@@ -1793,6 +1816,7 @@ impl SessionsEngine {
         &self,
         chat_id: &str,
         prompt: &str,
+        attachments: Vec<String>,
         message_id: Option<String>,
         issued_at: i64,
         execution: zeron_proto::ExecutionPolicy,
@@ -1803,10 +1827,16 @@ impl SessionsEngine {
                 .map(|h| std::mem::take(&mut *lock(&h.redeliver)))
                 .unwrap_or_default();
             for steer in earlier {
+                let attachments = steer
+                    .request
+                    .as_ref()
+                    .map(|r| r.attachments.clone())
+                    .unwrap_or_default();
                 let outcome = self
-                    .steer_at(
+                    .steer_with(
                         chat_id,
                         &steer.prompt,
+                        attachments,
                         Some(steer.message_id),
                         now_ms(),
                         steer
@@ -1820,7 +1850,7 @@ impl SessionsEngine {
                 }
             }
         }
-        self.steer_at(chat_id, prompt, message_id, issued_at, execution)
+        self.steer_with(chat_id, prompt, attachments, message_id, issued_at, execution)
             .await
     }
 
