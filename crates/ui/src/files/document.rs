@@ -40,9 +40,58 @@ pub(super) struct PendingSave {
     pub line_ending: WorkspaceWritableLineEnding,
 }
 
+/// A file the panel draws itself instead of opening in the editor.
+#[derive(Clone)]
+pub(super) enum MediaPreview {
+    Image(Entity<super::image_preview::ImagePreview>),
+    Pdf(Entity<super::pdf_preview::PdfPreview>),
+}
+
+impl MediaPreview {
+    pub fn handles(path: &str) -> bool {
+        super::image_preview::is_image(path) || super::pdf_preview::is_pdf(path)
+    }
+
+    pub fn focus(&self, cx: &gpui::App) -> gpui::FocusHandle {
+        match self {
+            Self::Image(view) => view.read(cx).focus.clone(),
+            Self::Pdf(view) => view.read(cx).focus.clone(),
+        }
+    }
+
+    pub fn suspend(&self, cx: &mut gpui::App) {
+        match self {
+            Self::Image(view) => view.update(cx, |view, cx| view.suspend(cx)),
+            Self::Pdf(view) => view.update(cx, |view, cx| view.suspend(cx)),
+        }
+    }
+
+    pub fn activate(&self, cx: &mut gpui::App) {
+        match self {
+            Self::Image(view) => view.update(cx, |view, cx| view.activate(cx)),
+            Self::Pdf(view) => view.update(cx, |view, cx| view.activate(cx)),
+        }
+    }
+
+    pub fn deleted(&self, cx: &mut gpui::App) {
+        match self {
+            Self::Image(view) => view.update(cx, |view, cx| view.deleted(cx)),
+            Self::Pdf(view) => view.update(cx, |view, cx| view.deleted(cx)),
+        }
+    }
+
+    pub fn into_any_element(self) -> gpui::AnyElement {
+        use gpui::IntoElement as _;
+        match self {
+            Self::Image(view) => view.into_any_element(),
+            Self::Pdf(view) => view.into_any_element(),
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub(super) struct FileDocument {
-    pub image: Option<Entity<super::image_preview::ImagePreview>>,
+    pub media: Option<MediaPreview>,
     pub markdown: Option<Entity<super::markdown_preview::MarkdownPreview>>,
     pub show_markdown: bool,
     pub key: DocumentKey,
@@ -74,7 +123,7 @@ pub(super) struct FileDocument {
 impl FileDocument {
     pub fn loading(key: DocumentKey) -> Self {
         Self {
-            image: None,
+            media: None,
             markdown: None,
             show_markdown: super::markdown_preview::is_markdown(&key.path),
             key,

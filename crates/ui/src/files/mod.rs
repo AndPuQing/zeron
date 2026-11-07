@@ -29,6 +29,8 @@ pub(crate) mod markdown_media;
 mod markdown_preview;
 pub mod model;
 pub mod mutations;
+mod pdf_preview;
+mod pdf_render;
 pub mod preview;
 mod rename;
 pub mod search;
