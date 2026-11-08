@@ -882,7 +882,7 @@ pub fn tool_detail(
     })
 }
 
-/// Chars kept per output line. Lines clip rather than wrap, but each one is
+/// Chars kept per output line. Lines scroll rather than wrap, but each one is
 /// still shaped whole for selection — a minified megabyte must not be.
 const OUTPUT_LINE_MAX_CHARS: usize = 8 * 1024;
 
@@ -10473,13 +10473,11 @@ fn detail_body(
 ) -> AnyElement {
     let body = div().w_full().min_w_0().flex().flex_col().overflow_hidden();
     // Every line joins the transcript's selection, so paths, commands and
-    // output can be drag-selected (across lines too) and copied. Lines clip
-    // rather than ellipsize: selection maps the pointer onto the full text.
+    // output can be drag-selected (across lines too) and copied. Preserve
+    // intrinsic widths so the shared horizontal viewport can reach each end.
     let selectable = |line_ix: usize, text: SharedString, runs: Vec<TextRun>| {
         div()
-            .w_full()
-            .min_w_0()
-            .overflow_hidden()
+            .flex_none()
             .whitespace_nowrap()
             .child(render::selectable_text_element(
                 format!("{selection_key}-{line_ix}").into(),
@@ -10535,6 +10533,7 @@ fn detail_body(
                         div()
                             .min_w_0()
                             .flex_1()
+                            .overflow_hidden()
                             .child(selectable(stat_ix, path, runs)),
                     )
                     .child(
@@ -10554,54 +10553,80 @@ fn detail_body(
         ToolDetail::Output {
             lines,
             truncated_by,
-        } => body
-            .py(px(6.0))
-            .font_family(theme.font_mono.clone())
-            .text_size(px(TOOL_TEXT_SIZE))
-            .children(lines.iter().enumerate().map(|(line_ix, line)| {
-                let row = div()
-                    .h(px(OUTPUT_LINE_HEIGHT))
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .text_color(theme.text_faint);
-                if line.is_empty() {
-                    return row;
-                }
-                row.child(selectable(
-                    line_ix,
-                    line.clone(),
-                    plain(line, theme.text_faint),
-                ))
-            }))
-            .when(*truncated_by > 0, |block| {
-                block.child(more_lines_row(*truncated_by, theme))
-            })
-            .into_any_element(),
+        } => scroll_detail_body(
+            selection_key,
+            div()
+                .min_w_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .py(px(6.0))
+                .font_family(theme.font_mono.clone())
+                .text_size(px(TOOL_TEXT_SIZE))
+                .children(lines.iter().enumerate().map(|(line_ix, line)| {
+                    let row = div()
+                        .h(px(OUTPUT_LINE_HEIGHT))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .text_color(theme.text_faint);
+                    if line.is_empty() {
+                        return row;
+                    }
+                    row.child(selectable(
+                        line_ix,
+                        line.clone(),
+                        plain(line, theme.text_faint),
+                    ))
+                }))
+                .when(*truncated_by > 0, |block| {
+                    block.child(more_lines_row(*truncated_by, theme))
+                }),
+        ),
         ToolDetail::Thought {
             lines,
             truncated_by,
-        } => body
-            .py(px(6.0))
-            .text_size(px(TOOL_TEXT_SIZE))
-            .children(lines.iter().enumerate().map(|(line_ix, line)| {
-                let row = div()
-                    .h(px(OUTPUT_LINE_HEIGHT))
-                    .w_full()
-                    .min_w_0()
-                    .flex()
-                    .items_center();
-                let Some((text, runs)) = thought_line_text(line, theme) else {
-                    return row; // blank separator row
-                };
-                row.child(selectable(line_ix, text, runs))
-            }))
-            .when(*truncated_by > 0, |block| {
-                block.child(more_lines_row(*truncated_by, theme))
-            })
-            .into_any_element(),
+        } => scroll_detail_body(
+            selection_key,
+            div()
+                .min_w_full()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .py(px(6.0))
+                .text_size(px(TOOL_TEXT_SIZE))
+                .children(lines.iter().enumerate().map(|(line_ix, line)| {
+                    let row = div()
+                        .h(px(OUTPUT_LINE_HEIGHT))
+                        .flex_none()
+                        .flex()
+                        .items_center();
+                    let Some((text, runs)) = thought_line_text(line, theme) else {
+                        return row; // blank separator row
+                    };
+                    row.child(selectable(line_ix, text, runs))
+                }))
+                .when(*truncated_by > 0, |block| {
+                    block.child(more_lines_row(*truncated_by, theme))
+                }),
+        ),
     }
+}
+
+/// One viewport per detail (invocation and result have distinct keys). The
+/// inner column measures its widest line, while the outer card stays bounded.
+/// Keep vertical gestures bubbling to the transcript instead of converting
+/// them to horizontal movement inside the detail.
+fn scroll_detail_body(key: &str, content: gpui::Div) -> AnyElement {
+    let mut viewport = div()
+        .id(SharedString::from(format!("{key}-scroll")))
+        .w_full()
+        .min_w_0()
+        .flex()
+        .overflow_x_scroll()
+        .child(content);
+    viewport.style().restrict_scroll_to_axis = Some(true);
+    viewport.into_any_element()
 }
 
 /// The counted-tail row under a truncated Output/Thought detail.
@@ -13933,6 +13958,96 @@ mod tests {
             );
             assert!(rows[0].copy_text.is_none());
         }
+    }
+
+    #[gpui::test]
+    fn expanded_tool_details_scroll_horizontally_without_trapping_vertical_input(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_base::init(cx);
+            cx.set_global(Theme::dark());
+        });
+        struct Details {
+            parent_scroll: gpui::ScrollHandle,
+        }
+        impl Render for Details {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let theme = Theme::of(cx).clone();
+                div()
+                    .id("details-parent")
+                    .w(px(280.0))
+                    .h(px(160.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.parent_scroll)
+                    .map(|mut parent| {
+                        // The transcript list consumes vertical deltas only.
+                        parent.style().restrict_scroll_to_axis = Some(true);
+                        parent
+                    })
+                    .child(render::selection_frame_reset_for(8))
+                    .child(detail_body(
+                        &ToolDetail::Output {
+                            lines: vec!["command --argument very-long-output/".repeat(12).into()],
+                            truncated_by: 0,
+                        },
+                        None,
+                        "scroll-output",
+                        &theme,
+                    ))
+                    .child(detail_body(
+                        &ToolDetail::Thought {
+                            lines: thought_of(
+                                "分析包含中文和 English 的长行以及路径：/workspace/"
+                                    .repeat(8)
+                                    .as_str(),
+                            ),
+                            truncated_by: 0,
+                        },
+                        None,
+                        "scroll-thought",
+                        &theme,
+                    ))
+                    .child(div().h(px(1000.0)))
+            }
+        }
+        let scroll = gpui::ScrollHandle::new();
+        let (_, cx) = cx.add_window_view(|_, _| Details {
+            parent_scroll: scroll.clone(),
+        });
+        cx.run_until_parked();
+        for key in ["scroll-output-0", "scroll-thought-0"] {
+            let before = render::selection_test_bounds(key);
+            assert!(
+                before.size.width > px(280.0),
+                "fixture must overflow: {key}"
+            );
+            cx.simulate_event(ScrollWheelEvent {
+                position: point(px(140.0), before.center().y),
+                delta: ScrollDelta::Pixels(point(px(-10000.0), px(0.0))),
+                ..Default::default()
+            });
+            cx.run_until_parked();
+            let after = render::selection_test_bounds(key);
+            assert!(
+                after.left() < before.left(),
+                "long detail did not scroll: {key}"
+            );
+            assert!(
+                after.right() <= px(281.0),
+                "line end remains clipped: {key}"
+            );
+            assert_eq!(scroll.offset().y, px(0.0));
+        }
+        // A vertical wheel over the output still moves the surrounding chat.
+        let before = render::selection_test_bounds("scroll-output-0");
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(140.0), before.center().y),
+            delta: ScrollDelta::Pixels(point(px(0.0), px(-40.0))),
+            ..Default::default()
+        });
+        cx.run_until_parked();
+        assert!(scroll.offset().y < px(0.0));
     }
 
     #[gpui::test]
