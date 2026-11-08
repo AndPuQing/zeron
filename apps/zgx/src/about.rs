@@ -210,6 +210,7 @@ impl Desktop {
         *self.flow.borrow_mut() = Flow::Downloading { version: version.clone() };
         publish();
         let (edge, data_dir, install) = (self.edge.clone(), self.data_dir.clone(), self.install.clone());
+        let requested_channel = zeron_update::channel::selected();
         let me = self.clone();
         engine::get().spawn(async move {
             let staged = on_tokio(async move {
@@ -219,6 +220,13 @@ impl Desktop {
             })
             .await
             .unwrap_or_else(|| Err("the download stopped".into()));
+            // A channel change while downloading must not install the old offer.
+            if zeron_update::channel::selected() != requested_channel {
+                *me.flow.borrow_mut() = Flow::Idle;
+                me.download_if_needed();
+                publish();
+                return;
+            }
             *me.flow.borrow_mut() = match staged {
                 Ok((version, staged)) => {
                     eprintln!("zerun-experimental: updates: {version} staged at {}", staged.display());
