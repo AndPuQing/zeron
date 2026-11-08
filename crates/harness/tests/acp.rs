@@ -845,7 +845,7 @@ async fn missing_override_is_not_installed_and_fails_discovery() {
 #[tokio::test]
 async fn hung_handshake_errors_instead_of_spinning_forever() {
     // An agent that consumes stdin and never answers initialize — the
-    // "thinking for minutes, then nothing" startup class (issue #93). The
+    // "thinking for minutes, then nothing" startup class. The
     // run must end with a Done that names the timeout, not hang.
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().unwrap();
@@ -866,10 +866,27 @@ async fn hung_handshake_errors_instead_of_spinning_forever() {
     assert_eq!(*status, DoneStatus::Errored);
     let error = error.as_deref().unwrap_or_default();
     assert!(
-        error.contains("did not complete the ACP handshake"),
+        error.contains("ACP startup timed out") && error.contains("waiting for initialize"),
         "{error}"
     );
 }
+#[tokio::test]
+async fn hung_session_creation_names_the_stage_after_initialize() {
+    let harness = harness().with_handshake_timeout(Duration::from_millis(300));
+    let mut req = request("hi");
+    req.env.insert("FAKE_ACP_HANG_NEW".into(), "1".into());
+    let (controls, _steer, _token) = controls();
+    let events = run_to_end(&harness, req, controls).await;
+    let completed = dones(&events);
+    assert_eq!(completed.len(), 1, "{events:?}");
+    let (status, error) = &completed[0];
+    assert_eq!(*status, DoneStatus::Errored);
+    let error = error.as_deref().unwrap_or_default();
+    assert!(error.contains("waiting for session/new"), "{error}");
+    assert!(!error.contains("waiting for initialize"), "{error}");
+    assert!(!error.contains("may be waiting for a login"), "{error}");
+}
+
 #[test]
 fn hermes_and_pi_descriptor_surfaces_match_registry_expectations() {
     let devin = AcpHarness::devin();

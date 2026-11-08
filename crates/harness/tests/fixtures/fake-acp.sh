@@ -31,6 +31,10 @@ emit "{\"id\":$(rid "$line"),\"result\":{\"protocolVersion\":1,\"agentCapabiliti
 
 # ---- session new / load ----------------------------------------------------
 read -r line || exit 1
+if [ "$FAKE_ACP_HANG_NEW" = "1" ]; then
+  while read -r line; do :; done
+  exit 0
+fi
 SID="s-1"
 MODEL_API=0
 if has "$line" '"sessionId":"existing-grok-session"'; then

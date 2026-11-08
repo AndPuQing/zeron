@@ -5078,6 +5078,44 @@ fn session_unrestorable(harness: HarnessId, error: &HarnessError) -> bool {
             && message.contains("fs_not_found"))
 }
 
+/// Setup can block after initialize too (history replay, MCP startup or
+/// model configuration). Keep the last stage without recording RPC payloads.
+struct SetupProgress {
+    agent: &'static str,
+    stage: std::sync::Mutex<&'static str>,
+}
+
+impl SetupProgress {
+    fn new(agent: &'static str) -> Self {
+        Self {
+            agent,
+            stage: std::sync::Mutex::new("initialize"),
+        }
+    }
+
+    fn enter(&self, stage: &'static str) {
+        *self
+            .stage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = stage;
+        tracing::info!(agent = self.agent, stage, "ACP startup stage");
+    }
+
+    fn timeout(&self, budget: Duration) -> HarnessError {
+        let stage = *self
+            .stage
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        HarnessError::Protocol(format!(
+            "{} ACP startup timed out after {}s while waiting for {stage}. \
+             Check the agent's network connection and configuration on the host computer. \
+             A timeout alone does not indicate that sign-in is required.",
+            self.agent,
+            budget.as_secs()
+        ))
+    }
+}
+
 /// `session/new`, or for a resumed run the advertised restore with a visible
 /// fallback to a fresh session when the agent no longer has it (see
 /// [`session_unrestorable`]); any other restore failure errors the run and
@@ -5094,6 +5132,7 @@ async fn open_session(
     agent_name: &str,
     load_timeout: Duration,
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
+    progress: &SetupProgress,
 ) -> Result<(String, Value), HarnessError> {
     let params = json!({
         "cwd": request.cwd,
@@ -5101,6 +5140,7 @@ async fn open_session(
     });
     if let Some(resume) = &request.resume {
         let method = restore_method(init, harness);
+        progress.enter(method);
         let mut restore = params.clone();
         restore["sessionId"] = Value::String(resume.clone());
         let restored = if method == "session/load" {
@@ -5145,6 +5185,7 @@ async fn open_session(
             }
         }
     }
+    progress.enter("session/new");
     let new = request_draining(client, incoming, access, "session/new", params).await?;
     let session_id = new
         .get("sessionId")
@@ -5841,7 +5882,9 @@ async fn run_session(session: Session) {
     };
 
     // ---- handshake + session (interruptible) ------------------------------
+    let progress = SetupProgress::new(agent_name);
     let setup = async {
+        progress.enter("initialize");
         let init = client
             .request("initialize", initialize_params(harness))
             .await?;
@@ -5865,6 +5908,7 @@ async fn run_session(session: Session) {
                 agent_name,
                 session_load_timeout,
                 &event_tx,
+                &progress,
             )
             .await
             {
@@ -5873,6 +5917,7 @@ async fn run_session(session: Session) {
                 }
                 Err(e) if is_auth_required(&e) && !authenticated => {
                     authenticated = true;
+                    progress.enter("authenticate");
                     authenticate_for_run(&client, &mut incoming, access, &init, agent_name, &e)
                         .await?;
                 }
@@ -5889,6 +5934,7 @@ async fn run_session(session: Session) {
         }
         let init_commands =
             available_commands_in_response(&session_response).unwrap_or(init_commands);
+        progress.enter("session configuration");
         let session_options = select_session_config(
             &client,
             &mut incoming,
@@ -5928,12 +5974,7 @@ async fn run_session(session: Session) {
                 // "thinking for 2+ minutes then nothing" class of report. Bound it
                 // and say what was reached.
                 _ = &mut handshake_deadline => {
-                    break Err(HarnessError::Protocol(format!(
-                        "{agent_name} did not complete the ACP handshake within {}s \
-                         (the agent may be waiting for a login — try running it once \
-                         in a terminal)",
-                        setup_budget.as_secs()
-                    )));
+                    break Err(progress.timeout(setup_budget));
                 }
                 // A crash mid-handshake must not sit out the whole bound: a
                 // descendant holding stdout open keeps the requests pending. Same
