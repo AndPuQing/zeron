@@ -139,19 +139,11 @@ test("Activity: the view menu opens its settings, and holds what it stands aside
 	settle(app)
 	-- Its own row, checked; grouping, sorting, the empty projects' fold and
 	-- a new section, out of reach.
-	local function line(label: string): string
-		for l in app:tree():gmatch("[^\n]+") do
-			if l:find(`"{label}"`, 1, true) and not l:find(" button \"Activity\" 13,", 1, true) then
-				return l
-			end
-		end
-		return ""
-	end
-	expect(line("Activity"):find("checked", 1, true) ~= nil).to_be(true)
-	expect(line("By device"):find("disabled", 1, true) ~= nil).to_be(true)
-	expect(line("Last updated"):find("disabled", 1, true) ~= nil).to_be(true)
-	expect(line("Empty projects"):find("disabled", 1, true) ~= nil).to_be(true)
-	expect(line("Create section"):find("disabled", 1, true) ~= nil).to_be(true)
+	expect(app:tree('role:checkbox "Activity"')).to_contain("checked")
+	expect(app:tree('role:checkbox "By device"')).to_contain("disabled")
+	expect(app:tree('role:checkbox "Last updated"')).to_contain("disabled")
+	expect(app:tree('role:checkbox "Empty projects"')).to_contain("disabled")
+	expect(app:tree('role:menuitem "Create section"')).to_contain("disabled")
 	-- Its settings: their page.
 	app:click('role:button "Activity settings…"')
 	settle(app)

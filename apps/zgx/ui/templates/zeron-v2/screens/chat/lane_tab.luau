@@ -303,14 +303,38 @@ local function composer(chat: string, view: any, name: string): Node
 			end
 			draft:set("")
 			notice:set(nil)
+			-- A running chat queues the words, without changing its picks or
+			-- adding a transcript row before the queued turn starts.
+			local queued = running:peek()
+			local req = if queued then {} else picks()
+			local function deliver(mid: string?)
+				req.message_id = mid
+				local sent: any = nil
+				if is_unsent then
+					sent = lanes.send_first(chat, words, req, place())
+				else
+					req.session, req.text = chat, words
+					sent = store.send(req :: any)
+				end
+				sent:after(function() end, function(err: any)
+					draft:set(words)
+					local why = if type(err) == "table" and err.message then tostring(err.message) else nil
+					notice:set({
+						tone = "danger",
+						text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
+						dismissable = true,
+					})
+				end)
+			end
+			if queued then
+				deliver(nil)
+				return
+			end
 			-- As the chat page sends: the prompt joins its transcript as the
 			-- transcript's send steps clear of the end (it glides to the top,
 			-- its reply's room opening under it), then goes to the host with
 			-- that id, so the host's copy is the same row.
 			local mid = store.new_id()
-			local req = picks()
-			req.message_id = mid
-			local sent: any = nil
 			T.send(function()
 				local here = false
 				for _, m in view.messages:peek() do
@@ -322,23 +346,8 @@ local function composer(chat: string, view: any, name: string): Node
 					-- (On its way from this moment: the line under it says so.)
 					view.messages:push { id = mid, role = "user", text = words, waiting = "sending" }
 				end
+				deliver(mid)
 			end, mid, name)
-			-- Its first message makes it (New side chat), then sends.
-			if is_unsent then
-				sent = lanes.send_first(chat, words, req, place())
-			else
-				req.session, req.text = chat, words
-				sent = store.send(req :: any)
-			end
-			sent:after(function() end, function(err: any)
-				draft:set(words)
-				local why = if type(err) == "table" and err.message then tostring(err.message) else nil
-				notice:set({
-					tone = "danger",
-					text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
-					dismissable = true,
-				})
-			end)
 		end,
 		on_stop = function()
 			store.interrupt(chat)

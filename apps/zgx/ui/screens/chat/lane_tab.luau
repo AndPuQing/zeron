@@ -26,6 +26,8 @@ local Quote = require("@ds/quote")
 -- (The chat page's places in its chats, which a split's panes share.)
 local Shared = require("@app/screens/chat/shared")
 local Asks = require("@app/screens/chat/asks")
+local Carried = require("@app/screens/chat/carried")
+local Appshots = require("@app/screens/chat/appshots")
 
 -- Two places in a transcript (ds/transcript's `keep`), the same.
 local function same(a: any, b: any): boolean
@@ -468,7 +470,7 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 				return
 			end
 			local words = string.match(text, "^%s*(.-)%s*$") or ""
-			if words == "" then
+			if words == "" and #Shared.peek_cargo(chat) == 0 then
 				return
 			end
 			-- (Nowhere it can start, a project gone: the line says why.)
@@ -479,14 +481,46 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 			end
 			draft:set("")
 			notice:set(nil)
+			local cargo = Shared.take_cargo_of(chat)
+			local packed = Carried.pack(cargo, words, words)
+			local text_out = Carried.text(packed.typed, packed)
+			-- While a turn runs, only the queued words and attachments go to
+			-- the host. Model picks wait for the turn they will run in.
+			local queued = running:peek()
+			local req = if queued then {} else picks()
+			req.attachments, req.appshots = packed.attachments, Appshots.of_cargo(cargo)
+			local function deliver(mid: string?)
+				req.message_id = mid
+				-- Its first message makes it (New side chat), then sends.
+				local sent: any = nil
+				if is_unsent then
+					sent = lanes.send_first(chat, text_out, req, place())
+				else
+					req.session, req.text = chat, text_out
+					sent = store.send(req :: any)
+				end
+				sent:after(function() end, function(err: any)
+					draft:set(words)
+					if #cargo > 0 then
+						Shared.restore_cargo_of(chat, cargo)
+					end
+					local why = if type(err) == "table" and err.message then tostring(err.message) else nil
+					notice:set({
+						tone = "danger",
+						text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
+						dismissable = true,
+					})
+				end)
+			end
+			if queued then
+				deliver(nil)
+				return
+			end
 			-- As the chat page sends: the prompt joins its transcript as the
 			-- transcript's send steps clear of the end (it glides to the top,
 			-- its reply's room opening under it), then goes to the host with
 			-- that id, so the host's copy is the same row.
 			local mid = store.new_id()
-			local req = picks()
-			req.message_id = mid
-			local sent: any = nil
 			T.send(function()
 				local here = false
 				for _, m in view.messages:peek() do
@@ -496,25 +530,10 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 				end
 				if not here then
 					-- (On its way from this moment: the line under it says so.)
-					view.messages:push { id = mid, role = "user", text = words, waiting = "sending" }
+					view.messages:push { id = mid, role = "user", text = packed.typed, attachments = Carried.shown(packed), waiting = "sending" }
 				end
+				deliver(mid)
 			end, mid, name)
-			-- Its first message makes it (New side chat), then sends.
-			if is_unsent then
-				sent = lanes.send_first(chat, words, req, place())
-			else
-				req.session, req.text = chat, words
-				sent = store.send(req :: any)
-			end
-			sent:after(function() end, function(err: any)
-				draft:set(words)
-				local why = if type(err) == "table" and err.message then tostring(err.message) else nil
-				notice:set({
-					tone = "danger",
-					text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
-					dismissable = true,
-				})
-			end)
 		end,
 		on_stop = function()
 			store.interrupt(chat)

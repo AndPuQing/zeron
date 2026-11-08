@@ -156,7 +156,9 @@ local stub_store = store :: any
 -- A send, and what it went with (`pick:<session>:<model>:<agent>:<effort>`);
 -- failing (as an engine that refuses it) after `send_fails`.
 local send_fails = ui.state("test_send_fails", false)
+local last_send = ui.state("last_send", nil :: any)
 stub_store.send = function(req: any): any
+	last_send:set(req)
 	note(`send:{req.session}:{req.text}{if req.fresh then ":fresh" else ""}`)
 	note(`pick:{req.session}:{req.model or ""}:{req.harness or ""}:{req.effort or ""}:{req.access or ""}{if req.worktree then ":worktree" else ""}`)
 	if send_fails:peek() then
@@ -226,6 +228,11 @@ end }
 -- The rest of what a side chat's composer shows as the chat page's does.
 ui.command { id = "side_attach_passage", title = "A passage attached to it", run = function()
 	require("@app/screens/chat/shared").attach_quote({ text = "the whole passage", who = "Reply" }, "side-a")
+end }
+ui.command { id = "side_attach_file", title = "A file attached to it", run = function()
+	require("@app/screens/chat/shared").push_cargo("side-a", {
+		id = "side-file", kind = "file", name = "note.txt", path = "/host/uploads/note.txt", on_host = true,
+	})
 end }
 ui.command { id = "side_edit_lost", title = "Its edit let go", run = function()
 	side_says({ queue = { { id = "q1", text = "Queued words" } } })
