@@ -7063,6 +7063,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "block",
+ "chrono",
  "core-foundation 0.10.1",
  "core-graphics 0.24.0",
  "foreign-types",
@@ -7076,6 +7077,7 @@ dependencies = [
  "open",
  "png 0.18.1",
  "rusqlite",
+ "serde",
  "serde_json",
  "sha2",
  "similar",
@@ -7088,6 +7090,7 @@ dependencies = [
  "zeron-notify",
  "zeron-plugin-guard",
  "zeron-preview-label",
+ "zeron-proto",
  "zeron-theme",
  "zeron-update",
  "zeron-visual",

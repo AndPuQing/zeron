@@ -1279,7 +1279,19 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
      */
     func shutdown() 
     
+    /**
+     * Put a chat to sleep until `until_ms` (the Activity view's Asleep),
+     * or wake it now (`None`). Synced: every device shows it asleep.
+     */
+    func sleepSession(chatId: String, untilMs: Int64?) throws 
+    
     func stopBackgroundTask(chatId: String, taskId: String) async throws  -> Bool
+    
+    /**
+     * Stop waiting on the background processes a chat's agent said it
+     * waits on (asked of its host). `false` when it no longer was.
+     */
+    func stopWaiting(chatId: String) async throws  -> Bool
     
     /**
      * `git checkout <ref>` in `repo_path` on the device.
@@ -2381,12 +2393,46 @@ open func shutdown()  {try! rustCall() {
 }
 }
     
+    /**
+     * Put a chat to sleep until `until_ms` (the Activity view's Asleep),
+     * or wake it now (`None`). Synced: every device shows it asleep.
+     */
+open func sleepSession(chatId: String, untilMs: Int64?)throws   {try rustCallWithError(FfiConverterTypeCoreError_lift) {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_coreclient_sleep_session(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(chatId),
+        FfiConverterOptionInt64.lower(untilMs),uniffiCallStatus
+    )
+}
+}
+    
 open func stopBackgroundTask(chatId: String, taskId: String)async throws  -> Bool  {
     return
         try  await uniffiRustCallAsync(
             rustFutureFunc: {
                 uniffi_zeron_mobile_fn_method_coreclient_stop_background_task(
                         self.uniffiCloneHandle(),FfiConverterString.lower(chatId),FfiConverterString.lower(taskId)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_i8,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_i8,
+            freeFunc: ffi_zeron_mobile_rust_future_free_i8,
+            liftFunc: FfiConverterBool.lift,
+            errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Stop waiting on the background processes a chat's agent said it
+     * waits on (asked of its host). `false` when it no longer was.
+     */
+open func stopWaiting(chatId: String)async throws  -> Bool  {
+    return
+        try  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_stop_waiting(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(chatId)
                 )
             },
             pollFunc: ffi_zeron_mobile_rust_future_poll_i8,
@@ -13869,6 +13915,20 @@ public struct SessionRow: Equatable, Hashable {
      * 2 = chat2; 1 = legacy (not dialable).
      */
     public var roomGen: UInt32
+    /**
+     * Asleep until then (ms; the Activity view's Asleep). `None` when
+     * awake or woken.
+     */
+    public var sleepUntilMs: Int64?
+    /**
+     * Woke from sleep then (ms) and not seen since.
+     */
+    public var wokeAtMs: Int64?
+    /**
+     * Waiting on a background process its agent said it waits on: the
+     * person may stop waiting (`CoreClient::stop_waiting`).
+     */
+    public var waitsOnProcess: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -13908,7 +13968,18 @@ public struct SessionRow: Equatable, Hashable {
          */sendState: SendState?, parentChatId: String?, 
         /**
          * 2 = chat2; 1 = legacy (not dialable).
-         */roomGen: UInt32) {
+         */roomGen: UInt32, 
+        /**
+         * Asleep until then (ms; the Activity view's Asleep). `None` when
+         * awake or woken.
+         */sleepUntilMs: Int64?, 
+        /**
+         * Woke from sleep then (ms) and not seen since.
+         */wokeAtMs: Int64?, 
+        /**
+         * Waiting on a background process its agent said it waits on: the
+         * person may stop waiting (`CoreClient::stop_waiting`).
+         */waitsOnProcess: Bool) {
         self.id = id
         self.revision = revision
         self.title = title
@@ -13940,6 +14011,9 @@ public struct SessionRow: Equatable, Hashable {
         self.sendState = sendState
         self.parentChatId = parentChatId
         self.roomGen = roomGen
+        self.sleepUntilMs = sleepUntilMs
+        self.wokeAtMs = wokeAtMs
+        self.waitsOnProcess = waitsOnProcess
     }
 
     
@@ -13988,7 +14062,10 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
                 pullRequest: FfiConverterOptionTypePullRequest.read(from: &buf), 
                 sendState: FfiConverterOptionTypeSendState.read(from: &buf), 
                 parentChatId: FfiConverterOptionString.read(from: &buf), 
-                roomGen: FfiConverterUInt32.read(from: &buf)
+                roomGen: FfiConverterUInt32.read(from: &buf), 
+                sleepUntilMs: FfiConverterOptionInt64.read(from: &buf), 
+                wokeAtMs: FfiConverterOptionInt64.read(from: &buf), 
+                waitsOnProcess: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -14024,6 +14101,9 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
         FfiConverterOptionTypeSendState.write(value.sendState, into: &buf)
         FfiConverterOptionString.write(value.parentChatId, into: &buf)
         FfiConverterUInt32.write(value.roomGen, into: &buf)
+        FfiConverterOptionInt64.write(value.sleepUntilMs, into: &buf)
+        FfiConverterOptionInt64.write(value.wokeAtMs, into: &buf)
+        FfiConverterBool.write(value.waitsOnProcess, into: &buf)
     }
 }
 
@@ -16574,6 +16654,11 @@ public enum ChatIndicator: Equatable, Hashable {
     
     case working
     case awaitingInput
+    /**
+     * Its turn ended, and the agent waits on background work that will
+     * wake it: under way, never "done". Drawn as Working.
+     */
+    case waiting
     case errored
     /**
      * Finished but not seen yet on any device.
@@ -16605,11 +16690,13 @@ public struct FfiConverterTypeChatIndicator: FfiConverterRustBuffer {
         
         case 2: return .awaitingInput
         
-        case 3: return .errored
+        case 3: return .waiting
         
-        case 4: return .completed
+        case 4: return .errored
         
-        case 5: return .idle
+        case 5: return .completed
+        
+        case 6: return .idle
         
         default: throw UniffiInternalError.unexpectedEnumCase
         }
@@ -16627,16 +16714,20 @@ public struct FfiConverterTypeChatIndicator: FfiConverterRustBuffer {
             writeInt(&buf, Int32(2))
         
         
-        case .errored:
+        case .waiting:
             writeInt(&buf, Int32(3))
         
         
-        case .completed:
+        case .errored:
             writeInt(&buf, Int32(4))
         
         
-        case .idle:
+        case .completed:
             writeInt(&buf, Int32(5))
+        
+        
+        case .idle:
+            writeInt(&buf, Int32(6))
         
         }
     }
@@ -24518,7 +24609,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_coreclient_shutdown() != 4352) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_sleep_session() != 47154) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_zeron_mobile_checksum_method_coreclient_stop_background_task() != 13803) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_stop_waiting() != 28732) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_switch_ref() != 45706) {

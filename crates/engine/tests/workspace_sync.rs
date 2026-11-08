@@ -765,6 +765,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 harness_session_harness: None,
                 space_id: Some("space-legacy".into()),
                 last_seen_at: Some(now),
+                sleep: None,
             })
             .unwrap();
         legacy
@@ -779,6 +780,7 @@ async fn legacy_workspace_doc_migrates_instantly_on_first_boot() {
                 status: SessionStatus::Idle,
                 started_at: Some(now),
                 updated_at: now,
+                waiting: None,
             })
             .unwrap();
         store

@@ -636,6 +636,7 @@ impl ExternalSessionImporter {
             });
         receipt.row = Some(Chat {
             child_kind: None,
+            sleep: None,
             id: receipt.chat_id.clone(),
             device_id: self.inner.docs.device_id().into(),
             title: Some(source.title.clone()),

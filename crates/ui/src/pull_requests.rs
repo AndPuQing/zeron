@@ -3726,6 +3726,7 @@ mod tests {
             import_source: None,
             last_seen_at: None,
             room_gen: None,
+            sleep: None,
         }
     }
 

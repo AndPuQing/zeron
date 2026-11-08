@@ -90,6 +90,12 @@ zeron-launch = { path = "../../crates/launch" }
 # `zerun-dev://` links: a chat's (src/sessions.rs, src/links.rs) and a clicked
 # banner's, the shipping app's formats.
 zeron-notify = { path = "../../crates/notify" }
+# (A message between chats: its routing header, read as the engine writes it.)
+zeron-proto = { path = "../../crates/proto" }
+# (Already in the build through zeron-proto: its times are chrono's, and its
+# rows are read straight from the engine's JSON, not cloned first.)
+chrono = "0.4"
+serde = "1"
 zeron-update = { path = "../../crates/update" }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # Templates' theme files, JSON with comments, read for their previews
