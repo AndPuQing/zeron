@@ -45,7 +45,7 @@ permissions:
 
 # Build-only platform selections can run independently; tag publication is serialized.
 concurrency:
-  group: zgx-beta-${{ github.ref }}-${{ inputs.version }}-${{ inputs.platforms }}
+  group: ${{ github.event_name == 'push' && 'zgx-beta-publish' || format('zgx-beta-{0}-{1}-{2}', github.ref, inputs.version, inputs.platforms) }}
   cancel-in-progress: false
 
 jobs:
