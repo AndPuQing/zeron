@@ -139,7 +139,7 @@ test("Activity: the view menu opens its settings, and holds what it stands aside
 	settle(app)
 	-- Its own row, checked; grouping, sorting, the empty projects' fold and
 	-- a new section, out of reach.
-	expect(app:tree('role:checkbox "Activity"')).to_contain("checked")
+	expect(app:tree('role:checkbox "Activity"')).to_contain(" checked")
 	expect(app:tree('role:checkbox "By device"')).to_contain("disabled")
 	expect(app:tree('role:checkbox "Last updated"')).to_contain("disabled")
 	expect(app:tree('role:checkbox "Empty projects"')).to_contain("disabled")
