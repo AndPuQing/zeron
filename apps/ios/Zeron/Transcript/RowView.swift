@@ -186,6 +186,18 @@ final class RowView: UIView {
         element.accessibilityFrameInContainerSpace = bounds
         textElement = element
         rebuildLinkElements(d)
+        // Streaming and width changes repaint the same scrollers. Keep the
+        // reader's horizontal position, but never carry it to another pooled
+        // row or a different set of expanded tool details.
+        func openDetails(_ display: RowDisplay) -> [UInt64] {
+            display.widgets.compactMap { widget in
+                if case let .toolToggle(detail, open) = widget.kind, open { return detail }
+                return nil
+            }
+        }
+        let keepScrollPositions = previous.map {
+            $0.key == d.key && $0.scrollers.count == d.scrollers.count && openDetails($0) == openDetails(d)
+        } ?? false
         // Scrollers: reuse views in order.
         while scrollers.count < d.scrollers.count {
             let s = FadingScrollView()
@@ -207,10 +219,11 @@ final class RowView: UIView {
                 continue
             }
             let info = d.scrollers[i]
+            let previousX = keepScrollPositions ? s.contentOffset.x : 0
             s.isHidden = false
             s.frame = CGRect(x: CGFloat(info.x), y: CGFloat(info.y), width: CGFloat(info.w), height: CGFloat(info.h))
             s.contentSize = CGSize(width: CGFloat(info.contentWidth), height: CGFloat(info.h))
-            s.contentOffset = .zero
+            s.contentOffset = CGPoint(x: min(max(0, previousX), max(0, s.contentSize.width - s.bounds.width)), y: 0)
             s.layer.cornerRadius = 0
             if let c = s.subviews.first(where: { $0 is RowCanvas }) as? RowCanvas {
                 c.frame = CGRect(x: 0, y: 0, width: CGFloat(info.contentWidth), height: CGFloat(info.h))
