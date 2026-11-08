@@ -31,25 +31,23 @@ pub const MANAGED_ENV: &str = "ZERUN_MANAGED_ENGINE";
 /// executable elsewhere.
 pub const APP_ENV: &str = "ZERUN_APP";
 
-static FULL_APP_ENGINE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static ENGINE_HELPER: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
-/// This app's engine is another release's whole app binary, which runs the
-/// engine as its [`ENGINE_SUBCOMMAND`] (a Windows release has no separate
-/// engine executable): the desktop Beta on Windows. Set
-/// once, before anything asks. Nothing else sets it, so other builds resolve
-/// their engine as ever.
-pub fn set_full_app_engine(binary: PathBuf) {
-    let _ = FULL_APP_ENGINE.set(binary);
+/// Select the packaged engine helper for the Windows desktop Beta. It accepts
+/// the shared engine subcommand and lives in a versioned folder. Set this once
+/// before resolving or starting the engine; other builds use the adjacent helper.
+pub fn set_engine_helper(binary: PathBuf) {
+    let _ = ENGINE_HELPER.set(binary);
 }
 
-fn full_app_engine() -> Option<&'static Path> {
-    FULL_APP_ENGINE.get().map(PathBuf::as_path).filter(|path| path.is_file())
+fn engine_helper() -> Option<&'static Path> {
+    ENGINE_HELPER.get().map(PathBuf::as_path).filter(|path| path.is_file())
 }
 
 /// The engine executable for the app at `app_exe`, if there is one: beside it,
-/// or the one [`set_full_app_engine`] named.
+/// or the one [`set_engine_helper`] named.
 pub fn engine_executable(app_exe: &Path) -> Option<PathBuf> {
-    if let Some(engine) = full_app_engine() {
+    if let Some(engine) = engine_helper() {
         return Some(engine.to_path_buf());
     }
     let dir = app_exe.parent().unwrap_or(Path::new("."));
@@ -63,7 +61,7 @@ pub fn engine_executable(app_exe: &Path) -> Option<PathBuf> {
 /// the engine executable beside it, else the app binary's
 /// [`ENGINE_SUBCOMMAND`].
 pub fn engine_command(app_exe: &Path) -> Command {
-    if let Some(engine) = full_app_engine() {
+    if let Some(engine) = engine_helper() {
         let mut command = Command::new(engine);
         command.arg(ENGINE_SUBCOMMAND);
         return command;
@@ -105,7 +103,7 @@ pub struct LaunchConfig {
 /// exiting (or its terminal closing) leaves it running.
 pub fn launch(config: &LaunchConfig, app_exe: &Path) -> std::io::Result<Child> {
     let mut command = engine_command(app_exe);
-    if full_app_engine().is_some() {
+    if engine_helper().is_some() {
         if let Some(directory) = app_exe.parent() {
             command.env("ZERON_INSTALLED_AT", directory);
         }

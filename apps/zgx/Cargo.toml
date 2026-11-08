@@ -117,6 +117,9 @@ zeron-visual-gpu = { path = "../../crates/visual-gpu" }
 # Their frames' pixel loops, optimized in debug builds too (below).
 zeron-zgx-pixels = { path = "pixels" }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 # The app's macOS appearance (`appearance`): the same objc2 zgx builds on.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

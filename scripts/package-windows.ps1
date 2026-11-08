@@ -1,8 +1,7 @@
 # The beta (.github/workflows/zgx-beta.yml), with -BetaVersion and -BetaEngine:
 # the zgx interface (apps/zgx, its `beta` feature) as zerun.exe, and beside it
-# beta\<version>\ with its scripts, plugins and the zerun.exe it's given, built
-# from the same commit, as engine\zerun.exe (a Windows release has no separate
-# engine: it runs as `zerun.exe engine`). A tester keeps their data and device.
+# beta\<version>\ with its scripts, plugins and the matching zerun-engine.exe
+# built from the same commit. A tester keeps their data and device.
 # No standalone .exe: this interface can't run without that folder.
 param(
     [Parameter(Mandatory)][string]$ReleasesUrl,
@@ -12,7 +11,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $ReleasesUrl.StartsWith('https://')) { throw 'Release feed must use HTTPS' }
 if ($BetaVersion -and -not (Test-Path -LiteralPath $BetaEngine -PathType Leaf)) {
-    throw "-BetaEngine: the engine's zerun.exe"
+    throw "-BetaEngine: the matching zerun-engine.exe"
 }
 $root = Split-Path $PSScriptRoot -Parent
 
@@ -69,7 +68,7 @@ function Get-ZerunVersion([string]$Path) {
             $process.Kill()
             throw 'Executable version probe timed out'
         }
-        $versionMatch = [regex]::Match($stdout.Result.Trim(), '\Azerun (\d+\.\d+\.\d+(?:-beta\.\d+)?)\z')
+        $versionMatch = [regex]::Match($stdout.Result.Trim(), '\Azerun(?:-engine)? (\d+\.\d+\.\d+(?:-beta\.\d+)?)\z')
         if ($process.ExitCode -ne 0 -or -not $versionMatch.Success) {
             throw "Cannot read executable version: $($stderr.Result)"
         }
@@ -123,7 +122,7 @@ try {
         Remove-Item -LiteralPath (Join-Path $beta 'ui/tests') -Recurse -Force
         Copy-Scripts 'apps/zgx/plugins-builtin' (Join-Path $beta 'plugins-builtin')
         New-Item -ItemType Directory -Force -Path (Join-Path $beta 'engine') | Out-Null
-        Copy-Item -LiteralPath $BetaEngine -Destination (Join-Path $beta 'engine/zerun.exe')
+        Copy-Item -LiteralPath $BetaEngine -Destination (Join-Path $beta 'engine/zerun-engine.exe')
         Copy-Item -Path 'apps/zgx/fonts/*-OFL.txt' -Destination $licenses
     }
     Compress-Archive -Path "$stage/*" -DestinationPath "$stage.zip" -Force

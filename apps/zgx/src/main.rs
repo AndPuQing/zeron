@@ -195,7 +195,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The Windows package carries its matching engine in a versioned folder.
     #[cfg(all(windows, feature = "beta"))]
     if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
-        zeron_launch::set_full_app_engine(dir.join("beta").join(about::APP_VERSION).join("engine").join("zerun.exe"));
+        zeron_launch::set_engine_helper(dir.join("beta").join(about::APP_VERSION).join("engine").join("zerun-engine.exe"));
     }
     if open_url.is_none() && !dev_launch(&argv[1..]) {
         let engines = engine_helper.as_deref().map_or(zeron_cli::Engines::Helper, zeron_cli::Engines::HelperAt);

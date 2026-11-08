@@ -29,8 +29,8 @@ const VERSION_FILE: &str = "zerun-version";
 /// Inno Setup's `_is1` suffix). Settings → Apps reads `DisplayVersion` here.
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{94F099C7-A9D5-5A32-B951-50AE16E29A01}_is1";
 /// A beta's own files beside `zerun.exe`, by version: `beta\<version>\ui`,
-/// `plugins-builtin` and `engine\zerun.exe`, the stable release's own
-/// executable. A beta can't update by swapping one file, so it updates from
+/// `plugins-builtin` and the matching `engine\zerun-engine.exe`. A beta can't
+/// update by swapping one file, so it updates from
 /// the package (`zerun-<version>-windows-<arch>.zip`); nothing already there
 /// is replaced, which a running engine would prevent. A stable build never
 /// reads this folder.

@@ -280,27 +280,22 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
-      - name: Locate Windows SDK shader compiler
-        run: |
-          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/fxc.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $fxc) { throw 'Windows SDK fxc.exe is required for GPUI release shaders' }
-          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: zgx-beta
           save-if: ${{ github.ref == 'refs/heads/dev' }}
+          cache-on-failure: true
           workspaces: |
             . -> target
             apps/zgx -> target
-      # (A Windows release has no separate engine: it runs as `zerun.exe engine`.)
+      # Match the other Beta platforms: bundle the engine without the stable UI.
       - name: the engine, from this commit
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
         run: |
-          cargo build --release --locked -p zeron
+          cargo build --release --locked -p zeron --bin zerun-engine --no-default-features
           if ($LASTEXITCODE -ne 0) { throw 'the engine failed to build' }
-          "BETA_ENGINE=$((Resolve-Path -LiteralPath './target/release/zerun.exe').Path)" >> $env:GITHUB_ENV
+          "BETA_ENGINE=$((Resolve-Path -LiteralPath './target/release/zerun-engine.exe').Path)" >> $env:GITHUB_ENV
       # The feed's base is the edge's: its `beta/` is the beta channel, and
       # stable's manifest and files, for going back, are beside it.
       - name: Update and launch regressions
@@ -323,8 +318,8 @@ jobs:
           $interface = (& "$dir/zerun.exe" --version | Out-String).Trim()
           if ($interface -ne "zerun $env:BETA_VERSION") { throw "the interface says '$interface'" }
           $beta = "$dir/beta/$env:BETA_VERSION"
-          $engine = (& "$beta/engine/zerun.exe" --version | Out-String).Trim()
-          if ($engine -ne "zerun $env:ENGINE") { throw "the engine says '$engine'" }
+          $engine = (& "$beta/engine/zerun-engine.exe" --version | Out-String).Trim()
+          if ($engine -ne "zerun-engine $env:ENGINE") { throw "the engine says '$engine'" }
           foreach ($path in @("$beta/ui/app.luau", "$beta/plugins-builtin", "$dir/zerun-update.json")) {
             if (-not (Test-Path -LiteralPath $path)) { throw "no $path in the package" }
           }
