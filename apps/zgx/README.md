@@ -3,8 +3,9 @@
 An optional desktop interface built with [zgx](https://zgx.zeron.sh) and Luau.
 The existing `zerun` desktop remains available. This preview includes onboarding,
 chat and agent selection, files, terminals, browser panels, plugins and templates.
-It is still experimental; use the stable desktop for production service installs
-and automatic updates.
+It is still experimental. Optional [desktop Beta packages](../../docs/desktop-beta.md)
+share the installed Zerun profile and update through the Beta channel. The source
+preview described below keeps its own profile and is updated by rebuilding.
 
 ## Build and run
 
@@ -67,7 +68,7 @@ Optional overrides:
 
 Stable IPC ports and the default stable profile directories are refused.
 Updates require rebuilding this preview; it never installs a stable desktop
-update over itself. No experimental release feed is configured.
+update over itself. Packaged Betas use the separate Beta feed.
 
 ## Development
 

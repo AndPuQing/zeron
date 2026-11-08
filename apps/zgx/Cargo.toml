@@ -18,6 +18,12 @@ publish = false
 name = "zerun-experimental"
 path = "src/main.rs"
 
+[features]
+beta = []
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
 [dependencies]
 zgx = { git = "https://github.com/zeronsh/zgx", rev = "99a50ad527f18be4dcf1ffb9772da8c735cdbb00" }
 # `mimalloc`: the program's allocator, in place of the system's. It hands

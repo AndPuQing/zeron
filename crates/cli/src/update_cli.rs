@@ -13,10 +13,7 @@ pub async fn update(edge_url: &str, check_only: bool) -> anyhow::Result<()> {
     zeron_update::channel::set_data_dir(&super::paths::data_dir());
     let manifest = zeron_update::fetch_latest(edge_url).await?;
     let current = zeron_update::app_version();
-    let running_engine = match zeron_update::detect_install() {
-        InstallKind::MacApp { bundle } => zeron_update::bundle_engine_version(&bundle),
-        _ => None,
-    };
+    let running_engine = zeron_update::desktop::engine_version(&zeron_update::detect_install());
     match zeron_update::offer(
         &manifest,
         current,

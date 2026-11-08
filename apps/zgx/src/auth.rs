@@ -76,7 +76,7 @@ const PRODUCTION: Env = Env {
     name: "production",
     edge: "https://edge.550w.host",
     client: "client_01M4AN0G973H42GQJY8RAAC0RS",
-    port: 27873,
+    port: if cfg!(feature = "beta") { 27642 } else { 27873 },
 };
 
 /// How long the browser has to come back (the engine forgets a sign-in
@@ -108,7 +108,11 @@ pub struct Endpoint {
 }
 
 pub fn endpoint() -> Endpoint {
-    endpoint_with(|key| std::env::var(key).ok().filter(|v: &String| !v.trim().is_empty()))
+    if cfg!(feature = "beta") {
+        production()
+    } else {
+        endpoint_with(|key| std::env::var(key).ok().filter(|v: &String| !v.trim().is_empty()))
+    }
 }
 
 /// The fork's service by default; explicit experimental overrides for development.
@@ -138,11 +142,20 @@ pub fn production() -> Endpoint {
 #[cfg(test)]
 mod endpoint_tests {
     use super::*;
+    #[cfg(feature = "beta")]
+    #[test]
+    fn packaged_beta_uses_the_existing_account_callback() {
+        let at = endpoint();
+        assert_eq!(at.edge, zeron_cli::DEFAULT_EDGE_URL);
+        assert_eq!(at.client, zeron_cli::DEFAULT_WORKOS_CLIENT_ID);
+        assert_eq!(at.port, zeron_proto::identity::DEFAULT_CALLBACK_PORT);
+    }
+
     #[test]
     fn defaults_use_the_fork_account_service() {
         let at = endpoint_with(|_| None);
         assert_eq!((at.edge.as_str(),at.client.as_str(),at.port),
-            ("https://edge.550w.host","client_01M4AN0G973H42GQJY8RAAC0RS",27873));
+            ("https://edge.550w.host","client_01M4AN0G973H42GQJY8RAAC0RS",PRODUCTION.port));
         let custom = endpoint_with(|key| (key == "ZERUN_ZGX_EDGE").then(|| "https://edge.example.test/".into()));
         assert_eq!(custom.name,"custom");
         assert_eq!(custom.edge,"https://edge.example.test");

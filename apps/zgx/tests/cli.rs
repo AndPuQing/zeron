@@ -85,7 +85,7 @@ fn the_engine_s_subcommands_run_in_the_helper_beside_the_app() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(feature = "beta")))]
 #[test]
 fn an_explicit_matching_engine_gets_only_the_experimental_profile() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -117,6 +117,7 @@ fn an_explicit_matching_engine_gets_only_the_experimental_profile() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(not(feature = "beta"))]
 #[test]
 fn the_experimental_entry_refuses_stable_updates_and_service_installation() {
     for args in [vec!["update"], vec!["daemon", "install"]] {
@@ -124,4 +125,27 @@ fn the_experimental_entry_refuses_stable_updates_and_service_installation() {
         assert_eq!(out.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&out.stderr).contains("updated by rebuilding it"), "{out:?}");
     }
+}
+
+#[cfg(all(unix, feature = "beta"))]
+#[test]
+fn packaged_beta_commands_keep_the_installed_profile_and_ignore_preview_overrides() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = scratch("beta-profile");
+    let app = zeron_in(&dir);
+    let helper = dir.join(if cfg!(target_os = "macos") { "Zerun Engine" } else { "zerun-engine" });
+    std::fs::write(&helper, "#!/bin/sh\nprintf '%s\\n' \"$*\" \"$ZERUN_DATA_DIR\" \"$ZERUN_IPC_PORT\"\nexit 7\n").unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let profile = dir.join("installed");
+    let out = Command::new(&app).arg("status")
+        .env("ZERUN_DATA_DIR", &profile)
+        .env("ZERUN_IPC_PORT", "27655")
+        .env("ZERUN_ZGX_ENGINE_BIN", dir.join("wrong-engine"))
+        .env("ZERUN_ZGX_ENGINE_DATA", dir.join("preview"))
+        .env("ZERUN_ZGX_ENGINE_PORT", "27872")
+        .output().unwrap();
+    assert_eq!(out.status.code(), Some(7), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap().lines().collect::<Vec<_>>(),
+        vec!["status", profile.to_str().unwrap(), "27655"]);
+    let _ = std::fs::remove_dir_all(&dir);
 }

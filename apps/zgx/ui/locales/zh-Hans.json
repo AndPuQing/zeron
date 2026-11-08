@@ -1748,8 +1748,9 @@
       "beta": {
         "label": "获取测试版更新",
         "terms": "测试版 抢先 渠道 稳定版 beta stable",
-        "on": "正在获取测试版更新。关闭即可回到稳定版。",
-        "off": "抢先试用下一版 Zerun。需要 macOS {version} 或更高版本。"
+        "on": "正在获取测试版更新。关闭后会在稳定版引擎追上时切回。",
+        "off": "抢先试用下一版 Zerun。需要 macOS {version} 或更高版本。",
+        "off_any": "抢先试用下一版 Zerun。"
       },
       "updates_self_description": "Zerun 会自动更新：新版本在后台下载，重新启动时安装。",
       "version_info": {

@@ -23,6 +23,10 @@
 #ifndef OutputDir
   #define OutputDir "."
 #endif
+; The file version must be numeric; a beta's AppVersion (x.y.z-beta.n) isn't.
+#ifndef FileVersion
+  #define FileVersion AppVersion
+#endif
 
 #if Arch == "aarch64"
   #define ArchAllowed "arm64"
@@ -42,7 +46,7 @@ AppPublisher=Zerun
 AppPublisherURL=https://github.com/AndPuQing/zeron
 AppSupportURL=https://github.com/AndPuQing/zeron/issues
 AppUpdatesURL=https://github.com/AndPuQing/zeron/releases
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#FileVersion}
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\Zerun
 DisableProgramGroupPage=yes
@@ -73,6 +77,11 @@ Source: "{#PackageDir}\zerun-update.json"; DestDir: "{app}"; Flags: ignoreversio
 Source: "{#PackageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+#ifdef Beta
+; The Beta's scripts, plugins and matching engine, by version.
+Source: "{#PackageDir}\zerun-version"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PackageDir}\beta\*"; DestDir: "{app}\beta"; Flags: ignoreversion recursesubdirs createallsubdirs
+#endif
 
 [Icons]
 Name: "{autoprograms}\Zerun"; Filename: "{app}\zerun.exe"
@@ -93,3 +102,6 @@ Filename: "{app}\zerun.exe"; Description: "{cm:LaunchProgram,Zerun}"; Flags: now
 Type: files; Name: "{app}\zerun.exe.old"
 Type: files; Name: "{app}\.zerun-update-incoming.exe"
 Type: filesandordirs; Name: "{app}\.zerun-update-*"
+#ifdef Beta
+Type: filesandordirs; Name: "{app}\beta"
+#endif

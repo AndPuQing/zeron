@@ -1,5 +1,13 @@
-//! Stamp this independently built desktop with the root workspace version.
-//! The internal environment names are also used by template metadata.
+//! Zerun's version, as `ZERON_VERSION`: the root workspace's
+//! (`[workspace.package] version` in ../../Cargo.toml). zgx is a workspace of
+//! its own at 0.0.0, so its crate version says nothing of which Zerun this
+//! is. Templates are stamped with it (src/plugins/live.rs), and one made for
+//! another Zerun reads as out of date.
+//!
+//! And the app's own version, as `ZERON_APP_VERSION`: a beta build's
+//! (`ZERUN_BETA_VERSION=0.3.30-beta.1` at build time, the release
+//! workflow's), else Zerun's. `zerun --version` prints it and the updater
+//! compares releases with it.
 
 fn main() {
     // (Read as it runs, not with `env!`: a target dir shared between
@@ -8,10 +16,30 @@ fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     let manifest = std::path::Path::new(&dir).join("../../Cargo.toml");
     println!("cargo:rerun-if-changed={}", manifest.display());
+    println!("cargo:rerun-if-env-changed=ZERUN_BETA_VERSION");
     let text = std::fs::read_to_string(&manifest).unwrap_or_default();
     let version = workspace_version(&text).unwrap_or_default();
+    let app = std::env::var("ZERUN_BETA_VERSION")
+        .ok().filter(|_| std::env::var_os("CARGO_FEATURE_BETA").is_some())
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| version.clone());
     println!("cargo:rustc-env=ZERON_VERSION={version}");
-    println!("cargo:rustc-env=ZERON_APP_VERSION={version}");
+    println!("cargo:rustc-env=ZERON_APP_VERSION={app}");
+
+    // On Windows, Zerun's icon in the exe: without one the taskbar shows
+    // the system's blank one, and zgx has none to give the window.
+    println!("cargo:rerun-if-changed=../../dist/windows/zeron.rc");
+    println!("cargo:rerun-if-changed=../../dist/windows/zeron.ico");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        embed_resource::compile_for(
+            "../../dist/windows/zeron.rc",
+            &["zerun-experimental"],
+            embed_resource::NONE,
+        )
+        .manifest_required()
+        .expect("Windows app icon resource compilation failed");
+    }
 }
 
 /// `version = "…"` under `[workspace.package]`.

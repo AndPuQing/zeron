@@ -22,7 +22,10 @@ coexist with Zeron: app data lives in `~/.zerun` on macOS/Linux and
 The default local IPC port is 27655 (`ZERUN_IPC_PORT`); the sign-in callback
 port is 27642 (`ZERUN_CALLBACK_PORT`).
 
-An optional [experimental desktop](apps/zgx/README.md) can be built with
+Try the new interface with the optional [desktop Beta](docs/desktop-beta.md),
+which shares your Zerun data and follows a separate Beta update channel.
+
+An isolated [development preview](apps/zgx/README.md) can be built with
 `scripts/experimental-desktop.sh`. It runs in a separate local profile and
 requires its matching engine; stable downloads keep the existing desktop.
 

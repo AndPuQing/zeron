@@ -1,14 +1,15 @@
-//! Release channels: `stable` (everyone) and `beta` (Zeron.app testers).
+//! Release channels: `stable` (everyone) and `beta` (Zerun.app testers).
 //!
-//! The channel a Mac follows is kept in the data dir, `update-channel.json`,
-//! where every updater reads it on each check: the app's own (whichever
-//! interface is installed) and the engine's report. It is a file, not the
-//! environment, so it survives the app replacing itself and an engine never
-//! inherits a channel from whoever started it.
+//! The channel an install follows is kept in the data dir,
+//! `update-channel.json`, where every updater reads it on each check: the
+//! app's own (whichever interface is installed) and the engine's report. It is
+//! a file, not the environment, so it survives the app replacing itself and an
+//! engine never inherits a channel from whoever started it.
 //!
-//! Only macOS app installs follow it. Managed installs (headless daemons, the
-//! Linux desktop), Windows and source builds are always on stable: beta
-//! publishes the macOS app alone.
+//! macOS app installs follow it. On Windows and the Linux desktop only a beta
+//! build does (`InstallKind::follows_channels`), which is how a tester goes
+//! back to Stable. Stable builds there, headless daemons and source builds are
+//! always on stable.
 //!
 //!   stable  `{edge}/releases/manifest.json` (and `latest.txt`), unchanged
 //!   beta    `{edge}/releases/beta/manifest.json`
@@ -66,7 +67,7 @@ impl Channel {
     }
 
     /// The release feed's base for this channel, under `stable` (the edge's
-    /// `/releases` or `ZERON_RELEASES_URL`).
+    /// `/releases` or `ZERUN_RELEASES_URL`).
     pub fn base(self, stable: &str) -> String {
         let stable = stable.trim_end_matches('/');
         match self {
@@ -145,16 +146,18 @@ pub fn data_dir() -> Option<&'static Path> {
     DATA_DIR.get().map(PathBuf::as_path)
 }
 
-/// The channel this process's updater follows: the record's on a macOS app
-/// install, stable everywhere else.
+/// The channel this process's updater follows: the record's on an install
+/// that follows channels, stable everywhere else.
 pub fn selected() -> Channel {
-    let crate::InstallKind::MacApp { bundle } = crate::detect_install() else {
+    let install = crate::detect_install();
+    if !install.follows_channels() {
         return Channel::Stable;
+    }
+    let app_version = match &install {
+        crate::InstallKind::MacApp { bundle } => crate::bundle_app_version(bundle),
+        _ => Some(crate::app_version().to_owned()),
     };
-    choice_for(
-        data_dir().and_then(recorded),
-        crate::bundle_app_version(&bundle).as_deref(),
-    )
+    choice_for(data_dir().and_then(recorded), app_version.as_deref())
 }
 
 /// What's recorded, when there's a record to read.
@@ -207,18 +210,23 @@ pub fn macos_at_least(system: &str, minimum: &str) -> bool {
     }
 }
 
-/// Why this Mac can't take beta updates, in words for the person: not a
-/// macOS app install, or macOS older than [`BETA_MINIMUM_MACOS`].
+/// Why this install can't take beta updates, in words for the person: it
+/// doesn't follow channels, or it's a Mac on macOS older than
+/// [`BETA_MINIMUM_MACOS`] (the floor is macOS's alone).
 pub fn beta_unavailable() -> Option<String> {
-    if !matches!(crate::detect_install(), crate::InstallKind::MacApp { .. }) {
-        return Some("Beta updates are for the Zeron app on a Mac.".into());
+    let install = crate::detect_install();
+    if !install.follows_channels() {
+        return Some("Beta updates need an installed Zerun desktop app.".into());
+    }
+    if !matches!(install, crate::InstallKind::MacApp { .. }) {
+        return None;
     }
     match macos_version() {
         Some(version) if macos_at_least(version, BETA_MINIMUM_MACOS) => None,
         Some(version) => Some(format!(
-            "Zeron beta needs macOS {BETA_MINIMUM_MACOS} or later. This Mac has macOS {version}."
+            "Zerun beta needs macOS {BETA_MINIMUM_MACOS} or later. This Mac has macOS {version}."
         )),
-        None => Some(format!("Zeron beta needs macOS {BETA_MINIMUM_MACOS} or later.")),
+        None => Some(format!("Zerun beta needs macOS {BETA_MINIMUM_MACOS} or later.")),
     }
 }
 

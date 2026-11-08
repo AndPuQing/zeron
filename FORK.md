@@ -47,7 +47,7 @@ conflicts.
 | Endpoints | shared `crates/cli`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |
-| Experimental desktop | Optional `zerun-experimental` entry in `apps/zgx`, independent renderer workspace; fork auth with isolated app state and engine data/IPC, matching checkout engine, no public username/card onboarding or automatic release feed |
+| Experimental desktop | Optional `zerun-experimental` entry in `apps/zgx`, independent renderer workspace; fork auth with isolated app state and engine data/IPC, matching checkout engine, no public username/card onboarding; packaged desktop Betas use the regular Zerun account/data and a separate Beta update feed |
 | Desktop isolation | Unix data `~/.zerun`, Windows data `%LOCALAPPDATA%\Zerun`, Linux service `zerun.service`, Windows installer AppId `94F099C7-A9D5-5A32-B951-50AE16E29A01`, IPC 27655, loopback callback 27642; overrides use `ZERUN_*` |
 | Android | follow upstream navigation, phone/tablet layouts, account/agent login, onboarding, voice and interactive visual implementations; retain canonical/attachment draft storage, session import, side-chat search and explicit side-chat deletion; app ID `work.puqing.zerun.android`, display name `Zerun`, callback `zerun-dev`, workspace version; local China mirrors, official sources in CI; signed APKs join the release/download feed; signed App Bundles are build artifacts, with Play testing uploads available only through an explicit manual dev dispatch |
 | Live Activity | extension bundle `work.puqing.zerun.ios.LiveActivity`; returns to the app via `zerun-dev://voice` |
@@ -56,7 +56,7 @@ conflicts.
 | Agent account usage | No independent provider quota queries, quota resets or background identity lookups; account lists use stored metadata and ignore old probe caches. Preserve explicit sign-in/account switching and usage reported by agent sessions |
 | Mobile side chats | retain empty side chats until explicitly deleted; closing a page or background refresh must not delete a session that may own an unsent draft or attachments |
 | Mobile bindings | regenerate committed UniFFI Swift bindings when forked Rust exports or their documentation change |
-| Update feed | `{edge}/releases` (R2); advisory links point at `github.com/AndPuQing/zeron` |
+| Update feed | `{edge}/releases` for stable and `{edge}/releases/beta` for desktop Betas (R2); stable/headless installs keep their stable default; advisory links point at `github.com/AndPuQing/zeron` |
 | Versioning | the fork releases independently, starting at `v0.3.0`; fork tags are never shared with upstream |
 
 ## Fork configuration (not in git)

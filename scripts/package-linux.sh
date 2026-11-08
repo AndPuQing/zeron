@@ -8,6 +8,12 @@
 #
 # Usage: scripts/package-linux.sh
 # Env:   PROFILE=debug for a fast unoptimized package (CI smoke); default release.
+#
+# The beta (.github/workflows/zgx-beta.yml), with both of these set: the zgx
+# interface (apps/zgx, its `beta` feature) as `zerun`, its scripts beside it,
+# and the `zerun-engine` it's given, built from the same commit:
+#   BETA_VERSION=<workspace version>-beta.<n>
+#   ZGX_BETA_ENGINE=<a zerun-engine binary, or a release's linux tarball>
 
 set -euo pipefail
 
@@ -16,12 +22,43 @@ command -v cargo >/dev/null 2>&1 || PATH="$HOME/.cargo/bin:$PATH"
 PROFILE="${PROFILE:-release}"
 ARCH="$(uname -m)"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
+BETA_VERSION="${BETA_VERSION:-}"
+if [[ -n "$BETA_VERSION" ]]; then
+  [[ "$BETA_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ && "$BETA_VERSION" == "$VERSION"-beta.* ]] || { echo "BETA_VERSION $BETA_VERSION isn't a beta of the workspace's $VERSION" >&2; exit 1; }
+  [[ -f "${ZGX_BETA_ENGINE:-}" ]] || { echo "ZGX_BETA_ENGINE: a zerun-engine binary, or a release's linux tarball" >&2; exit 1; }
+  VERSION="$BETA_VERSION"
+fi
 OUT_DIR="$ROOT/target/package"
 STAGE="$OUT_DIR/zerun-$VERSION-linux-$ARCH"
 TARBALL="$STAGE.tar.gz"
 
 cd "$ROOT"
-if [[ "$PROFILE" == "release" ]]; then
+if [[ -n "$BETA_VERSION" ]]; then
+  # The engine: the binary given, or the one in a release's tarball.
+  if [[ "$ZGX_BETA_ENGINE" == *.tar.gz ]]; then
+    UNPACK="$OUT_DIR/.stable"
+    rm -rf "$UNPACK" && mkdir -p "$UNPACK"
+    tar -xzf "$ZGX_BETA_ENGINE" -C "$UNPACK" --strip-components=1
+    ENGINE_BIN="$UNPACK/zerun-engine"
+  else
+    ENGINE_BIN="$ZGX_BETA_ENGINE"
+  fi
+  [[ -x "$ENGINE_BIN" ]] || { echo "no zerun-engine in $ZGX_BETA_ENGINE" >&2; exit 1; }
+  # The interface hands `zerun headless` and the engine's other subcommands to
+  # this engine, as scripts/package-zgx-beta.sh requires of macOS's. (Read,
+  # not run: an engine from before the shared command line starts on any
+  # argument.)
+  LC_ALL=C grep -aq "Multi-device controller for coding agents" "$ENGINE_BIN" ||
+    { echo "the stable engine predates the shared command line" >&2; exit 1; }
+  [[ "$("$ENGINE_BIN" --version)" == "zerun-engine $BETA_VERSION" ]] ||
+    { echo "The Beta requires a matching $BETA_VERSION engine" >&2; exit 1; }
+  # A workspace of its own (its own lock, patches).
+  (cd "$ROOT/apps/zgx" && ZERUN_BETA_VERSION="$BETA_VERSION" ZERUN_ENGINE_VERSION="$BETA_VERSION" \
+    cargo build --release --locked --features beta --target-dir "$ROOT/apps/zgx/target")
+  BIN="$ROOT/apps/zgx/target/release/zerun-experimental"
+  [[ "$("$BIN" --version)" == "zerun $BETA_VERSION" ]] ||
+    { echo "$BIN isn't the $BETA_VERSION beta (it says '$("$BIN" --version)')" >&2; exit 1; }
+elif [[ "$PROFILE" == "release" ]]; then
   cargo build --release --locked -p zeron
   BIN="$ROOT/target/release/zerun"
 else
@@ -30,7 +67,7 @@ else
 fi
 # The background engine the app starts: sessions keep running with the app
 # closed, in a process of its own.
-ENGINE_BIN="$(dirname "$BIN")/zerun-engine"
+ENGINE_BIN="${ENGINE_BIN:-$(dirname "$BIN")/zerun-engine}"
 
 rm -rf "$STAGE" "$TARBALL"
 mkdir -p "$STAGE"
@@ -42,6 +79,16 @@ install -m 644 "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"
 mkdir -p "$STAGE/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$STAGE/licenses/fonts/"
 cp "$ROOT/crates/voice/NOTICE.md" "$STAGE/licenses/parakeet-v3.txt"
+if [[ -n "$BETA_VERSION" ]]; then
+  # The scripts and Zerun's own plugins, as scripts/package-zgx-beta.sh: read
+  # beside the binary. Not zgx's generated types or the tests.
+  rsync -a --exclude '.zgx/' --exclude '/tests/' --exclude '.lock' --exclude '.DS_Store' \
+    "$ROOT/apps/zgx/ui/" "$STAGE/ui/"
+  rsync -a --exclude '.zgx/' --exclude '.DS_Store' \
+    "$ROOT/apps/zgx/plugins-builtin/" "$STAGE/plugins-builtin/"
+  cp "$ROOT/apps/zgx/fonts/"*-OFL.txt "$STAGE/licenses/fonts/"
+  rm -rf "$OUT_DIR/.stable"
+fi
 
 cat >"$STAGE/install.sh" <<'INSTALL'
 #!/usr/bin/env bash

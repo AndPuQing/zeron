@@ -25,6 +25,8 @@
 //! `ZERUN_ZGX_REPLAY=1` shows every page, as if none were finished.
 //! `--inspect` (or `ZGX_INSPECT_SOCKET=1`) serves devtools to `zgx inspect`.
 
+#![cfg_attr(all(windows, feature = "beta"), windows_subsystem = "windows")]
+
 mod about;
 mod acp_registry;
 mod agents;
@@ -110,8 +112,8 @@ use zgx_desktop::{
 };
 use zgx_script::{ScriptHost, Shared, Value};
 
-/// Isolated local UI preferences, shared by all builds of this preview.
-const APP_ID: &str = "zerun-experimental";
+/// Packaged Betas share Zerun's preferences; source previews stay isolated.
+const APP_ID: &str = if cfg!(feature = "beta") { "zerun" } else { "zerun-experimental" };
 
 /// Setup's window, in points: room for a step and its footer, no more.
 const ONBOARDING_SIZE: (f64, f64) = (680., 500.);
@@ -162,13 +164,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Intro, gallery, fixtures and --inspect remain local UI entry points.
     // This separate preview has no release feed or service installation.
     // Keep shared CLI engine commands scoped to its own profile as well.
-    if matches!(argv.get(1).map(String::as_str), Some("update" | "daemon"))
+    if !cfg!(feature = "beta") && matches!(argv.get(1).map(String::as_str), Some("update" | "daemon"))
         && !argv.iter().any(|arg| matches!(arg.as_str(),"--help" | "-h")) {
         eprintln!("zerun-experimental: this experimental desktop is updated by rebuilding it; use the stable app for service installation.");
         std::process::exit(1);
     }
     let mut engine_helper = None;
-    if argv.get(1).is_some_and(|arg| matches!(arg.as_str(),
+    if !cfg!(feature = "beta") && argv.get(1).is_some_and(|arg| matches!(arg.as_str(),
         "headless" | "engine" | "login" | "logout" | "status" | "sync" | "quiesce" | "mcp" | "plugin" | "template")) {
         let endpoint = auth::endpoint();
         let config = engine::manager::Config::from_env(&endpoint.edge,&endpoint.client,endpoint.port)?;
@@ -190,6 +192,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .then(|| argv[1].clone());
     // Report the workspace version through the shared CLI.
     zeron_update::set_app_version(about::APP_VERSION);
+    // The Windows package carries its matching engine in a versioned folder.
+    #[cfg(all(windows, feature = "beta"))]
+    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
+        zeron_launch::set_full_app_engine(dir.join("beta").join(about::APP_VERSION).join("engine").join("zerun.exe"));
+    }
     if open_url.is_none() && !dev_launch(&argv[1..]) {
         let engines = engine_helper.as_deref().map_or(zeron_cli::Engines::Helper, zeron_cli::Engines::HelperAt);
         match zeron_cli::run(about::APP_VERSION, engines) {
@@ -275,7 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // delivered to the app as Zerun.app's are (src/links.rs).
     {
         application = application
-            .application_id("work.puqing.zerun.experimental")?
+            .application_id(if cfg!(feature = "beta") { "work.puqing.zerun" } else { "work.puqing.zerun.experimental" })?
             .on_application_event(|event, _| {
                 if let zgx_desktop::ApplicationEvent::OpenUrls(urls) = event {
                     for url in urls {
@@ -982,13 +989,20 @@ fn ui_dir() -> PathBuf {
     }
 }
 
-/// `Contents/Resources/ui` of the bundle this executable runs from, if any.
+/// Packaged scripts: macOS resources, Linux beside the app, Windows by version.
 fn bundled_ui() -> Option<PathBuf> {
     static BUNDLED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     BUNDLED
         .get_or_init(|| {
             let exe = std::env::current_exe().ok()?;
-            let ui = exe.parent()?.parent()?.join("Resources").join("ui");
+            let dir = exe.parent()?;
+            let ui = if cfg!(target_os = "macos") {
+                dir.parent()?.join("Resources").join("ui")
+            } else if cfg!(windows) {
+                dir.join("beta").join(about::APP_VERSION).join("ui")
+            } else {
+                dir.join("ui")
+            };
             ui.join("app.luau").is_file().then_some(ui)
         })
         .clone()

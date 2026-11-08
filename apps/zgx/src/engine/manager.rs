@@ -1,6 +1,7 @@
-//! Start the matching fork engine on an isolated experimental profile.
-//! `ZERUN_ZGX_ENGINE_*` overrides apply only to this entry point. Stable
-//! desktop ports and default profile directories are never adopted.
+//! Start the matching fork engine. Packaged Betas share the installed profile;
+//! source previews use an isolated experimental profile.
+//! `ZERUN_ZGX_ENGINE_*` overrides apply only to source previews, which never
+//! adopt the installed desktop's ports or default profile directories.
 //! The engine survives closing the window and owns session/auth persistence.
 
 use std::path::{Path, PathBuf};
@@ -80,13 +81,41 @@ pub fn started_build(config: &Config) -> Option<String> {
 }
 
 impl Config {
-    /// This client always uses an isolated profile, including packaged builds.
+    /// Packaged Betas use the installed profile; development previews stay isolated.
     pub fn from_env(edge: &str, client: &str, callback_port: u16) -> Result<Self, Refusal> {
         let var = |key: &str| std::env::var(key).ok().filter(|v: &String| !v.trim().is_empty());
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from).ok_or_else(|| "A user home directory is required for the experimental profile".to_string())?;
         let exe = std::env::current_exe().ok();
-        Self::from_vars(var, &home, exe.as_deref(), edge, client, callback_port)
+        if cfg!(feature = "beta") {
+            Self::installed(var, &home, exe.as_deref(), edge, client, callback_port)
+        } else {
+            Self::from_vars(var, &home, exe.as_deref(), edge, client, callback_port)
+        }
+    }
+
+    fn installed(
+        var: impl Fn(&str) -> Option<String>, home: &Path, exe: Option<&Path>,
+        edge: &str, client: &str, callback_port: u16,
+    ) -> Result<Self, Refusal> {
+        let production = crate::auth::production();
+        if (edge, client, callback_port) != (production.edge.as_str(), production.client.as_str(), production.port) {
+            return Err("The packaged Beta needs the Zerun account service".into());
+        }
+        let port = zeron_cli::ipc_port_from(var("ZERUN_IPC_PORT").as_deref());
+        let data_dir = zeron_cli::paths::resolve_data_dir(|key| match key {
+            "HOME" => Some(home.as_os_str().to_owned()),
+            key => var(key).map(Into::into),
+        });
+        if port == STAGING_PORT || same_dir(&data_dir, &home.join(STAGING_DATA)) {
+            return Err("The packaged Beta cannot use the development preview's profile".into());
+        }
+        Ok(Self {
+            port, data_dir,
+            bin: exe.and_then(zeron_launch::engine_executable),
+            home: None, spawn: true,
+            edge: edge.into(), client: client.into(), callback_port, managed: true,
+        })
     }
 
     fn from_vars(
@@ -310,6 +339,27 @@ mod tests {
             &prod.client,
             prod.port,
         )
+    }
+
+    #[test]
+    fn packaged_beta_keeps_the_installed_data_and_engine_identity() {
+        let home = Path::new("/example/home");
+        let prod = crate::auth::production();
+        let build = |vars: &[(&str, &str)]| Config::installed(
+            |key| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()),
+            home, None, &prod.edge, &prod.client, prod.port,
+        ).unwrap();
+        let config = build(&[("ZERUN_DATA_DIR", "/example/saved-data"), ("ZERUN_IPC_PORT", "28555"),
+            ("ZERUN_ZGX_ENGINE_DATA", "/example/preview"), ("ZERUN_ZGX_ENGINE_PORT", "27872")]);
+        assert_eq!(config.data_dir, Path::new("/example/saved-data"));
+        assert_eq!(config.port, 28555);
+        assert!(config.follows_bundle());
+        let default = build(&[]);
+        assert_eq!(default.port, zeron_cli::DEFAULT_IPC_PORT);
+        assert_eq!(default.data_dir, zeron_cli::paths::resolve_data_dir(|key| {
+            (key == "HOME").then(|| home.as_os_str().to_owned())
+        }));
+        assert!(Config::installed(|_| None, home, None, "https://example.test", &prod.client, prod.port).is_err());
     }
 
     #[test]

@@ -28,7 +28,7 @@
 # of kept ones, as uploaded before the bucket was capped.
 #
 # Asset names come from the GitHub Releases API, so this also covers the legacy
-# `zeron-*` spelling of early releases. Drafts never reach R2 and hold no place
+# `zeron-*` spelling of early releases. Drafts and prereleases hold no place
 # in the window. Dry-run by default; `--apply` deletes.
 #
 # Usage: scripts/prune-r2-releases.sh [--keep N] [--lookback N] [--full]
@@ -88,7 +88,7 @@ if [[ -z "$repo" ]]; then
 fi
 releases="$(
   gh api --paginate "repos/$repo/releases?per_page=100" \
-    --jq '.[] | select(.draft | not) | {tag: .tag_name, at: .created_at, assets: [.assets[].name]}' \
+    --jq '.[] | select((.draft | not) and (.prerelease | not)) | {tag: .tag_name, at: .created_at, assets: [.assets[].name]}' \
     | jq -s 'sort_by(.at) | reverse'
 )" || { echo "prune-r2-releases: cannot list releases of $repo (set GH_TOKEN)" >&2; exit 1; }
 

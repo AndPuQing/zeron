@@ -21,6 +21,9 @@ macOS/Linux 数据放在 `~/.zerun`，Windows 放在 `%LOCALAPPDATA%\Zerun`；
 可用 `ZERUN_DATA_DIR` 自定义。默认本机通信端口为 27655（`ZERUN_IPC_PORT`），
 登录回调端口为 27642（`ZERUN_CALLBACK_PORT`）。
 
+可选的[桌面 Beta](docs/desktop-beta.md)提供新界面，沿用现有 Zerun 账号与聊天数据，
+使用独立的 Beta 更新渠道。稳定版仍可正常下载和更新。
+
 ## Android
 
 从 [GitHub Releases](https://github.com/AndPuQing/zeron/releases/latest) 下载

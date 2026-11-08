@@ -1748,8 +1748,9 @@
       "beta": {
         "label": "Get beta updates",
         "terms": "beta early test channel stable preview next",
-        "on": "You're getting beta updates. Turn this off to go back to Stable.",
-        "off": "Try the next Zerun early. Needs macOS {version} or later."
+        "on": "You're getting beta updates. Turn this off to return to Stable once its engine catches up.",
+        "off": "Try the next Zerun early. Needs macOS {version} or later.",
+        "off_any": "Try the next Zerun early."
       },
       "updates_self_description": "Zerun updates itself: a new version downloads in the background and installs when you restart.",
       "version_info": {

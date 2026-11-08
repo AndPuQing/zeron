@@ -2,8 +2,11 @@
 -- shipping app has them (its About panel and "Check for Updates…", crates/ui
 -- app_menus.rs, app_update.rs; the engine's updater, crates/update).
 --
--- This experimental desktop is rebuilt from source. No desktop update
--- channel is configured; the engine reports its installed version.
+-- As the Zerun app (the beta: `self_updating`), it updates itself as
+-- Zerun.app does (src/about.rs): a new version downloads in the background,
+-- "Restart to update" installs it, and one nobody restarted for installs on
+-- quit. "Get beta updates" chooses the release channel; leaving beta goes
+-- back to Stable once its engine catches up.
 --
 -- A development build isn't packaged: what updates is the engine's updater,
 -- the engine on this Mac, which knows its version and the newest release
@@ -324,55 +327,67 @@ function M.view(): Node
 				then ui.t("settings.about.updates_self_description")
 				else ui.t("settings.about.updates_description"),
 			ds.Settings.Group {
-				row("updates", {
-					label = function(): string
-						return now_update().title
-					end,
-					description = function(): string
-						return now_update().line
-					end,
-					-- (Updating is the one accented action; the rest ask again.)
-					control = ui.row {
-						items = "center",
-						ui.show(function(): boolean
-							return now_update().accent == true
-						end, ds.Button {
-							function(): string
-								return now_update().action or ""
-							end,
-							tone = "accent",
-							size = "sm",
-							on_click = M.update,
+				ui.column {
+					w_full = true,
+					row("updates", {
+						label = function(): string
+							return now_update().title
+						end,
+						description = function(): string
+							return now_update().line
+						end,
+						-- (Updating is the one accented action; the rest ask again.)
+						control = ui.row {
+							items = "center",
+							ui.show(function(): boolean
+								return now_update().accent == true
+							end, ds.Button {
+								function(): string
+									return now_update().action or ""
+								end,
+								tone = "accent",
+								size = "sm",
+								on_click = M.update,
+							}),
+							ui.show(function(): boolean
+								local u = now_update()
+								return u.action ~= nil and not u.accent
+							end, ds.Button {
+								function(): string
+									return now_update().action or ""
+								end,
+								tone = "secondary",
+								size = "sm",
+								on_click = M.check,
+							}),
+						},
+					}),
+					-- The release channel (an install that follows channels).
+					-- (A row that comes and goes brings its own hairline: none under the
+					-- one above while it's away.)
+					ui.show(function(): boolean
+						return M.now:get().channels == true
+					end, ui.column {
+						w_full = true,
+						ds.Settings.Rule(),
+						row("beta", {
+						label = ui.t("settings.about.beta.label"),
+						description = function(): string
+							local a = M.now:get()
+							if a.channel_note then
+								return a.channel_note
+							end
+							if a.channel == "beta" then
+								return ui.t("settings.about.beta.on"):get()
+							end
+							return if a.beta_minimum
+								then ui.t("settings.about.beta.off", { version = a.beta_minimum }):get()
+								else ui.t("settings.about.beta.off_any"):get()
+						end,
+						control = ds.Switch { value = beta, label = ui.t("settings.about.beta.label"), on_change = M.set_beta },
 						}),
-						ui.show(function(): boolean
-							local u = now_update()
-							return u.action ~= nil and not u.accent
-						end, ds.Button {
-							function(): string
-								return now_update().action or ""
-							end,
-							tone = "secondary",
-							size = "sm",
-							on_click = M.check,
-						}),
-					},
-				}),
-				-- The release channel (a macOS app install).
-				ui.show(function(): boolean
-					return M.now:get().channels == true
-				end, row("beta", {
-					label = ui.t("settings.about.beta.label"),
-					description = function(): string
-						local a = M.now:get()
-						if a.channel_note then
-							return a.channel_note
-						end
-						return if a.channel == "beta"
-							then ui.t("settings.about.beta.on"):get()
-							else ui.t("settings.about.beta.off", { version = a.beta_minimum or "13.0" }):get()
-					end,
-					control = ds.Switch { value = beta, label = ui.t("settings.about.beta.label"), on_change = M.set_beta },
-				})),
+					}),
+				},
 			},
 		},
 		ds.Settings.Section {

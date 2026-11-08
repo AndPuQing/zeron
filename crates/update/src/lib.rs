@@ -315,7 +315,7 @@ pub fn offer(
         && !channel::macos_at_least(system, minimum)
     {
         return Offer::Held(format!(
-            "Zeron {latest} needs macOS {minimum} or later. This Mac has macOS {system}."
+            "Zerun {latest} needs macOS {minimum} or later. This Mac has macOS {system}."
         ));
     }
     if !leaving_beta {
@@ -326,7 +326,7 @@ pub fn offer(
         && version_newer(engine, target_engine)
     {
         return Offer::Held(format!(
-            "This beta's engine ({engine}) is newer than Zeron {latest}'s. You'll move to Stable once it catches up."
+            "This beta's engine ({engine}) is newer than Zerun {latest}'s. You'll move to Stable once it catches up."
         ));
     }
     if version_newer(latest, running) {
@@ -587,6 +587,17 @@ impl InstallKind {
             #[cfg(windows)]
             Self::WindowsPortable { .. } => true,
             Self::Unmanaged => false,
+        }
+    }
+
+    /// Whether this install's updater follows `update-channel.json`: a macOS
+    /// app always; on Windows and the Linux desktop a beta build alone, so
+    /// stable builds and headless services keep following stable.
+    pub fn follows_channels(&self) -> bool {
+        match self {
+            Self::MacApp { .. } => true,
+            Self::Unmanaged => false,
+            _ => self.supports_desktop_update() && Channel::of_version(app_version()) == Channel::Beta,
         }
     }
 
@@ -863,6 +874,16 @@ impl UpdateAbility {
     /// This process's: how it's installed, and whether it can update from afar.
     pub fn current() -> Self {
         let kind = detect_install();
+        #[cfg(windows)]
+        if matches!(kind, InstallKind::WindowsPortable { .. })
+            && Channel::of_version(current_version()) == Channel::Beta
+        {
+            return Self::refused(
+                InstallMethod::WindowsApp,
+                "Update this Beta from About & updates in the Zerun desktop app.",
+                None,
+            );
+        }
         Self::decide(
             &kind,
             std::env::consts::OS,
@@ -982,7 +1003,8 @@ pub fn bundle_engine_version(bundle: &Path) -> Option<String> {
 /// The app's own version in a macOS bundle (a beta's isn't its engine's).
 pub fn bundle_app_version(bundle: &Path) -> Option<String> {
     let plist = std::fs::read_to_string(bundle.join("Contents/Info.plist")).ok()?;
-    plist_string(&plist, "CFBundleShortVersionString")
+    plist_string(&plist, "ZeronVersion")
+        .or_else(|| plist_string(&plist, "CFBundleShortVersionString"))
 }
 
 /// A string value from an XML property list (the packaging template;
@@ -1246,7 +1268,7 @@ async fn stage_headless_with_progress(
     result
 }
 
-/// Atomically repoint `app_root/current` at `app_root/<ver>` (symlink to a temp
+/// Atomically repoint `app_root/current` at `version`'s directory (symlink to a temp
 /// name, then rename over — never a window with no `current`).
 pub fn apply_headless(app_root: &Path, version: &str) -> anyhow::Result<()> {
     #[cfg(unix)]
@@ -2017,7 +2039,7 @@ impl Updater {
             InstallKind::MacApp { bundle } => Some(bundle),
             _ => None,
         };
-        let running_engine = bundle.as_deref().and_then(bundle_engine_version);
+        let running_engine = desktop::engine_version(&detect_install());
         let app_version = bundle.as_deref().and_then(bundle_app_version);
         let running = match &*self.role {
             Role::Engine { .. } => app_version.as_deref().unwrap_or(&self.version),
@@ -2324,7 +2346,7 @@ pub async fn prepare_install(
 async fn artifact_size(edge_url: &str, manifest: &Manifest, file: &str) -> Option<u64> {
     let base = manifest.channel.base(&release_base(edge_url).ok()?);
     let url = format!("{base}/{file}");
-    let response = http_client().ok()?.head(&url).send().await.ok()?;
+    let response = http_client().ok()?.head(&url).send_routed().await.ok()?;
     response.status().is_success().then(|| response.content_length())?
 }
 
@@ -3221,6 +3243,21 @@ mod tests {
         // A bundle from before the key.
         write("<plist><dict><key>CFBundleShortVersionString</key><string>0.2.134</string></dict></plist>");
         assert_eq!(bundle_engine_version(&bundle).as_deref(), Some("0.2.134"));
+    }
+
+    #[test]
+    fn beta_bundle_keeps_its_full_version_for_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("Zerun.app");
+        std::fs::create_dir_all(bundle.join("Contents")).unwrap();
+        std::fs::write(bundle.join("Contents/Info.plist"),
+            "<plist><dict><key>CFBundleShortVersionString</key><string>0.3.30</string>\
+             <key>ZeronVersion</key><string>0.3.30-beta.1</string>\
+             <key>ZeronEngineVersion</key><string>0.3.30-beta.1</string></dict></plist>"
+        ).unwrap();
+        assert_eq!(bundle_app_version(&bundle).as_deref(), Some("0.3.30-beta.1"));
+        assert_eq!(bundle_engine_version(&bundle).as_deref(), Some("0.3.30-beta.1"));
+        assert_eq!(desktop::engine_version(&InstallKind::MacApp { bundle }).as_deref(), Some("0.3.30-beta.1"));
     }
 
     #[test]

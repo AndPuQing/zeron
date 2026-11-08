@@ -9,17 +9,23 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{Channel, InstallKind, Offer, app_version, bundle_engine_version, channel, fetch_latest, offer};
+use crate::{Channel, InstallKind, Offer, app_version, bundle_engine_version, current_version, channel, fetch_latest, offer};
+
+/// The packaged engine's version: Beta packages carry the matching build on
+/// every platform. A macOS bundle also records it for older app packages.
+pub fn engine_version(install: &InstallKind) -> Option<String> {
+    match install {
+        InstallKind::MacApp { bundle } => bundle_engine_version(bundle),
+        _ => Some(current_version().to_owned()),
+    }
+}
 
 /// What the selected channel offers this app now, with the release itself:
 /// the feed asked again, so a long-lived status still lands on the newest
 /// release (and that release's checksums).
 pub async fn current_offer(edge_url: &str, install: &InstallKind) -> anyhow::Result<(Offer, crate::Manifest)> {
     let manifest = fetch_latest(edge_url).await?;
-    let running_engine = match install {
-        InstallKind::MacApp { bundle } => bundle_engine_version(bundle),
-        _ => None,
-    };
+    let running_engine = engine_version(install);
     let offer = offer(
         &manifest,
         app_version(),
@@ -59,9 +65,8 @@ pub async fn stage_offer_with_progress(
     Ok((manifest.version, staged))
 }
 
-/// "Get beta updates" on or off: the beta channel needs a macOS app install
-/// on [`channel::BETA_MINIMUM_MACOS`] or later (the refusal says why, for the
-/// person); leaving it is always allowed. The channel chosen.
+/// Choose the installed app's channel. macOS also enforces its Beta system
+/// requirement. Leaving Beta is always allowed.
 pub fn choose_channel(data_dir: &Path, beta: bool) -> Result<Channel, String> {
     if beta && let Some(why) = channel::beta_unavailable() {
         return Err(why);
@@ -77,18 +82,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn non_mac_beta_updates_also_wait_for_the_stable_engine_to_catch_up() {
+        let running = engine_version(&InstallKind::Managed { app_root: "/example/app".into() }).unwrap();
+        let stable = crate::Manifest { version: "0.1.0".into(), ..Default::default() };
+        assert!(matches!(offer(&stable, "99.0.0-beta.1", Channel::Stable, Some(&running), None), Offer::Held(_)));
+        let caught_up = crate::Manifest { version: "99.0.0".into(), ..Default::default() };
+        assert_eq!(offer(&caught_up, "99.0.0-beta.1", Channel::Stable, Some(&running), None), Offer::Newer);
+    }
+
+    #[test]
     fn leaving_beta_is_always_allowed() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(choose_channel(dir.path(), false), Ok(Channel::Stable));
         assert_eq!(channel::read(dir.path()).channel, Channel::Stable);
     }
 
-    /// A test binary isn't a macOS app install: beta is refused, in words.
+    /// A test binary isn't an installed desktop app: beta is refused, in words.
     #[test]
     fn beta_needs_an_app_install() {
         let dir = tempfile::tempdir().unwrap();
         let refused = choose_channel(dir.path(), true).unwrap_err();
-        assert!(refused.contains("Zeron app"), "{refused}");
+        assert!(refused.contains("installed Zerun desktop app"), "{refused}");
         assert_eq!(channel::read(dir.path()).channel, Channel::Stable);
     }
 }
