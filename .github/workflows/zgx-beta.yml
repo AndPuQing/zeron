@@ -120,6 +120,7 @@ jobs:
         with:
           key: zgx-beta
           save-if: ${{ github.ref == 'refs/heads/dev' }}
+          cache-on-failure: true
           workspaces: |
             . -> target
             apps/zgx -> target
@@ -181,7 +182,12 @@ jobs:
           codesign -d --entitlements - "$app"
           if [ -n "${NOTARY_KEY_PATH:-}" ]; then
             spctl --assess --type execute --verbose=2 "$app"
-            xcrun stapler validate "$app"
+            # Ticket validation also contacts Apple's CloudKit service.
+            for attempt in 1 2 3; do
+              xcrun stapler validate "$app" && break
+              [ "$attempt" -lt 3 ] || exit 1
+              sleep 10
+            done
           fi
           test "$(plutil -extract ZeronEngineVersion raw "$plist")" = "$ENGINE"
           du -sh "$app"
