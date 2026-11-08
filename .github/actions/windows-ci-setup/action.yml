@@ -60,10 +60,24 @@ runs:
         $version = '0.9.146'
         $sha256 = '0fa689815c8157e4633225b6b173184b3d546eb6ffb754c3d0e6ea5973284a20'
         $zip = Join-Path $env:RUNNER_TEMP 'nextest.zip'
-        Invoke-WebRequest -Uri "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-x86_64-pc-windows-msvc.zip" -OutFile $zip -MaximumRetryCount 5 -RetryIntervalSec 5
-        if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne $sha256) { throw 'cargo-nextest checksum mismatch' }
+        $downloaded = $false
+        try {
+          Invoke-WebRequest -Uri "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-x86_64-pc-windows-msvc.zip" -OutFile $zip -MaximumRetryCount 5 -RetryIntervalSec 5
+          $downloaded = $true
+        } catch {
+          Write-Warning 'nextest download failed; building the pinned release from its locked registry sources'
+        }
         $bin = Join-Path $env:RUNNER_TEMP 'nextest-bin'
-        Expand-Archive -LiteralPath $zip -DestinationPath $bin -Force
+        if ($downloaded) {
+          if ((Get-FileHash -Algorithm SHA256 $zip).Hash -ne $sha256) { throw 'cargo-nextest checksum mismatch' }
+          Expand-Archive -LiteralPath $zip -DestinationPath $bin -Force
+        } else {
+          $source = Join-Path $env:RUNNER_TEMP 'nextest-source'
+          cargo install cargo-nextest --version "=$version" --locked --root $source
+          if ($LASTEXITCODE -ne 0) { throw 'Building the pinned cargo-nextest release failed' }
+          New-Item -ItemType Directory -Force -Path $bin | Out-Null
+          Copy-Item -LiteralPath (Join-Path $source 'bin/cargo-nextest.exe') -Destination $bin
+        }
         $bin >> $env:GITHUB_PATH
     # One cache for every Windows job (they build the same dependency graph with
     # the same profile); the job given save-rust-cache writes it, on the default branch only.

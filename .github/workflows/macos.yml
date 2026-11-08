@@ -90,15 +90,20 @@ jobs:
           # Pinned release, verified against a checksum.
           version=0.9.146
           sha256=39785160b3c2f6ed9a765049cf4fa79f3b39aa02eb7598a5a0e2a1a0b9ffb9a8
-          curl --proto '=https' --tlsv1.2 -fsSL --retry 5 -o "$RUNNER_TEMP/nextest.tar.gz" \
-            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-universal-apple-darwin.tar.gz?download=1"
-          echo "$sha256  $RUNNER_TEMP/nextest.tar.gz" | shasum -a 256 -c -
           # macOS 26 runners ship rustup from the system package manager, so
           # ~/.cargo/bin no longer exists. A run-scoped bin dir on PATH also
           # keeps the verified binary out of the rust-cache'd ~/.cargo.
           bin="$RUNNER_TEMP/nextest-bin"
           mkdir -p "$bin"
-          tar -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$bin" cargo-nextest
+          if curl --proto '=https' --tlsv1.2 -fsSL --retry 5 -o "$RUNNER_TEMP/nextest.tar.gz" \
+            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-$version/cargo-nextest-$version-universal-apple-darwin.tar.gz"; then
+            echo "$sha256  $RUNNER_TEMP/nextest.tar.gz" | shasum -a 256 -c -
+            tar -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$bin" cargo-nextest
+          else
+            echo 'nextest download failed; building the pinned release from its locked registry sources' >&2
+            cargo install cargo-nextest --version "=$version" --locked --root "$RUNNER_TEMP/nextest-source"
+            cp "$RUNNER_TEMP/nextest-source/bin/cargo-nextest" "$bin/"
+          fi
           echo "$bin" >> "$GITHUB_PATH"
       # The app (`-p zeron --bins`) is compiled with the tests, sharing their zeron-ui
       # build: a separate `cargo build -p zeron` rebuilt zeron-ui without the fixture
