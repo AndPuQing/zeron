@@ -138,6 +138,19 @@ async fn connect_routed(
     unreachable!("bounded dial attempts")
 }
 
+/// tungstenite's default refuses any frame over 16 MiB, and a Durable Object
+/// sends each message as one frame however the sender fragmented it: a host's
+/// large reply then ended the whole link in the reader. The cap only stops
+/// runaways, like the local socket's (`zeron_rpc`'s `ws::config`).
+fn ws_config() -> tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+    const MAX_MESSAGE_BYTES: usize = 512 << 20;
+    tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
+        max_message_size: Some(MAX_MESSAGE_BYTES),
+        max_frame_size: Some(MAX_MESSAGE_BYTES),
+        ..Default::default()
+    }
+}
+
 async fn connect_ws_inner(
     request: Request,
     config: Option<WebSocketConfig>,
@@ -162,8 +175,13 @@ async fn connect_ws_inner(
     // Best-effort: a socket that works without NODELAY beats no socket.
     let _ = stream.set_nodelay(true);
     let (stream, progress) = crate::socket::ProgressIo::new(stream);
-    let (ws, response) =
-        tokio_tungstenite::client_async_tls_with_config(request, stream, config, None).await?;
+    let (ws, response) = tokio_tungstenite::client_async_tls_with_config(
+        request,
+        stream,
+        Some(config.unwrap_or_else(ws_config)),
+        None,
+    )
+    .await?;
     crate::wake::notify_online();
     Ok((
         crate::socket::Connection {
