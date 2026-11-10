@@ -169,6 +169,36 @@ A plugin can offer a new chat's wallpaper. Replace `#new-chat-background` (list 
 
 Zerun draws that row on your settings page: "Use as wallpaper", and while it's on, Zerun's effect (dither, ASCII, halftone, scanlines) to draw over your wallpaper. Only the person turns it on, there. While it's on, a new chat opens on what you build at `#new-chat-background` and Settings → Appearance says the wallpaper is from your plugin, with a way to your page; choosing None or Image there takes it back. One plugin's wallpaper at a time: turning yours on replaces another's. Turned off or removed, Zerun goes back to Appearance's choice. Zerun fades what you draw from the top and lays the effect over it, so draw it plain: fill the box (`absolute`, every edge 0) and keep your pictures in your plugin's folder. The row has no value of yours. Zerun's own Parallax scenes plugin (`plugins-builtin/parallax-scenes`) is this whole.
 
+## 3D scenes
+
+Plugin pages and placed views can return `ui.scene3d` with meshes, lights and
+groups. Drawing a scene needs no extra permission; placing it in the app still
+requires the usual UI permission. A scene redraws when its inputs change.
+
+`ui.mesh` accepts built-in shapes or your own triangle geometry. Positions are
+flat x/y/z coordinates, and indices are **1-based**, three per triangle:
+
+```lua
+ui.scene3d {
+	w = 320,
+	h = 240,
+	orbit = true,
+	camera = { position = { 0, 0, 4 }, fov = 40 },
+	ui.light { kind = "hemisphere", intensity = 1 },
+	ui.mesh {
+		geometry = {
+			positions = { -0.5, -0.5, 0,  0.5, -0.5, 0,  0, 0.5, 0 },
+			indices = { 1, 2, 3 },
+		},
+		material = { color = "#6699ff", double_sided = true },
+	},
+}
+```
+
+Geometry may also include normals and vertex or face colors. Mesh data counts
+against the plugin's memory limit. Use a mesh's `on_click` callback to receive
+the point picked on it.
+
 ## Doing things
 
 | call | what | needs |
