@@ -52,20 +52,20 @@ jobs:
           save-rust-cache: 'true'
       - name: Build tests
         run: >-
-          cargo nextest run --config-file scripts/ci/nextest.toml --no-run --release --locked -p zeron-ui -p zeron-harness -p gpui_windows -p zeron -p zeron-update -p zeron-proto -p zeron-engine -p zeron-voice-media --features zeron-harness/native-fixture --lib --bins --test agent_environment --test codex_availability --test windows_native --test opencode --test cursor_shim --test pi_rpc --test background_engine --test noop_browser --test worktree_on_run --test codex_catalog --test codex_login_resolution --test auth
+          cargo nextest run --config-file scripts/ci/nextest.toml --no-run --release --locked -p zeron-ui -p zeron-harness -p gpui_windows -p zeron -p zeron-update -p zeron-proto -p zeron-engine -p zeron-voice-media -p zeron-voice --features zeron-harness/native-fixture --lib --bins --test agent_environment --test codex_availability --test windows_native --test opencode --test cursor_shim --test pi_rpc --test background_engine --test noop_browser --test worktree_on_run --test codex_catalog --test codex_login_resolution --test auth
       # Same selection as the old commands:
       #   UI: the zeron-ui library (native_diff_font_geometry included)
       #   native harness security/integration + portable driver suites (OpenCode HTTP/SSE,
       #     the Cursor shim, Pi RPC; the shell- and python-fixture suites are unix-only)
       #   shader layout, application and updater, worktree paths, engine unit/catalog/login/auth
-      #   voice-media (runtime resolution; used to be its own build in voice-tests.yml)
+      #   voice-media runtime resolution and voice input-device names
       # gpui_windows (shader layout) is a git dependency, which a filterset cannot name: the last
       # clause picks it as "not one of the workspace packages above".
       - name: UI, harness, shader layout, application, updater and engine tests
         env:
           RUST_BACKTRACE: '1'
         run: >-
-          cargo nextest run --config-file scripts/ci/nextest.toml --release --locked --no-fail-fast -p zeron-ui -p zeron-harness -p gpui_windows -p zeron -p zeron-update -p zeron-proto -p zeron-engine -p zeron-voice-media --features zeron-harness/native-fixture --lib --bins --test agent_environment --test codex_availability --test windows_native --test opencode --test cursor_shim --test pi_rpc --test background_engine --test noop_browser --test worktree_on_run --test codex_catalog --test codex_login_resolution --test auth -E "(package(zeron-ui) & kind(lib)) | package(zeron-harness) | package(zeron) | package(zeron-update) | (package(zeron-voice-media) & kind(lib)) | (package(zeron-proto) & test(device_paths)) | (package(zeron-engine) & (kind(lib) | binary_id(zeron-engine::codex_catalog) | binary_id(zeron-engine::codex_login_resolution) | binary_id(zeron-engine::auth) | (binary_id(zeron-engine::worktree_on_run) & test(worktree_location_)))) | (not package(zeron-ui) & not package(zeron-harness) & not package(zeron) & not package(zeron-update) & not package(zeron-proto) & not package(zeron-engine) & not package(zeron-voice-media) & test(layout))"
+          cargo nextest run --config-file scripts/ci/nextest.toml --release --locked --no-fail-fast -p zeron-ui -p zeron-harness -p gpui_windows -p zeron -p zeron-update -p zeron-proto -p zeron-engine -p zeron-voice-media -p zeron-voice --features zeron-harness/native-fixture --lib --bins --test agent_environment --test codex_availability --test windows_native --test opencode --test cursor_shim --test pi_rpc --test background_engine --test noop_browser --test worktree_on_run --test codex_catalog --test codex_login_resolution --test auth -E "(package(zeron-ui) & kind(lib)) | package(zeron-harness) | package(zeron) | package(zeron-update) | (package(zeron-voice-media) & kind(lib)) | (package(zeron-voice) & kind(lib)) | (package(zeron-proto) & test(device_paths)) | (package(zeron-engine) & (kind(lib) | binary_id(zeron-engine::codex_catalog) | binary_id(zeron-engine::codex_login_resolution) | binary_id(zeron-engine::auth) | (binary_id(zeron-engine::worktree_on_run) & test(worktree_location_)))) | (not package(zeron-ui) & not package(zeron-harness) & not package(zeron) & not package(zeron-update) & not package(zeron-proto) & not package(zeron-engine) & not package(zeron-voice-media) & not package(zeron-voice) & test(layout))"
       - name: Record the pass (CI skips this job while its inputs stay the same)
         if: inputs.pass-key != ''
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
