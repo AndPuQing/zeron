@@ -93,7 +93,13 @@
     // ADMIN_TOKEN protects GET /admin/users and /admin/organizations
     // (JSON or ?format=csv); unset => 404.
     "WORKOS_CLIENT_ID": "client_01M4AN0G973H42GQJY8RAAC0RS",
-    "AUTH_MODE": "workos"
+    "AUTH_MODE": "workos",
+    // Relay frames require clients that negotiate the relay protocol. Keep
+    // the stored-log protocol in use until those clients are available.
+    // Set "1" for everyone or a comma-separated list of user ids to opt in.
+    // Before rolling back the room's storage code, follow the write-through
+    // gate documented by CHAT_ROOM_WRITE_THROUGH in src/env.ts.
+    "CHAT_RELAY_LAYER": ""
     // Cloud and the credential vault stay unconfigured in this fork: no
     // CLOUD_* Durable Objects, Workflows, VAULT service binding or cron is
     // bound, so /cloud answers `available: false` and a deploy creates no
