@@ -105,7 +105,7 @@ VOICE_PATHS = ["crates/audio/**", "crates/voice-media/**", "dist/voice/**", "scr
 EXPERIMENTAL_PATHS = CARGO + [
     "apps/zgx/**", "apps/zeron/**", "crates/engine/**", "crates/harness/**",
     "crates/cli/**", "crates/launch/**", "crates/update/**", "crates/notify/**",
-    "crates/proto/**", "crates/theme/**", "crates/visual/**", "crates/visual-gpu/**", "crates/zatex/**",
+    "crates/proto/**", "crates/theme/**", "crates/voice/**", "crates/visual/**", "crates/visual-gpu/**", "crates/zatex/**",
     "scripts/experimental-desktop.sh", ".github/workflows/experimental-desktop.yml",
 ]
 

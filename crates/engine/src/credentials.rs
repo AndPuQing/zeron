@@ -38,12 +38,13 @@
 //!   (`{data_dir}/cloud/claude-native-credentials.json`) and restored when the
 //!   grant goes away.
 //! - **GitHub**: a `github` grant — a one-hour GitHub App installation token
-//!   for the installation on the session repository's owner (the user's own
-//!   GitHub token never leaves the vault) — becomes a git credential store at
+//!   for the session repository (the user's own GitHub token never leaves the
+//!   vault; the vault keeps a session on the login it started with, and a grant
+//!   names that login as `account`) — becomes a git credential store at
 //!   `{data_dir}/cloud/git-credentials` (0600) wired once via
 //!   `git config --global credential.https://github.com.helper`, and
 //!   `~/.config/gh/hosts.yml` for `gh` (only when absent or already
-//!   Zeron-managed). Refreshed in the background ~10 min before expiry. Never
+//!   Zerun-managed). Refreshed in the background ~10 min before expiry. Never
 //!   `GH_TOKEN`/`GITHUB_TOKEN`: a run's environment is fixed at spawn, `gh`
 //!   prefers it over hosts.yml, and the token expires within the hour, so a
 //!   warm session's `gh` would start failing while `git push` kept working.
@@ -75,6 +76,23 @@ use crate::runner::{EdgeErrorBody, RunnerIdentity, write_private_atomic};
 pub const GITHUB_NOT_CONNECTED: &str =
     "github_not_connected: GitHub isn't connected for this device — connect it in Settings → Cloud";
 
+/// Refusals that mean this session's own GitHub login can't serve it (the
+/// vault's messages): it stays on that login, so a run says so rather than
+/// working on with no way to push.
+const GITHUB_SESSION_REFUSALS: [&str; 3] = [
+    "github_account_needs_reconnect:",
+    "github_account_disconnected:",
+    "github_account_no_access:",
+];
+
+/// The words for the user, when `reason` is such a refusal.
+pub fn github_session_refusal(reason: &str) -> Option<String> {
+    GITHUB_SESSION_REFUSALS.iter().find_map(|prefix| {
+        let at = reason.find(prefix)?;
+        Some(reason[at + prefix.len()..].trim().to_owned())
+    })
+}
+
 /// A Cloud run of a provider with no login anywhere on the device.
 pub const CODEX_NOT_SIGNED_IN: &str = "Codex isn't signed in on Cloud. Sign in with ChatGPT, pick an \
      account or add an OpenAI API key in Settings → Providers → Cloud, then send again.";
@@ -100,7 +118,7 @@ const GITHUB_PROBE_EVERY: Duration = Duration::from_secs(5 * 60);
 const OFFLINE_MIN_VALIDITY: Duration = Duration::from_secs(30);
 const GITHUB_MAX_PAGES: usize = 10;
 const HOSTS_MARKER: &str =
-    "# Managed by Zeron Cloud (GitHub grant) — delete this line to manage gh yourself.";
+    "# Managed by Zerun Cloud (GitHub grant) — delete this line to manage gh yourself.";
 
 /// `{data_dir}/cloud/codex-home` — the managed `CODEX_HOME`.
 pub fn managed_codex_home(data_dir: &Path) -> PathBuf {
@@ -310,12 +328,32 @@ impl CredentialBroker {
         }
         let weak: Weak<Inner> = Arc::downgrade(&self.inner);
         *slot = Some(tokio::spawn(async move {
+            let mut first = true;
             loop {
                 let Some(inner) = weak.upgrade() else { return };
-                CredentialBroker { inner }.refresh_due().await;
+                let broker = CredentialBroker { inner };
+                if std::mem::take(&mut first) {
+                    tokio::join!(broker.refresh_due(), broker.prime_for_first_run());
+                } else {
+                    broker.refresh_due().await;
+                }
+                drop(broker);
                 tokio::time::sleep(REFRESH_TICK).await;
             }
         }));
+    }
+
+    /// What the first run after a boot asks for: fetched now, beside the
+    /// engine's boot, so a machine woken by a message doesn't make that run
+    /// wait on one round trip after another. A grant it finds cached within
+    /// [`RUN_REVALIDATE`] is used as it is.
+    async fn prime_for_first_run(&self) {
+        if let Some(grant) = self.github_grant().await {
+            let _ = self.git_identity(&grant).await;
+        }
+        for provider in [VaultProvider::Claude, VaultProvider::Codex] {
+            let _ = self.grant_for_run(provider).await;
+        }
     }
 
     pub fn shutdown(&self) {
@@ -494,13 +532,24 @@ impl CredentialBroker {
         // never the run's environment (fixed at spawn, outlived by the token).
         // The user's identity does go in the environment: it outranks any
         // git config, so an agent that sets one of its own (the App's bot,
-        // which its token belongs to) still commits as the user.
-        if let Some(grant) = self.github_grant().await
-            && let Some(identity) = self.git_identity(&grant).await
-        {
-            for (key, value) in identity.env() {
-                request.env.insert(key.into(), value);
+        // which its token belongs to) still commits as the user. Asked again
+        // before a run, so a login disconnected since the last one stops it.
+        match self.grant_for_run(VaultProvider::Github).await {
+            GrantOutcome::Granted(grant) => {
+                self.sync_github_files(&grant).await;
+                if let Some(identity) = self.git_identity(&grant).await {
+                    for (key, value) in identity.env() {
+                        request.env.insert(key.into(), value);
+                    }
+                }
             }
+            GrantOutcome::NotConnected(reason) => {
+                self.clear_github_files().await;
+                if let Some(message) = github_session_refusal(&reason) {
+                    return Err(message);
+                }
+            }
+            GrantOutcome::Unavailable(_) => {}
         }
         if harness == HarnessId::Codex {
             self.ensure_codex_starts().await;
@@ -640,7 +689,7 @@ impl CredentialBroker {
             }
             GrantOutcome::NotConnected(reason) => {
                 self.clear_github_files().await;
-                Err(reason)
+                Err(github_session_refusal(&reason).unwrap_or(reason))
             }
             GrantOutcome::Unavailable(reason) => Err(reason),
         }
@@ -1036,11 +1085,16 @@ fn classify_grant_failure(status: u16, body: &EdgeErrorBody) -> GrantOutcome {
 
 #[async_trait::async_trait]
 impl crate::registry::RunEnvironment for CredentialBroker {
-    async fn prepare(&self, harness: HarnessId, request: &mut RunRequest) -> Result<(), String> {
+    async fn prepare(
+        &self,
+        harness: HarnessId,
+        _chat_id: Option<&str>,
+        request: &mut RunRequest,
+    ) -> Result<(), String> {
         CredentialBroker::prepare(self, harness, request).await
     }
 
-    async fn credential(&self, harness: HarnessId) -> Option<String> {
+    async fn credential(&self, harness: HarnessId, _chat_id: Option<&str>) -> Option<String> {
         CredentialBroker::credential(self, harness).await
     }
 }
@@ -1357,7 +1411,7 @@ fn is_managed_hosts(path: &Path) -> bool {
 }
 
 /// `~/.config/gh/hosts.yml` for interactive terminals — written only when
-/// absent or already Zeron-managed (a user's own `gh auth login` wins).
+/// absent or already Zerun-managed (a user's own `gh auth login` wins).
 fn write_gh_hosts(home: &Path, grant: &Grant) {
     let path = gh_hosts_path(home);
     if path.exists() && !is_managed_hosts(&path) {
@@ -1589,6 +1643,7 @@ fn parse_github_repo(value: &Value) -> Option<GithubRepo> {
             .map(|at| at.timestamp_millis())
             .unwrap_or(0),
         full_name,
+        ..Default::default()
     })
 }
 
@@ -1796,6 +1851,7 @@ mod tests {
             private: false,
             description: None,
             pushed_at,
+            ..Default::default()
         };
         let repos = vec![
             repo("acme/old", 1),

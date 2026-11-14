@@ -555,8 +555,8 @@ pub fn fold_event_into_parts(out: &mut Vec<MessagePart>, event: &AgentEvent) {
             is_error,
             output,
             diff,
-            exit_code,
             preview_paths,
+            exit_code,
             ..
         } => {
             for p in out.iter_mut() {

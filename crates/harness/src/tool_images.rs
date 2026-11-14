@@ -39,18 +39,22 @@ pub(crate) fn compact_base64(data: &str) -> Option<String> {
     )
 }
 
-fn push_tool_image(out: &mut Vec<zeron_proto::ToolResultImage>, data: &str) {
+fn push_tool_image(out: &mut Vec<zeron_proto::ToolResultImage>, name: &str, data: &str) {
     if out.len() >= MAX_TOOL_RESULT_IMAGES {
         return;
     }
     let Some(data_base64) = compact_base64(data) else {
         return;
     };
-    out.push(zeron_proto::ToolResultImage { data_base64 });
+    out.push(zeron_proto::ToolResultImage { name: name.to_owned(), data_base64 });
 }
 
 /// Image blocks inside a tool result's `content` array.
 pub(crate) fn images_in_content(content: Option<&Value>) -> Vec<zeron_proto::ToolResultImage> {
+    images_in_content_named(content, "image.png")
+}
+
+pub(crate) fn images_in_content_named(content: Option<&Value>, name: &str) -> Vec<zeron_proto::ToolResultImage> {
     let mut out = Vec::new();
     let Some(blocks) = content.and_then(Value::as_array) else {
         return out;
@@ -80,7 +84,7 @@ pub(crate) fn images_in_content(content: Option<&Value>) -> Vec<zeron_proto::Too
         else {
             continue;
         };
-        push_tool_image(&mut out, data);
+        push_tool_image(&mut out, name, data);
     }
     out
 }

@@ -14,6 +14,7 @@
 
 local ds = require("@ds")
 local motion = require("@ds/motion")
+local seam = require("@ds/seam")
 local locale = require("@ds/locale")
 local route = require("@app/screens/shell/route")
 local shell_view = require("@app/screens/shell/view")
@@ -38,9 +39,21 @@ export type Props = {
 -- The title bar's height (Zerun's): the pages start under it, the
 -- wallpaper runs under it to the window's top.
 local TITLE_H = 38
--- The title line's own room: under the bar's 4 of top padding, its
--- controls centred 21 down; and what its right end keeps for them.
-local TITLE_TOP, TITLE_RIGHT = 4, 64
+-- The top bar over the cards: a tab on the bar's line, the window's gap over
+-- and under it.
+local TOP_BAR = 42
+local WINDOW_EDGE = 5
+-- The window's gap before the sidebar's card, part of the sidebar's move
+-- (screens/shell/sidebar `before`).
+local SIDEBAR_GAP = 5
+-- The panel's Expand on the top bar (the bar's controls' size).
+local EXPAND = 24
+-- What the title line's right end keeps for the bar's controls there. (The
+-- line itself is the bar's: `ds.TitleBar.middle`.)
+local TITLE_RIGHT = 64
+-- Of that room, what lies past the controls' row (ds/title_bar's ROW_PAD),
+-- which `TitleBar.actions_right` gives as it is now.
+local TITLE_ROW_PAD = 10
 -- How wide a session's files stand beside it: at least, and by default
 -- (room for the tree beside a file, ds/files_pane's 288 + 360).
 -- The panel's least (Zerun's surface host's: screens/shell/fit) and its
@@ -223,13 +236,23 @@ return function(props: Props): Node
 	local panel_open: () -> boolean = function(): boolean
 		return false
 	end
+	-- What the panel takes beside the page's card, its gap included (known
+	-- further down): the wallpaper holds still as it opens and closes.
+	local panel_beside: () -> number = function(): number
+		return 0
+	end
 	-- Where a pane's × stands from its card's right: clear of the title
 	-- bar's panel toggle over the page's top right while the panel is shut.
 	local function close_right(id: string?): number
 		return if at_top_right(id) and not panel_open() then 34 else 8
 	end
 
-	local pane: ContainerProps = ds.wallpaper.follow(box, px, py, home)
+	-- (Where the pointer is, only while a wallpaper reads it: a plugin's.
+	-- Your picture, or none, never does, and its writes on every move
+	-- went nowhere.)
+	local pane: ContainerProps = ds.wallpaper.follow(box, px, py, function(): boolean
+		return home() and string.find(appearance.showing:peek(), "^plugin:") ~= nil
+	end)
 	pane.ref = box
 	pane.id = "shell-page"
 	pane.hook = "shell.page"
@@ -291,15 +314,9 @@ return function(props: Props): Node
 	pane.pointer_events = function(): any
 		return if grouped() then "none" else "auto"
 	end
-	-- A trackpad's swipe between pages (the mouse's back and forward too):
-	-- the history, as the router's own view takes it.
-	pane.on_navigate = function(e)
-		if e.direction == "back" then
-			route.back()
-		else
-			route.forward()
-		end
-	end
+	-- No `on_navigate`: a trackpad's swipe over the page scrolls and never
+	-- steps the history (that's the title bar's arrows, the mouse's buttons,
+	-- ⌘[ and ⌘]).
 	-- Whether it shows, for what stands over it (screens/shell/art).
 	ui.effect(function()
 		local on = home() and not on_plugin() and appearance.showing:get() ~= "none"
@@ -318,7 +335,15 @@ return function(props: Props): Node
 			shown = function(): boolean
 				return home() and not on_plugin()
 			end,
-			width = props.width,
+			-- (Laid at the window's width, as a state zgx follows: a resize
+			-- runs no script here.)
+			width = fit.viewport,
+			beside = function(): number
+				return panel_beside()
+			end,
+			picture = function(): any
+				return if appearance.showing:peek() == "image" then appearance.image:peek() else nil
+			end,
 			key = function(): string
 				local showing = appearance.showing:get()
 				if showing == "image" then
@@ -371,6 +396,15 @@ return function(props: Props): Node
 	-- (In a split, the chat page isn't made: the window still watches the
 	-- focused chat, for the composer and the focused pane's transcript.)
 	local chat_store = require("@app/screens/chat/store")
+	-- (The transcript at the window's composer's foot, whose "Jump to
+	-- latest" its pill pairs with: the chat page's, or the focused pane's.
+	-- Its lane is `split-<chat>`: the panes', below.)
+	ui.effect(function()
+		local key = if grouped() then `lane.split-{splits.focused:get()}` else "page"
+		if chat_shared.at_foot:peek() ~= key then
+			chat_shared.at_foot:set(key)
+		end
+	end)
 	ui.effect(function()
 		if grouped() then
 			chat_store.open(splits.focused:get())
@@ -586,19 +620,9 @@ return function(props: Props): Node
 		)
 	)
 
-	-- The title bar's strip over the page moves the window (a double click
-	-- zooms it): over all of the page (the composer's room, the wallpaper),
-	-- under the bar's controls, which keep their presses.
-	-- (The card's own head, set down by the gap; the gap over the
-	-- cards moves the window too, below.)
-	-- (In a split, the panes' heads are there instead.)
-	table.insert(pane, ui.show(function(): boolean
-		return not grouped()
-	end, ui.div { id = "page-drag", absolute = true, left = 0, right = 0, top = 0, h = below_head, window_drag = true }))
-
-	-- A session's files, beside it: sliding in from the window's edge as
-	-- the toggle opens them, at their own width (the pane keeps it as it
-	-- slides, so nothing re-lays out on the way).
+	-- A session's files, beside it: its card growing in from the window's
+	-- edge as the toggle opens them, what's in it standing still at its own width as the card's edge
+	-- uncovers it (nothing re-lays out on the way).
 	-- Its docked tree's room while the window's fit shows Zerun's Files:
 	-- the tree's own width, so that as the tree goes to float over the file
 	-- the panel narrows by just that, and the file stays where it was.
@@ -606,9 +630,11 @@ return function(props: Props): Node
 	-- The width it would take, its tree docked: as last split (opening, a
 	-- neighbour opening or closing) or dragged. Kept across launches.
 	local files_w = ui.persist("shell_files_width", FILES_W)
-	-- Whether a width was chosen (its edge dragged, or keyed): from then on
-	-- it opens at that width, as Zerun's does (its `right_pane_width`), the
-	-- fit narrowing it only as it must. Until then each opening splits.
+	-- Whether a width was chosen (its edge dragged, or keyed) since it was
+	-- last opened or closed: until its toggle, it holds that width (another
+	-- chat's panel, a relaunch), the fit narrowing it only as it must. Its
+	-- toggle forgets it, as Zerun's does: it opens at its share again, and
+	-- keeps to its share as the window is resized.
 	local chosen = ui.persist("shell_panel_width_chosen", false)
 	local from_x, from_w, resizing = 0, 0, false
 	-- Its edge being dragged: whether its tree was docked at the press (kept
@@ -619,6 +645,11 @@ return function(props: Props): Node
 	local drag_held = ui.use_state(nil :: { w: number, docked: boolean }?)
 	-- The pointer over its edge (its hairline stronger, as the sidebar's).
 	local edge_over = ui.use_state(false)
+	-- Its edge's drag: a bounce past its least or most, added to its width.
+	local edge_drag = seam.drag()
+	-- Whether a step (opening, closing, expanding, a column beside it going
+	-- or coming) is under way: its edge is out of reach until it lands.
+	local stepping = ui.use_state(false)
 	-- (Open for this session, and the window has room for it: hidden for
 	-- room, it stays open, and comes back as the window widens.)
 	-- (A plugin's page has a panel of its own too: its plugin's tabs.)
@@ -632,6 +663,18 @@ return function(props: Props): Node
 	end
 	local function tree_part(): number
 		return if fit.current:get().files then TREE else 0
+	end
+	-- The window `v` wide less its gaps round the cards beside a sidebar `sd`
+	-- wide (none: the window's edge before the page; one: its gap before
+	-- the sidebar's card and the gap between cards after it; then the gap
+	-- before the panel's card and the window's edge after it): what the
+	-- chat's card and the panel split 50/50. Zerun's columns had no gaps;
+	-- left in, they all came off the chat, its card 18 points short of the
+	-- panel at "half" each. (The leasts count them already: the chat's 300
+	-- and a split's floor are its column's, gaps and all, as Wing set them.)
+	local function less_gaps(v: number, sd: number): number
+		local before = if sd > 0 then SIDEBAR_GAP + INSET else WINDOW_EDGE
+		return v - before - INSET - WINDOW_EDGE
 	end
 	-- (Expanded over the session (the panel's Expand): all of the page's
 	-- room, the chat's column narrowing to nothing.)
@@ -648,13 +691,14 @@ return function(props: Props): Node
 			drag_held:set(nil)
 		end
 	end)
-	-- Its part beside the tree as it stands. A window resize moves it only
-	-- when it must: narrowing, the chat gives up its room first, down to
-	-- its least, and then this; widening, while the chat is at its least,
-	-- this takes the room back first, up to what it would take, then the
-	-- chat grows. A column the fit hides gives its room to the chat; one it
-	-- shows takes the chat's, and this only gives way if it must. Nothing
-	-- jumps as a column goes or comes.
+	-- Its part beside the tree as it stands. A window resize shares its
+	-- change between the chat and this equally, as Zerun's does, so a panel
+	-- at its share stays at half of the room (each keeping its least; a
+	-- column the fit hides or shows is shared out too). Its width dragged
+	-- since its toggle, it holds instead, moving only when it must:
+	-- narrowing, the chat gives up its room first, down to its least, and
+	-- then this; widening, while the chat is at its least, this takes the
+	-- room back first, up to what it would take, then the chat grows.
 	-- The tree's room inside `files_w`: a session's panel keeps it for its
 	-- tree (docked, or floating with the panel narrowed by it); a plugin's
 	-- page has no tree, so its panel is the whole width. (It took TREE off
@@ -683,9 +727,37 @@ return function(props: Props): Node
 		end
 		local allowed = vw - side - tree - fit.CHAT_PANEL_MIN
 		local r = right_w:peek()
-		if pref ~= was.pref then
+		-- (Its share of a window `v` wide beside a sidebar `sd` wide.)
+		local function share(v: number, sd: number): number
+			return fit.content_split(math.max(less_gaps(v, sd) - sd - reserve(), 0), floor)
+		end
+		-- (The sidebar folded or brought back, the window as it was.)
+		local toggled = (side > 0) ~= (was.side > 0) and vw == was.vw and floor == was.floor
+		if toggled and floor <= fit.CHAT_PANEL_MIN and not shell_view.expanded:peek() then
+			-- The sidebar folded or back: the chat and this split again, as
+			-- Zerun's `toggle_sidebar` re-split them (`resplit_panels`), a
+			-- width dragged forgotten as there. Below, it eases there.
+			if chosen:peek() then
+				chosen:set(false)
+			end
+			local part = share(vw, side)
+			alloc.pref = part
+			files_w:set(reserve() + part)
+			r = math.min(part, allowed)
+		elseif pref ~= was.pref then
 			-- Split or dragged: what it would take, as far as there's room.
 			r = math.min(pref, allowed)
+		elseif not chosen:peek() and floor <= fit.CHAT_PANEL_MIN and floor == was.floor and vw ~= was.vw then
+			-- At its share: the change shared out, at once (the window's edge is
+			-- under the hand). What it would take moves with it, so a sidebar
+			-- coming or going gives it back what it gave.
+			local by = share(vw, side) - share(was.vw, was.side)
+			r = math.min(r + by, allowed)
+			local moved_pref = math.max(pref + by, 0)
+			if moved_pref ~= pref then
+				alloc.pref = moved_pref
+				files_w:set(reserve() + moved_pref)
+			end
 		elseif r > allowed then
 			-- No room left for the chat's least: it gives way.
 			r = allowed
@@ -710,18 +782,67 @@ return function(props: Props): Node
 			right_w:set(r)
 		end
 	end)
-	-- Its tree docked beside the file: while the window's fit has room for
-	-- it, and the panel, as it rests, leaves the file beside it its least
-	-- (ds/files_pane's `zeron.files.view`). A panel dragged narrower floats
-	-- its tree over the file, the panel as wide as it was; it docks again a
-	-- little past that least, so an edge dragged about it doesn't flicker.
-	local VIEW = (ui.theme.get("zeron.files.view") :: number?) or fit.RIGHT_PANE_MIN
-	local AGAIN = 24
-	local floated_narrow = false
-	local tree_docked = ui.computed(function(): boolean
-		local held = drag_held:get()
-		if held then
-			return held.docked
+	-- Its share, as Zerun's: its tree's allowance and half of what the
+	-- sidebar and the tree leave the chat and it. Beside a split, its least:
+	-- the room is the panes'. (Dragged wider there, it stays so until it
+	-- closes; the width chosen is kept for a chat alone.)
+	local function resplit()
+		local vw = fit.viewport:peek()
+		if vw <= 0 then
+			return
+		end
+		local r = math.max(fit.RIGHT_PANE_MIN - tree_part(), 0)
+		local floor = fit.page_floor:peek()
+		if floor <= fit.CHAT_PANEL_MIN then
+			local side, keep = sidebar_settled(), reserve()
+			local part = fit.content_split(math.max(less_gaps(vw, side) - side - keep, 0), floor)
+			files_w:set(keep + part)
+			r = math.min(part, fit.panel_room(vw, side, tree_part(), floor))
+		end
+		if r ~= right_w:peek() then
+			right_w:set(r)
+		end
+	end
+	-- (Whose panel shows: the session's, a plugin page's; none on a new
+	-- chat. Another one is the route moving, not the person opening or
+	-- closing this one, and the panel lands at once, as it is there.)
+	local function owner(peek: boolean): string
+		local c: any = if peek then route.chat:peek() else route.chat:get()
+		if c.name == "plugin" then
+			return `page:{c.plugin or ""}/{c.page or ""}`
+		end
+		return if c.name == "session" then `chat:{c.session or ""}` else c.name or ""
+	end
+	-- It opens at its share, unless a width was chosen since its toggle
+	-- (its edge dragged, then another chat's panel shown, or the fit hiding
+	-- it for room and bringing it back). Its toggle, opening or closing it,
+	-- forgets that width. (The sidebar folding or coming back splits them
+	-- again too, above, as Zerun's does: Gaël's call over Wing's earlier
+	-- rule, where the chat took all the sidebar gave and the panel held.)
+	local split = { on = shown:peek(), open = props.files:peek(), owner = owner(true) }
+	ui.effect(function()
+		local on = shown:get()
+		local open, who = props.files:get(), owner(false)
+		local changed = on ~= split.on
+		local toggled = open ~= split.open and who == split.owner
+		split = { on = on, open = open, owner = who }
+		if toggled and chosen:peek() then
+			chosen:set(false)
+		end
+		local vw = fit.viewport:peek()
+		if changed and on and not shell_view.expanded:peek() and vw > 0 then
+			local side = sidebar_settled()
+			if fit.page_floor:peek() > fit.CHAT_PANEL_MIN or not chosen:peek() then
+				resplit()
+			else
+				-- (The width chosen, as far as there's room: not what it had
+				-- given way to before it closed.)
+				local allowed = fit.panel_room(vw, side, tree_part(), fit.page_floor:peek())
+				local r = math.max(math.min(math.max(right_pref(), fit.RIGHT_PANE_MIN - tree_part()), allowed), 0)
+				if r ~= right_w:peek() then
+					right_w:set(r)
+				end
+			end
 		end
 		if not fit.current:get().files then
 			floated_narrow = false
@@ -732,6 +853,25 @@ return function(props: Props): Node
 		floated_narrow = not docked
 		return docked
 	end)
+	-- The sidebar's edge double-clicked (its width put back): the chat and
+	-- this split again, the width chosen forgotten, as Zerun's
+	-- `reset_panel_widths` (a seam's reset restores the whole layout).
+	local resets = shell_view.seam_reset:peek()
+	ui.effect(function()
+		local n = shell_view.seam_reset:get()
+		if n == resets then
+			return
+		end
+		resets = n
+		if not shown:peek() or shell_view.expanded:peek() then
+			return
+		end
+		if chosen:peek() then
+			chosen:set(false)
+		end
+		resplit()
+	end)
+	-- (Before what follows, so a panel arriving with the route lands where this puts it.)
 	-- The width it rests at, open; closing, the last it rested at (its
 	-- content keeps that as its edge clips it).
 	local held_rest: number? = nil
@@ -747,9 +887,18 @@ return function(props: Props): Node
 		-- (The page's room read only while expanded: otherwise the sidebar
 		-- moving would wake this every frame.)
 		if expanded() then
-			-- (The row's room less the window round the cards; the
-			-- page's card gone, there's no gap before the panel's.)
-			local room: number = (row_ref.width or 0) - 2 * INSET
+			-- (The row's room inside its padding, the window round the cards:
+			-- the gap before the page's card and the window's edge at its
+			-- right, where the panel's card ends unexpanded too. The page's
+			-- card gone, there's no gap before the panel's.)
+			local before = if fit.current:get().sidebar then INSET else WINDOW_EDGE
+			local room: number = (row_ref.width or 0) - before - WINDOW_EDGE
+			-- (Settings' list stands where the sidebar does, in this row: as beside the
+			-- sidebar, the panel has what's past it.)
+			if away() and not shell_view.collapsed:get() then
+				local sidebar: any = require("@app/screens/shell/sidebar")
+				room -= math.clamp(sidebar.width:get(), fit.SIDEBAR_MIN, fit.SIDEBAR_MAX) + 6
+			end
 			if room > 0 then
 				return room
 			end
@@ -757,13 +906,30 @@ return function(props: Props): Node
 		return if shown:get() then rest_w:get() else 0
 	end
 	local open_w = ui.state("shell_files_shown_width", target())
-	-- Opening or closing (the edge revealing what stands at its width):
-	-- its content keeps the width it rests at. Otherwise it fills the panel.
-	-- (The build's own, as the animation is: a reload mid-step starts the
-	-- step again from where it shows, never counting what's left twice.)
-	local revealing = ui.use_state(false)
-	-- (Whether the step under way opens the panel beside the page.)
-	local step_opening = ui.use_state(nil :: boolean?)
+	-- Where its width is going (`base` below, told), and whether a step that
+	-- opens, closes, expands or collapses it is under way: then what's in it
+	-- is laid out at that from the step's first frame, so nothing in it
+	-- squeezes as its edge moves. (A column the fit takes away or gives as
+	-- the window is resized, it follows the edge: that's the window's edge
+	-- under the hand.) (The build's own, as the animation is.)
+	local goal = ui.use_state(open_w:peek())
+	local holding = ui.use_state(false)
+	-- (The width its content showed at as it began to close, and its
+	-- content's width as each frame laid it out: `inner_w`'s.)
+	local left_at: number? = nil
+	local showing_w = 0
+	-- What's in it (its tabs and what they show) and the page's own content
+	-- (held under the panel expanded over it: `page_hold`), for their drift
+	-- and fade as they come and go (ds/motion `content`).
+	local content_el: any = nil
+	local page_el: any = nil
+	-- The page's content width while the panel expands over it or gives it
+	-- back: it keeps the width it had (expanding) or takes the one it's
+	-- going to (coming back), clipped by its edge, never squeezed to nothing
+	-- or growing from it. nil: the page's own.
+	local page_hold = ui.use_state(nil :: number?)
+	-- (Its width as the panel expanded, with the window's and the panel's.)
+	local held_from: { w: number, vw: number, panel: number }? = nil
 	-- Its width is where it's going (`base`, which a window resize moves at
 	-- once) and, after a step (opened, closed, expanded, a column going or
 	-- coming beside it, a neighbour's share), what's left of that step
@@ -773,6 +939,7 @@ return function(props: Props): Node
 	local base = open_w:peek()
 	local off = ui.use_state(0)
 	local easing: any = nil
+	local steps = 0
 	-- Whose panel shows (the session's, a plugin page's; none on a new
 	-- chat): another one is the route moving, not the person opening or
 	-- closing this one, and the panel lands at once, as it is there.
@@ -790,6 +957,7 @@ return function(props: Props): Node
 			shown = shown:peek(),
 			expanded = expanded(),
 			sidebar = f.sidebar and not shell_view.collapsed:peek(),
+			side = if f.sidebar and not shell_view.collapsed:peek() then f.sidebar_limit else 0,
 			files = f.files,
 			owner = owner(true),
 		}
@@ -802,6 +970,7 @@ return function(props: Props): Node
 			shown = shown:get(),
 			expanded = expanded(),
 			sidebar = f.sidebar and not shell_view.collapsed:get(),
+			side = if f.sidebar and not shell_view.collapsed:get() then f.sidebar_limit else 0,
 			files = f.files,
 			owner = owner(false),
 		}
@@ -812,7 +981,39 @@ return function(props: Props): Node
 		local flipped = opened or now.sidebar ~= seen.sidebar or now.files ~= seen.files
 		local resized = now.vw ~= seen.vw
 		local moved = now.owner ~= seen.owner
+		local was = seen
 		seen = now
+		-- What comes or goes with it stands still under its edge and only
+		-- fades a little (ds/motion `content`): its content as it opens or
+		-- closes, the page's as the panel expands over it. The route moving
+		-- shows each as it is there, at once.
+		if now.shown ~= was.shown and content_el then
+			anime.animate(content_el, motion.content(now.shown, moved))
+		end
+		if now.expanded ~= was.expanded then
+			if page_el then
+				-- (Given back from rest, where it stood hidden under the panel, it
+				-- comes from the floor, not from nothing.)
+				anime.animate(page_el, motion.content(not now.expanded, moved, not now.expanded and easing == nil))
+			end
+			-- (Measured before this step changes anything: the page's room now,
+			-- and the row it shares with the panel.)
+			local area = splits.area().w
+			if moved and not now.expanded then
+				page_hold:set(nil)
+			elseif now.expanded then
+				page_hold:set(area)
+				held_from = { w = area, vw = now.vw, panel = base + off:peek() }
+			elseif held_from and held_from.vw == now.vw and held_from.panel == to then
+				-- (Back to where it was: the width it had.)
+				page_hold:set(held_from.w)
+			else
+				-- (The row less where the panel goes and the gap before it; none
+				-- while it stood expanded.)
+				local whole = area + base + off:peek()
+				page_hold:set(math.max(whole - to - (if to > 0 then INSET else 0), 0))
+			end
+		end
 		if to == base and not moved then
 			return
 		end
@@ -823,7 +1024,7 @@ return function(props: Props): Node
 				easing:cancel()
 				easing = nil
 			end
-			revealing:set(false)
+			holding:set(false)
 			off:set(0)
 			base = to
 		elseif resizing then
@@ -832,6 +1033,7 @@ return function(props: Props): Node
 				easing:cancel()
 				easing = nil
 			end
+			holding:set(false)
 			off:set(0)
 			base = to
 		elseif flipped or not (resized or (now.expanded and not opened)) then
@@ -842,120 +1044,102 @@ return function(props: Props): Node
 				easing:cancel()
 				easing = nil
 			end
-			if opened then
-				revealing:set(true)
-				step_opening:set(opening)
+			-- (Opening or closing, what's in it holds still under its edge. Between
+			-- two open widths (expanding, collapsing), it follows its edge, as
+			-- Zerun's `panel_content_tween` eases it: laid out at the far width
+			-- from the first frame, a home centred in it jumped half the way at
+			-- once, and collapsing left the card empty beside it.)
+			if now.shown ~= was.shown then
+				-- (Closing, at the width it shows now: expanded, the wide one.)
+				left_at = if now.shown then nil else showing_w
+				holding:set(true)
+			elseif opened then
+				holding:set(false)
 			end
 			off:set(showing - to)
-			local params = motion.column(off:peek(), 0)
-			local this: any = nil
+			-- (Split again as the sidebar folds or comes back: on the sidebar's
+			-- own clock, its curve and its time for its column's travel, so the
+			-- chat between them only ever widens or narrows, as in Zerun, where
+			-- both rode one tween. On the panel's quicker curve, the chat
+			-- narrowed a little first as the sidebar folded, then widened.)
+			local params = if now.sidebar ~= was.sidebar and not opened
+				then motion.column(math.max(now.side, was.side) + SIDEBAR_GAP, 0)
+				else motion.panel(0)
+			-- (By number: a callback holding its own clip would keep both for good.)
+			steps += 1
+			local this = steps
 			params.onComplete = function()
-				if easing == this then
+				if steps == this then
 					easing = nil
-					revealing:set(false)
+					stepping:set(false)
+					holding:set(false)
+					-- (The page under the panel expanded: hidden, not left at the
+					-- fade's floor as a sliver of its edge.)
+					if page_el and shown:peek() and shell_view.expanded:peek() then
+						anime.animate(page_el, { opacity = 0, duration = 0 } :: any)
+					end
+					-- (The page given back: its own width again, the one it was
+					-- held at.)
+					if not (shown:peek() and shell_view.expanded:peek()) and page_hold:peek() ~= nil then
+						page_hold:set(nil)
+					end
 				end
 			end
-			this = anime.animate(off, params)
-			easing = this
+			easing = anime.animate(off, params)
 		else
 			-- The window resized (or the room it fills while expanded moved):
 			-- where it goes moves at once; a step under way goes on.
 			base = to
 		end
-		open_w:set(base + off:peek())
-	end)
-	panel_room = function(): number
-		return rest_w:get() + INSET
-	end
-	-- Which hold stands: the panel's glide's, else a drag's; none, the page's
-	-- content its own width again (laid out once, its reading place kept:
-	-- ds/transcript).
-	local holds = 0
-	ui.effect(function()
-		local want: { opening: boolean }? = nil
-		if revealing:get() and step_opening:get() ~= nil then
-			want = { opening = step_opening:get() == true }
-		elseif edge_dragging:get() or drag_held:get() ~= nil then
-			want = { opening = false }
+		if not easing and not now.expanded and page_hold:peek() ~= nil then
+			page_hold:set(nil)
 		end
-		local now = held:peek()
-		if want == nil then
-			if now ~= nil then
-				held:set(nil)
-			end
-		elseif now == nil or now.opening ~= want.opening then
-			holds += 1
-			held:set({ opening = want.opening, since = holds })
+		if goal:peek() ~= base then
+			goal:set(base)
 		end
-	end)
-	ui.effect(function()
-		if not revealing:get() and step_opening:peek() ~= nil then
-			step_opening:set(nil)
+		if stepping:peek() ~= (easing ~= nil) then
+			stepping:set(easing ~= nil)
 		end
+		open_w:set(base + off:peek() + edge_drag.nudge:peek())
 	end)
-	-- (Following the step as it eases.)
+	-- (Following the step as it eases, and its edge's bounce.)
 	ui.effect(function()
 		local o = off:get()
-		local w = base + o
+		local w = base + o + edge_drag.nudge:get()
 		if open_w:peek() ~= w then
 			open_w:set(w)
 		end
 	end)
-	-- Its share, as Zerun's: its tree's allowance and half of what the
-	-- sidebar and the tree leave the chat and it, as it opens. A dragged
-	-- edge holds until then. (Not as the sidebar opens or closes, as Zerun
-	-- does: halving it then squeezed a panel the chat had room beside, its
-	-- tree going to float. It gives way only as it must, above, and comes
-	-- back as the sidebar goes.)
-	local split = { on = shown:peek() }
-	ui.effect(function()
-		local on = shown:get()
-		local changed = on ~= split.on
-		split = { on = on }
-		local vw = fit.viewport:peek()
-		if changed and on and not shell_view.expanded:peek() and vw > 0 then
-			local side = sidebar_settled()
-			if not chosen:peek() then
-				local keep = reserve()
-				files_w:set(keep + fit.content_split(math.max(vw - side - keep, 0)))
-			else
-				-- (The width chosen, as far as there's room: not what it had
-				-- given way to before it closed.)
-				local allowed = vw - side - tree_part() - fit.CHAT_PANEL_MIN
-				local r = math.max(math.min(math.max(right_pref(), fit.RIGHT_PANE_MIN - tree_part()), allowed), 0)
-				if r ~= right_w:peek() then
-					right_w:set(r)
-				end
-			end
-		end
-	end)
-	-- The panel's content width: opening or closing, the width it rests at
-	-- (its edge reveals it, its strip held: see `hold`); else the panel's
-	-- own, filling it as it moves (a column going or coming beside it, its
-	-- tree going to float: the file stays where it was as the tree slides
-	-- away).
+	-- The panel's content width: opening, where its width is going, from
+	-- the step's first frame, its edge sweeping over it as it gets there;
+	-- closing and shut, the width it rested at. Otherwise its own: under the
+	-- hand as it's dragged or the window is resized, following its edge as
+	-- it expands or collapses.
 	local function inner_w(): number
-		if revealing:get() then
-			return math.max(rest_w:get(), open_w:get())
+		local w: number
+		if not holding:get() and shown:get() then
+			w = open_w:get()
+		else
+			local g = goal:get()
+			w = if g > 0 then g else left_at or rest_w:get()
 		end
-		return open_w:get()
+		showing_w = w
+		return w
+	end
+	-- The widest it may be asked to be: what leaves the page what it wants.
+	local function most_w(): number
+		return math.max(FILES_MIN, fit.viewport:peek() - sidebar_settled() - fit.page_floor:peek())
 	end
 	-- Its width asked for (its edge dragged, or keyed): never past what
 	-- leaves the chat its least; kept as the width it takes with its tree
 	-- docked.
 	local function set_width(want: number)
 		local tree = if fit.current:peek().files then TREE else 0
-		local most = math.max(FILES_MIN, fit.viewport:peek() - sidebar_settled() - fit.CHAT_PANEL_MIN)
-		local w = math.clamp(want, FILES_MIN, most)
+		local w = math.clamp(want, FILES_MIN, most_w())
 		files_w:set(reserve() + w - tree)
 		if not chosen:peek() then
 			chosen:set(true)
 		end
-	end
-	-- (The page's card goes, not to a sliver of its edge, while the
-	-- panel stands over it.)
-	pane.opacity = function(): number
-		return if expanded() then 0 else 1
 	end
 	-- Whether any of it shows: none at all under 2 points. (Shut is shut:
 	-- what's left of its width as it eases closed, a point or so, would
@@ -1017,10 +1201,17 @@ return function(props: Props): Node
 		-- (From the window's top: the panel's own band is the title strip
 		-- over it, its tabs in it, a window-drag region of its own, room
 		-- left at its right for the title bar's Panel toggle.)
+		-- (Its card is its box, as the sidebar's is; what's in it stands at
+		-- its right, the side it's attached to, at `inner_w`: the edge
+		-- sweeping in from the left reveals it and covers it again. Shut, and
+		-- its width run out, out of layout until it opens: kept as it was,
+		-- not laid out at its width in a box of none.)
 		ui.column {
-			-- (Its own width, or, expanding, the one it grows to.)
-			w = inner_w,
+			w_full = true,
 			h_full = true,
+			hidden = function(): boolean
+				return not shown:get() and not panel_seen:get()
+			end,
 			-- The session's panel (its tabs: the files, a terminal), or, until
 			-- that screen is there, the files pane alone.
 			if boundary.load("@app/screens/panel")
@@ -1029,41 +1220,59 @@ return function(props: Props): Node
 						project = route.project,
 						session = route.session,
 						page = route.page,
-						-- (Where its left edge is in the window: expanded, or with
-						-- the sidebar collapsed, its tabs clear the title bar's
-						-- controls there. Its card ends the gap short of
-						-- the window's right.)
-						left = function(): number
-							return props.width() - INSET - open_w:get()
-						end,
-						-- (Its strip held where it stands open as the panel slides,
-						-- its right end against the title bar's controls: what shows
-						-- of the panel is less than its content's width.)
-						hold = function(): number
-							return math.min(0, open_w:get() - inner_w())
-						end,
-						-- (Its file tabs' trees docked beside the file, or floating
-						-- over it: `tree_docked`.)
-						docked = function(): boolean
-							return tree_docked:get()
-						end,
+						no_project = true,
+						content = {
+							id = "shell-files-content",
+							w = inner_w,
+							-- (At the card's right, out of its flow: laid out at its
+							-- width while the card's edge sweeps over it, a clip
+							-- meant, not content overflowing the card.)
+							absolute = true,
+							right = 0,
+							top = 0,
+							bottom = 0,
+							on_mount = function(el: any)
+								content_el = el
+								anime.animate(el, motion.content(shown:peek(), true))
+							end,
+						},
 					}
 				end)
-				else boundary.screen(boundary.named("shell.boundary.screen.files"), "@app/screens/files", function(files): Node
-					return files.Pane { project = route.project, session = route.session }
-				end),
+				else ui.column {
+					w = inner_w,
+					self = "end",
+					h_full = true,
+					boundary.screen(boundary.named("shell.boundary.screen.files"), "@app/screens/files", function(files): Node
+						return files.Pane { project = route.project, session = route.session }
+					end),
+				},
 		},
-		-- (No hairline down its left; its card's edge is that.)
-		-- Its edge, dragged: wider or narrower (the page keeps its least).
-		-- (Pressed itself, so it keeps the pointer as it's dragged. Not while
-		-- expanded: it's as wide as it goes.)
-		ui.div {
+	}
+	panel_open = function(): boolean
+		return shown:get()
+	end
+	panel_beside = function(): number
+		return open_w:get() + gap_before:get()
+	end
+	-- (No hairline down its left; its card's edge is that.)
+	-- Its edge, dragged: wider or narrower (the page keeps its least),
+	-- bouncing past either; double-clicked, back to its share, easing there,
+	-- the width chosen forgotten. The gap before its card, taking the pointer
+	-- `seam.REACH` each side of the gap's middle: the gap is where a hand goes
+	-- for it, and the card clips what's its own, so this stands beside it.
+	-- (Pressed itself, so it keeps the pointer as it's dragged. Not while
+	-- expanded: it's as wide as it goes. While the panel moves a press there
+	-- does nothing, as Zerun's handle; the pointer stays its own all along,
+	-- so a hand resting on it finds it lit once the panel lands.)
+	local panel_edge = ui.div {
 			absolute = true,
-			left = 0,
-			top = 0,
-			bottom = 0,
+			right = function(): number
+				return ui.raw(WINDOW_EDGE + open_w:get() + gap_before:get() / 2 - seam.REACH, "the seam's reach past the gap's middle")
+			end,
+			top = ui.raw(TOP_BAR, "as the panel's top"),
+			bottom = ui.raw(WINDOW_EDGE, "the window's edge"),
 			w = function(): number
-				return if expanded() then 0 else 6
+				return if expanded() then 0 else ui.raw(2 * seam.REACH, "the seam's reach either side")
 			end,
 			cursor = "col_resize",
 			label = ui.t("shell.page.resize_files"),
@@ -1104,20 +1313,48 @@ return function(props: Props): Node
 				return true
 			end,
 			on_press = function(e)
-				-- (From where it stands, its tree docked or floating.)
+				if stepping:peek() then
+					return
+				end
+				if e.clicks == 2 then
+					if chosen:peek() then
+						chosen:set(false)
+					end
+					resplit()
+					return
+				end
+				-- (From where it stands.)
 				from_x, from_w, resizing = e.x, open_w:peek(), true
 				drag_held:set({ w = inner_w(), docked = tree_docked:peek() })
 			end,
 			on_pointer_move = function(e)
 				if resizing then
-					set_width(from_w - (e.x - from_x))
+					local want = from_w - (e.x - from_x)
+					edge_drag.at(want, FILES_MIN, most_w())
+					set_width(want)
 				end
 			end,
 			on_release = function()
 				resizing = false
 				drag_held:set(nil)
+				edge_drag.release()
 			end,
-		},
+			-- What lights: the gap, as between two panes.
+			ui.div {
+				absolute = true,
+				left = function(): number
+					return ui.raw(seam.REACH - gap_before:get() / 2, "the gap, in the seam's reach")
+				end,
+				top = 0,
+				bottom = 0,
+				w = gap_before,
+				rounded = "$radius.full",
+				pointer_events = "none",
+				bg = "$border.strong",
+				opacity = seam.lit(function(): boolean
+					return edge_over:get() or drag_held:get() ~= nil
+				end, edge_drag),
+			},
 	}
 	panel_open = function(): boolean
 		return shown:get()
@@ -1374,28 +1611,39 @@ return function(props: Props): Node
 					end)
 				end
 			end,
-			ui.column {
-				ref = lane_ref,
-				absolute = true,
-				left = 0,
-				-- (Its width held through the panel's glide, by its share of
-				-- the page.)
-				w = held_width(lane_ref, function(): number
-					local b = box_of(id)
-					return b.right.p - b.left.p
-				end),
-				top = TITLE_H - INSET,
-				bottom = 0,
-				LaneTab.Tab {
-					tab = {
-						id = lane_slot,
-						kind = "side_chat",
-						chat = id,
-						title = "",
-						data = { split = true, focused = focused },
+			ui.column((function()
+				local lane: { [any]: any } = {
+					id = `split-lane-{id}`,
+					absolute = true,
+					left = 0,
+					right = 0,
+					top = 0,
+					bottom = 0,
+					LaneTab.Tab {
+						tab = {
+							id = lane_slot,
+							kind = "side_chat",
+							chat = id,
+							title = "",
+							data = { split = true, focused = focused },
+						},
 					},
-				},
-			},
+					pane_grip(function(): string?
+						return id
+					end, function(): boolean
+						return near:get()
+					end, card_ref),
+				}
+				-- (Made as it's added to the split: it stands where it lands as
+				-- the gap it opens out of reveals it, only fading in a little.)
+				lane.on_mount = function(el: any)
+					if splits.just_added(id) then
+						anime.animate(el, motion.content(true, false, true))
+					end
+				end
+				tracks_near(lane, near)
+				return lane
+			end)()),
 			-- Dimmed while another is focused, lighter under the pointer;
 			-- it takes no pointer of its own.
 			ui.div {
@@ -1507,9 +1755,10 @@ return function(props: Props): Node
 			class = "split-pane",
 			provide = { session = id },
 			pointer_events = "none",
-			-- (The panel expanded over the page: none of the split shows.)
-			opacity = function(): number
-				return if expanded() then 0 else 1
+			-- (Opening, its edge clips its card, in the card's corners.)
+			rounded = "$zeron.inset.radius",
+			overflow = function(): string
+				return if splits.opening_size(id) then "hidden" else "visible"
 			end,
 			ui.show(grouped, card),
 			ui.show(grouped, head),
@@ -1567,6 +1816,138 @@ return function(props: Props): Node
 		end)
 		return ui.column(item)
 	end
+	-- A divider between two panes: dragging it moves their split, at once,
+	-- bouncing at either pane's least; double-clicked, its panes take equal
+	-- shares again, easing there. It takes the pointer `seam.REACH` each side
+	-- of the gap's middle, its gap lit under it.
+	local PANE_LEAST_WIDE, PANE_LEAST_TALL = 288, 160
+	local DIVIDER_REACH = seam.REACH - splits.GAP / 2
+	local function divider(id: string): Node
+		local function find(list: { any }): any
+			for _, d in list do
+				if d.id == id then
+					return d
+				end
+			end
+			return nil
+		end
+		local function now(): any
+			return find(splits.dividers:get()) or { left = splits.WHOLE.left, right = splits.WHOLE.right, top = splits.WHOLE.top, bottom = splits.WHOLE.bottom }
+		end
+		local first = find(splits.dividers:peek())
+		local row = first == nil or first.axis == "row"
+		local lit = ui.use_state(false)
+		local held = ui.use_state(false)
+		local drag = seam.drag()
+		-- The press, and the last move (`moved`, `least`): what its bounce
+		-- goes past, after the drag too.
+		local start: any = nil
+		local last: any = nil
+		local function apply(s: any)
+			splits.resize(s.path, s.part, s.shares, s.moved, s.least, drag.nudge:peek() / s.length)
+		end
+		local was_nudge = 0
+		ui.effect(function()
+			local n = drag.nudge:get()
+			if n == 0 and was_nudge == 0 then
+				return
+			end
+			was_nudge = n
+			if last then
+				apply(last)
+			end
+		end)
+		local item: { [any]: any } = {
+			id = `split-divider-{id}`,
+			pointer_events = "auto",
+			cursor = if row then "col_resize" else "row_resize",
+			on_hover = function(inside: boolean)
+				lit:set(inside)
+			end,
+			on_press = function(e: any)
+				local d = find(splits.dividers:peek())
+				if not d then
+					return
+				end
+				last = nil
+				if e.clicks == 2 then
+					splits.even(d.path)
+					return
+				end
+				local area = splits.area()
+				local span = if row then area.w else area.h
+				start = { at = if row then e.x else e.y, shares = splits.shares_at(d.path), path = d.path, part = d.at, length = d.length.p * span + d.length.q }
+				held:set(true)
+			end,
+			on_pointer_move = function(e: any)
+				local s = start
+				if s and s.length > 0 then
+					local moved = ((if row then e.x else e.y) - s.at) / s.length
+					local least = math.min(0.45, (if row then PANE_LEAST_WIDE else PANE_LEAST_TALL) / s.length)
+					local lo, hi = splits.bounds(s.shares, s.part, least)
+					drag.at((s.shares[s.part] + moved) * s.length, lo * s.length, hi * s.length)
+					last = { path = s.path, part = s.part, shares = s.shares, moved = moved, least = least, length = s.length }
+					apply(last)
+				end
+			end,
+			on_release = function()
+				start = nil
+				held:set(false)
+				drag.release()
+			end,
+			-- What lights: the gap itself.
+			ui.div {
+				absolute = true,
+				left = if row then DIVIDER_REACH else 0,
+				right = if row then DIVIDER_REACH else 0,
+				top = if row then 0 else DIVIDER_REACH,
+				bottom = if row then 0 else DIVIDER_REACH,
+				rounded = "$radius.full",
+				pointer_events = "none",
+				bg = "$border.strong",
+				opacity = seam.lit(function(): boolean
+					return lit:get() or held:get()
+				end, drag),
+			},
+		}
+		-- Placed at its gap's insets, reaching a little past it each side to take the
+		-- pointer.
+		local WHY = "a divider's place: a share of the page, plus points"
+		local along = if row then DIVIDER_REACH else 0
+		local across = if row then 0 else DIVIDER_REACH
+		item.absolute = true
+		item.snap = true
+		item.left = function(): string
+			return `{now().left.p * 100}%`
+		end
+		item.ml = function(): number
+			return ui.raw(now().left.q - along, WHY)
+		end
+		item.right = function(): string
+			return `{(1 - now().right.p) * 100}%`
+		end
+		item.mr = function(): number
+			return ui.raw(-now().right.q - along, WHY)
+		end
+		item.top = function(): string
+			return `{now().top.p * 100}%`
+		end
+		item.mt = function(): number
+			return ui.raw(now().top.q - across, WHY)
+		end
+		item.bottom = function(): string
+			return `{(1 - now().bottom.p) * 100}%`
+		end
+		item.mb = function(): number
+			return ui.raw(-now().bottom.q - across, WHY)
+		end
+		return ui.div(item)
+	end
+	-- (Each pane's landing, only while a chat is carried. Not a `ui.show` round them:
+	-- its box would lie over the page and keep a drop from the chat under it.)
+	local landing_ids = ui.computed(function(): { string }
+		return if splits.dragging:get() and not expanded() then members:get() else {}
+	end)
 	-- The page's room: the page's card at the focused chat's place, the
 	-- split's panes under it.
 	local split_area = ui.row {
@@ -1574,58 +1955,100 @@ return function(props: Props): Node
 		min_w = 0,
 		h_full = true,
 		relative = true,
-		-- (The split's panes, under the page's card: in a split, their cards
-		-- are the chats, and the page's card is the composer's frame over
-		-- the focused one's.)
+		hidden = function(): boolean
+			return away()
+		end,
+		on_mount = function(el: any)
+			splits.set_area(el)
+		end,
+		-- (In a split, the frame of the window's composer alone, over the
+		-- panes: the pointer goes through to them, but for the composer.)
+		pointer_events = function(): any
+			return if grouped() then "none" else "auto"
+		end,
+		-- (While the panel expands over the page or gives it back, what's in
+		-- it is held at a width (`page_hold`) and this clips it, in the cards'
+		-- corners: its edge reads as the page's card's own.)
+		overflow = function(): string
+			return if page_hold:get() then "hidden" else "visible"
+		end,
+		rounded = "$zeron.inset.radius",
 		ui.div {
+			id = "shell-page-room",
 			absolute = true,
 			left = 0,
-			right = 0,
 			top = 0,
 			bottom = 0,
-			pointer_events = "none",
-			ui.each(members, function(id: string): Node
-				return pane_item(id)
-			end, {
-				key = function(id: string): string
-					return id
-				end,
-				w_full = true,
-				h_full = true,
-				relative = true,
-			}),
-		},
-		-- (What the page's card stands in, placed by its box in a split.)
-		ui.column {
-			grow = 1,
-			min_w = 0,
-			h_full = true,
-			relative = true,
-			-- (In a split, the frame of the window's composer alone, over the
-			-- panes: the pointer goes through to them, but for the composer.)
+			w = function(): any
+				local held = page_hold:get()
+				return if held then ui.raw(held, "the page's width held as the panel expands over it") else "100%"
+			end,
 			pointer_events = function(): any
 				return if grouped() then "none" else "auto"
 			end,
+			-- (Its fade as the panel expands over it: ds/motion `content`.
+			-- Gone, it takes no clicks.)
+			on_mount = function(el: any)
+				page_el = el
+				anime.animate(el, { opacity = if expanded() then 0 else 1, duration = 0 } :: any)
+			end,
+			-- (The split's panes, under the page's card: in a split, their cards
+			-- are the chats, and the page's card is the composer's frame over
+			-- the focused one's.)
+			ui.div {
+				absolute = true,
+				left = 0,
+				right = 0,
+				top = 0,
+				bottom = 0,
+				pointer_events = "none",
+				ui.each(members, function(id: string): Node
+					return pane_item(id)
+				end, {
+					key = function(id: string): string
+						return id
+					end,
+					w_full = true,
+					h_full = true,
+					relative = true,
+				}),
+			},
+			-- (The page's card, placed by its box in a split: there the frame of
+			-- the window's composer alone, over the panes.)
 			ui.column(pane),
+			ui.div {
+				absolute = true,
+				left = 0,
+				right = 0,
+				top = 0,
+				bottom = 0,
+				pointer_events = "none",
+				ui.each(divider_ids, divider, {
+					key = function(id: string): string
+						return id
+					end,
+					w_full = true,
+					h_full = true,
+					relative = true,
+				}),
+			},
+			ui.div {
+				absolute = true,
+				left = 0,
+				right = 0,
+				top = 0,
+				bottom = 0,
+				pointer_events = "none",
+				ui.each(landing_ids, landing, {
+					key = function(id: string): string
+						return id
+					end,
+					w_full = true,
+					h_full = true,
+					relative = true,
+				}),
+			},
 		},
-		ui.show(function(): boolean
-			return splits.dragging:get() and not expanded()
-		end, ui.div {
-			absolute = true,
-			left = 0,
-			right = 0,
-			top = 0,
-			bottom = 0,
-			pointer_events = "none",
-			ui.each(members, landing, {
-				key = function(id: string): string
-					return id
-				end,
-				w_full = true,
-				h_full = true,
-				relative = true,
-			}),
-		}),
 	}
 
 	-- Two cards, the page and its panel, set in from the window's edges and
@@ -1638,6 +2061,20 @@ return function(props: Props): Node
 		min_w = 0,
 		h_full = true,
 		relative = true,
+		pt = ui.raw(TOP_BAR, "room for the top bar"),
+		-- (The window's edges a little more than the gap between cards: the
+		-- same to the eye.)
+		pb = ui.raw(WINDOW_EDGE, "the window's edge"),
+		-- (The gap between cards beside the sidebar's, the window's edge
+		-- without it: the one going to the other only over the sidebar's
+		-- last points, so the gap beside its edge holds as it folds.)
+		pl = function(): number
+			-- (Its column, the window's gap before its card included.)
+			local shown = math.min(shell_view.sidebar_shown:get(), WINDOW_EDGE)
+			return ui.raw(WINDOW_EDGE - (WINDOW_EDGE - INSET) * shown / WINDOW_EDGE, "the window's edge, or the gap beside the sidebar")
+		end,
+		pr = ui.raw(WINDOW_EDGE, "the window's edge"),
+		pointer_events = "none",
 		ui.div { id = "shell-drag", absolute = true, left = 0, right = 0, top = 0, h = TITLE_H, window_drag = true },
 		ui.row {
 			ref = row_ref,
@@ -1652,5 +2089,51 @@ return function(props: Props): Node
 			split_area,
 			beside,
 		},
+		-- What there is to update, beside the panel toggle (and Expand, with the
+		-- panel open): nothing with nothing to say.
+		ui.show(updates.shown, ui.div {
+			absolute = true,
+			right = function(): number
+				local toggle = 24 + 8 + ds.TitleBar.actions_right()
+				return ui.raw(if shown:get() then toggle + EXPAND + 8 else toggle, "off the panel toggle")
+			end,
+			top = function(): number
+				return ds.TitleBar.middle() - 14
+			end,
+			pointer_events = "auto",
+			updates.Button {},
+		}),
+		-- Expand: the panel over the session's chat, and back, on the top bar beside
+		-- the panel toggle, as far off it as Back is off the sidebar's toggle.
+		ui.show(function(): boolean
+			return shown:get()
+		end, ui.div {
+			absolute = true,
+			right = function(): number
+				return ui.raw(24 + 8 + ds.TitleBar.actions_right(), "off the panel toggle")
+			end,
+			top = function(): number
+				return ds.TitleBar.middle() - EXPAND / 2
+			end,
+			pointer_events = "auto",
+			-- (Its name, glyph and tooltip swap as it flips: two buttons.)
+			ui.presence(function(): string
+				return if expanded() then "collapse" else "expand"
+			end, function(which: string): Node
+				return ds.IconButton {
+					id = "panel-expand",
+					label = if which == "collapse" then ui.t("panel.strip.collapse") else ui.t("panel.strip.expand"),
+					tooltip_side = "bottom",
+					w = EXPAND,
+					h = EXPAND,
+					-- (One of the title bar's: its glyph held under the pointer.)
+					tone = "bar",
+					on_click = function()
+						shell_view.toggle_expanded()
+					end,
+					ds.Icon { name = if which == "collapse" then "collapse-arrows" else "expand-arrows", size = 14, glyph_stroke = true },
+				}
+			end),
+		}),
 	}
 end

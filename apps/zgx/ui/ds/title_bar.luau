@@ -63,29 +63,234 @@ local LIGHT, LIGHT_FIRST, LIGHT_PITCH = 14, 21, 23
 -- `TITLEBAR_CLUSTER_PAD`).
 local TOGGLE_IN, ROW_PAD = 88, 10
 
--- How far in from the window's right edge the window's own buttons reach:
--- Windows' caption buttons, and on Linux the buttons zgx draws where the
--- desktop's `button-layout` asks (GNOME's `appmenu:close`, close at the
--- right). 0 where they stand at the left (macOS's traffic lights, which
--- TOGGLE_IN already clears), are not reported, or there are none. A plugin
--- reads no `ui.window.controls`: 0.
+-- A state of the window's (`ui.window.<name>`), or nil where there's none
+-- (a plugin, lent the design system, has no window of its own).
+local function window_state(name: string): State<any>?
+	local window = (ui :: any).window
+	return if window then window[name] else nil
+end
+local function read(state: State<any>?, tracked: boolean): any
+	if state == nil then
+		return nil
+	end
+	return if tracked then state:get() else state:peek()
+end
+
+-- Whether the window is on macOS, as the host says (src/main.rs
+-- `platform`): its buttons the traffic lights at the bar's left. Asked once.
+local platform: string? = nil
+local function platform_now(): string
+	if platform == nil then
+		local ok, name = pcall(function(): any
+			return ui.shared("platform", ""):peek()
+		end)
+		platform = if ok and type(name) == "string" then name else ""
+	end
+	return platform :: string
+end
+local function on_macos(): boolean
+	return platform_now() == "macos"
+end
+-- Whether it's on Windows (its buttons zgx's caption buttons, at the right).
+local function on_windows(): boolean
+	return platform_now() == "windows"
+end
+
+-- Whether the window is in full screen (tracked).
+local function full_screen(): boolean
+	return read(window_state("full_screen"), true) == true
+end
+
+-- The window's own buttons as the window reports them, and the side they
+-- stand at: the left (macOS's traffic lights; on Linux a `close:…` layout)
+-- or the right (Windows' caption buttons; GNOME's `appmenu:close`). Nil
+-- where none are reported: in full screen, in a plugin (which reads no
+-- `ui.window.controls`) and headless. Read tracked unless `tracked` is
+-- false.
+type Side = "left" | "right"
+local function window_buttons(tracked: boolean?): (Side?, any)
+	local area = read(window_state("titlebar_area"), tracked ~= false)
+	local buttons = read(window_state("controls"), tracked ~= false)
+	if not area or not buttons then
+		return nil, nil
+	end
+	return if buttons.x >= area.x + area.width then "right" else "left", buttons
+end
+
+-- Where the toggle stands from the window's left, in full screen (`full`)
+-- or out of it. On macOS: past the traffic lights, or at the edge once
+-- they're hidden. (Leaving full screen, the lights aren't reported again
+-- until the system's animation ends: 88 meanwhile, where they put it.)
+-- Elsewhere, by where the window's buttons stand: 10 in with them at the
+-- right (the shipping app's), past them at the left (never nearer than
+-- the lights' 88), 88 with none reported.
+local function toggle_in(full: boolean, tracked: boolean?): number
+	if not on_macos() then
+		local side, buttons = window_buttons(tracked)
+		if side == "right" then
+			return ROW_PAD
+		elseif side == "left" then
+			return math.max(TOGGLE_IN, buttons.x + buttons.width)
+		end
+		return TOGGLE_IN
+	end
+	if full then
+		return FULL_SCREEN_IN
+	end
+	local lights = read(window_state("controls"), tracked ~= false)
+	return if lights then lights.x + lights.width + LIGHTS_GAP else TOGGLE_IN
+end
+
+-- The row's controls' width, past the toggle's start (`start`), to the
+-- row's end: ROW_PAD past its last control; alone at the window's left
+-- (off macOS, the window's buttons at the right), its island holds it
+-- evenly, as far past its end as before its start.
+local function controls_tail(start: number): number
+	return if not on_macos() and start == ROW_PAD then ROW_PAD - island.metrics().inset else ROW_PAD
+end
+local function controls_w(start: number): number
+	local m = island.metrics()
+	return m.control + m.group + m.control + m.gap + m.control + controls_tail(start)
+end
+
+-- Whether the window is in full screen, untracked (a value to start from).
+local function full_screen_now(): boolean
+	return read(window_state("full_screen"), false) == true
+end
+
+-- `target`'s props kept where each says (`at[prop](full)`, read tracked: the
+-- window in full screen or not, the lights, whatever else it reads), by the
+-- engine: still while the window goes in or out of full screen, then
+-- sliding over as Zerun's controls do (`FULL_SCREEN_SLIDE`); otherwise eased
+-- by `settle` (a tween's options) or set at once. Nothing runs per frame
+-- and nothing at rest: the node's own style gives them a plain number to
+-- start from (`at` as it stands then), never a function (an animated style
+-- runs its node's functions again each frame). With motion reduced they
+-- land at once.
+local function follow(target: any, at: { [string]: (full: boolean) -> number }, settle: { duration: number, ease: string }?)
+	local moving = window_state("full_screen_transition")
+	-- Where they stand, and whether full screen's move is held for its slide.
+	local last: { [string]: number }? = nil
+	local held = false
+	local function go(to: { [string]: number }, timing: { duration: number, ease: string }?)
+		local from = last :: { [string]: number }
+		last = to
+		if timing == nil or motion.reduced_now() then
+			anime.utils.set(target, to :: any)
+			return
+		end
+		local params: { [string]: any } = { duration = timing.duration, ease = timing.ease }
+		for prop, v in to do
+			params[prop] = { from[prop], v }
+		end
+		anime.animate(target, params :: any)
+	end
+	ui.effect(function()
+		local full = full_screen()
+		local now: { [string]: number } = {}
+		for prop, f in at do
+			now[prop] = f(full)
+		end
+		-- (The first: the node's own style already says it.)
+		if last == nil then
+			last = now
+			return
+		end
+		-- Held while macOS animates (what it reports meanwhile is never
+		-- seen: coming out, the lights stand at 9,9 for a moment).
+		if read(moving, true) ~= nil then
+			held = true
+			return
+		end
+		local changed = false
+		for prop, v in now do
+			if (last :: any)[prop] ~= v then
+				changed = true
+			end
+		end
+		if not changed then
+			return
+		end
+		if held then
+			-- Once what macOS says as it ends has settled (the lights come
+			-- back a moment after the transition ends; a change meanwhile
+			-- runs this again and waits anew).
+			ui.after(0.05, function()
+				held = false
+				go(now, FULL_SCREEN_SLIDE)
+			end)
+			return
+		end
+		go(now, settle)
+	end)
+end
+
+-- How far in from the window's right edge the window's own buttons reach;
+-- 0 where they stand at the left, or none are reported.
 local function window_buttons_right(): number
-	local window = ui.window :: any
-	local area_state, controls_state = window.titlebar_area, window.controls
-	if area_state == nil or controls_state == nil then
-		return 0
+	local side, buttons = window_buttons()
+	return if side == "right" then buttons.width else 0
+end
+
+-- Windows' caption glyph (zgx's: a 10-point square in each button) and how
+-- much of a control's box its glyph inks (the island's 16-point glyphs, the
+-- panel toggle's frame among them, are 12 across): what the page's controls
+-- are spaced from the window's buttons by.
+local CAPTION_GLYPH, CONTROL_INK = 10, 12
+
+-- How far in from the window's right edge the page's controls (the bar's
+-- `actions`) end: their row's padding; beside the window's own buttons at
+-- the right, past them by one rhythm, measured by ink: from the last
+-- control's glyph to Minimize's as far as from one caption glyph to the
+-- next (a button's width less its glyph), so the two read as one group.
+local function actions_right(): number
+	local side, buttons = window_buttons()
+	-- (Linux's buttons, circles in a strip the bar's height or more, keep
+	-- the row's padding before them. Windows' span the bar's whole 38 too,
+	-- as Zerun's, src/main.rs `caption_height`: still one rhythm.)
+	if side == "right" and buttons.height >= H and not on_windows() then
+		return buttons.width + ROW_PAD
 	end
 	local area, buttons = area_state:get(), controls_state:get()
 	if area and buttons and buttons.x >= area.x + area.width then
 		return buttons.width
 	end
-	return 0
+	return ROW_PAD
+end
+
+-- The title line's middle, from the window's top: where everything on the
+-- bar centres. 21, as beside the traffic lights; where the window's buttons
+-- stand at the right in a strip shorter than the bar (Windows' 32-point
+-- caption buttons), on their middle, so Zerun's controls and theirs share
+-- one line; never nearer the window's top than an island's middle, its
+-- controls held their padding in from the edge (zgx reports the buttons
+-- shorter in a zoomed window than it draws them: zgx-asks/
+-- windows-caption-buttons). Read tracked unless `tracked` is false.
+-- On macOS the traffic lights decide it: zgx's inset bar centres them in its
+-- 40-point strip, so 20 down, not old Zerun's 21 (which left every control a
+-- point under them). Their own middle where they're reported; 20 in full
+-- screen, so nothing moves going in.
+local LIGHTS_LINE = 20
+local function middle(tracked: boolean?): number
+	local side, buttons = window_buttons(tracked)
+	if side == "right" and buttons.height < H then
+		return math.max(buttons.y + buttons.height / 2, island.thickness() / 2)
+	end
+	if on_macos() then
+		return if side == "left" then buttons.y + buttons.height / 2 else LIGHTS_LINE
+	end
+	return MIDDLE
 end
 
 -- A bar control: the design system's icon button at the island's size,
 -- a quiet glyph, a wash under the pointer; when it can't (nothing to go
 -- back or forward to), muted and still. Its tooltip hangs below it: above
 -- is the window's edge.
+-- Back and Forward's glyphs, at the bar glyphs' optical size: the arrow
+-- runs 14 of its source's 24 units, so drawn 16 across it was 9 points
+-- beside the sidebar toggle's 13; 21 across it is 12, in the glyphs'
+-- stroke (ds/sidebar_icon's), so the three weigh alike.
+local ARROW = 21
 local function control(label: Label, glyph: Node, enabled: (() -> boolean)?, on_click: (() -> ())?): Node
 	local function able(): boolean
 		return enabled == nil or enabled()
@@ -95,6 +300,8 @@ local function control(label: Label, glyph: Node, enabled: (() -> boolean)?, on_
 		label = label,
 		w = size,
 		h = size,
+		-- (Its glyph held under the pointer, the wash alone coming: Zerun's.)
+		tone = "bar",
 		tooltip_side = "bottom",
 		disabled = function(): boolean
 			return not able()
@@ -163,6 +370,8 @@ local TitleBar = ui.component(function(props: Props): Node
 		-- goes, centred on them as it grows; gone as it comes back.
 	}
 	local left_island: ContainerProps = {
+		id = "titlebar-island",
+		ref = island_ref,
 		absolute = true,
 		left = ISLAND_LEFT,
 		w = ISLAND_RIGHT - ISLAND_LEFT,
@@ -198,6 +407,7 @@ local TitleBar = ui.component(function(props: Props): Node
 						return not collapsed:get()
 					end) :: any,
 					size = 16,
+					ink = "$zeron.bar.ink",
 				},
 				nil,
 				function()
@@ -209,9 +419,9 @@ local TitleBar = ui.component(function(props: Props): Node
 				end
 			),
 			ui.div { w = GROUP_GAP, shrink = 0 },
-			control(locale.t("common.back"), Icon { name = "arrow-left", size = 16 }, props.can_back, props.on_back),
+			control(locale.t("common.back"), Icon { name = "arrow-left", size = ARROW, glyph_stroke = true }, props.can_back, props.on_back),
 			ui.div { w = CONTROL_GAP, shrink = 0 },
-			control(locale.t("ds.title_bar.forward"), Icon { name = "arrow-right", size = 16 }, props.can_forward, props.on_forward),
+			control(locale.t("ds.title_bar.forward"), Icon { name = "arrow-right", size = ARROW, glyph_stroke = true }, props.can_forward, props.on_forward),
 		}
 	)
 	if props.actions then

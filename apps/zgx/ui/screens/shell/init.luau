@@ -382,9 +382,40 @@ return function(): Node
 		end
 		was_settings = now
 	end)
-	-- Whether the title bar stands over a wallpaper: a new chat's.
-	local function art(): boolean
-		return route.current:get().name == "home" and appearance.showing:get() ~= "none"
+	-- Settings: in the page's place, under the top bar and beside the panel, its tabs
+	-- still there, its own list of pages down its side and the way back to the chats at
+	-- its head.
+	local function settings_view(): Node
+		return
+		ui.show(
+				in_settings,
+				ui.column {
+					id = "shell-settings",
+					-- Zerun's Settings are no plugin's to change or add to: what you
+					-- allow plugins and templates is decided here (Settings →
+					-- Plugins and Templates). Sealed, with all it holds.
+					hook = false,
+					w_full = true,
+					h_full = true,
+					focusable = true,
+					focus = { outline = 0 },
+					-- (Focus comes here as it shows: none left on a row of the chats
+					-- now out of sight, where keys would go unseen.)
+					on_mount = function(el)
+						el:focus()
+					end,
+					on_key = function(e): boolean
+						if e.key == "Escape" then
+							route.leave_settings()
+							return true
+						end
+						return false
+					end,
+					boundary.screen(boundary.named("shell.boundary.screen.settings"), "@app/screens/shell/settings", function(settings): Node
+						return settings.View({ inset = true, collapsed = collapsed :: any })
+					end),
+				}
+			)
 	end
 	local frosted = ui.computed(function(): number
 		return if material.frosted:get() then 1 else 0
@@ -396,6 +427,9 @@ return function(): Node
 			fit.set_viewport(size.w)
 		end,
 		id = "shell",
+		-- The mouse's back and forward buttons, anywhere not taken by a
+		-- node with its own (a session's tab, which hands them on).
+		on_aux_click = route.aux_click,
 		-- The accent chosen (Settings → Appearance, setup's Make it yours), as
 		-- setup's frame wears it, and the interface's text size (ds.look):
 		-- nothing for the theme's own.
@@ -540,10 +574,9 @@ return function(): Node
 				end
 				local function device(): (string?, boolean)
 					local c = chat()
-					local now = sessions.now:get()
-					for _, d in now.devices do
+					for _, d in sessions.devices:get() do
 						if c and d.id == c.device then
-							return d.name, d.here or d.id == now.here
+							return d.name, d.here or d.id == sessions.here:get()
 						end
 					end
 					return nil, false
@@ -564,20 +597,33 @@ return function(): Node
 							local c = chat()
 							return if c then c.title else ""
 						end,
-						time = function(): number?
-							local c = chat()
-							return if c then c.updated else nil
-						end,
-						device = function(): string?
-							return (device())
-						end,
-						here = function(): boolean
-							local _, here = device()
-							return here
-						end,
-						project = function(): string?
-							local c = chat()
-							if not c or not c.project then
+						ds.SessionCard {
+							session = id,
+							title = function(): string
+								local c = chat()
+								return if c then c.title else ""
+							end,
+							time = function(): number?
+								local c = chat()
+								return if c then c.updated else nil
+							end,
+							device = function(): string?
+								return (device())
+							end,
+							here = function(): boolean
+								local _, here = device()
+								return here
+							end,
+							project = function(): string?
+								local c = chat()
+								if not c or not c.project then
+									return nil
+								end
+								for _, p in sessions.projects:get() do
+									if p.id == c.project then
+										return p.name
+									end
+								end
 								return nil
 							end
 							for _, p in sessions.now:get().projects do

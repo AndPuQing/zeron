@@ -69,6 +69,7 @@ separate layer, split at the exact glyph offset.
 | Line breaks vs CoreText on the same font bytes | `ZeronTests/LineBreakAccuracyTests`, `crates/text/tests/coretext.rs` |
 | Demo end-to-end (send → echo → reply, questions, queue, offline host) | `crates/client/tests/demo.rs`, `ZeronUITests/SessionFlowTests` |
 | Live sync against an in-process edge | `crates/client/tests/live.rs` |
+| The relay layer: live frames, journal, queue, catch-up, checkpoints, flips ([relay-mobile.md](design/relay-mobile.md)) | `crates/client/tests/relay.rs` |
 | Real stack (wrangler dev edge + headless engine, mock harness) | `ZeronUITests/LiveStackTests` |
 | Frame pacing (hitch ratio, idle + streaming) | `-lab -bench`, `ZeronUITests/ScrollPerformanceTests` |
 
@@ -82,4 +83,4 @@ token 0.19 ms; display-link flings through 3,300 rows — 0 hitches idle
 `scripts/ios/build-core.sh` (run by the Xcode "Rust core" phase) builds
 `zeron-mobile` for the active platform with the `mobile` cargo profile (always
 optimized), and regenerates the committed UniFFI bindings in
-`apps/ios/Zeron/Core/Generated/`.
+`apps/ios/Zerun/Core/Generated/`.

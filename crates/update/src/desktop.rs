@@ -85,7 +85,7 @@ mod tests {
     fn non_mac_beta_updates_also_wait_for_the_stable_engine_to_catch_up() {
         let running = engine_version(&InstallKind::Managed { app_root: "/example/app".into() }).unwrap();
         let stable = crate::Manifest { version: "0.1.0".into(), ..Default::default() };
-        assert!(matches!(offer(&stable, "99.0.0-beta.1", Channel::Stable, Some(&running), None), Offer::Held(_)));
+        assert!(matches!(crate::offer_given(&stable, "99.0.0-beta.1", Channel::Stable, Some(&running), None, true), Offer::Held(_)));
         let caught_up = crate::Manifest { version: "99.0.0".into(), ..Default::default() };
         assert_eq!(offer(&caught_up, "99.0.0-beta.1", Channel::Stable, Some(&running), None), Offer::Newer);
     }

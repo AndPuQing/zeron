@@ -13,6 +13,7 @@ browser = "1.10.0"
 coreSplashscreen = "1.2.0"
 backdrop = "1.0.6"
 webrtc = "150.7871.01"
+junit = "4.13.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -36,6 +37,7 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 compose-backdrop = { module = "io.github.kyant0:backdrop", version.ref = "backdrop" }
 webrtc = { module = "io.github.webrtc-sdk:android", version.ref = "webrtc" }
+junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

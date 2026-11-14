@@ -9,8 +9,10 @@
 --   LaneTab { tab = { id, kind = "side_chat" | "subagent", chat, title } }
 
 local ds = require("@ds")
+local Dictation = require("@app/screens/chat/dictation")
 local T = require("@ds/transcript")
 local lanes = require("@app/screens/chat/lanes")
+local TurnGlue = require("@app/screens/chat/turn_glue")
 local store = require("@app/screens/chat/store")
 local prefs = require("@app/screens/settings/prefs")
 local locale = require("@ds/locale")
@@ -18,8 +20,11 @@ local sessions = require("@account/sessions")
 local route = require("@app/screens/shell/route")
 local Where = require("@app/screens/chat/where")
 local Dock = require("@app/screens/chat/dock")
+local CloudTray = require("@app/screens/chat/cloud_tray")
+local LinkNotice = require("@app/screens/chat/link_notice")
 local ReplyImages = require("@app/screens/chat/reply_images")
 local FileLinks = require("@app/screens/chat/file_links")
+local LinkChips = require("@app/screens/chat/link_chips")
 local LinkMenu = require("@app/screens/chat/link_menu")
 local boundary = require("@app/screens/shell/boundary")
 local Quote = require("@ds/quote")
@@ -60,8 +65,106 @@ function M.title(tab: any): string
 	return locale.s(if tab.kind == "subagent" then "chat.lane_tab.subagent" else "chat.lane_tab.side_chat")
 end
 
-function M.icon(tab: any): string
-	return if tab.kind == "subagent" then "bot" else "side-chat"
+function M.icon(_tab: any): string
+	return "side-chat"
+end
+
+-- A side chat's project: where its composer has it before its first message,
+-- then its chat's; its parent's while neither is known.
+local function project_of(tab: any, picked: State<string?>): any
+	local chat = tab.chat
+	local parent = lanes.unsent:get()[chat]
+	local id: string? = nil
+	if parent then
+		id = picked:get()
+	else
+		local s = lanes.view(tab.id).session:get()
+		if s and s.id == chat and s.harness then
+			id = s.project
+			parent = nil
+		else
+			local row = row_of(chat)
+			parent = if row then row.parent else nil
+		end
+	end
+	local now = sessions.now:get()
+	if not id and parent then
+		for _, c in now.chats do
+			if c.id == parent then
+				id = c.project
+			end
+		end
+	end
+	for _, p in now.projects do
+		if p.id == id then
+			return p
+		end
+	end
+	return nil
+end
+
+-- A side chat's tile in its tab: its project's, as a chat's on the top bar (one
+-- with no project, the side chat's glyph, there too).
+function M.tile(tab: any): Node
+	local picked = ui.state(`chat_lane_project_{tab.chat}`, nil :: string?)
+	return ui.presence(function(): string
+		local p = project_of(tab, picked)
+		return if p then p.id else ""
+	end, function(which: string): Node
+		if which == "" then
+			return ds.Tile { size = 20, inside = ds.Icon { name = "side-chat", size = 14 } }
+		end
+		return ds.Tile {
+			size = 20,
+			label = function(): string?
+				local p = project_of(tab, picked)
+				return if p then p.name else nil
+			end,
+			hue = function(): string?
+				local p = project_of(tab, picked)
+				return if p then look.of(p).hue else nil
+			end,
+			src = function(): string?
+				local p = project_of(tab, picked)
+				return if p then look.of(p).src else nil
+			end,
+			emoji = function(): string?
+				local p = project_of(tab, picked)
+				return if p then look.of(p).emoji else nil
+			end,
+			project = function(): string?
+				local p = project_of(tab, picked)
+				return if p then p.id else nil
+			end,
+		}
+	end, { w = 20, h = 20, shrink = 0 })
+end
+
+-- What a side chat's tab says at its end: whether it awaits a person or is at
+-- work (what a chat's tab on the top bar says).
+local TAB_STATES: { [string]: boolean } = { approval = true, input = true, working = true, connecting = true }
+function M.state(tab: any): string?
+	local row = row_of(tab.chat)
+	local kind = if row then row.status else nil
+	return if kind and TAB_STATES[kind] then kind else nil
+end
+
+-- Each tab's find bar and model picker, by its slot, while it's made.
+local finders: { [string]: any } = {}
+local pickers: { [string]: State<number> } = {}
+
+function M.open_find(tab: any): boolean
+	local find = finders[tab.id]
+	return find ~= nil and find.open()
+end
+
+function M.open_model(tab: any): boolean
+	local picker = pickers[tab.id]
+	if not picker then
+		return false
+	end
+	picker:add(1)
+	return true
 end
 
 -- A side chat's composer: the chat page's (ds.Composer), its footer the
@@ -146,13 +249,29 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		end,
 		chosen = chosen,
 		asked = ui.state(`chat_split_asked_{chat}`, nil :: any),
+		-- (A steer glides in its own transcript, as its sends do.)
+		name = name,
 		say = function(tone: string, key: string)
 			notice:set({ tone = tone, text = locale.s(key), dismissable = true })
 		end,
 	}
 	local tray = ui.state(`chat_split_tray_{chat}`, nil :: any)
 	local session = view.session
-	local focus = ui.state(`chat_lane_focus_{chat}`, 0)
+	-- Its Cloud machine, on a chat that has one (a side chat shares its
+	-- parent's).
+	local machine = CloudTray.bind {
+		chat = function(): string?
+			return chat
+		end,
+		device = function(): string?
+			local s = session:get()
+			return s and s.device
+		end,
+		running = function(): boolean
+			local s = session:get()
+			return s ~= nil and s.running == true
+		end,
+	}
 	-- A queued message edited in its composer. (A split's pane: a press
 	-- focuses it, the window's composer doing this.)
 	local editing = ui.state(`chat_lane_editing_{chat}`, nil :: { item: string, aside: string, aside_cargo: { any }? }?)
@@ -338,7 +457,7 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		end
 		local s = session:get()
 		local function project_row(id: string?): any?
-			for _, p in sessions.now:get().projects do
+			for _, p in sessions.projects:get() do
 				if p.id == id then
 					return p
 				end
@@ -358,6 +477,12 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 			}
 		end
 		local p = project_row(s.project)
+		local on: string? = nil
+		for _, d in sessions.devices:get() do
+			if d.id == s.device then
+				on = d.name
+			end
+		end
 		return {
 			name = s.branch,
 			worktree = p ~= nil and s.cwd ~= nil and s.cwd ~= p.path,
@@ -401,10 +526,82 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 	local function remove_lane_cargo(id: string)
 		Shared.remove_cargo_of(chat, id)
 	end
+	-- (A chat sent already has its host in the session: `device` is only
+	-- seeded while it's unsent, so reading it alone asked this computer's
+	-- engine for a chat running on another's.)
+	local accounts = Shared.model_accounts(function(): string?
+		if unsent() then
+			return device:get()
+		end
+		local s = session:get()
+		return if s then s.device else nil
+	end)
+	-- What `@`, `/` and `$` offer, as the chat page's. (A split's pane: the
+	-- window's composer types, a press focusing it.)
+	local function run_command(command: string)
+		if command == "model" then
+			open_model:add(1)
+		else
+			ZeronCommands.run(command, if unsent() then nil else chat)
+		end
+	end
+	local completions = if split
+		then nil
+		else Completions.bind {
+			key = `chat_lane_{chat}`,
+			text = draft,
+			agent = function(): string?
+				return Completions.agent_of(model:get(), if unsent() then nil else session:get())
+			end,
+			target = function(): any
+				if unsent() then
+					local p = project:get()
+					return if p and p ~= Where.NO_PROJECT then { space = p, device = device:get() } else nil
+				end
+				local s = session:get()
+				return { chat = chat, device = if s then s.device else nil }
+			end,
+			files = function(): any
+				if unsent() then
+					local p = project:peek()
+					return if p and p ~= Where.NO_PROJECT then { space = p, device = device:peek() } else nil
+				end
+				local s = session:peek()
+				return { chat = chat, device = if s then s.device else nil }
+			end,
+			in_chat = function(): boolean
+				return not unsent()
+			end,
+			run = run_command,
+			-- (`@` lists what the draft carries, and the other chats.)
+			cargo = function(): { any }
+				return carried:get()
+			end,
+			chat = function(): string?
+				return chat
+			end,
+		}
+	local dictation = Dictation.bind(draft, function(): string
+		local edit = editing:get()
+		return `{chat}|{name}|{if edit then edit.item else ""}`
+	end, function(): boolean
+		local current = session:get()
+		return asks.question:get() ~= nil or asks.approval:get() ~= nil
+			or (current ~= nil and (current.state == "missing" or current.state == "offline"))
+			or (focused ~= nil and not focused())
+	end, name)
 	return ds.Composer {
+		dictation = dictation,
 		value = draft,
 		snap = if split then snap else nil,
-		cargo = lane_cargo,
+		-- (Its transcript's "Jump to latest", while it shows: its trays'
+		-- pill moves aside, the two a centred pair. By the lane's name, its
+		-- transcript's: screens/chat/shared's `pill_width_of`.)
+		aside = function(): number?
+			return Shared.pill_width_of("jump", name):get()
+		end,
+		on_pill_width = Shared.pill_teller("waiting", name),
+		cargo = carried,
 		-- (Its chips' × under the pointer, as the chat page's.)
 		on_remove_cargo = if split then remove_carried else remove_lane_cargo,
 		focus = focus,
@@ -436,16 +633,50 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 		access = access,
 		model = model,
 		effort = effort,
-		notice = notice,
+		fast = fast,
+		options = options,
+		open_model = open_model,
+		-- The app's settings: what sends, and whether Escape stops the agent.
+		send_with = function(): string
+			return prefs.send_with:get()
+		end,
+		on_escape = function(): boolean
+			return store.escape_chat(chat, running:peek())
+		end,
+		disabled = function(): boolean
+			local s = session:get()
+			return s ~= nil and (s.state == "missing" or s.state == "offline")
+		end,
+		mentions = if completions then completions.lists else nil,
+		on_mention = if completions then completions.on_mention else nil,
+		mention_empty = if completions then completions.empty else nil,
+		mention_sections = if completions then completions.sections else nil,
+		-- (Its own line first, else its Cloud machine's, on a chat with one.)
+		notice = ui.computed(function(): any
+			local mine = notice:get()
+			if mine then
+				return mine
+			end
+			local link = machine.cloud_link(string.find(draft:get(), "%S") ~= nil)
+			return if link then LinkNotice.of { cloud = link } else nil
+		end),
 		on_dismiss_notice = function()
 			notice:set(nil)
 		end,
+		on_notice_action = machine.wake,
+		alerts = machine.alerts,
+		on_alert_action = machine.on_alert,
+		on_dismiss_alert = machine.dismiss,
 		harnesses = function(): { any }
 			return store.catalog:get().harnesses
 		end,
 		models = function(): { any }
 			return store.catalog:get().models
 		end,
+		accounts = accounts.accounts,
+		account_group = accounts.account_group,
+		on_account = accounts.on_account,
+		on_accounts_open = accounts.on_accounts_open,
 		-- What its context holds: the chat page's ring and card, from the
 		-- side chat's own numbers (once it has run and they're reported).
 		usage = function(): any
@@ -481,35 +712,27 @@ local function composer(chat: string, view: any, name: string, split: boolean?, 
 			end
 			draft:set("")
 			notice:set(nil)
-			local cargo = Shared.take_cargo_of(chat)
-			local packed = Carried.pack(cargo, words, words)
-			local text_out = Carried.text(packed.typed, packed)
-			-- While a turn runs, only the queued words and attachments go to
-			-- the host. Model picks wait for the turn they will run in.
-			local queued = running:peek()
-			local req = if queued then {} else picks()
-			req.attachments, req.appshots = packed.attachments, Appshots.of_cargo(cargo)
-			local function deliver(mid: string?)
-				req.message_id = mid
-				-- Its first message makes it (New side chat), then sends.
-				local sent: any = nil
-				if is_unsent then
-					sent = lanes.send_first(chat, text_out, req, place())
-				else
-					req.session, req.text = chat, text_out
-					sent = store.send(req :: any)
-				end
-				sent:after(function() end, function(err: any)
-					draft:set(words)
-					if #cargo > 0 then
-						Shared.restore_cargo_of(chat, cargo)
-					end
-					local why = if type(err) == "table" and err.message then tostring(err.message) else nil
-					notice:set({
-						tone = "danger",
-						text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
-						dismissable = true,
-					})
+			-- What it carries goes with it, as the chat page's does.
+			local chips = Shared.take_cargo_of(chat)
+			local pack = Carried.pack(chips, words, words)
+			-- (Each command or skill picked: its canonical reference.)
+			-- (And each reference to what it carries, `@` picked: its name.)
+			local typed = Carried.settle(Invocations.encode(pack.typed), chips)
+			local prompt = Carried.text(typed, pack)
+			-- As the chat page sends: the prompt joins its transcript as the
+			-- transcript's send steps clear of the end (it glides to the top,
+			-- its reply's room opening under it), then goes to the host with
+			-- that id, so the host's copy is the same row.
+			-- (While a turn runs it's queued instead: it shows in the queue, and
+			-- what's picked waits for the turn it will run in.)
+			local queued = not is_unsent and running:peek()
+			local req: { [string]: any } = if queued then {} else picks()
+			req.attachments = pack.attachments
+			req.appshots = Appshots.of_cargo(chips)
+			local function failed(err: any)
+				ui.batch(function()
+					draft:set(text)
+					quotes:set(said_quotes)
 				end)
 			end
 			if queued then
@@ -698,10 +921,18 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 	local pictures = ReplyImages.for_session(lane_session)
 	local sent_pictures = ReplyImages.for_attachments(function(): any
 		local s = lane_session()
-		if not s then
+		if s then
+			return { id = s.id, device = s.device, cwd = s.cwd, here = sessions.here:get() }
+		end
+		-- A subagent's lane has no chat of its own (its doc is its parent's
+		-- child): the pictures its tools kept are files on its parent's
+		-- host, read as the parent's are.
+		local parent = data.parent
+		local open = store.session:get()
+		if not parent or not open or open.id ~= parent or open.state == "missing" then
 			return nil
 		end
-		return { id = s.id, device = s.device, cwd = s.cwd, here = sessions.now:get().here }
+		return { id = open.id, device = open.device, cwd = open.cwd, here = sessions.here:get() }
 	end)
 	-- The session whose panel it's in (the page's): where a file it links
 	-- opens, and a subagent it spawned.
@@ -758,11 +989,25 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 		offset = offset,
 		keep = anchor,
 		foot = if tab.kind == "subagent" then nil else room.foot,
+		-- Its "Jump to latest" and the pill of the composer at its foot, a
+		-- centred pair: its own composer's, or, a split's focused pane, the
+		-- window's (screens/chat/shared's `pill_width_of`).
+		beside = if tab.kind == "subagent"
+			then nil
+			else function(): number?
+				return Shared.pill_width_of("waiting", if split and focused_now() then "window" else `lane.{slot}`):get()
+			end,
+		on_jump_width = Shared.pill_teller("jump", `lane.{slot}`),
 		compact = function(): boolean
 			return prefs.compact_transcript:get()
 		end,
 		on_mention = quote,
-		on_attach = quote,
+		on_attach = attach_quote,
+		find = if split then nil else find.marks(),
+		-- (A subagent's liveness is its own doc's: no session of its own.)
+		turn_state = if tab.kind == "subagent" then nil else TurnGlue.of(function(): any
+			return view.session:get()
+		end),
 		on_retry = function(message: string)
 			store.retry(chat, message)
 		end,
@@ -776,6 +1021,10 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 		end,
 		open_link = open_link,
 		link_menu = LinkMenu(open_link, function(): any
+			return view.session:peek()
+		end),
+		-- (A reply's link to one of its files or its agent's skills: a chip.)
+		link_chip = LinkChips(function(): any
 			return view.session:peek()
 		end),
 		-- (A split's pane, made again at the place taken up: whether

@@ -40,6 +40,10 @@ mod devin_models;
 mod dsh_discovery;
 mod dsh_saved;
 mod grok_saved;
+mod hermes_names;
+/// How long Hermes's model names may take to read before the list goes
+/// out with ids.
+const HERMES_NAMING_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 mod normalize;
 mod prompt;
 mod saved;
@@ -277,8 +281,10 @@ fn grok_spec() -> AcpAgentSpec {
              `npm install -g @xai-official/grok`; set GROK_EXECUTABLE to override)",
         models: || {
             vec![Model {
+                default: false,
                 id: "grok-4.5".into(),
                 label: "Grok 4.5".into(),
+                provider: None,
                 description: Some("xAI's coding model — 500k context".into()),
                 reasoning_levels: vec![
                     ReasoningLevel::Low,
@@ -354,22 +360,28 @@ fn devin_spec() -> AcpAgentSpec {
         models: || {
             vec![
                 Model {
+                    default: false,
                     id: "swe-1-7-medium".into(),
                     label: "SWE-1.7 Medium".into(),
+                    provider: None,
                     description: Some("Devin's default coding model".into()),
                     reasoning_levels: Vec::new(),
                     options: Vec::new(),
                 },
                 Model {
+                    default: false,
                     id: "claude-fable-5-1-high".into(),
                     label: "Claude Fable 5.1 High".into(),
+                    provider: None,
                     description: Some("Anthropic's frontier model through Devin".into()),
                     reasoning_levels: Vec::new(),
                     options: Vec::new(),
                 },
                 Model {
+                    default: false,
                     id: "adaptive".into(),
                     label: "Adaptive".into(),
+                    provider: None,
                     description: Some("Devin picks the model per request".into()),
                     reasoning_levels: Vec::new(),
                     options: Vec::new(),
@@ -510,15 +522,19 @@ fn hermes_spec() -> AcpAgentSpec {
         models: || {
             vec![
                 Model {
+                    default: false,
                     id: "hermes-4-405b".into(),
                     label: "Hermes 4 405B".into(),
+                    provider: None,
                     description: Some("Nous Research's hybrid-reasoning flagship".into()),
                     reasoning_levels: Vec::new(),
                     options: Vec::new(),
                 },
                 Model {
+                    default: false,
                     id: "hermes-4-70b".into(),
                     label: "Hermes 4 70B".into(),
+                    provider: None,
                     description: Some("Faster Hermes 4 — same post-training, 70B".into()),
                     reasoning_levels: Vec::new(),
                     options: Vec::new(),
@@ -1222,15 +1238,19 @@ fn antigravity_spec() -> AcpAgentSpec {
             use ReasoningLevel::{High, Low, Medium};
             vec![
                 Model {
+                    default: false,
                     id: "gemini-3.7-flash".into(),
                     label: "Gemini 3.7 Flash".into(),
+                    provider: None,
                     description: None,
                     reasoning_levels: vec![Low, Medium, High],
                     options: Vec::new(),
                 },
                 Model {
+                    default: false,
                     id: "gemini-3.1-pro".into(),
                     label: "Gemini 3.1 Pro".into(),
+                    provider: None,
                     description: None,
                     reasoning_levels: vec![Low, High],
                     options: Vec::new(),
@@ -1452,6 +1472,8 @@ fn copilot_spec() -> AcpAgentSpec {
                 id: "auto".into(),
                 label: "Auto".into(),
                 description: Some("Let Copilot pick the best model".into()),
+                provider: None,
+                default: false,
                 reasoning_levels: Vec::new(),
                 options: Vec::new(),
             }]
@@ -3116,6 +3138,9 @@ impl AcpHarness {
                     model.options.retain(|option| option.id != "allow_all");
                 }
             }
+            if self.spec.id == HarnessId::Hermes {
+                hermes_names::fold_context_variants(&mut models);
+            }
             // Prompt-convention modes (Claude Ultrathink) extend any real
             // ladder — never an effort-less model's empty one.
             for model in &mut models {
@@ -3137,7 +3162,36 @@ impl AcpHarness {
         let result = tokio::time::timeout(self.model_discovery_timeout, discovery).await;
         drain.abort();
         client.close_stdin_for_teardown();
-        child.shutdown(self.kill_grace).await;
+        // Hermes's names come from a file, read on a blocking thread while
+        // the agent shuts down: neither waits on the other, and no async
+        // worker is held by file reads.
+        let result = match result {
+            Ok(Ok(models)) if self.spec.id == HarnessId::Hermes => {
+                // (Named within a few seconds, or kept as they are: a slow
+                // disk never holds up the model list.)
+                let unnamed = models.clone();
+                let naming = tokio::task::spawn_blocking(move || {
+                    let mut models = models;
+                    hermes_names::name_models(&mut models);
+                    models
+                });
+                child.shutdown(self.kill_grace).await;
+                match tokio::time::timeout(HERMES_NAMING_WAIT, naming).await {
+                    Ok(Ok(models)) => Ok(Ok(models)),
+                    Ok(Err(error)) => Ok(Err(HarnessError::Protocol(format!(
+                        "naming Hermes models failed: {error}"
+                    )))),
+                    Err(_) => {
+                        tracing::debug!("naming Hermes models took too long; models keep their ids");
+                        Ok(Ok(unnamed))
+                    }
+                }
+            }
+            result => {
+                child.shutdown(self.kill_grace).await;
+                result
+            }
+        };
         match result {
             Ok(inner) => inner,
             Err(_) => {
@@ -3205,6 +3259,56 @@ fn select_choices(option: &Value) -> Vec<&Value> {
 /// unmatched models keep fast mode etc.; the catalog only enriches matched
 /// ids with label/description/per-model ladders.
 fn models_from_session(session_response: &Value, catalog: &[Model]) -> Vec<Model> {
+    let mut models = models_from_session_wire(session_response, catalog);
+    for model in &mut models {
+        split_provider_label(model);
+    }
+    models
+}
+
+/// A model an agent names `<provider>:<model>` and labels
+/// `<Provider> · <model>` (Hermes: `anthropic:claude-fable-5.1`, "Anthropic ·
+/// claude-fable-5.1"): its label is the model, and its provider rides on
+/// `provider`, named as people say it (`openai-codex` → Codex, as for Pi and
+/// OpenCode), else as the agent wrote it. The picker shows it beside the
+/// name, like every agent that reaches models through several providers.
+fn split_provider_label(model: &mut Model) {
+    if model.provider.is_some() {
+        return;
+    }
+    let Some((pid, _)) = model.id.split_once(':') else {
+        return;
+    };
+    let Some((written, name)) = model.label.split_once(" \u{b7} ") else {
+        return;
+    };
+    let (pid, written, name) = (pid.trim(), written.trim(), name.trim());
+    if pid.is_empty() || written.is_empty() || name.is_empty() {
+        return;
+    }
+    let known = crate::pi::provider_name(pid);
+    // (A name the map only spelled out from the id reads worse than the
+    // agent's own: keep the agent's then.)
+    let spelled = pid
+        .split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let provider_name = if known == spelled { written.to_owned() } else { known };
+    model.label = name.to_owned();
+    model.provider = Some(zeron_proto::ModelProvider {
+        id: pid.to_owned(),
+        name: provider_name,
+    });
+}
+
+fn models_from_session_wire(session_response: &Value, catalog: &[Model]) -> Vec<Model> {
     let config_options = session_response
         .get("configOptions")
         .and_then(Value::as_array)
@@ -3254,12 +3358,14 @@ fn models_from_session(session_response: &Value, catalog: &[Model]) -> Vec<Model
         // The wire name wins for real ids; an ALIAS row's terse wire name
         // ("Opus") loses to the curated family label/description.
         Model {
+            default: false,
             id: id.to_owned(),
             label: aliased
                 .map(|m| m.label.clone())
                 .or_else(|| name.map(str::to_owned))
                 .or_else(|| known.map(|m| m.label.clone()))
                 .unwrap_or_else(|| id.to_owned()),
+            provider: None,
             description: aliased
                 .and_then(|m| m.description.clone())
                 .or_else(|| description.map(str::to_owned))
@@ -4016,14 +4122,24 @@ fn strip_trailing_parenthetical(name: &str) -> &str {
 /// variants in either hint spelling. Exact match first (with the 1M compose
 /// when the run selects the 1M window), then a family-token fallback that
 /// prefers a variant matching the requested context window.
-fn pick_model_value(requested: &str, available: &[&str], context_1m: bool) -> Option<String> {
-    if context_1m {
-        for composed in [format!("{requested}[1m]"), format!("{requested}-1m")] {
+fn pick_model_value(requested: &str, available: &[&str], window: Option<&str>) -> Option<String> {
+    // The chosen window's variant when the agent lists one: `<model>[1m]` /
+    // `<model>-1m` (Claude), `<model>-900k` (Hermes's Codex variants). The
+    // default window has none, and runs the model itself.
+    if let Some(window) = window
+        .map(str::to_ascii_lowercase)
+        .filter(|w| !w.is_empty())
+    {
+        for composed in [
+            format!("{requested}[{window}]"),
+            format!("{requested}-{window}"),
+        ] {
             if available.contains(&composed.as_str()) {
                 return Some(composed);
             }
         }
     }
+    let context_1m = window.is_some_and(|w| w.eq_ignore_ascii_case("1m"));
     if available.contains(&requested) {
         return Some(requested.to_owned());
     }
@@ -4120,11 +4236,8 @@ fn validate_config_model_selection(
         .into_iter()
         .filter_map(|choice| choice.get("value").and_then(Value::as_str))
         .collect();
-    let context_1m = model_options
-        .get("contextWindow")
-        .and_then(Value::as_str)
-        .is_some_and(|window| window.eq_ignore_ascii_case("1m"));
-    if pick_model_value(requested, &available, context_1m).is_some() {
+    let window = model_options.get("contextWindow").and_then(Value::as_str);
+    if pick_model_value(requested, &available, window).is_some() {
         return Ok(());
     }
     Err(HarnessError::Protocol(format!(
@@ -4190,10 +4303,7 @@ fn config_option_sets(
     else {
         return Vec::new();
     };
-    let context_1m = model_options
-        .get("contextWindow")
-        .and_then(Value::as_str)
-        .is_some_and(|w| w.eq_ignore_ascii_case("1m"));
+    let window = model_options.get("contextWindow").and_then(Value::as_str);
     let mut sets = Vec::new();
     for option in options {
         let Some(config_id) = option.get("id").and_then(Value::as_str) else {
@@ -4209,7 +4319,7 @@ fn config_option_sets(
 
         let wanted: Option<Value> = match (kind, category) {
             ("select", Some("model")) => model
-                .and_then(|m| pick_model_value(m, &available, context_1m))
+                .and_then(|m| pick_model_value(m, &available, window))
                 .map(Value::String),
             // Full access: unattended parity with the retired custom
             // adapters (claude bypassPermissions / codex approvalPolicy
@@ -5334,9 +5444,11 @@ fn group_effort_variants(models: Vec<Model>) -> Vec<Model> {
             };
             let first = models.iter().find(|m| m.id == *first_id)?;
             Some(Model {
+                default: false,
                 id: group.id.clone(),
                 label: group.label.to_owned(),
                 // variant descriptions only restate their thinking level
+                provider: first.provider.clone(),
                 description: None,
                 reasoning_levels: group.variants.iter().map(|(level, _)| *level).collect(),
                 options: first.options.clone(),
@@ -8765,6 +8877,44 @@ mod tests {
         );
     }
 
+    /// Hermes names a model `<provider>:<model>` and labels it `<Provider> ·
+    /// <model>`: the picker gets the model as its name and the provider
+    /// apart, named as people say it; a provider the map doesn't know keeps
+    /// the agent's own wording. A label without the shape stays as it is.
+    #[test]
+    fn a_provider_glued_to_a_models_label_rides_apart() {
+        let response = json!({
+            "sessionId": "s-1",
+            "configOptions": [
+                {
+                    "id": "model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": "anthropic:claude-fable-5.1",
+                    "options": [
+                        { "value": "anthropic:claude-fable-5.1", "name": "Anthropic \u{b7} claude-fable-5.1" },
+                        { "value": "openai-codex:gpt-6-luna", "name": "ChatGPT or Codex Subscription \u{b7} gpt-6-luna" },
+                        { "value": "nous-portal:hermes-4-405b", "name": "Nous Portal Plus \u{b7} hermes-4-405b" },
+                        { "value": "local-model", "name": "Local Model" },
+                    ],
+                },
+            ],
+        });
+        let models = models_from_session(&response, &[]);
+        let row = |id: &str| models.iter().find(|m| m.id == id).unwrap_or_else(|| panic!("{id}"));
+        let fable = row("anthropic:claude-fable-5.1");
+        assert_eq!(fable.label, "claude-fable-5.1");
+        assert_eq!(fable.provider.as_ref().map(|p| (p.id.as_str(), p.name.as_str())), Some(("anthropic", "Anthropic")));
+        let luna = row("openai-codex:gpt-6-luna");
+        assert_eq!(luna.label, "gpt-6-luna");
+        assert_eq!(luna.provider.as_ref().map(|p| p.name.as_str()), Some("Codex"));
+        let nous = row("nous-portal:hermes-4-405b");
+        assert_eq!(nous.provider.as_ref().map(|p| p.name.as_str()), Some("Nous Portal Plus"));
+        let plain = row("local-model");
+        assert_eq!(plain.label, "Local Model");
+        assert!(plain.provider.is_none());
+    }
+
     #[test]
     fn model_1m_variants_collapse_into_a_context_window_trait() {
         let response = json!({
@@ -8865,7 +9015,7 @@ mod tests {
         let models = models_from_session(&response, &crate::claude::catalog::static_models());
         assert_eq!(
             models.iter().map(|m| m.label.as_str()).collect::<Vec<_>>(),
-            vec!["Opus 5.5", "Fable 5.1", "Sonnet 5", "Haiku 4.5"]
+            vec!["Opus 5.5", "Fable 5.2", "Sonnet 5.5", "Haiku 5.5"]
         );
         // The alias rows carry the catalog's per-model ladders.
         assert!(
@@ -8873,7 +9023,8 @@ mod tests {
                 .reasoning_levels
                 .contains(&ReasoningLevel::Ultracode)
         );
-        assert!(models[3].reasoning_levels.is_empty());
+        // Haiku 5.5, unlike Haiku 4.5, takes an effort.
+        assert!(models[3].reasoning_levels.contains(&ReasoningLevel::XHigh));
         // Versioned ids never fuzzy-match: a foreign id passes through.
         let foreign = json!({
             "sessionId": "s-1",

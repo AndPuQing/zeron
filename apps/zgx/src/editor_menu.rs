@@ -460,7 +460,9 @@ return ui.column {
         assert!(focused(&app, &editor));
 
         // Outside the selection (here a caret), as macOS has it: the word
-        // there selected, and the menu about it.
+        // there selected, and the menu about it. Elsewhere (zgx's editor,
+        // as GTK's and Windows' fields have it), the caret goes there and
+        // nothing is selected.
         let off = middle(editor.text_area(3..4).unwrap());
         secondary_click(&mut app, off);
         // macOS selects the word under a secondary click. Other platforms

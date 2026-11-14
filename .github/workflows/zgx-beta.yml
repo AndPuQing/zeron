@@ -127,6 +127,7 @@ jobs:
       - name: the engine, from this commit
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: cargo build --release --locked -p zeron --bin zerun-engine --no-default-features
       - name: import Developer ID certificate
         if: env.MACOS_CERT_P12 != ''
@@ -159,6 +160,7 @@ jobs:
       - name: Update and launch regressions
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: cargo test --release --locked -p zeron-update -p zeron-launch --lib
       - name: package dmg
         env:
@@ -232,10 +234,12 @@ jobs:
       - name: the engine, from this commit
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: cargo build --release --locked -p zeron --bin zerun-engine --no-default-features
       - name: Update and launch regressions
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: cargo test --release --locked -p zeron-update -p zeron-launch --lib
       - name: package
         env:
@@ -292,6 +296,7 @@ jobs:
       - name: the engine, from this commit
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: |
           cargo build --release --locked -p zeron --bin zerun-engine --no-default-features
           if ($LASTEXITCODE -ne 0) { throw 'the engine failed to build' }
@@ -301,6 +306,7 @@ jobs:
       - name: Update and launch regressions
         env:
           ZERUN_ENGINE_VERSION: ${{ needs.version.outputs.version }}
+          LUAU_CXXFLAGS: -DNDEBUG
         run: |
           cargo test --release --locked -p zeron-update -p zeron-launch --lib
           if ($LASTEXITCODE -ne 0) { throw 'Update and launch tests failed' }

@@ -4,8 +4,8 @@ use zeron_proto::{Model, ReasoningLevel};
 
 use super::normalize::string;
 
-/// Muse's tier for a Zeron reasoning level (its closed vocabulary also has
-/// `none`, which no Zeron level selects). Levels Muse has no tier for
+/// Muse's tier for a Zerun reasoning level (its closed vocabulary also has
+/// `none`, which no Zerun level selects). Levels Muse has no tier for
 /// (`ultracode`, `ultrathink`) leave the model's default.
 pub(super) fn effort(level: Option<ReasoningLevel>) -> Option<&'static str> {
     Some(match level? {
@@ -62,8 +62,10 @@ pub(super) fn models(result: &Value) -> Vec<Model> {
             Some((
                 row["isDefault"] == true,
                 Model {
+                    default: false,
                     id: id.into(),
                     label,
+                    provider: None,
                     description: row["description"]
                         .as_str()
                         .filter(|d| !d.trim().is_empty())

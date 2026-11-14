@@ -111,12 +111,12 @@ mod tests {
 
     fn result(id: &str, output: &str, exit_code: Option<i32>) -> AgentEvent {
         AgentEvent::ToolResult {
-            image_payloads: Vec::new(),
-            preview_paths: Vec::new(),
             id: id.into(),
             is_error: exit_code.is_some_and(|c| c != 0),
             output: Some(output.into()),
             diff: None,
+            preview_paths: Vec::new(),
+            image_payloads: Vec::new(),
             exit_code,
         }
     }

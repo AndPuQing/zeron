@@ -160,6 +160,8 @@ mod tests {
             id: id.into(),
             label: label.into(),
             description: None,
+            provider: None,
+            default: false,
             reasoning_levels: Vec::<ReasoningLevel>::new(),
             options: Vec::new(),
         }

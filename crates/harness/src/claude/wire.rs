@@ -242,7 +242,7 @@ pub(crate) struct MessageFrame {
     #[serde(default)]
     pub error: Option<String>,
     /// Bookkeeping frame, not a person typing. Image scale notes ride this.
-    #[serde(default, rename = "isMeta")]
+    #[serde(default, rename = "isMeta", alias = "is_meta")]
     pub is_meta: bool,
     /// Structured tool outcome. An image result repeats its bytes here when
     /// the content blocks do not. The live stream spells it in snake case,

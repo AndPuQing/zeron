@@ -59,7 +59,8 @@ if [[ -n "$BETA_VERSION" ]]; then
   [[ "$("$BIN" --version)" == "zerun $BETA_VERSION" ]] ||
     { echo "$BIN isn't the $BETA_VERSION beta (it says '$("$BIN" --version)')" >&2; exit 1; }
 elif [[ "$PROFILE" == "release" ]]; then
-  cargo build --release --locked -p zeron
+  CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 LUAU_CXXFLAGS=-DNDEBUG \
+    cargo build --release --locked -p zeron
   BIN="$ROOT/target/release/zerun"
 else
   cargo build --locked -p zeron
@@ -68,6 +69,13 @@ fi
 # The background engine the app starts: sessions keep running with the app
 # closed, in a process of its own.
 ENGINE_BIN="${ENGINE_BIN:-$(dirname "$BIN")/zerun-engine}"
+# The engine's Luau (visuals, plugin services) without its asserts: with them,
+# each LUAU_ASSERT keeps its Luau source file's path (Luau/Common.h's
+# __FILE__), VM/src/l*.cpp; with NDEBUG, none. (A debug package has them.)
+if [[ "$PROFILE" == "release" ]] && LC_ALL=C grep -aqE 'VM[\\/]src[\\/]l[a-z]+\.cpp' "$ENGINE_BIN"; then
+  echo "$ENGINE_BIN was built with Luau's asserts: build it with LUAU_CXXFLAGS=-DNDEBUG" >&2
+  exit 1
+fi
 
 rm -rf "$STAGE" "$TARBALL"
 mkdir -p "$STAGE"
@@ -86,6 +94,10 @@ if [[ -n "$BETA_VERSION" ]]; then
     "$ROOT/apps/zgx/ui/" "$STAGE/ui/"
   rsync -a --exclude '.zgx/' --exclude '.DS_Store' \
     "$ROOT/apps/zgx/plugins-builtin/" "$STAGE/plugins-builtin/"
+  # Each ships the canonical SDK, as scripts/package-zgx-beta.sh.
+  for dir in "$STAGE/plugins-builtin/"*/; do
+    cp "$ROOT/apps/zgx/plugins-sdk/zeron.luau" "$dir/zeron.luau"
+  done
   cp "$ROOT/apps/zgx/fonts/"*-OFL.txt "$STAGE/licenses/fonts/"
   rm -rf "$OUT_DIR/.stable"
 fi
@@ -100,7 +112,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION="__VERSION__"
 APP_ROOT="$HOME/.zerun/app"
-DEST="$APP_ROOT/$VERSION"
+# A beta's directory isn't named as a version: crates/update `managed_dir`.
+case "$VERSION" in
+  *-beta.*) DEST="$APP_ROOT/beta-$VERSION" ;;
+  *) DEST="$APP_ROOT/$VERSION" ;;
+esac
 mkdir -p "$APP_ROOT"
 if [ ! -x "$DEST/zerun" ]; then
   # Copy beside the final name, then rename: an interrupted install never

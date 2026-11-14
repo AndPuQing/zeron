@@ -88,6 +88,9 @@ impl NativeHost {
         cmd.current_dir(path.parent().unwrap())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        // No console window for the helper under a windowless engine.
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
         cmd
     }
     pub async fn open(
@@ -289,7 +292,7 @@ const HELPER: &str = if cfg!(windows) {
 };
 
 /// The helper shipped inside the device's standalone Codex installation (layout
-/// 1, version 0.159 or later), resolved from its `codex` executable. Zeron never
+/// 1, version 0.159 or later), resolved from its `codex` executable. Zerun never
 /// redistributes this runtime; npm installations do not contain it. The helper
 /// only initializes from a `codex-resources/voice` directory.
 pub fn installed_helper(codex_executable: &Path) -> Result<PathBuf, VoiceRejection> {

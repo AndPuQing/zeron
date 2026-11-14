@@ -102,6 +102,8 @@ Filename: "{app}\zerun.exe"; Description: "{cm:LaunchProgram,Zerun}"; Flags: now
 Type: files; Name: "{app}\zerun.exe.old"
 Type: files; Name: "{app}\.zerun-update-incoming.exe"
 Type: filesandordirs; Name: "{app}\.zerun-update-*"
+Type: files; Name: "{app}\.zerun-completing.lock"
+Type: files; Name: "{app}\zerun-version"
 #ifdef Beta
 Type: filesandordirs; Name: "{app}\beta"
 #endif

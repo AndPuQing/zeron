@@ -2283,6 +2283,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "cty"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b365fabc795046672053e29c954733ec3b05e4be654ab130fe8f1f94d7051f35"
+
+[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5572,6 +5578,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
 dependencies = [
  "cc",
+ "cty",
 ]
 
 [[package]]
@@ -13875,6 +13882,7 @@ dependencies = [
  "clap",
  "embed-resource",
  "libc",
+ "libmimalloc-sys",
  "mimalloc",
  "serde_json",
  "tempfile",
@@ -13961,6 +13969,7 @@ dependencies = [
  "loro",
  "serde",
  "serde_json",
+ "sha2",
  "similar",
  "thiserror 2.0.20",
  "tracing",
@@ -13975,7 +13984,9 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.22.1",
+ "bytes",
  "chrono",
+ "core-foundation 0.10.1",
  "dunce",
  "fff-search",
  "flate2",
@@ -13996,6 +14007,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "sysinfo",
  "tar",
  "tempfile",
  "thiserror 2.0.20",
@@ -14224,6 +14236,7 @@ dependencies = [
 name = "zeron-sync"
 version = "0.3.31"
 dependencies = [
+ "base64 0.22.1",
  "block2 0.6.2",
  "chrono",
  "futures",
@@ -14233,10 +14246,12 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tokio-tungstenite",
+ "tokio-util",
  "tracing",
  "uuid",
  "zeron-doc",
@@ -14473,6 +14488,8 @@ dependencies = [
  "anyhow",
  "cpal 0.17.3",
  "hound",
+ "ort",
+ "ort-sys",
  "parakeet-rs",
  "reqwest",
  "rubato",

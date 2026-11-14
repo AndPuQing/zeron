@@ -441,6 +441,8 @@ impl Harness for OmpHarness {
             id: "default".into(),
             label: "OMP default".into(),
             description: Some("Model configured in Oh My Pi".into()),
+            provider: None,
+            default: false,
             reasoning_levels: vec![],
             options: vec![],
         }]

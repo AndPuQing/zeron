@@ -10,7 +10,7 @@ use zeron_rpc::{Caller, RpcError, RpcReply, methods, with_caller};
 
 use super::*;
 
-/// `params` as Zeron's consent window sends them: an allowing
+/// `params` as Zerun's consent window sends them: an allowing
 /// `DecidePlugin` or a `SignPlugin` without a review gets one minted for
 /// the plugin as listed now (what consent.rs does before every decision).
 /// Everything else passes as is.
@@ -270,7 +270,7 @@ async fn an_agents_use_template_is_a_preview_with_who_asked() {
     let zeron = dir.join(templates::ZERON_DIR);
     std::fs::create_dir_all(&zeron).unwrap();
     std::fs::write(zeron.join("app.luau"), "return nil").unwrap();
-    std::fs::write(zeron.join(templates::MANIFEST), r#"{"name":"Zeron"}"#).unwrap();
+    std::fs::write(zeron.join(templates::MANIFEST), r#"{"name":"Zerun"}"#).unwrap();
     std::fs::write(zeron.join(templates::HASHES), "{}").unwrap();
     let mine = dir.join("agent-made");
     std::fs::create_dir_all(&mine).unwrap();
@@ -347,7 +347,7 @@ async fn the_agent_token_cannot_allow_over_ipc() {
 }
 
 /// R29: an agent can't name where an export goes (anywhere it could write a
-/// file the person runs); it exports to Zeron's exports folder only.
+/// file the person runs); it exports to Zerun's exports folder only.
 #[tokio::test]
 async fn an_agent_cannot_choose_where_a_template_is_exported() {
     let f = fixture();
@@ -366,6 +366,31 @@ async fn an_agent_cannot_choose_where_a_template_is_exported() {
         assert!(refused.as_ref().is_err_and(|e| e.contains("exports folder")), "{refused:?}");
     }
     assert!(!path.exists());
+}
+
+/// R29 for plugins: an agent's export goes to Zerun's plugin-exports folder,
+/// never a path of its choosing.
+#[tokio::test]
+async fn an_agent_exports_a_plugin_only_to_the_exports_folder() {
+    let f = fixture();
+    call(&f.plugins, methods::NEW_PLUGIN, json!({ "id": "hello", "name": "Hello" })).await.unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = outside.path().join("x.zeron-plugin");
+    for caller in [Caller::Agent { chat: None }, Caller::Peer { device: None }] {
+        let refused = with_caller(
+            caller,
+            call(&f.plugins, methods::EXPORT_PLUGIN, json!({ "id": "hello", "to": path.display().to_string() })),
+        )
+        .await;
+        assert!(refused.as_ref().is_err_and(|e| e.contains("plugin-exports folder")), "{refused:?}");
+    }
+    assert!(!path.exists());
+    let exported = with_caller(Caller::Agent { chat: None }, call(&f.plugins, methods::EXPORT_PLUGIN, json!({ "id": "hello" })))
+        .await
+        .unwrap();
+    let saved = Path::new(exported["path"].as_str().unwrap());
+    assert_eq!(saved, f._dir.path().join("plugin-exports").join("hello-0.1.0.zeron-plugin"));
+    assert_eq!(exported["bytes"].as_u64().unwrap(), std::fs::metadata(saved).unwrap().len());
 }
 
 /// R14: a device-room dial's proof is this device's registered key over the

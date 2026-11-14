@@ -7,7 +7,10 @@ It is still experimental. Optional [desktop Beta packages](../../docs/desktop-be
 share the installed Zerun profile and update through the Beta channel. The source
 preview described below keeps its own profile and is updated by rebuilding.
 
-## Build and run
+The composer's current behavior, layout and sizing contracts are documented
+in [Composer](docs/composer.md).
+
+## Running it
 
 Use the repository's Rust toolchain and Python 3. On macOS, install the Xcode
 command line tools and Zig 0.16.0 for the terminal renderer. On Linux, install a

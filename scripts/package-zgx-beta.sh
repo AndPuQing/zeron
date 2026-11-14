@@ -109,6 +109,9 @@ rsync -a --exclude '.zgx/' --exclude '/tests/' --exclude '.lock' --exclude '.DS_
   "$ROOT/apps/zgx/ui/" "$APP/Contents/Resources/ui/"
 rsync -a --exclude '.zgx/' --exclude '.DS_Store' \
   "$ROOT/apps/zgx/plugins-builtin/" "$APP/Contents/Resources/plugins-builtin/"
+for dir in "$APP/Contents/Resources/plugins-builtin/"*/; do
+  cp "$ROOT/apps/zgx/plugins-sdk/zeron.luau" "$dir/zeron.luau"
+done
 
 mkdir -p "$APP/Contents/Resources/licenses/fonts"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$ROOT/apps/zgx/fonts/"*-OFL.txt "$APP/Contents/Resources/licenses/fonts/"

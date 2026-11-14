@@ -39,6 +39,9 @@ echo "kotlin bindings: $OUT/kotlin"
 
 # Luau links the NDK C++ runtime; cargo-ndk also copies it into each ABI's
 # jniLibs directory so Android can load the mobile core.
-cargo ndk "${ABIS[@]}" --link-libcxx-shared -o "$OUT/jniLibs" \
-  build --locked -p zeron-mobile --lib --profile "${ZERON_ANDROID_PROFILE:-mobile}"
+PROFILE="${ZERON_ANDROID_PROFILE:-mobile}"
+LUAU=()
+if [[ "$PROFILE" == "mobile-dist" ]]; then LUAU=(LUAU_CXXFLAGS=-DNDEBUG); fi
+env ${LUAU[@]+"${LUAU[@]}"} cargo ndk "${ABIS[@]}" --link-libcxx-shared -o "$OUT/jniLibs" \
+  build --locked -p zeron-mobile --lib --profile "$PROFILE"
 echo "jniLibs: $OUT/jniLibs"

@@ -1,7 +1,7 @@
 //! Frame → [`AgentEvent`] normalization (init dedupe, subagent tagging, tool
 //! decoding, error-code mapping).
 
-use crate::tool_images::{compact_base64, images_in_content};
+use crate::tool_images::{compact_base64, images_in_content_named as images_in_content};
 use serde::Deserialize as _;
 use serde_json::Value;
 use zeron_proto::{AgentEvent, DoneStatus, HarnessId, TodoItem, TodoStatus, ToolCall};
@@ -306,6 +306,7 @@ fn tag(parent: &str, event: AgentEvent) -> AgentEvent {
 /// block order with the tool calls, or subagent transcripts are
 /// tool-chips-only.
 fn subagent_message(
+    paths: &mut std::collections::HashMap<String, String>,
     parent: &str,
     f: &MessageFrame,
     server_tools: &mut ServerTools,
@@ -331,10 +332,11 @@ fn subagent_message(
             "thinking" if !b.thinking.trim().is_empty() => Some(AgentEvent::ReasoningDelta {
                 text: format!("{}\n\n", b.thinking.trim_end()),
             }),
-            "tool_use" => Some(AgentEvent::ToolCall {
-                id: b.id.clone(),
-                call: decode_tool_use(&b.name, &b.input),
-            }),
+            "tool_use" => {
+                let call = decode_tool_use(&b.name, &b.input);
+                remember_tool_file(paths, &b.id, &call);
+                Some(AgentEvent::ToolCall { id: b.id.clone(), call })
+            },
             _ => None,
         };
         if let Some(event) = event {
@@ -352,6 +354,27 @@ fn subagent_message(
         ));
     }
     out
+}
+
+fn remember_tool_file(
+    paths: &mut std::collections::HashMap<String, String>,
+    id: &str,
+    call: &ToolCall,
+) {
+    if id.is_empty() {
+        return;
+    }
+    let path = match call {
+        ToolCall::ReadFile { path }
+        | ToolCall::WriteFile { path, .. }
+        | ToolCall::EditFile { path, .. } => path.as_str(),
+        _ => return,
+    };
+    let name = file_basename(path);
+    if name.is_empty() {
+        return;
+    }
+    paths.insert(id.to_owned(), name.to_owned());
 }
 
 fn empty_tool_result(id: impl Into<String>, is_error: bool) -> AgentEvent {
@@ -453,27 +476,67 @@ fn path_safe(id: &str) -> bool {
 ///
 /// Prefix-matched: the CLI ships at least two spellings of the marker
 /// (`…by user]` and `…by user for tool use]`).
+///
+/// Also the CLI's image note, which rides a user frame after a tool result
+/// that already carries the pixels: `[Image: source: <path>]` and
+/// `[Image: original WxH, displayed at WxH. …]`. On a tagged frame it must
+/// not read as a steer.
 fn is_synthetic_user_text(text: &str) -> bool {
     let text = text.trim();
     if text.starts_with("<system-reminder>") || text.starts_with("[Request interrupted") {
         return true;
     }
-    let Some(rest) = text.strip_prefix("[Image: ") else {
+    is_image_note(text)
+}
+
+/// The CLI's image note exactly: one line, `[Image: source: <path>]` (the
+/// path may be followed by `, original WxH, displayed at WxH. …`), or
+/// `[Image: original WxH, displayed at WxH. …]`. A steer that only starts
+/// and ends like one (`[Image: original mockup attached]\nmatch it [urgent]`)
+/// is not it.
+fn is_image_note(text: &str) -> bool {
+    if text.contains('\n') {
+        return false;
+    }
+    let Some(rest) = text
+        .strip_prefix("[Image: ")
+        .and_then(|rest| rest.strip_suffix(']'))
+    else {
         return false;
     };
-    let Some(rest) = rest.strip_suffix(']') else {
-        return false;
-    };
-    let rest = rest.trim_start();
-    rest.starts_with("source: ") || rest.starts_with("original ")
+    if let Some(path) = rest.strip_prefix("source: ") {
+        return !path.trim().is_empty() && !path.contains(['[', ']']);
+    }
+    rest.strip_prefix("original ").is_some_and(sizes_note)
+}
+
+/// `WxH, displayed at WxH` and whatever the CLI says after it.
+fn sizes_note(text: &str) -> bool {
+    fn dimensions(text: &str) -> Option<&str> {
+        let (width, rest) = text.split_once('x')?;
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        (!width.is_empty() && width.bytes().all(|b| b.is_ascii_digit()) && digits > 0)
+            .then(|| &rest[digits..])
+    }
+    dimensions(text)
+        .and_then(|rest| rest.strip_prefix(", displayed at "))
+        .and_then(dimensions)
+        .is_some_and(|rest| !rest.contains(['[', ']']))
+}
+
+fn file_basename(path: &str) -> &str {
+    path.rsplit(['/', '\\'])
+        .find(|part| !part.is_empty())
+        .unwrap_or("image.png")
 }
 
 /// `toolUseResult` image, used only when the content blocks had none.
 fn image_from_tool_use_result(
     result: &crate::claude::wire::ToolUseResult,
+    name: &str,
 ) -> Option<zeron_proto::ToolResultImage> {
     let data_base64 = compact_base64(result.image_base64.as_deref()?)?;
-    Some(zeron_proto::ToolResultImage { data_base64 })
+    Some(zeron_proto::ToolResultImage { name: name.to_owned(), data_base64 })
 }
 
 struct CompactionState {
@@ -561,6 +624,10 @@ pub(crate) struct Normalizer {
     /// which then opened as an empty, never-created subagent doc (user
     /// report 2026-08-20).
     agent_spawn_tools: std::collections::HashSet<String>,
+    /// tool_use id → file basename for Read/Write/Edit, so an image result
+    /// can be labeled with the file the tool named. Removed when the result
+    /// arrives.
+    tool_paths: std::collections::HashMap<String, String>,
     /// Bash calls not yet answered, tool_use id → whether it runs in the
     /// background: their results carry the command's output and exit code.
     command_calls: std::collections::HashMap<String, bool>,
@@ -596,6 +663,7 @@ impl Normalizer {
             agent_tool_spawns: std::collections::HashMap::new(),
             skill_calls: std::collections::HashMap::new(),
             agent_spawn_tools: std::collections::HashSet::new(),
+            tool_paths: std::collections::HashMap::new(),
             command_calls: std::collections::HashMap::new(),
             typed_fork: None,
             fork_transcripts: true,
@@ -632,18 +700,19 @@ impl Normalizer {
             if clear_inline_skills {
                 self.skill_calls.remove(&parsed.tool_use_id);
             }
+            let name = self.tool_paths.remove(&parsed.tool_use_id).unwrap_or_else(|| "image.png".into());
             let event = tool_result(&parsed, &mut self.command_calls);
-            let images = images_in_content(block.get("content"));
-            pending.push((event, images));
+            let images = images_in_content(block.get("content"), &name);
+            pending.push((event, name, images));
         }
-        if pending.len() == 1 && pending[0].1.is_empty() {
-            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result) {
-                pending[0].1.push(image);
+        if pending.len() == 1 && pending[0].2.is_empty() {
+            if let Some(image) = image_from_tool_use_result(&frame.tool_use_result, &pending[0].1) {
+                pending[0].2.push(image);
             }
         }
         pending
             .into_iter()
-            .map(|(mut event, images)| {
+            .map(|(mut event, _name, images)| {
                 if let AgentEvent::ToolResult { image_payloads, .. } = &mut event {
                     *image_payloads = images;
                 }
@@ -895,6 +964,7 @@ impl Normalizer {
         let events = if assistant {
             note_commands(&f, &mut self.command_calls);
             subagent_message(
+                &mut self.tool_paths,
                 &chip,
                 &f,
                 &mut self.server_tools,
@@ -1246,7 +1316,7 @@ impl Normalizer {
                 }
                 // Streamed usage is the input-side measurement on gateways
                 // whose aggregated `assistant` frame reports all zeros
-                // (upstream issue #786) — and the frame can arrive BEFORE
+                // (a gateway response) — and the frame can arrive BEFORE
                 // `message_delta` (live-verified 2.1.289), so this is a source
                 // in its own right, not a fallback for that frame. Only the
                 // parent's own calls count: a subagent's frames must never
@@ -1330,7 +1400,7 @@ impl Normalizer {
                     if self.fork_repeat(parent, f.uuid.as_deref()) {
                         return Vec::new();
                     }
-                    return subagent_message(parent, &f, &mut self.server_tools, &streamed_citations);
+                    return subagent_message(&mut self.tool_paths, parent, &f, &mut self.server_tools, &streamed_citations);
                 }
                 // Record spawn tool ids up front: `task_notification` keys on
                 // them; a task may finish before a `task_started` arrives. A
@@ -1358,6 +1428,7 @@ impl Normalizer {
                             return self.server_tools.block(None, &b);
                         }
                         let decoded = decode_tool_use(&b.name, &b.input);
+                        remember_tool_file(&mut self.tool_paths, &b.id, &decoded);
                         let call = AgentEvent::ToolCall {
                             id: b.id.clone(),
                             call: decoded,
@@ -1422,7 +1493,7 @@ impl Normalizer {
                 self.last_model = f.message.model.clone().or(self.last_model.take());
                 // Input-side usage of this message: prompt + both cache
                 // counters. All-zero means the provider never populated them
-                // here (some do exactly that, issue #786) — publishing that
+                // here (some do exactly that, the gateway) — publishing that
                 // zero would ERASE the real measurement the streamed frames
                 // carry, so it is not a measurement at all.
                 if let Some(tokens) = f
@@ -2293,6 +2364,31 @@ mod tests {
         );
     }
 
+    /// Only the CLI's own image notes are bookkeeping: a steer that merely
+    /// starts with `[Image: ` and ends with `]` still reaches the agent.
+    #[test]
+    fn only_the_clis_image_notes_are_synthetic() {
+        for note in [
+            "[Image: source: /tmp/shots/1.png]",
+            "[Image: source: /tmp/shots/1.png, original 10x10, displayed at 10x10.]",
+            "[Image: original 1884x2066, displayed at 1824x2000. Multiply coordinates by 1.03 to map to original image.]",
+            "  [Image: original 10x10, displayed at 10x10]  ",
+        ] {
+            assert!(super::is_synthetic_user_text(note), "{note}");
+        }
+        for steer in [
+            "[Image: original mockup attached]\nmatch it exactly [urgent]",
+            "[Image: original mockup attached]",
+            "[Image: original 10x10 please]",
+            "[Image: source: ]",
+            "[Image: source: a] and also [b]",
+            "[Image: sourced elsewhere]",
+            "[Image: original 10x10, displayed at big]",
+        ] {
+            assert!(!super::is_synthetic_user_text(steer), "{steer}");
+        }
+    }
+
     /// A tool that returns an image puts the pixels on the result. The
     /// following note about the displayed size is bookkeeping, not a steer,
     /// on the main feed and on a subagent feed.
@@ -2327,6 +2423,7 @@ mod tests {
         assert_eq!(id, "toolu_read");
         assert!(preview_paths.is_empty());
         assert_eq!(image_payloads.len(), 1);
+        assert_eq!(image_payloads[0].name, "1.png");
         assert_eq!(image_payloads[0].data_base64, PNG);
         let journaled = serde_json::to_string(&ev[0]).unwrap();
         assert!(
@@ -2352,7 +2449,7 @@ mod tests {
             &ev[..],
             [AgentEvent::Subagent { parent_tool_use_id, event }]
                 if parent_tool_use_id == "toolu_sub"
-                    && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. } if image_payloads.len() == 1)
+                    && matches!(event.as_ref(), AgentEvent::ToolResult { image_payloads, .. } if image_payloads.len() == 1 && image_payloads[0].name == "00.png")
         ));
 
         for note in [scale, source, combined] {
@@ -2395,7 +2492,7 @@ mod tests {
         let ev = Normalizer::new().normalize(fallback, false);
         assert!(matches!(
             &ev[..],
-            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1
+            [AgentEvent::ToolResult { image_payloads, .. }] if image_payloads.len() == 1 && image_payloads[0].name == "image.png"
         ));
         // A result that already has the image does not take the fallback as a second copy.
         let both = crate::claude::wire::parse_frame(&format!(
@@ -3583,7 +3680,7 @@ mod context_tests {
         })
     }
 
-    /// Upstream issue #786's wire, verbatim: the gateway zeroes every input
+    /// Upstream the gateway's wire, verbatim: the gateway zeroes every input
     /// counter on the aggregated `assistant` frame (which even arrives BEFORE
     /// `message_delta` — live-verified 2.1.289) while `message_delta` carries
     /// the real numbers. The zero must be dropped and the streamed frame must

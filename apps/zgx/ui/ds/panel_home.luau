@@ -324,7 +324,7 @@ function M.Lanes(props: LanesProps): Node
 		if level == "project" then
 			local p = l.project
 			if p then
-				return { key = `{prefix}project:{p.id}`, name = p.name, kind = "project", hue = p.hue or "gray", src = p.src, emoji = p.emoji }
+				return { key = `{prefix}project:{p.id}`, name = p.name, kind = "project", hue = p.hue or "gray", src = p.src, emoji = p.emoji, project = p.id }
 			end
 			return { key = `{prefix}project:none`, name = locale.s("shell.sidebar.chats"), kind = "project", hue = "gray" }
 		end
@@ -558,13 +558,45 @@ function M.Lanes(props: LanesProps): Node
 		end
 		return out
 	end)
-	-- As tall as all its rows ("Show N more" keeps a group short).
-	local height = ui.computed(function(): number
-		local h = 0
-		for _, x in heights:get() do
-			h += x
+	local drawn_h = ui.computed(function(): number
+		return total_h(drawn:get())
+	end)
+	-- How much of the list shows: easing to its height, and never past the
+	-- rows there are. (Ours, not a tween on the box: the fold around it, and
+	-- so what's under it, go with it.)
+	local shown = ui.use_state(height:peek())
+	local target = shown:peek()
+	local going: any = nil
+	-- (By number: a callback holding its own clip would keep both for good, what
+	-- Rust keeps of a clip being out of the collector's sight.)
+	local slide = 0
+	ui.effect(function()
+		local to = height:get()
+		if to == target then
+			return
 		end
-		return h
+		target = to
+		-- (With motion reduced it lands at once: what it puts away is known first.)
+		drawn:peek()
+		if going then
+			going:cancel()
+		end
+		slide += 1
+		local this = slide
+		going = anime.animate(shown, motion.params({
+			value = to,
+			duration = SLIDE.duration,
+			ease = SLIDE.ease,
+			onComplete = function()
+				if slide == this then
+					going = nil
+				end
+				if away then
+					away = nil
+					settles:set(settles:peek() + 1)
+				end
+			end,
+		}))
 	end)
 	-- Under a group's tile: the trunk at the tile's middle, as the
 	-- sidebar's groups draw it (a project's tile hidden by the view, a
@@ -664,7 +696,7 @@ function M.Lanes(props: LanesProps): Node
 								string.upper(string.sub(g.name, 1, 1)),
 								text_size = "$font.size.xs",
 								weight = "$font.weight.semibold",
-							}, badge, g.hue or "gray", g.src, g.emoji)
+							}, badge, g.hue or "gray", g.src, g.emoji, g.project)
 						end
 						return SessionRow.tile(Icon { name = if g.here then "laptop" else "remote-server", size = 12 }, badge)
 					end,
@@ -722,7 +754,7 @@ function M.Lanes(props: LanesProps): Node
 					if not p then
 						return ui.div {}
 					end
-					return Tile { label = p.name, hue = p.hue, src = p.src, emoji = p.emoji, size = 16 }
+					return Tile { label = p.name, hue = p.hue, src = p.src, emoji = p.emoji, size = 16, project = p.id }
 				end),
 				-- (Where its group isn't its project, and the view shows project
 				-- icons: as the sidebar's rows.)

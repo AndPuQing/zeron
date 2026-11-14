@@ -73,11 +73,15 @@ pub struct CoreConfig {
     pub data_dir: String,
     /// Stable device id (`ios-xxxxxxxx`), stamped on every command/queue row.
     pub device_id: String,
-    /// Human name for presence/attribution ("Wing's iPhone").
+    /// Human name for presence/attribution ("Example iPhone").
     pub device_name: String,
     /// `ios` / `android`.
     pub platform: String,
     pub app_version: String,
+    /// Run the relay layer (docs/design/relay-mobile.md). Off, this device sends what
+    /// a shipped phone does, and holds its account's chats on stored rows.
+    #[uniffi(default = false)]
+    pub relay_layer: bool,
 }
 
 impl From<CoreConfig> for zc::ClientConfig {
@@ -89,6 +93,7 @@ impl From<CoreConfig> for zc::ClientConfig {
             device_name: c.device_name,
             platform: c.platform,
             app_version: c.app_version,
+            relay_layer: c.relay_layer,
         }
     }
 }

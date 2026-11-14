@@ -385,6 +385,9 @@ return function(): Node
 			fit.set_viewport(size.w)
 		end,
 		id = "shell",
+		-- The mouse's back and forward buttons, anywhere not taken by a
+		-- node with its own (a session's tab, which hands them on).
+		on_aux_click = route.aux_click,
 		-- The accent chosen (Settings → Appearance, setup's Make it yours), as
 		-- setup's frame wears it, and the interface's text size (ds.look):
 		-- nothing for the theme's own.
@@ -529,10 +532,9 @@ return function(): Node
 				end
 				local function device(): (string?, boolean)
 					local c = chat()
-					local now = sessions.now:get()
-					for _, d in now.devices do
+					for _, d in sessions.devices:get() do
 						if c and d.id == c.device then
-							return d.name, d.here or d.id == now.here
+							return d.name, d.here or d.id == sessions.here:get()
 						end
 					end
 					return nil, false
@@ -553,20 +555,33 @@ return function(): Node
 							local c = chat()
 							return if c then c.title else ""
 						end,
-						time = function(): number?
-							local c = chat()
-							return if c then c.updated else nil
-						end,
-						device = function(): string?
-							return (device())
-						end,
-						here = function(): boolean
-							local _, here = device()
-							return here
-						end,
-						project = function(): string?
-							local c = chat()
-							if not c or not c.project then
+						ds.SessionCard {
+							session = id,
+							title = function(): string
+								local c = chat()
+								return if c then c.title else ""
+							end,
+							time = function(): number?
+								local c = chat()
+								return if c then c.updated else nil
+							end,
+							device = function(): string?
+								return (device())
+							end,
+							here = function(): boolean
+								local _, here = device()
+								return here
+							end,
+							project = function(): string?
+								local c = chat()
+								if not c or not c.project then
+									return nil
+								end
+								for _, p in sessions.projects:get() do
+									if p.id == c.project then
+										return p.name
+									end
+								end
 								return nil
 							end
 							for _, p in sessions.now:get().projects do
@@ -616,13 +631,6 @@ return function(): Node
 						return true
 					end
 					return false
-				end,
-				on_navigate = function(e)
-					if e.direction == "back" then
-						route.back()
-					else
-						route.forward()
-					end
 				end,
 				boundary.screen(boundary.named("shell.boundary.screen.settings"), "@app/screens/shell/settings", function(settings): Node
 					return settings.View()

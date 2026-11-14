@@ -1,6 +1,7 @@
 package sh.zeron.android
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
@@ -16,6 +17,7 @@ import uniffi.zeron_core.authCallbackScheme
  * Launch extras mirror the iOS launch arguments, e.g.
  * `adb shell am start -n sh.zeron.android/.MainActivity --ez demo true --es route chat:chat-veil`
  * (`--es wallpaper <path>` sets the wallpaper from a file the app can read).
+ * A real stack in a debuggable build: `--es dev-user <id> --es dev-org <id> --es edge http://10.0.2.2:<port>`.
  */
 class MainActivity : ComponentActivity() {
     private val model get() = (application as ZeronApplication).model
@@ -25,6 +27,9 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val extras = intent.extras
+        // Rig switches: this activity is exported, so a release build ignores them.
+        val debuggable = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        val rig = extras.takeIf { debuggable }
         model.boot(
             LaunchOptions(
                 demo = extras?.getBoolean("demo") == true,
@@ -44,6 +49,11 @@ class MainActivity : ComponentActivity() {
                 voiceStage = extras?.getBoolean("voice-stage") == true,
                 remoteVoice = extras?.getBoolean("remote-voice") == true,
                 voiceSelfTest = extras?.getBoolean("voice-selftest") == true,
+                dev = rig?.getString("dev-user")?.let { user -> rig.getString("dev-org")?.let { org -> user to org } },
+                edge = rig?.getString("edge"),
+                noRelayLayer = rig?.getBoolean("no-relay-layer") == true,
+                relayLayer = rig?.getBoolean("relay-layer") == true,
+                sendOnOpen = rig?.getString("send-on-open"),
             ),
         )
         handleCallback(intent)

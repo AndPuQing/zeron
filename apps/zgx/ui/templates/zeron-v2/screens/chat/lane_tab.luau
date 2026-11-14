@@ -9,8 +9,10 @@
 --   LaneTab { tab = { id, kind = "side_chat" | "subagent", chat, title } }
 
 local ds = require("@ds")
+local Dictation = require("@app/screens/chat/dictation")
 local T = require("@ds/transcript")
 local lanes = require("@app/screens/chat/lanes")
+local TurnGlue = require("@app/screens/chat/turn_glue")
 local store = require("@app/screens/chat/store")
 local prefs = require("@app/screens/settings/prefs")
 local locale = require("@ds/locale")
@@ -18,8 +20,11 @@ local sessions = require("@account/sessions")
 local route = require("@app/screens/shell/route")
 local Where = require("@app/screens/chat/where")
 local Dock = require("@app/screens/chat/dock")
+local CloudTray = require("@app/screens/chat/cloud_tray")
+local LinkNotice = require("@app/screens/chat/link_notice")
 local ReplyImages = require("@app/screens/chat/reply_images")
 local FileLinks = require("@app/screens/chat/file_links")
+local LinkChips = require("@app/screens/chat/link_chips")
 local LinkMenu = require("@app/screens/chat/link_menu")
 local boundary = require("@app/screens/shell/boundary")
 local Quote = require("@ds/quote")
@@ -34,8 +39,8 @@ function M.title(tab: any): string
 	return locale.s(if tab.kind == "subagent" then "chat.lane_tab.subagent" else "chat.lane_tab.side_chat")
 end
 
-function M.icon(tab: any): string
-	return if tab.kind == "subagent" then "bot" else "side-chat"
+function M.icon(_tab: any): string
+	return "side-chat"
 end
 
 -- A side chat's composer: the chat page's (ds.Composer), its footer the
@@ -57,8 +62,80 @@ local function composer(chat: string, view: any, name: string): Node
 	-- reload finds it as it was; a passage quoted from its transcript lands
 	-- in it.)
 	local draft = ui.state(`chat_lane_draft_{chat}`, "")
+	-- Its draft's chips: one draft's per chat (screens/chat/shared), wherever
+	-- it's kept.
+	local carried = ui.use_state({} :: { any })
+	ui.effect(function()
+		carried:set(Shared.cargo_of(chat))
+	end)
+	-- The passages mentioned in its draft, by their lines (the chat page's
+	-- `shared.quotes`): each goes with the message in full.
+	local quotes = ui.state(`chat_lane_quotes_{chat}`, {} :: { [string]: string })
+	-- What its chat asks, and its queue, todos and tasks, from its own
+	-- session, as the window's composer shows them.
+	local asks = Asks.bind {
+		id = function(): string?
+			return chat
+		end,
+		session = function(): any
+			return view.session:get()
+		end,
+		chosen = ui.state(`chat_lane_chosen_{chat}`, {} :: { [string]: boolean }),
+		asked = ui.state(`chat_split_asked_{chat}`, nil :: any),
+		-- (A steer glides in its own transcript, as its sends do.)
+		name = name,
+	}
+	local tray = ui.state(`chat_split_tray_{chat}`, nil :: any)
 	local session = view.session
 	local notice = ui.use_state(nil :: any)
+	-- Its Cloud machine, on a chat that has one (a side chat shares its
+	-- parent's).
+	local machine = CloudTray.bind {
+		chat = function(): string?
+			return chat
+		end,
+		device = function(): string?
+			local s = session:get()
+			return s and s.device
+		end,
+		running = function(): boolean
+			local s = session:get()
+			return s ~= nil and s.running == true
+		end,
+	}
+	-- A queued message edited in its composer.
+	local editing = ui.state(`chat_lane_editing_{chat}`, nil :: { item: string, aside: string }?)
+	local edits = Asks.queue_edits {
+		id = function(): string?
+			return chat
+		end,
+		text = draft,
+		editing = editing,
+		focus = function()
+			focus:add(1)
+		end,
+		say = function(tone: string, key: string)
+			notice:set({ tone = tone, text = locale.s(key), dismissable = true })
+		end,
+	}
+	-- A tab closed mid-edit lets go of the edit, and made again finds its row
+	-- no longer held: the draft it set aside back. (A row gone is another
+	-- matter: it keeps the words, and saving says so.)
+	ui.effect(function()
+		local e = editing:get()
+		local s = session:get()
+		if not e or not s or s.state == "loading" then
+			return
+		end
+		for _, row in s.queue or {} do
+			if row.id == e.item and not row.editing then
+				ui.batch(function()
+					editing:set(nil)
+					draft:set(e.aside)
+				end)
+			end
+		end
+	end)
 	local running = ui.computed(function(): boolean
 		local s = session:get()
 		return s ~= nil and s.running == true
@@ -199,7 +276,7 @@ local function composer(chat: string, view: any, name: string): Node
 		end
 		local s = session:get()
 		local function project_row(id: string?): any?
-			for _, p in sessions.now:get().projects do
+			for _, p in sessions.projects:get() do
 				if p.id == id then
 					return p
 				end
@@ -219,6 +296,12 @@ local function composer(chat: string, view: any, name: string): Node
 			}
 		end
 		local p = project_row(s.project)
+		local on: string? = nil
+		for _, d in sessions.devices:get() do
+			if d.id == s.device then
+				on = d.name
+			end
+		end
 		return {
 			name = s.branch,
 			worktree = p ~= nil and s.cwd ~= nil and s.cwd ~= p.path,
@@ -254,7 +337,96 @@ local function composer(chat: string, view: any, name: string): Node
 		end
 		return where.plan() :: any
 	end
+	-- (A chat sent already has its host in the session: `device` is only
+	-- seeded while it's unsent.)
+	local accounts = Shared.model_accounts(function(): string?
+		if unsent() then
+			return device:get()
+		end
+		local s = session:get()
+		return if s then s.device else nil
+	end)
+	-- A new side chat's composer takes the keys as it's made.
+	if lanes.take_keys:peek()[chat] then
+		ui.on_mount(function()
+			local left = table.clone(lanes.take_keys:peek())
+			left[chat] = nil
+			lanes.take_keys:set(left)
+			focus:add(1)
+		end)
+	end
+	-- What `@`, `/` and `$` offer, as the chat page's.
+	local open_model = ui.use_state(0)
+	local function run_command(command: string)
+		if command == "model" then
+			open_model:add(1)
+		else
+			ZeronCommands.run(command, if unsent() then nil else chat)
+		end
+	end
+	local completions = Completions.bind {
+		key = `chat_lane_{chat}`,
+		text = draft,
+		agent = function(): string?
+			return Completions.agent_of(model:get(), if unsent() then nil else session:get())
+		end,
+		target = function(): any
+			if unsent() then
+				local p = project:get()
+				return if p and p ~= Where.NO_PROJECT then { space = p, device = device:get() } else nil
+			end
+			local s = session:get()
+			return { chat = chat, device = if s then s.device else nil }
+		end,
+		files = function(): any
+			if unsent() then
+				local p = project:peek()
+				return if p and p ~= Where.NO_PROJECT then { space = p, device = device:peek() } else nil
+			end
+			local s = session:peek()
+			return { chat = chat, device = if s then s.device else nil }
+		end,
+		in_chat = function(): boolean
+			return not unsent()
+		end,
+		run = run_command,
+	}
+	local dictation = Dictation.bind(draft, function(): string
+		local edit = editing:get()
+		return `{chat}|{name}|{if edit then edit.item else ""}`
+	end, function(): boolean
+		local current = session:get()
+		return asks.question:get() ~= nil or asks.approval:get() ~= nil
+			or (current ~= nil and (current.state == "missing" or current.state == "offline"))
+	end, name)
 	return ds.Composer {
+		dictation = dictation,
+		cargo = carried,
+		-- (Its chips' × under the pointer, as the chat page's.)
+		on_remove_cargo = function(cid: string)
+			Shared.remove_cargo_of(chat, cid)
+		end,
+		-- (What's dropped on it is its tab's to take, under its own overlays.)
+		drop_overlay = false,
+		-- Its + and a picture pasted: chips on its own draft, as the chat page's.
+		on_attach = function()
+			ui.open_files({ title = ui.t("chat.composer.attach_files"):get(), multiple = true }):after(function(files: any)
+				if files and #files > 0 then
+					Shared.attach_files(files, chat)
+					focus:add(1)
+				end
+			end, function() end)
+		end,
+		on_paste_image = function(): boolean
+			store.paste_image():after(function(path: string?)
+				if type(path) == "string" and path ~= "" then
+					Shared.attach_files({ { name = "image.png", path = path } }, chat)
+					focus:add(1)
+				end
+			end, function() end)
+			return true
+		end,
+		focus = focus,
 		value = draft,
 		-- (ds.Composer's placeholder is a string: read as the tab is made.)
 		placeholder = locale.s("chat.lane_tab.placeholder"),
@@ -262,16 +434,50 @@ local function composer(chat: string, view: any, name: string): Node
 		access = access,
 		model = model,
 		effort = effort,
-		notice = notice,
+		fast = fast,
+		options = options,
+		open_model = open_model,
+		-- The app's settings: what sends, and whether Escape stops the agent.
+		send_with = function(): string
+			return prefs.send_with:get()
+		end,
+		on_escape = function(): boolean
+			return store.escape_chat(chat, running:peek())
+		end,
+		disabled = function(): boolean
+			local s = session:get()
+			return s ~= nil and (s.state == "missing" or s.state == "offline")
+		end,
+		mentions = completions.lists,
+		on_mention = completions.on_mention,
+		mention_enabled = completions.enabled,
+		mention_empty = completions.empty,
+		-- (Its own line first, else its Cloud machine's, on a chat with one.)
+		notice = ui.computed(function(): any
+			local mine = notice:get()
+			if mine then
+				return mine
+			end
+			local link = machine.cloud_link(string.find(draft:get(), "%S") ~= nil)
+			return if link then LinkNotice.of { cloud = link } else nil
+		end),
 		on_dismiss_notice = function()
 			notice:set(nil)
 		end,
+		on_notice_action = machine.wake,
+		alerts = machine.alerts,
+		on_alert_action = machine.on_alert,
+		on_dismiss_alert = machine.dismiss,
 		harnesses = function(): { any }
 			return store.catalog:get().harnesses
 		end,
 		models = function(): { any }
 			return store.catalog:get().models
 		end,
+		accounts = accounts.accounts,
+		account_group = accounts.account_group,
+		on_account = accounts.on_account,
+		on_accounts_open = accounts.on_accounts_open,
 		-- What its context holds: the chat page's ring and card, from the
 		-- side chat's own numbers (once it has run and they're reported).
 		usage = function(): any
@@ -303,27 +509,27 @@ local function composer(chat: string, view: any, name: string): Node
 			end
 			draft:set("")
 			notice:set(nil)
-			-- A running chat queues the words, without changing its picks or
-			-- adding a transcript row before the queued turn starts.
-			local queued = running:peek()
-			local req = if queued then {} else picks()
-			local function deliver(mid: string?)
-				req.message_id = mid
-				local sent: any = nil
-				if is_unsent then
-					sent = lanes.send_first(chat, words, req, place())
-				else
-					req.session, req.text = chat, words
-					sent = store.send(req :: any)
-				end
-				sent:after(function() end, function(err: any)
-					draft:set(words)
-					local why = if type(err) == "table" and err.message then tostring(err.message) else nil
-					notice:set({
-						tone = "danger",
-						text = if is_unsent and why then why else locale.s("chat.lane_tab.didnt_send"),
-						dismissable = true,
-					})
+			-- What it carries goes with it, as the chat page's does.
+			local chips = Shared.take_cargo_of(chat)
+			local pack = Carried.pack(chips, words, words)
+			-- (Each command or skill picked: its canonical reference.)
+			-- (And each reference to what it carries, `@` picked: its name.)
+			local typed = Carried.settle(Invocations.encode(pack.typed), chips)
+			local prompt = Carried.text(typed, pack)
+			-- As the chat page sends: the prompt joins its transcript as the
+			-- transcript's send steps clear of the end (it glides to the top,
+			-- its reply's room opening under it), then goes to the host with
+			-- that id, so the host's copy is the same row.
+			-- (While a turn runs it's queued instead: it shows in the queue, and
+			-- what's picked waits for the turn it will run in.)
+			local queued = not is_unsent and running:peek()
+			local req: { [string]: any } = if queued then {} else picks()
+			req.attachments = pack.attachments
+			req.appshots = Appshots.of_cargo(chips)
+			local function failed(err: any)
+				ui.batch(function()
+					draft:set(text)
+					quotes:set(said_quotes)
 				end)
 			end
 			if queued then
@@ -425,10 +631,18 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 	local pictures = ReplyImages.for_session(lane_session)
 	local sent_pictures = ReplyImages.for_attachments(function(): any
 		local s = lane_session()
-		if not s then
+		if s then
+			return { id = s.id, device = s.device, cwd = s.cwd, here = sessions.here:get() }
+		end
+		-- A subagent's lane has no chat of its own (its doc is its parent's
+		-- child): the pictures its tools kept are files on its parent's
+		-- host, read as the parent's are.
+		local parent = data.parent
+		local open = store.session:get()
+		if not parent or not open or open.id ~= parent or open.state == "missing" then
 			return nil
 		end
-		return { id = s.id, device = s.device, cwd = s.cwd, here = sessions.now:get().here }
+		return { id = open.id, device = open.device, cwd = open.cwd, here = sessions.here:get() }
 	end)
 	-- The session whose panel it's in (the page's): where a file it links
 	-- opens, and a subagent it spawned.
@@ -470,7 +684,14 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 			return prefs.compact_transcript:get()
 		end,
 		on_mention = quote,
-		on_attach = quote,
+		-- (Attached (its bar's Attach): a chip, as the chat page's.)
+		on_attach = function(q: any)
+			Shared.attach_quote(q, chat)
+			focus:add(1)
+		end,
+		turn_state = if tab.kind == "subagent" then nil else TurnGlue.of(function(): any
+			return view.session:get()
+		end),
 		on_retry = function(message: string)
 			store.retry(chat, message)
 		end,
@@ -484,6 +705,10 @@ M.Tab = ui.component(function(props: { tab: any }): Node
 		end,
 		open_link = open_link,
 		link_menu = LinkMenu(open_link, function(): any
+			return view.session:peek()
+		end),
+		-- (A reply's link to one of its files or its agent's skills: a chip.)
+		link_chip = LinkChips(function(): any
 			return view.session:peek()
 		end),
 	}

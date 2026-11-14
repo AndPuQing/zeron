@@ -1,4 +1,4 @@
-//! Zeron plugins, engine side (the plugins contract, v1).
+//! Zerun plugins, engine side (the plugins contract, v1).
 //!
 //! Folders under `<data>/plugins/<id>/` are watched, hashed, checked against
 //! their ed25519 signature and the user's decisions, and listed to the app
@@ -14,6 +14,7 @@
 //! [`snapshot`], [`broker`], [`scaffold`]; [`templates`] stores whole-app
 //! templates for agents. This file does the IO around them.
 
+pub mod agents;
 pub mod broker;
 pub mod capability;
 pub mod files;
@@ -33,6 +34,7 @@ pub mod status;
 pub mod template_packages;
 pub mod templates;
 pub mod themes;
+pub mod uploads;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -58,11 +60,40 @@ use status::{Author, State, Status};
 pub const PLUGINS_DIR: &str = "plugins";
 pub const TEMPLATES_DIR: &str = "templates";
 pub const REMOVED_DIR: &str = ".removed";
+
+/// Forget what plugin `id` kept under `plugins_dir/.storage`: `zeron.store`
+/// (the app's and its service's), its settings, and its database with
+/// SQLite's files beside it. A plugin installed later under the id starts
+/// with none of it.
+pub(crate) fn forget_storage(plugins_dir: &Path, id: &str) {
+    let storage = plugins_dir.join(".storage");
+    for end in ["json", "settings.json", "sqlite3", "sqlite3-wal", "sqlite3-shm"] {
+        let _ = std::fs::remove_file(storage.join(format!("{id}.{end}")));
+    }
+    let _ = std::fs::remove_file(Services::store_path(&storage, id));
+}
+
+/// Take away what removing plugins left in `plugins_dir/.removed` (each is
+/// moved there first, so it's gone from the list at once, then deleted).
+pub(crate) fn sweep_removed(plugins_dir: &Path) {
+    let removed = plugins_dir.join(REMOVED_DIR);
+    let Ok(listed) = std::fs::read_dir(&removed) else { return };
+    for entry in listed.flatten() {
+        let path = entry.path();
+        let gone = match entry.file_type() {
+            Ok(t) if t.is_dir() => std::fs::remove_dir_all(&path),
+            _ => std::fs::remove_file(&path),
+        };
+        if let Err(error) = gone {
+            tracing::debug!(path = %path.display(), %error, "plugins: couldn't delete a removed plugin yet");
+        }
+    }
+}
 /// `PluginSend`'s `data`, serialized (checked again where it lands).
 pub const MAX_SEND_BYTES: usize = 64 * 1024;
 /// A service call's `args` from another device, serialized.
 pub const MAX_CALL_BYTES: usize = 1024 * 1024;
-/// The author Zeron's own plugins say they are across devices: never a
+/// The author Zerun's own plugins say they are across devices: never a
 /// key, so never the same as one.
 pub const BUILTIN_AUTHOR: &str = "zeron";
 /// How often this device looks for signing keys added on the account's
@@ -125,6 +156,8 @@ pub fn handles(method: &str) -> bool {
             | methods::PLUGIN_DELIVER
             | methods::CALL_PLUGIN_SERVICE
             | methods::SERVE_PLUGIN_CALL
+            | methods::PLUGIN_AGENTS
+            | methods::SERVE_PLUGIN_AGENTS
             | methods::WATCH_PLUGIN_CHANNEL
             | methods::PLUGIN_SIGNING_KEY
             | methods::CHECK_PLUGIN_KEY
@@ -213,13 +246,16 @@ struct Inner {
     watch: Mutex<Option<crate::fs_watch::FsWatch>>,
     /// The plugins dir as the watcher reports it (canonical).
     root: Mutex<Option<PathBuf>>,
-    /// Zeron's own plugins, the app's folder of them (`SetBuiltinPlugins`).
+    /// Zerun's own plugins, the app's folder of them (`SetBuiltinPlugins`).
     builtin_dir: Mutex<Option<PathBuf>>,
-    /// Zeron's own plugins' folder, watched as yours are: an edit to one
-    /// (developing Zeron) loads as it's saved, not at the next rescan.
+    /// Zerun's own plugins' folder, watched as yours are: an edit to one
+    /// (developing Zerun) loads as it's saved, not at the next rescan.
     builtin_watch: Mutex<Option<crate::fs_watch::FsWatch>>,
     /// Plugins' services (plugins/service).
     services: Services,
+    /// The agents' usage, accounts and models, as plugins reach them
+    /// (plugins/agents), and their events.
+    agents: agents::Agents,
     /// Devices whose windows watch this device's service events, by plugin:
     /// each until it renews.
     watchers: Mutex<HashMap<String, HashMap<String, Instant>>>,
@@ -228,9 +264,12 @@ struct Inner {
     notifier: Mutex<Option<NotifyFn>>,
     /// Where this device's chats and projects are (`zeron.folders`).
     folders: Mutex<Option<FoldersFn>>,
-    /// One-time capabilities for Zeron's consent window (`ReviewPlugin`,
+    /// One-time capabilities for Zerun's consent window (`ReviewPlugin`,
     /// `ReviewTemplate`): what allowing and signing need.
     reviews: Mutex<reviews::Reviews>,
+    /// Plugin files on their way here from another of your devices
+    /// (`StagePluginPackage`).
+    uploads: Mutex<uploads::Uploads>,
     /// The ticket of the sign-in just made (`Auth::step_up`), which
     /// registering a new key needs.
     step_up: Mutex<Option<StepUpFn>>,
@@ -485,6 +524,7 @@ impl Plugins {
                 sweep_scheduled: AtomicBool::new(false),
                 written: Mutex::new(HashMap::new()),
                 reviews: Mutex::new(reviews::Reviews::default()),
+                uploads: Mutex::new(uploads::Uploads::default()),
                 tools: Arc::new(ToolBroker::default()),
                 channel: Arc::new(Slot::default()),
                 themes: Arc::new(Slot::default()),
@@ -495,6 +535,7 @@ impl Plugins {
                 builtin_dir: Mutex::new(None),
                 builtin_watch: Mutex::new(None),
                 services: Services::new(&storage, config),
+                agents: agents::Agents::default(),
                 watchers: Mutex::new(HashMap::new()),
                 watching: Mutex::new(HashSet::new()),
                 notifier: Mutex::new(None),
@@ -506,6 +547,9 @@ impl Plugins {
             }),
         };
         plugins.inner.services.set_hooks(Arc::new(ServiceHooks {
+            inner: Arc::downgrade(&plugins.inner),
+        }));
+        plugins.inner.agents.set_sink(Arc::new(AgentSink {
             inner: Arc::downgrade(&plugins.inner),
         }));
         plugins.publish_tools();
@@ -524,6 +568,23 @@ impl Plugins {
     /// `zeron.folders()` (the engine's workspace; a test's own).
     pub fn set_folders(&self, folders: impl Fn() -> Vec<String> + Send + Sync + 'static) {
         *lock(&self.inner.folders) = Some(Arc::new(folders));
+    }
+
+    /// Plugins' agent ops and events (the engine sets their host and feeds).
+    pub fn agents(&self) -> &agents::Agents {
+        &self.inner.agents
+    }
+
+    /// Follow what the engine learns of accounts, sessions and chats, for
+    /// plugins' events, while the plugins service runs.
+    pub fn follow_agents(
+        &self,
+        accounts: watch::Receiver<Option<zeron_proto::AgentAccountsSnapshot>>,
+        sessions: watch::Receiver<Vec<zeron_proto::Session>>,
+        chats: watch::Receiver<Vec<zeron_proto::Chat>>,
+    ) {
+        let tasks = agents::follow(&self.inner.agents, accounts, sessions, chats);
+        lock(&self.inner.tasks).extend(tasks);
     }
 
     pub fn plugins_dir(&self) -> &Path {
@@ -637,6 +698,8 @@ impl Plugins {
         let worker = runtime.spawn(Self::worker(Arc::downgrade(&self.inner), rx));
         let this = self.clone();
         let setup = runtime.spawn(async move {
+            let plugins_dir = this.inner.plugins_dir.clone();
+            let _ = tokio::task::spawn_blocking(move || sweep_removed(&plugins_dir)).await;
             let watcher = this.clone();
             let _ = tokio::task::spawn_blocking(move || watcher.install_watch(tx)).await;
             this.register_key().await;
@@ -708,7 +771,7 @@ impl Plugins {
         *lock(&self.inner.watch) = Some(watch);
     }
 
-    /// Watches Zeron's own plugins' folder: any change there rescans (the
+    /// Watches Zerun's own plugins' folder: any change there rescans (the
     /// worker's debounce), so a built-in plugin edited in a checkout
     /// reloads as it's saved. In an installed app the folder never changes.
     fn watch_builtin(&self, dir: &Path) {
@@ -730,6 +793,9 @@ impl Plugins {
         }
         self.inner.tools.drop_pending();
         self.inner.services.shutdown();
+        // Its host holds the engine (doc host, sessions, workspace), and the
+        // engine holds these plugins: let go, so the graph can be freed.
+        self.inner.agents.shutdown();
     }
 
     fn kick(&self, kick: Kick) {
@@ -1118,7 +1184,7 @@ impl Plugins {
                 scan::entry(inspected, author, &state)
             })
             .collect();
-        // Zeron's own, from the app's folder of them. A folder of yours by
+        // Zerun's own, from the app's folder of them. A folder of yours by
         // the same name gives way, said so.
         if let Some(dir) = lock(&self.inner.builtin_dir).clone() {
             for dir in scan::plugin_dirs(&dir) {
@@ -1164,7 +1230,7 @@ impl Plugins {
         (entries, owed, keeps)
     }
 
-    /// Forget own ids and decisions whose folder is gone (yours, or Zeron's
+    /// Forget own ids and decisions whose folder is gone (yours, or Zerun's
     /// own for its off switch). Under the scan lock, which installs hold
     /// while they swap a folder.
     fn prune_state(&self) {
@@ -1434,10 +1500,36 @@ impl Plugins {
         }
     }
 
+    /// Whether `new` is another live key of the account that signed with
+    /// `old` ([`keys::same_account`]), asked of the edge now (never the
+    /// cache: a key revoked a minute ago mustn't take a plugin over).
+    /// Offline, signed out or slow: no.
+    pub(super) async fn same_account(&self, old: &str, new: &str) -> bool {
+        if old == new {
+            return false;
+        }
+        let (Some(directory), Some(account)) = (self.directory(), self.account()) else {
+            return false;
+        };
+        let look = |key: &str| {
+            let (directory, account, key) = (directory.clone(), account.clone(), key.to_owned());
+            async move { tokio::time::timeout(LOOKUP_NOW_TIMEOUT, self.look_up(directory.as_ref(), &key, &account)).await.ok().flatten() }
+        };
+        let (Some(old), Some(new)) = (look(old).await, look(new).await) else {
+            return false;
+        };
+        keys::same_account(&old, &new)
+    }
+
+    /// The plugin `id`: Zerun's own when a folder of yours squats its id
+    /// (that folder is listed Broken beside it, and what's kept under the id
+    /// is the built-in's).
     fn entry(&self, id: &str) -> Option<Entry> {
-        lock(&self.inner.entries)
+        let entries = lock(&self.inner.entries);
+        entries
             .iter()
-            .find(|e| e.item.id == id)
+            .find(|e| e.item.id == id && e.item.builtin)
+            .or_else(|| entries.iter().find(|e| e.item.id == id))
             .cloned()
     }
 
@@ -1490,7 +1582,10 @@ impl Plugins {
     }
 
     /// Use up a consent-window review for `subject` as shown (`hash`):
-    /// refused to anything but this device's own app.
+    /// only by whom it was minted for (`reviews::Origin`): this device's own
+    /// app, or (a plugin's) the verified device that asked for it over the
+    /// link. Never an agent's token, never an unverified dial; a template's
+    /// and a signing are this device's app's alone.
     fn redeem_review(
         &self,
         kind: reviews::Kind,
@@ -1498,13 +1593,15 @@ impl Plugins {
         hash: &str,
         review: Option<&str>,
     ) -> Result<(), RpcError> {
-        if !zeron_rpc::caller().is_local() {
-            return Err(reviews::needed(match kind {
-                reviews::Kind::Plugin => "Allowing a plugin",
-                reviews::Kind::Template => "Allowing a template",
-            }));
+        let what = match kind {
+            reviews::Kind::Plugin => "Allowing a plugin",
+            reviews::Kind::Template => "Allowing a template",
+        };
+        let origin = reviews::Origin::of(&zeron_rpc::caller()).ok_or_else(|| reviews::needed(what))?;
+        if kind == reviews::Kind::Template && origin != reviews::Origin::Local {
+            return Err(reviews::needed(what));
         }
-        lock(&self.inner.reviews).redeem(kind, subject, hash, review)
+        lock(&self.inner.reviews).redeem(kind, &origin, subject, hash, review)
     }
 
     /// `SignPlugin`'s review: for the plugin `id` names, or `path` when it's
@@ -1530,6 +1627,10 @@ impl Plugins {
         let Some(id) = id else {
             return Err(failed("Only a plugin in your plugins folder can be signed, by its id"));
         };
+        // Signing is with this device's key: its own app's alone.
+        if !zeron_rpc::caller().is_local() {
+            return Err(reviews::needed("Signing a plugin"));
+        }
         self.rescan().await;
         let hash = self.entry(&id).map(|e| e.item.hash).unwrap_or_default();
         self.redeem_review(reviews::Kind::Plugin, &id, &hash, review)
@@ -1554,9 +1655,13 @@ impl Plugins {
             }
             methods::REVIEW_PLUGIN | methods::REVIEW_TEMPLATE => {
                 let p: ReviewParams = parse_params(params)?;
-                if !zeron_rpc::caller().is_local() {
-                    return Err(reviews::needed("A review"));
-                }
+                // This device's app, or (a plugin's) another of the
+                // account's devices as the edge verified the link: its
+                // consent window shows this plugin as listed here. The
+                // review is good only to whoever asked for it.
+                let origin = reviews::Origin::of(&zeron_rpc::caller())
+                    .filter(|origin| method == methods::REVIEW_PLUGIN || *origin == reviews::Origin::Local)
+                    .ok_or_else(|| reviews::needed("A review"))?;
                 let review = if method == methods::REVIEW_PLUGIN {
                     let id = p.id.unwrap_or_default();
                     self.rescan().await;
@@ -1566,10 +1671,10 @@ impl Plugins {
                     if entry.item.hash != p.hash {
                         return Err(failed("It changed while you were looking; review it again"));
                     }
-                    lock(&self.inner.reviews).mint(reviews::Kind::Plugin, &id, &p.hash)?
+                    lock(&self.inner.reviews).mint(reviews::Kind::Plugin, origin, &id, &p.hash)?
                 } else {
                     let pending = p.pending.unwrap_or_default();
-                    lock(&self.inner.reviews).mint(reviews::Kind::Template, pending.trim(), &p.hash)?
+                    lock(&self.inner.reviews).mint(reviews::Kind::Template, origin, pending.trim(), &p.hash)?
                 };
                 RpcReply::value(&serde_json::json!({ "review": review }))
             }
@@ -1581,8 +1686,10 @@ impl Plugins {
             }
             methods::DECIDE_PLUGIN => {
                 let p: DecideParams = parse_params(params)?;
-                // Allowing is Zeron's consent window's alone: this device's
-                // app, with a review minted for this plugin as shown.
+                // Allowing is Zerun's consent window's alone: this device's
+                // app's, or another of the account's devices' (its Settings →
+                // Plugins), with a review minted for this plugin as shown,
+                // for whoever decides.
                 if p.allow {
                     // (Changed since it was shown: say so, keeping the review.)
                     self.rescan().await;
@@ -1597,6 +1704,14 @@ impl Plugins {
                     .ok_or_else(|| failed(format!("There's no plugin {}", p.id)))?;
                 if entry.item.hash != p.hash {
                     return Err(failed("It changed while you were looking; review it again"));
+                }
+                // Changed since you allowed it: it's removed or installed
+                // again, never allowed as it is now.
+                if p.allow && entry.item.status == Status::Tampered {
+                    return Err(failed(format!(
+                        "{} changed after you allowed it. Remove it, or install it again from where it came from",
+                        entry.item.name
+                    )));
                 }
                 if entry.item.status == Status::Broken {
                     return Err(failed(
@@ -1632,7 +1747,7 @@ impl Plugins {
                 let p: BuiltinParams = parse_params(params)?;
                 let dir = PathBuf::from(p.dir.trim());
                 if !dir.is_absolute() || !dir.is_dir() {
-                    return Err(failed("Zeron's own plugins: that isn't a folder"));
+                    return Err(failed("Zerun's own plugins: that isn't a folder"));
                 }
                 *lock(&self.inner.builtin_dir) = Some(dir.clone());
                 self.watch_builtin(&dir);
@@ -1645,7 +1760,7 @@ impl Plugins {
                 let entry = self
                     .entry(&p.id)
                     .ok_or_else(|| failed(format!("There's no plugin {}", p.id)))?;
-                // Zeron's own: on or off is all there is to decide.
+                // Zerun's own: on or off is all there is to decide.
                 if entry.item.builtin {
                     self.update_state(|state| {
                         let mut decision = state.decisions.get(&p.id).cloned().unwrap_or_else(|| entry.facts().record(true));
@@ -1674,9 +1789,10 @@ impl Plugins {
             }
             methods::REMOVE_PLUGIN => {
                 let p: IdParams = parse_params(params)?;
-                if self.entry(&p.id).is_some_and(|e| e.item.builtin) {
-                    return Err(failed("Built-in plugins can be turned off, but not removed"));
-                }
+                // A folder of yours under a built-in's id is taken away, but
+                // what's kept under the id (its decision, storage) is the
+                // built-in's, and stays.
+                let builtin = self.entry(&p.id).is_some_and(|e| e.item.builtin);
                 // (One plain name, joined so it stays in the plugins folder on
                 // every system: never `C:`, a device name or a trailing dot.)
                 let dir = match zeron_plugin_guard::path::join(&self.inner.plugins_dir, &p.id) {
@@ -1684,26 +1800,31 @@ impl Plugins {
                     _ => return Err(failed(format!("There's no plugin {}", p.id))),
                 };
                 if std::fs::symlink_metadata(&dir).is_err() {
-                    return Err(failed(format!("There's no plugin {}", p.id)));
+                    return Err(failed(if builtin {
+                        "Built-in plugins can be turned off, but not removed".to_string()
+                    } else {
+                        format!("There's no plugin {}", p.id)
+                    }));
                 }
                 let removed = self.inner.plugins_dir.join(REMOVED_DIR);
                 std::fs::create_dir_all(&removed).map_err(|_| failed("Couldn't remove it"))?;
                 std::fs::rename(&dir, removed.join(format!("{}-{}", p.id, now_secs())))
                     .map_err(|_| failed("Couldn't remove it"))?;
+                // Gone from the list now; its files go with it (what can't
+                // be deleted yet goes when the engine next starts).
+                let plugins_dir = self.inner.plugins_dir.clone();
+                let _ = tokio::task::spawn_blocking(move || sweep_removed(&plugins_dir)).await;
+                if builtin {
+                    self.rescan().await;
+                    return RpcReply::value(&serde_json::json!({}));
+                }
                 self.update_state(|state| {
                     state.decisions.remove(&p.id);
                     state.own.remove(&p.id);
                 })?;
-                // What it kept (`zeron.store`, the app's) goes with it.
-                let _ = std::fs::remove_file(self.inner.plugins_dir.join(".storage").join(format!("{}.json", p.id)));
-                // And its settings (the app's: what you set on its page).
-                let _ = std::fs::remove_file(self.inner.plugins_dir.join(".storage").join(format!("{}.settings.json", p.id)));
-                // Its service's (`zeron.store` in service.luau).
-                let _ = std::fs::remove_file(Services::store_path(&self.inner.plugins_dir.join(".storage"), &p.id));
-                // Its database (`zeron.db`), and SQLite's files beside it.
-                for end in ["sqlite3", "sqlite3-wal", "sqlite3-shm"] {
-                    let _ = std::fs::remove_file(self.inner.plugins_dir.join(".storage").join(format!("{}.{end}", p.id)));
-                }
+                // What it kept (`zeron.store`, its settings, its database)
+                // goes with it.
+                forget_storage(&self.inner.plugins_dir, &p.id);
                 install::forget_found(&self.inner.plugins_dir, &p.id);
                 self.rescan().await;
                 RpcReply::value(&serde_json::json!({}))
@@ -1720,7 +1841,7 @@ impl Plugins {
                     .find(|x| !manifest::KNOWN_PERMISSIONS.contains(&x.as_str()))
                 {
                     return Err(failed(format!(
-                        "\"{unknown}\" isn't a permission Zeron knows"
+                        "\"{unknown}\" isn't a permission Zerun knows"
                     )));
                 }
                 let dir = self.inner.plugins_dir.join(&p.id);
@@ -1925,6 +2046,15 @@ impl Plugins {
                 p.from = self.trusted_from(p.from, &mut p.unverified_from);
                 RpcReply::value(&self.serve_call(p).await)
             }
+            methods::PLUGIN_AGENTS => {
+                let p: AgentsParams = parse_params(params)?;
+                RpcReply::value(&self.plugin_agents(p).await)
+            }
+            methods::SERVE_PLUGIN_AGENTS => {
+                let mut p: ServeAgentsParams = parse_params(params)?;
+                p.from = self.trusted_from(p.from, &mut p.unverified_from);
+                RpcReply::value(&self.serve_agents(p).await)
+            }
             methods::WATCH_PLUGIN_CHANNEL => {
                 Ok(RpcReply::Stream(self.inner.channel.subscribe(|| {})))
             }
@@ -2062,7 +2192,7 @@ impl Plugins {
                     review: Option<String>,
                 }
                 let p: PackageParams = parse_params(params)?;
-                // Allowing a template is Zeron's template consent window's
+                // Allowing a template is Zerun's template consent window's
                 // alone, with a review minted for this package as shown.
                 if method == methods::DECIDE_TEMPLATE && p.allow {
                     let pending = p.pending.as_deref().unwrap_or_default().trim();
@@ -2073,14 +2203,14 @@ impl Plugins {
                         p.review.as_deref(),
                     )?;
                 }
-                // R29: an agent exports to Zeron's exports folder only; a
+                // R29: an agent exports to Zerun's exports folder only; a
                 // path of its choosing is the person's (their save dialog).
                 if method == methods::EXPORT_TEMPLATE
                     && !zeron_rpc::caller().is_local()
                     && p.path.as_deref().is_some_and(|path| !path.trim().is_empty())
                 {
                     return Err(failed(
-                        "Agents export to Zeron's exports folder: leave out `path` (the reply says where it went)",
+                        "Agents export to Zerun's exports folder: leave out `path` (the reply says where it went)",
                     ));
                 }
                 let dir = self.inner.data_dir.join(TEMPLATES_DIR);
@@ -2096,7 +2226,7 @@ impl Plugins {
                                 return Err("Say which template (`id`).".to_string());
                             };
                             // Where it's asked to go, if that's a folder of
-                            // yours; else Zeron's exports folder.
+                            // yours; else Zerun's exports folder.
                             let path = match path {
                                 Some(path) => {
                                     template_packages::check_export_path(&path, &this.inner.data_dir, Some(&crate::repos::home_dir()))?;
@@ -2152,6 +2282,12 @@ impl Plugins {
                     let status = self.inner.services.status(&entry.item.id);
                     out["service"] = if status.is_null() { serde_json::json!({ "running": false }) } else { status };
                 }
+                // What it did to your agents' accounts and models here, and
+                // what its row says (a listener failing, a loop stopped).
+                let agents = self.inner.agents.status(&entry.item.id);
+                if !agents.is_null() {
+                    out["agents"] = agents;
+                }
                 // The window's account: where the plugin's nodes are, and
                 // what its row says (the app answers this call itself).
                 let tool = if p.snapshot { "@snapshot" } else { "@status" };
@@ -2169,7 +2305,7 @@ impl Plugins {
                     }
                     Err(CallError::NotOpen) => {
                         out["open"] = serde_json::json!(false);
-                        out["note"] = serde_json::json!("Zeron's window isn't open on this device: open it to see where the plugin shows.");
+                        out["note"] = serde_json::json!("Zerun's window isn't open on this device: open it to see where the plugin shows.");
                     }
                     Err(CallError::TimedOut) => {
                         out["open"] = serde_json::json!(true);
@@ -2185,10 +2321,10 @@ impl Plugins {
             methods::DESCRIBE_ELEMENTS => {
                 let path = self.inner.plugins_dir.join(ELEMENTS_FILE);
                 let text = tokio::fs::read_to_string(&path).await.map_err(|_| {
-                    failed("Zeron's window hasn't said where plugins can go yet: open Zeron, then ask again.")
+                    failed("Zerun's window hasn't said where plugins can go yet: open Zerun, then ask again.")
                 })?;
                 let mut map: serde_json::Value = serde_json::from_str(&text)
-                    .map_err(|_| failed("Zeron's map of where plugins can go couldn't be read."))?;
+                    .map_err(|_| failed("Zerun's map of where plugins can go couldn't be read."))?;
                 let (guide, _) = guides::ensure(&self.inner.data_dir);
                 map["guide"] = serde_json::json!(guide.display().to_string());
                 map["guide_summary"] = serde_json::json!(guides::PLUGINS_SUMMARY);
@@ -2370,7 +2506,7 @@ impl Plugins {
         {
             Ok(value) => RpcReply::value(&serde_json::json!({ "ok": true, "value": value })),
             Err(CallError::NotOpen) => Err(failed(format!(
-                "Open Zeron on {} to use {tool}",
+                "Open Zerun on {} to use {tool}",
                 self.device_name(&self.inner.device_id)
             ))),
             Err(CallError::TimedOut) => Err(failed(format!("{plugin_name} didn't answer in time"))),
@@ -2494,8 +2630,8 @@ impl Plugins {
         }
     }
 
-    /// Both sides have to be the same author, failing closed: Zeron's own
-    /// only with Zeron's own; a signed one only with one signed by the same
+    /// Both sides have to be the same author, failing closed: Zerun's own
+    /// only with Zerun's own; a signed one only with one signed by the same
     /// key, or by a key of the same account (each looked up now: stale or
     /// offline is Unknown, which matches nothing); unsigned only with
     /// unsigned (the ids, already equal, are all there is).
@@ -2573,6 +2709,23 @@ impl service::Hooks for ServiceHooks {
         folders.map(|f| f()).unwrap_or_default()
     }
 
+    fn agents(&self, plugin: &str, args: serde_json::Value, done: service::vm::Done) {
+        let (Some(inner), Ok(runtime)) = (self.inner.upgrade(), tokio::runtime::Handle::try_current()) else {
+            return done(Err("Zerun is stopping".into()));
+        };
+        let (agents, plugin) = (inner.agents.clone(), plugin.to_owned());
+        drop(inner);
+        runtime.spawn(async move {
+            done(agents.call(&plugin, args).await.map_err(|refused| refused.text()));
+        });
+    }
+
+    fn listeners(&self, plugin: &str, listeners: &[(String, String, serde_json::Value)]) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.agents.listen(plugin, agents::Target::Service, listeners);
+        }
+    }
+
     /// R11: the snapshot a service loads from is the version allowed, or it
     /// isn't loaded: it's removed, and a rescan makes it again from the
     /// plugin's (checked) folder.
@@ -2585,11 +2738,231 @@ impl service::Hooks for ServiceHooks {
         if let (Some(inner), Ok(runtime)) = (self.inner.upgrade(), tokio::runtime::Handle::try_current()) {
             runtime.spawn(async move { Plugins { inner }.rescan().await });
         }
-        Err(format!("its files changed since you allowed it ({why}); Zeron is checking it again"))
+        Err(format!("its files changed since you allowed it ({why}); Zerun is checking it again"))
+    }
+}
+
+/// Where plugins' agent events go, and what each plugin was allowed here.
+struct AgentSink {
+    inner: Weak<Inner>,
+}
+
+impl agents::Sink for AgentSink {
+    fn grants(&self, plugin: &str) -> Option<agents::Grant> {
+        let entry = Plugins { inner: self.inner.upgrade()? }.entry(plugin)?;
+        (entry.item.status == Status::On).then(|| agents::Grant {
+            name: entry.item.name.clone(),
+            allowed: entry.item.allowed.clone(),
+        })
+    }
+
+    fn to_window(&self, plugin: &str, listener: &str, event: &str, data: serde_json::Value) {
+        let Some(inner) = self.inner.upgrade() else { return };
+        let plugins = Plugins { inner };
+        // As a service's event to this device's windows, named `zeron:…`
+        // (no service's event can be: `zeron.emit` names are its own).
+        plugins.inner.channel.push(serde_json::json!({
+            "plugin": plugin,
+            "from": plugins.here(),
+            "event": format!("zeron:{event}"),
+            "here": true,
+            "data": { "listener": listener, "data": data },
+            "at": crate::now_ms(),
+        }));
+    }
+
+    fn to_service(
+        &self,
+        plugin: &str,
+        listener: &str,
+        event: &str,
+        data: serde_json::Value,
+    ) -> futures::future::BoxFuture<'static, Result<(), String>> {
+        let asked = self.ask_service(plugin, listener, event, data);
+        Box::pin(async move { asked.await.map(|_| ()) })
+    }
+
+    fn ask_service(
+        &self,
+        plugin: &str,
+        listener: &str,
+        event: &str,
+        data: serde_json::Value,
+    ) -> futures::future::BoxFuture<'static, Result<serde_json::Value, String>> {
+        let plan = self
+            .inner
+            .upgrade()
+            .and_then(|inner| Some((inner.services.clone(), service_plan(&Plugins { inner }.entry(plugin)?)?)));
+        let (listener, event) = (listener.to_owned(), event.to_owned());
+        Box::pin(async move {
+            let Some((services, plan)) = plan else {
+                return Err("its service isn't running here".into());
+            };
+            let call = serde_json::json!({ "kind": "event", "event": event });
+            services
+                .call(&plan, service::Kind::Event, &listener, data, call, AGENT_EVENT_TIMEOUT)
+                .await
+                .map_err(|refusal| refusal.message)
+        })
+    }
+}
+
+/// How long a service's listener may take over one event.
+const AGENT_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `PluginAgents`' params (the app's window).
+#[derive(Deserialize)]
+struct AgentsParams {
+    plugin: String,
+    #[serde(default)]
+    op: String,
+    #[serde(default)]
+    args: serde_json::Value,
+    #[serde(default)]
+    device: Option<String>,
+    #[serde(default)]
+    listeners: Vec<ListenerParam>,
+}
+
+#[derive(Deserialize)]
+struct ListenerParam {
+    key: String,
+    event: String,
+    #[serde(default)]
+    opts: serde_json::Value,
+}
+
+/// `ServePluginAgents`' params (another device of yours).
+#[derive(Deserialize, serde::Serialize)]
+struct ServeAgentsParams {
+    plugin: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default, rename = "authorKey", alias = "author_key")]
+    author_key: Option<String>,
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    op: String,
+    #[serde(default)]
+    args: serde_json::Value,
+    #[serde(skip)]
+    unverified_from: bool,
+}
+
+fn agents_reply(result: Result<serde_json::Value, agents::Refused>) -> serde_json::Value {
+    match result {
+        Ok(value) => serde_json::json!({ "ok": true, "value": value }),
+        Err(refused) => serde_json::json!({ "ok": false, "reason": refused.reason, "message": refused.message }),
     }
 }
 
 impl Plugins {
+    /// `PluginAgents`: a window's op, here or on the device it names.
+    async fn plugin_agents(&self, p: AgentsParams) -> serde_json::Value {
+        self.ensure_scanned().await;
+        let here = self.device_name(&self.inner.device_id);
+        let Some(entry) = self.entry(&p.plugin) else {
+            return Refusal::new(reason::NOT_INSTALLED, format!("There's no plugin {} on {here}", p.plugin)).to_json();
+        };
+        if p.op == "listen" {
+            let listeners: Vec<(String, String, serde_json::Value)> =
+                p.listeners.into_iter().map(|l| (l.key, l.event, l.opts)).collect();
+            self.inner.agents.listen(&p.plugin, agents::Target::Window, &listeners);
+            return serde_json::json!({ "ok": true, "value": null });
+        }
+        let mut args = if p.args.is_object() { p.args } else { serde_json::json!({}) };
+        args["op"] = serde_json::json!(p.op);
+        let target = p.device.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty() && *d != self.inner.device_id);
+        let Some(target) = target else {
+            return agents_reply(self.inner.agents.call(&p.plugin, args).await);
+        };
+        let call = ServeAgentsParams {
+            plugin: p.plugin,
+            version: entry.item.version.clone(),
+            author_key: author_identity(&entry),
+            from: self.inner.device_id.clone(),
+            op: p.op,
+            args,
+            unverified_from: false,
+        };
+        let name = self.device_name(&target);
+        let Some(links) = lock(&self.inner.links).clone() else {
+            return Refusal::new(reason::OFFLINE, format!("{name} can't be reached: this device isn't connected")).to_json();
+        };
+        let params = serde_json::to_value(&call).unwrap_or_default();
+        let reply = tokio::time::timeout(service::DEFAULT_TIMEOUT + LINK_SLACK, async {
+            links.client(&target).await?.call(methods::SERVE_PLUGIN_AGENTS, params).await
+        })
+        .await;
+        match reply {
+            Ok(Ok(value)) => value,
+            Ok(Err(RpcError::UnknownMethod(_))) => Refusal::new(
+                reason::OLD_ENGINE,
+                format!("{name} runs a Zerun from before plugins could read usage: update Zerun there"),
+            )
+            .to_json(),
+            Ok(Err(error)) => {
+                if matches!(error, RpcError::Closed | RpcError::Transport(_)) {
+                    links.invalidate(&target);
+                }
+                Refusal::new(reason::OFFLINE, format!("{name} can't be reached right now ({error})")).to_json()
+            }
+            Err(_) => {
+                links.invalidate(&target);
+                Refusal::new(reason::TIMEOUT, format!("{name} didn't answer in time")).to_json()
+            }
+        }
+    }
+
+    /// `ServePluginAgents`: another of your devices asking for its plugin's
+    /// op here. The plugin must be installed and on here, the same version
+    /// by the same author, and what this device allowed it decides.
+    async fn serve_agents(&self, p: ServeAgentsParams) -> serde_json::Value {
+        self.ensure_scanned().await;
+        let here = self.device_name(&self.inner.device_id);
+        if p.unverified_from || p.from.is_empty() {
+            return Refusal::new(reason::BAD_CALL, "Only another of your devices may ask this").to_json();
+        }
+        let Some(entry) = self.entry(&p.plugin) else {
+            return Refusal::new(reason::NOT_INSTALLED, format!("{} isn't installed on {here}", p.plugin)).to_json();
+        };
+        let name = entry.item.name.clone();
+        match entry.item.status {
+            Status::On => {}
+            Status::Off => return Refusal::new(reason::OFF, format!("{name} is turned off on {here}")).to_json(),
+            Status::Pending => {
+                return Refusal::new(reason::NOT_APPROVED, format!("{name} is waiting to be allowed on {here}")).to_json();
+            }
+            Status::Tampered | Status::Broken => {
+                return Refusal::new(reason::BROKEN, format!("{name} can't run on {here}")).to_json();
+            }
+        }
+        if entry.item.version != p.version {
+            return Refusal::new(
+                reason::VERSION_MISMATCH,
+                format!("{here} has {name} {}, the caller {}", entry.item.version, p.version),
+            )
+            .to_json();
+        }
+        if !self.same_author(&entry, p.author_key.as_deref()).await {
+            return Refusal::new(reason::OTHER_AUTHOR, format!("The {name} on {here} is someone else's plugin by the same name"))
+                .to_json();
+        }
+        if serde_json::to_vec(&p.args).map_or(usize::MAX, |b| b.len()) > MAX_CALL_BYTES {
+            return Refusal::new(reason::BAD_CALL, "That call's arguments are too big").to_json();
+        }
+        // A window's own (the default for new chats is that window's), or
+        // only the window here says what it listens for.
+        if matches!(p.op.as_str(), "set_default_model" | "listen") {
+            return Refusal::new(reason::BAD_CALL, format!("\"{}\" is a window's own, on its device", p.op)).to_json();
+        }
+        let mut args = if p.args.is_object() { p.args } else { serde_json::json!({}) };
+        args["op"] = serde_json::json!(p.op);
+        tracing::info!(plugin = %p.plugin, from = %p.from, op = %p.op, "plugins: another device asked for an agent op");
+        agents_reply(self.inner.agents.call(&p.plugin, args).await)
+    }
+
     /// This device, as `{ id, name }`.
     fn here(&self) -> serde_json::Value {
         let id = &self.inner.device_id;
@@ -2598,7 +2971,19 @@ impl Plugins {
 
     /// Run what should run, after a scan.
     fn sync_services(&self) {
-        let plans: Vec<Plan> = lock(&self.inner.entries).iter().filter_map(service_plan).collect();
+        let (plans, on): (Vec<Plan>, HashSet<String>) = {
+            let entries = lock(&self.inner.entries);
+            let on = entries.iter().filter(|e| e.item.status == Status::On).map(|e| e.item.id.clone()).collect();
+            (entries.iter().filter_map(service_plan).collect(), on)
+        };
+        // Listeners of plugins no longer on here are forgotten; a service
+        // that may no longer run here hears nothing.
+        self.inner.agents.retain(&on);
+        for id in &on {
+            if !plans.iter().any(|p| p.plugin == *id) {
+                self.inner.agents.listen(id, agents::Target::Service, &[]);
+            }
+        }
         self.inner.services.sync(plans);
     }
 
@@ -2699,7 +3084,7 @@ impl Plugins {
             Ok(Ok(value)) => value,
             Ok(Err(RpcError::UnknownMethod(_))) => Refusal::new(
                 reason::OLD_ENGINE,
-                format!("{name} runs a Zeron from before plugin services: update Zeron there"),
+                format!("{name} runs a Zerun from before plugin services: update Zerun there"),
             )
             .to_json(),
             Ok(Err(RpcError::BadParams(why))) => Refusal::new(reason::BAD_CALL, why).to_json(),
@@ -2831,7 +3216,7 @@ pub fn same_account(a: &Author, b: &Author) -> bool {
 /// What a device that isn't vouched for is called (`from`).
 pub const UNKNOWN_DEVICE: &str = "unknown";
 
-/// Who a plugin's author is across devices: Zeron for its own, else its
+/// Who a plugin's author is across devices: Zerun for its own, else its
 /// signing key (none when unsigned).
 fn author_identity(entry: &Entry) -> Option<String> {
     if entry.item.builtin {
@@ -2889,5 +3274,7 @@ mod tests;
 mod identity_tests;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod agents_service_tests;
 #[cfg(all(test, unix))]
 mod git_service_tests;

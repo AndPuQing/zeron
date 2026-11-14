@@ -12,13 +12,13 @@
 //! it's refused. The files no template may replace (`PROTECTED`: the plugins
 //! and templates pages, your account, the app's `.luaurc`) are then left out
 //! and named. Yours (signed by this device's key) installs at once; anyone
-//! else's waits in `.pending/` until you allow it in Zeron's own consent
+//! else's waits in `.pending/` until you allow it in Zerun's own consent
 //! window (`decide`), which checks it again. A template runs as the app's own
 //! code, with all its powers: that's what the window asks you to allow.
 //!
 //! An installed one keeps its signed manifest and `.imported.json`
 //! (`{key, author, at, ignored, hash, version, source?}`): who signed it, as
-//! Zeron knew them then, the package it was, and where it came from.
+//! Zerun knew them then, the package it was, and where it came from.
 //!
 //! A package comes from a file, or a link (`origin`): one to a
 //! `.zeron-template`, or a GitHub repository's release carrying one (its
@@ -47,13 +47,13 @@ pub const PENDING: &str = ".pending";
 pub const IMPORTED: &str = ".imported.json";
 /// Updates found, waiting to be installed (`<id>.json`, `<id>.zeron-template`).
 pub const UPDATES: &str = ".updates";
-/// The app's mark of one of Zeron's built-in themes (apps/zgx
+/// The app's mark of one of Zerun's built-in themes (apps/zgx
 /// theme_templates `MARK`): never written from a package.
 const BUILTIN_THEME: &str = "builtin_theme";
 /// A package's largest size on disk: its files' limit, as base64, and room.
 const MAX_PACKAGE_BYTES: u64 = MAX_BYTES * 4 / 3 + 1024 * 1024;
 
-/// What no template replaces: the app always loads Zeron's own (the app's
+/// What no template replaces: the app always loads Zerun's own (the app's
 /// `NEVER_TEMPLATED`, apps/zgx/src/plugins/live.rs).
 pub const PROTECTED: [&str; 4] = ["screens/plugins/", "screens/templates/", "account/", ".luaurc"];
 
@@ -68,10 +68,10 @@ pub fn protected(rel: &str) -> bool {
     })
 }
 
-const UNSIGNED: &str = "This template isn't signed, so Zeron can't tell who made it or whether it was changed. Ask its author to export it again from Zeron.";
-const TAMPERED: &str = "This template was changed after it was signed, so Zeron won't install it. Ask its author for a fresh copy.";
-const BAD_SIGNATURE: &str = "This template's signature doesn't check out, so Zeron won't install it. Ask its author for a fresh copy.";
-const NOT_A_PACKAGE: &str = "This isn't a Zeron template. Templates are shared as .zeron-template files, exported from Zeron.";
+const UNSIGNED: &str = "This template isn't signed, so Zerun can't tell who made it or whether it was changed. Ask its author to export it again from Zerun.";
+const TAMPERED: &str = "This template was changed after it was signed, so Zerun won't install it. Ask its author for a fresh copy.";
+const BAD_SIGNATURE: &str = "This template's signature doesn't check out, so Zerun won't install it. Ask its author for a fresh copy.";
+const NOT_A_PACKAGE: &str = "This isn't a Zerun template. Templates are shared as .zeron-template files, exported from Zerun.";
 
 /// A package, read and verified.
 pub struct Package {
@@ -139,7 +139,7 @@ pub fn export(dir: &Path, id: &str, out: &Path, key: &SigningKey) -> Result<Valu
     if let (Ok(parent), Ok(root)) = (std::fs::canonicalize(parent), std::fs::canonicalize(dir))
         && parent.starts_with(&root)
     {
-        return Err("Save it outside Zeron's templates folder.".into());
+        return Err("Save it outside Zerun's templates folder.".into());
     }
     if std::fs::symlink_metadata(out).is_ok_and(|m| !m.is_file()) {
         return Err("There's something at that path that isn't a file.".into());
@@ -202,18 +202,18 @@ pub fn export(dir: &Path, id: &str, out: &Path, key: &SigningKey) -> Result<Valu
     }))
 }
 
-/// Where Zeron saves an export when it isn't told where:
+/// Where Zerun saves an export when it isn't told where:
 /// `<data>/template-exports/<id>.zeron-template`.
 pub fn default_export_path(data_dir: &Path, id: &str) -> PathBuf {
     data_dir.join("template-exports").join(format!("{id}.{EXTENSION}"))
 }
 
-/// A path someone named for an export (R29): never inside Zeron's own data,
+/// A path someone named for an export (R29): never inside Zerun's own data,
 /// never in a hidden folder of your home (`~/.ssh`, `~/.config`), and never
 /// over a file that isn't a template package (an earlier export is
 /// replaced; nothing else is).
 pub fn check_export_path(out: &Path, data_dir: &Path, home: Option<&Path>) -> Result<(), String> {
-    let refuse = || Err("A template can only be saved in a folder of yours: not a hidden folder, not one of Zeron's, and not over a different kind of file.".to_string());
+    let refuse = || Err("A template can only be saved in a folder of yours: not a hidden folder, not one of Zerun's, and not over a different kind of file.".to_string());
     let parent = out.parent().ok_or("Say where to save it.")?;
     let canonical = std::fs::canonicalize(parent).map_err(|_| "That folder can't be found.".to_string())?;
     let data = std::fs::canonicalize(data_dir).unwrap_or_else(|_| data_dir.to_path_buf());
@@ -272,7 +272,7 @@ pub fn parse(raw: Vec<u8>) -> Result<Package, String> {
         // Every name a plain path inside the template (`templates::inside`:
         // no `..`, no absolute part, no dotfile but `.luaurc`).
         if inside(Path::new("t"), rel).is_none() {
-            return Err(format!("This template has a file Zeron won't write: {rel:?}."));
+            return Err(format!("This template has a file Zerun won't write: {rel:?}."));
         }
         let bytes = data
             .as_str()
@@ -362,9 +362,9 @@ fn write_folder(dir: &Path, id: &str, package: &Package, author: &Author, source
             }
             std::fs::write(&to, bytes).map_err(|e| format!("Couldn't write {rel}: {e}"))?;
         }
-        // What marks Zeron's own built-in themes (`builtin_theme`, the
+        // What marks Zerun's own built-in themes (`builtin_theme`, the
         // app's theme_templates) is the app's to write, never a package's:
-        // left out, so an imported template never shows as Zeron's own.
+        // left out, so an imported template never shows as Zerun's own.
         let mut manifest = package.manifest.clone();
         if let Some(m) = manifest.as_object_mut() {
             m.remove(BUILTIN_THEME);
@@ -394,7 +394,7 @@ fn write_folder(dir: &Path, id: &str, package: &Package, author: &Author, source
 
 /// `ImportTemplate`: the package at `path`, verified. Yours installs now
 /// (`{installed, name, author, ignored}`); anyone else's waits for you in
-/// Zeron (`{pending, …about, author, needs_consent: true}`).
+/// Zerun (`{pending, …about, author, needs_consent: true}`).
 pub fn import(dir: &Path, path: &Path, author_of: impl Fn(&str) -> Author) -> Result<Value, String> {
     let package = read(path)?;
     let shown = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -621,7 +621,14 @@ pub async fn fetch(origin: &Origin) -> Result<(Package, Source), String> {
         Origin::Release { repo, tag } => {
             let asset = install::release_asset_of(repo, tag.as_deref(), EXTENSION).await.map_err(|error| {
                 // (A repository with no release yet, or none with a template.)
-                if tag.is_none() { "That repository has no release with a template in it".to_string() } else { error }
+                // (Anything else, GitHub turning requests away among them,
+                // says what it is.)
+                let missing = matches!(install::reason_of(&error), Some(install::reason::RELEASE_NOT_FOUND | install::reason::NO_PACKAGE));
+                if tag.is_none() && missing {
+                    install::failure(install::reason::NO_PACKAGE, "That repository has no release with a template in it")
+                } else {
+                    error
+                }
             })?;
             (
                 install::download(&asset).await?,
@@ -742,6 +749,7 @@ pub fn compare(dir: &Path, id: &str, key: &str, hash: &str, fetched: &Package, s
         refused,
         source: Some(source),
         digest_diff: None,
+        new_key: false,
     })
 }
 
@@ -795,7 +803,7 @@ pub fn update(dir: &Path, id: &str, author_of: impl Fn(&str) -> Author) -> Resul
     let mut source: Option<Source> = found.source.clone().or_else(|| serde_json::from_value(imported["source"].clone()).ok());
     // A new version whose code differs from what's installed (anything but
     // its preview picture) is a new template to allow: it waits for you in
-    // Zeron's own consent window, as someone else's does, and replaces this
+    // Zerun's own consent window, as someone else's does, and replaces this
     // one only once you allow it there (`decide`).
     if changes_code(&folder, &package) {
         let shown = source.clone().unwrap_or_else(|| Source {
@@ -977,7 +985,7 @@ mod tests {
     #[test]
     fn plugins_template_packages_protected_files_in_a_package_are_ignored() {
         // A package that carries what no template replaces, signed as is
-        // (by hand: Zeron's own export never puts them in).
+        // (by hand: Zerun's own export never puts them in).
         let d = dir("protected");
         let alice = key();
         let files: BTreeMap<String, Vec<u8>> = [
@@ -1062,7 +1070,7 @@ mod tests {
         as_plugin["manifest"] = alice.sign_manifest(&bare, &hashes);
         refused(&as_plugin, "doesn't check out");
         // Not a package, and a path that would escape.
-        refused(&json!({ "hello": "world" }), "isn't a Zeron template");
+        refused(&json!({ "hello": "world" }), "isn't a Zerun template");
         let mut escaping = original.clone();
         escaping["files"]["../../evil.luau"] = json!(B64.encode("-- evil"));
         refused(&escaping, "won't write");
@@ -1264,14 +1272,14 @@ mod tests {
         assert_eq!(imported(&other.join("midnight-2")).unwrap()["version"], "1.1.0");
     }
 
-    /// R18: a package's manifest never carries the app's mark of Zeron's
+    /// R18: a package's manifest never carries the app's mark of Zerun's
     /// own built-in themes into what's installed.
     #[test]
     fn plugins_template_packages_builtin_theme_is_never_installed_from_a_package() {
         let d = with_template("posing");
         let alice = key();
         let out = d.parent().unwrap().join("midnight.zeron-template");
-        // A package whose signed manifest says it's Zeron's Catppuccin.
+        // A package whose signed manifest says it's Zerun's Catppuccin.
         let mut files = BTreeMap::new();
         files.insert("theme.luau".to_owned(), b"return nil".to_vec());
         files.insert("screens/shell/sidebar.luau".to_owned(), b"-- takes over".to_vec());
@@ -1313,7 +1321,7 @@ mod tests {
     }
 
     /// R29: an export lands only in a folder of yours, never over another
-    /// kind of file, never in Zeron's data or a hidden folder of home.
+    /// kind of file, never in Zerun's data or a hidden folder of home.
     #[test]
     fn an_export_goes_only_where_it_should() {
         let home = tempfile::tempdir().unwrap();

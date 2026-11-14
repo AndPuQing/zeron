@@ -27,6 +27,8 @@ pub(super) async fn models(process: &mut Process) -> Result<Vec<Model>, HarnessE
             id: format!("{provider}/{id}"),
             label: model["name"].as_str().unwrap_or(id).into(),
             description: Some(provider.into()),
+            provider: None,
+            default: false,
             options: thinking_option(model),
             reasoning_levels,
         });

@@ -42,12 +42,23 @@ pub const KNOWN_PERMISSIONS: &[&str] = &[
     // each device that allowed it, called by its windows and agents from
     // this device or another (plugins/service).
     "service",
+    // The agents' accounts, usage and models (plugins/agents): reading
+    // them, and the two controls (switching an account, setting a model).
+    "usage.read",
+    "accounts.read",
+    "accounts.switch",
+    "accounts.pin",
+    "models.read",
+    "models.set",
+    // Sending messages in your chats, starting chats and answering their
+    // questions, as you would from the composer (plugins/agents).
+    "messages.send",
 ];
 
 /// Ids the app keeps for itself.
 pub const RESERVED_IDS: &[&str] = &["templates", "zeron", "app"];
 
-pub const RESERVED_ID_ERROR: &str = "Zeron already uses that name";
+pub const RESERVED_ID_ERROR: &str = "Zerun already uses that name";
 
 /// `^[a-z0-9][a-z0-9-]{1,39}$`, and not one of [`RESERVED_IDS`].
 pub fn check_id(id: &str) -> Result<(), String> {
@@ -86,11 +97,11 @@ pub fn valid_service_path(path: &str) -> bool {
 }
 
 /// What's wrong with a `ui.change` entry, if anything. An entry names an
-/// element of Zeron's by selector, as zgx matches plugin targets: `#id`,
+/// element of Zerun's by selector, as zgx matches plugin targets: `#id`,
 /// `.class`, `hook:name`, `role:name`, `"name"` or a bare id, with `>>`
 /// between ancestors. It never names a module (`@app/…`: zgx would let
 /// the plugin run as the app), everything (`*`), a node's number, row or
-/// nth match, or Zeron's plugin placeholders (`.plugin-…`, each plugin's
+/// nth match, or Zerun's plugin placeholders (`.plugin-…`, each plugin's
 /// own through "panel.tabs" and "pages.add" alone).
 pub fn change_target_problem(target: &str) -> Option<String> {
     let refuse = |why: &str| Some(format!("It can't change \"{target}\": {why}"));
@@ -130,7 +141,7 @@ pub fn change_target_problem(target: &str) -> Option<String> {
                 return refuse("it isn't a selector (#id, .class, hook:name, role:name or \"name\")");
             }
             if class && name.starts_with("plugin-") {
-                return refuse("plugins' tabs, pages and badges are their own and Zeron's");
+                return refuse("plugins' tabs, pages and badges are their own and Zerun's");
             }
         }
     }
@@ -427,7 +438,7 @@ impl Manifest {
             .find(|p| !KNOWN_PERMISSIONS.contains(&p.as_str()))
         {
             return Some(format!(
-                "It asks for \"{unknown}\", which isn't a permission Zeron knows"
+                "It asks for \"{unknown}\", which isn't a permission Zerun knows"
             ));
         }
         let asks = |p: &str| self.permissions.iter().any(|have| have == p);
@@ -469,7 +480,7 @@ impl Manifest {
             _ => {}
         }
         if !self.ui.change.is_empty() && !asks("ui.change") {
-            return Some("It changes parts of Zeron but doesn't ask for \"ui.change\"".into());
+            return Some("It changes parts of Zerun but doesn't ask for \"ui.change\"".into());
         }
         if let Some(problem) = self.ui.change.iter().find_map(|t| change_target_problem(t)) {
             return Some(problem);
@@ -480,7 +491,7 @@ impl Manifest {
         for screen in &self.ui.replace {
             if !screen.starts_with("@app/screens/") {
                 return Some(format!(
-                    "It can only replace Zeron's screens, not \"{screen}\""
+                    "It can only replace Zerun's screens, not \"{screen}\""
                 ));
             }
             let protected = ["@app/screens/plugins", "@app/screens/shell/settings"];

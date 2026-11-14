@@ -31,7 +31,8 @@ class BetaPackaging(unittest.TestCase):
                 shutil.copyfile(ROOT / name, dest)
             for name in ["crates/ui/assets/fonts/licenses/font.txt", "apps/zgx/fonts/font-OFL.txt",
                          "apps/zgx/ui/app.luau", "apps/zgx/ui/tests/not-shipped.luau",
-                         "apps/zgx/ui/.zgx/generated.luau", "apps/zgx/plugins-builtin/test/plugin.json"]:
+                         "apps/zgx/ui/.zgx/generated.luau", "apps/zgx/plugins-builtin/test/plugin.json",
+                         "apps/zgx/plugins-sdk/zeron.luau"]:
                 dest = root / name
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_text("fixture")
@@ -57,6 +58,7 @@ class BetaPackaging(unittest.TestCase):
             package, = unpack.iterdir()
             self.assertTrue((package / "ui/app.luau").is_file())
             self.assertTrue((package / "plugins-builtin/test/plugin.json").is_file())
+            self.assertEqual((package / "plugins-builtin/test/zeron.luau").read_text(), "fixture")
             self.assertFalse((package / "ui/tests").exists())
             self.assertFalse((package / "ui/.zgx").exists())
             sandbox_home = Path(temp) / "home with spaces"
@@ -69,7 +71,7 @@ class BetaPackaging(unittest.TestCase):
                     text=True, capture_output=True, timeout=15)
                 self.assertEqual(installed.returncode, 0, installed.stderr)
             current = sandbox_home / ".zerun/app/current"
-            self.assertEqual(current.resolve().name, version)
+            self.assertEqual(current.resolve().name, f"beta-{version}")
             for name, prefix in [("zerun", "zerun"), ("zerun-engine", "zerun-engine")]:
                 actual = subprocess.check_output([current / name, "--version"], text=True).strip()
                 self.assertEqual(actual, f"{prefix} {version}")

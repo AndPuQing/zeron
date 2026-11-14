@@ -30,6 +30,7 @@ pub mod catalog;
 mod client;
 pub mod cloud;
 pub mod composer;
+mod cloud_stage;
 pub mod config;
 pub mod connectivity;
 mod demo;
@@ -61,7 +62,7 @@ pub use session::{
     AppendHint, BusyPolicy, ComposerState, Entry, HostCapabilities, HostInfo, InputRequest,
     LiveStatus, LocalEcho, OutgoingAttachment, PendingKind, PendingSend, QueueEditAction,
     QueueEditFinish, QueueEditLease, QueueEditStart, QueueGate, QueueItem, RoomState, SendOutcome,
-    SendRequest, SessionHandle, SessionSnapshot, SnapshotDelta, SnapshotWatch,
+    SendRequest, SessionHandle, SessionSnapshot, SnapshotDelta, SnapshotWatch, TranscriptLoad,
 };
 pub use subagents::{SubagentInfo, SubagentSink, SubagentState, SubagentWatch};
 pub use terminal::{TerminalInfo, TerminalLink, TerminalReplies, TerminalSink, TerminalUpdate};

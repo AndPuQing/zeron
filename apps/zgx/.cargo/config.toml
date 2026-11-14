@@ -1,4 +1,5 @@
-# Luau checks its asserts unless NDEBUG is defined (about a fifth slower);
-# zgx sets this in its own workspace, and an app built elsewhere repeats it.
 [env]
+# Release scripts and the desktop share Luau's optimized configuration.
 LUAU_CXXFLAGS = "-DNDEBUG"
+# Use smaller allocator pages on Apple Silicon to release fragmented memory.
+CFLAGS_aarch64_apple_darwin = "-DMI_ARENA_SLICE_SHIFT=14 -DMI_ENABLE_LARGE_PAGES=0"

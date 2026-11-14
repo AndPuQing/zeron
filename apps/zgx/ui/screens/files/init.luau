@@ -319,6 +319,9 @@ local function folder(w: Workspace, v: View, props: Props, here: () -> Where?): 
 		id = "files-pane",
 		hook = "files.pane",
 		shown = tree_shown,
+		-- Narrow with a file open, the tree over it: kept by the view, so a
+		-- pane made again shows it as it was.
+		over = ui.state(`files_tree_over:{v.id}`, false),
 		room = w.pane_room,
 		drawer = w.drawer,
 		docked = props.docked,

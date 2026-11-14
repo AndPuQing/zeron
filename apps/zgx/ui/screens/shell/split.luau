@@ -342,6 +342,265 @@ end)
 M.frames = ui.computed(function(): { [string]: Box }
 	return frames_of(M.shown:get(), M.GAP)
 end)
+-- The dividers of the split, as it is.
+M.dividers = ui.computed(function(): { Divider }
+	local _, list = arrange(M.shown:get(), M.GAP)
+	return list
+end)
+
+-- The tree with its node at `path` changed by `change`.
+local function at_path(node: Node, path: { number }, depth: number, change: (n: Node) -> Node): Node
+	if depth > #path then
+		return change(node)
+	end
+	local kids = table.clone(node.children or {})
+	kids[path[depth]] = at_path(kids[path[depth]], path, depth + 1, change)
+	return { kind = node.kind, children = kids, shares = node.shares }
+end
+
+-- The row or column at `path` given the shares `change` makes of its own.
+local function set_shares(path: { number }, change: (n: Node) -> { number })
+	local current = M.current:peek()
+	if not current then
+		return
+	end
+	local key = key_of(current)
+	local tree = at_path(current, path, 1, function(n: Node): Node
+		return { kind = n.kind, children = n.children, shares = change(n) }
+	end)
+	local list: { Node } = {}
+	for _, t in trees:peek() do
+		table.insert(list, if key_of(t) == key then keyed(tree, key) else t)
+	end
+	trees:set(list)
+end
+-- The page's least either side of a divider, as a share of what's shared out
+-- (`least`), and where the part before it is held between.
+function M.bounds(start: { number }, at: number, least: number): (number, number)
+	local both = start[at] + start[at + 1]
+	return math.min(least, both / 2), math.max(both - least, both / 2)
+end
+-- A divider dragged: the part before it to `share` of what the row or column
+-- shares out, the part after it taking up the difference, each at least `least`.
+-- `over`: a share past that as the divider bounces at its limit (ds/seam).
+function M.resize(path: { number }, at: number, start: { number }, moved: number, least: number, over: number?)
+	set_shares(path, function(): { number }
+		local shares = table.clone(start)
+		local both = shares[at] + shares[at + 1]
+		local lo, hi = M.bounds(start, at, least)
+		local first = math.clamp(shares[at] + moved, lo, hi) + (over or 0)
+		shares[at], shares[at + 1] = first, both - first
+		return shares
+	end)
+end
+-- A divider's row or column's shares now.
+function M.shares_at(path: { number }): { number }
+	local current = M.current:peek()
+	local n = current
+	for _, i in path do
+		n = if n and n.children then n.children[i] else nil
+	end
+	local count = if n and n.children then #n.children else 0
+	if n and n.shares and #n.shares == count then
+		return table.clone(n.shares)
+	end
+	local out: { number } = {}
+	for _ = 1, count do
+		table.insert(out, 1 / count)
+	end
+	return out
+end
+
+-- A change of structure (a pane come, gone or moved) eases each pane to its new
+-- place; a divider dragged moves them at once, and the same
+-- tab's panes only: another tab lands at once.
+local function shape_of(t: Node?): string
+	if not t then
+		return ""
+	end
+	if t.kind == "leaf" then
+		return t.id or ""
+	end
+	local parts: { string } = {}
+	for _, c in t.children or {} do
+		table.insert(parts, shape_of(c))
+	end
+	return `{t.kind}({table.concat(parts, ",")})`
+end
+M.shape = ui.computed(function(): string
+	local current = M.current:get()
+	return `{if current then key_of(current) else ""}#{shape_of(M.shown:get())}`
+end)
+local area_element: any = nil
+function M.set_area(element: any)
+	area_element = element
+end
+-- The page's room now, in points (read when needed, not followed).
+function M.area(): { w: number, h: number }
+	local el = area_element
+	return { w = if el then el.width or 0 else 0, h = if el then el.height or 0 else 0 }
+end
+-- Where each chat's box shows: `frames`, but as the shape of the tab showing changes,
+-- easing there from where each stood. In shares of the page, as `frames` is, so they
+-- keep to each other and to the page as it moves too (the sidebar stepping aside for
+-- a pane just added). A pane just added opens out of the gap it comes in at, as its
+-- neighbours make room, at its full size all along (`opening_size`).
+local settle = ui.state("split.settle", 1)
+local SETTLE_MS, SETTLE_EASE = 280, "outQuint"
+local settle_from: { [string]: Box } = {}
+local settle_new: { [string]: boolean } = {}
+local settling: any = nil
+local function mix(a: Box, b: Box, t: number): Box
+	local function at(x: Edge, y: Edge): Edge
+		return edge(x.p + (y.p - x.p) * t, x.q + (y.q - x.q) * t)
+	end
+	return { left = at(a.left, b.left), right = at(a.right, b.right), top = at(a.top, b.top), bottom = at(a.bottom, b.bottom) }
+end
+-- `node` with the panes in `old` keeping their shares and the others taking none.
+local function with_new_shut(node: Node, old: { [string]: Box }): (Node, boolean)
+	if node.kind == "leaf" then
+		return node, old[node.id :: string] == nil
+	end
+	local kids: { Node } = {}
+	local shut: { boolean } = {}
+	local all_new = true
+	local kept = 0
+	local count = #(node.children or {})
+	for i, c in node.children or {} do
+		local kid, new = with_new_shut(c, old)
+		kids[i], shut[i] = kid, new
+		all_new = all_new and new
+		if not new then
+			kept += if node.shares and #node.shares == count then node.shares[i] else 1 / count
+		end
+	end
+	local shares: { number } = {}
+	for i = 1, count do
+		local share = if node.shares and #node.shares == count then node.shares[i] else 1 / count
+		shares[i] = if shut[i] or kept <= 0 then 0 else share / kept
+	end
+	return { kind = node.kind, children = kids, shares = shares }, all_new
+end
+M.shown_frames = ui.computed(function(): { [string]: Box }
+	local to = M.frames:get()
+	local t = settle:get()
+	if t >= 1 then
+		return to
+	end
+	local out: { [string]: Box } = {}
+	for id, b in to do
+		local from = settle_from[id]
+		out[id] = if from then mix(from, b, t) else b
+	end
+	return out
+end)
+local seen_frames = M.frames:peek()
+local seen_shape = M.shape:peek()
+-- The chat the tab showing holds, when it holds one: it has no frame, the page is its.
+local function lone_of(tree: Node?): string?
+	local ids = leaves(tree)
+	return if #ids == 1 then ids[1] else nil
+end
+local seen_lone = lone_of(M.current:peek())
+ui.effect(function()
+	local to, shape = M.frames:get(), M.shape:get()
+	local was, was_shape, was_lone = seen_frames, seen_shape, seen_lone
+	seen_frames, seen_shape, seen_lone = to, shape, lone_of(M.current:peek())
+	if was_shape == shape then
+		return
+	end
+	-- (A chat that stood alone stood on the whole page.)
+	if next(was) == nil and was_lone then
+		was = frames_of(leaf(was_lone), M.GAP)
+	end
+	if settling then
+		settling:cancel()
+		settling = nil
+	end
+	-- (None of them there before, so nothing to ease from: as for another tab.)
+	local any_stays = false
+	for id in to do
+		any_stays = any_stays or was[id] ~= nil
+	end
+	-- (Another tab, or no motion: there at once.)
+	if string.match(was_shape, "^[^#]*") ~= string.match(shape, "^[^#]*") or motion.reduced_now() or (next(to) ~= nil and not any_stays) then
+		settle:set(1)
+		return
+	end
+	-- From where each shows now, a step under way included.
+	local t = settle:peek()
+	local from: { [string]: Box } = {}
+	for id, b in was do
+		local start = settle_from[id]
+		from[id] = if t < 1 and start then mix(start, b, t) else b
+	end
+	-- A pane just added: from the gap it comes in at.
+	local tree = M.shown:peek()
+	local shut = if tree then frames_of((with_new_shut(tree, was)), M.GAP) else {}
+	settle_new = {}
+	for id in to do
+		if not from[id] then
+			from[id] = shut[id]
+			settle_new[id] = true
+		end
+	end
+	settle_from = from
+	settle:set(0)
+	settling = anime.animate(settle, { value = 1, duration = SETTLE_MS, ease = SETTLE_EASE })
+end)
+
+-- A divider double-clicked: the panes of its row or column at equal shares
+-- again, easing there from where they show, as a pane coming or going does.
+function M.even(path: { number })
+	local count = #M.shares_at(path)
+	if count < 2 then
+		return
+	end
+	local from = M.shown_frames:peek()
+	set_shares(path, function(): { number }
+		local shares: { number } = {}
+		for i = 1, count do
+			shares[i] = 1 / count
+		end
+		return shares
+	end)
+	if motion.reduced_now() then
+		return
+	end
+	if settling then
+		settling:cancel()
+	end
+	settle_from, settle_new = from, {}
+	settle:set(0)
+	settling = anime.animate(settle, { value = 1, duration = SETTLE_MS, ease = SETTLE_EASE })
+end
+
+-- The size a pane just added is opening to, while it opens (what it holds stays at
+-- that size, its edge revealing it); else nil.
+function M.opening_size(id: string): { w: number, h: number }?
+	if settle:get() >= 1 or not settle_new[id] then
+		return nil
+	end
+	local b = M.frames:peek()[id]
+	local area = M.area()
+	if not b then
+		return nil
+	end
+	return {
+		w = (b.right.p - b.left.p) * area.w + b.right.q - b.left.q,
+		h = (b.bottom.p - b.top.p) * area.h + b.bottom.q - b.top.q,
+	}
+end
+
+-- Whether a pane was just added and is opening out of its gap (its
+-- content's fade in, ds/motion `content`): false once it's open.
+function M.just_added(id: string): boolean
+	return settle:peek() < 1 and settle_new[id] == true and settle_from[id] ~= nil
+end
+
+M.across = ui.computed(function(): number
+	return across_of(M.shown:get())
+end)
 
 ui.effect(function()
 	local shown = M.members:get()

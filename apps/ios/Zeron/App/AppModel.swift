@@ -172,6 +172,14 @@ final class AppModel {
                 : ""
             DispatchQueue.main.async {
                 guard let self else { return }
+                #if DEBUG
+                // A simulator shares its Mac's network, so a rig plays airplane mode
+                // with this and an edge URL it can take away.
+                if ProcessInfo.processInfo.arguments.contains("-network-offline") {
+                    self.client?.setNetworkOnline(online: false)
+                    return
+                }
+                #endif
                 self.client?.setNetworkOnline(online: p.status == .satisfied)
                 if let last = self.pathShape, last != shape, !shape.isEmpty {
                     self.client?.networkPathChanged()
@@ -262,7 +270,8 @@ final class AppModel {
             deviceId: Self.deviceId,
             deviceName: UIDevice.current.name,
             platform: "ios",
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0"
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0",
+            relayLayer: Self.runsRelayLayer
         )
         do {
             client = try CoreClient(config: config, credentials: credentials, listener: bridge)
@@ -281,6 +290,16 @@ final class AppModel {
             client = nil
             return false
         }
+    }
+
+    /// Relaying is opt-in for local protocol development. Installed builds use stored logs.
+    static var runsRelayLayer: Bool {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-relay-layer") && !args.contains("-no-relay-layer")
+        #else
+        return false
+        #endif
     }
 
     /// `-edge <url>` points at a local `wrangler dev` edge; otherwise production.

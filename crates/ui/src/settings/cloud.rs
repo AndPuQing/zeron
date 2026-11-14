@@ -739,7 +739,7 @@ impl CloudPage {
             Loadable::Idle | Loadable::Loading => return None,
             Loadable::Error(error) => {
                 let copy = if error.starts_with("unknown method") {
-                    "This version of Zeron can't manage Cloud yet.".to_string()
+                    "This version of Zerun can't manage Cloud yet.".to_string()
                 } else {
                     format!("Couldn't check Cloud: {error}")
                 };
@@ -1183,7 +1183,7 @@ impl CloudPage {
             "Enter this code on GitHub",
             vec![text(
                 theme.text_muted,
-                "Approve Zeron there; this page moves on by itself.",
+                "Approve Zerun there; this page moves on by itself.",
             )],
             None,
             vec![
@@ -1523,6 +1523,7 @@ mod tests {
                         max_awake_sessions: 5,
                         available,
                         credits: [Some(1240.0), Some(0.0), None][ix % 3],
+                        ..Default::default()
                     });
                     page.vault = Loadable::Ready(vault);
                     let days = if ix % 2 == 0 { 7 } else { 90 };
