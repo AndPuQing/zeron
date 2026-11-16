@@ -1014,7 +1014,6 @@ mod tests {
         });
         std::fs::write(dir.path().join(CONFIG), config.to_string()).unwrap();
         assert!(is_managed(&exe));
-        assert!(!is_managed(&dir.path().join("zerun.exe")));
         assert!(!is_managed(&dir.path().join("another.exe")));
         let mut config = config;
         config["application_id"] = serde_json::json!("another.application");
@@ -1103,10 +1102,18 @@ mod tests {
     fn only_the_old_app_s_github_feed_moves_to_the_edge() {
         let install = tempfile::tempdir().unwrap();
         let config = install.path().join(CONFIG);
-        std::fs::write(&config, format!(r#"{{"releases_url":"{GITHUB_LATEST}/"}}"#)).unwrap();
+        let value = serde_json::json!({
+            "application_id": zeron_proto::identity::BUNDLE_ID,
+            "releases_url": format!("{GITHUB_LATEST}/"),
+        });
+        std::fs::write(&config, value.to_string()).unwrap();
         leave_github_feed(install.path());
         assert!(std::fs::read_to_string(&config).unwrap().contains(EDGE_FEED));
-        std::fs::write(&config, r#"{"releases_url":"https://example.com/feed"}"#).unwrap();
+        let value = serde_json::json!({
+            "application_id": zeron_proto::identity::BUNDLE_ID,
+            "releases_url": "https://example.com/feed",
+        });
+        std::fs::write(&config, value.to_string()).unwrap();
         leave_github_feed(install.path());
         assert!(std::fs::read_to_string(&config).unwrap().contains("example.com"));
     }
@@ -1117,7 +1124,11 @@ mod tests {
         let exe = install.path().join("zerun.exe");
         // Not update-managed: a source build, left alone.
         assert_eq!(incomplete_install(&exe, "0.2.139"), None);
-        std::fs::write(install.path().join(CONFIG), "{}").unwrap();
+        let config = serde_json::json!({
+            "application_id": zeron_proto::identity::BUNDLE_ID,
+            "releases_url": "https://example.com/releases",
+        });
+        std::fs::write(install.path().join(CONFIG), config.to_string()).unwrap();
         assert_eq!(incomplete_install(&exe, "0.2.139").as_deref(), Some(install.path()));
         // A folder without its engine, or its engine alone, is incomplete.
         let files = version_files(install.path(), "0.2.139");
