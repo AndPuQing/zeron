@@ -72,9 +72,14 @@ jobs:
 
           token="$(cat "$token_path")"
           api() {
-            curl --globoff --fail-with-body --silent --show-error \
+            local response="$RUNNER_TEMP/asc-response.json"
+            if ! curl --globoff --fail-with-body --silent --show-error \
               -H "Authorization: Bearer $token" \
-              -H 'Content-Type: application/json' "$1"
+              -H 'Content-Type: application/json' --output "$response" "$1"; then
+              jq -r '.errors[]? | "\(.status) \(.code): \(.title): \(.detail)"' "$response" >&2
+              return 1
+            fi
+            cat "$response"
           }
 
           apps="$RUNNER_TEMP/apps.json"
