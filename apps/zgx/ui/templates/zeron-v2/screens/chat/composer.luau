@@ -704,7 +704,7 @@ local function Composer(): Node
 			end
 		end
 		-- Then Zerun's own (named clear of the agent's).
-		for _, row in ZerunCommands.rows(taken, session_id:get() ~= nil) do
+		for _, row in ZeronCommands.rows(taken, session_id:get() ~= nil) do
 			table.insert(slash, row)
 		end
 		given["/"] = slash
@@ -854,10 +854,10 @@ local function Composer(): Node
 		end
 		-- A draft that is only one of Zerun's own commands runs it (its
 		-- token goes; anything carried stays).
-		local zeron = ZerunCommands.of_text(shared.text:peek(), (mention_lists:peek() or {})["/"] or {})
+		local zeron = ZeronCommands.of_text(shared.text:peek(), (mention_lists:peek() or {})["/"] or {})
 		if zeron then
 			shared.text:set("")
-			ZerunCommands.run(zeron, session_id:peek())
+			ZeronCommands.run(zeron, session_id:peek())
 			return
 		end
 		local typed, carried = shared.take()
@@ -953,12 +953,7 @@ local function Composer(): Node
 			-- the prompt is there once, whoever adds it first.
 			local mid = store.new_id()
 			T.send(function()
-				local here = false
-				for _, m in store.messages:peek() do
-					if m.id == mid then
-						here = true
-					end
-				end
+				local here = store.messages:index_of("id", mid) ~= nil
 				if not here then
 					store.messages:push {
 						id = mid,
@@ -1165,6 +1160,7 @@ local function Composer(): Node
 			end
 		end
 		return {
+			device = on,
 			name = name,
 			worktree = path ~= nil and s.cwd ~= nil and s.cwd ~= path,
 			project = project,
@@ -1458,7 +1454,7 @@ local function Composer(): Node
 			-- Zerun's own runs (its token gone).
 			on_mention = function(item: any, trigger: string, token: string)
 				if item.zeron then
-					ZerunCommands.run(item.zeron, session_id:peek())
+					ZeronCommands.run(item.zeron, session_id:peek())
 				elseif trigger == "@" then
 					Invocations.remember(item, trigger, token)
 				else
@@ -1671,7 +1667,15 @@ local function Composer(): Node
 			pointer_events = "none",
 			left = 0,
 			right = 0,
-			bottom = FOOT,
+			-- On a new chat by its top, from the page's middle: it moves with
+			-- the page as the page lays out, and what's written grows it down.
+			-- Docked, by its foot.
+			top = function(): any
+				return if new_chat() then "50%" else nil
+			end,
+			bottom = function(): any
+				return if new_chat() then nil else FOOT
+			end,
 			px = require("@app/screens/chat/dock").SIDES,
 			justify = "center",
 			-- Mid-page on a new chat, docked on a session: sliding there as it

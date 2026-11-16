@@ -793,7 +793,7 @@ impl Live {
                 let loaded: Vec<zgx_script::Plugin> = self.items.iter().filter_map(Item::plugin).collect();
                 if let Some(id) = recovery::blame(&error, &loaded) {
                     let hash = self.items.iter().find(|i| i.id() == id).map(|i| i.hash().to_string()).unwrap_or_default();
-                    if self.failed_plugins.fail(&id, &hash, &error) {
+                    if self.failed_plugins.fail(&id, &hash, &recovery::reason(&error)) {
                         self.notices.push(format!("plugin {id}"));
                         again = true;
                     }

@@ -429,7 +429,7 @@ pub fn install(host: &ScriptHost) {
     let a = agents.clone();
     host.async_action("agents.sign_out", move |id| {
         let a = a.clone();
-        async move { a.sign_out(text(&id)).await.map_err(String::from) }
+        async move { crate::plugins::preview::refuse("agents.sign_out")?; a.sign_out(text(&id)).await.map_err(String::from) }
     });
     // The page a sign-in under way opened, again (a closed tab, a browser
     // that didn't come forward).
@@ -473,7 +473,7 @@ pub fn install(host: &ScriptHost) {
     host.async_action("agents.remove", move |args| {
         let a = a.clone();
         let (id, account) = harness_and_account(&args);
-        async move { a.account_call("ForgetAgentAccount", id, account).await.map_err(String::from) }
+        async move { crate::plugins::preview::refuse("agents.remove")?; a.account_call("ForgetAgentAccount", id, account).await.map_err(String::from) }
     });
     let a = agents.clone();
     host.async_action("agents.install", move |id| {

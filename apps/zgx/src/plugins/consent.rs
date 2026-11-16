@@ -147,11 +147,16 @@ fn bounded(item: &Json) -> Json {
     };
     tools(&mut item["tools"]);
     // How far each program and place it names reaches, as the engine
-    // rates them (zeron-plugin-guard): a program that can do anything you
-    // can, a host on this device or your network.
-    let anything = |list: &Json| -> Json {
-        json!(list.as_array().into_iter().flatten().filter_map(Json::as_str).filter(|c| zeron_plugin_guard::commands::risk(c) == zeron_plugin_guard::commands::Risk::Anything).collect::<Vec<_>>())
+    // rates them (zeron-plugin-guard): a shell or interpreter, which is full
+    // control of the computer; another program that can do anything you can
+    // (git and gh are said as what they do: the runner holds them to rules of
+    // their own); a host on this device or your network.
+    use zeron_plugin_guard::commands::{Risk, full_control, held_to_its_own_rules, risk};
+    let programs = |list: &Json, keep: &dyn Fn(&str) -> bool| -> Json {
+        json!(list.as_array().into_iter().flatten().filter_map(Json::as_str).filter(|c| keep(c)).collect::<Vec<_>>())
     };
+    let anything = |list: &Json| programs(list, &|c| risk(c) == Risk::Anything && !full_control(c) && !held_to_its_own_rules(c));
+    let full = |list: &Json| programs(list, &|c| full_control(c));
     let local = |list: &Json| -> Json {
         json!(list.as_array().into_iter().flatten().filter_map(Json::as_str).filter(|h| *h != "*" && zeron_plugin_guard::net::risky(h)).collect::<Vec<_>>())
     };
@@ -161,10 +166,12 @@ fn bounded(item: &Json) -> Json {
         json!(list.as_array().into_iter().flatten().filter_map(Json::as_str).filter(|h| zeron_plugin_guard::net::names_exactly(h) && !zeron_plugin_guard::net::risky(h)).collect::<Vec<_>>())
     };
     item["commands_anything"] = anything(&item["commands"]);
+    item["commands_full_control"] = full(&item["commands"]);
     item["network_local"] = local(&item["network_hosts"]);
     item["network_named"] = named(&item["network_hosts"]);
     if let Some(diff) = item.get_mut("digest_diff") {
         diff["commands_anything"] = anything(&diff["added_commands"]);
+        diff["commands_full_control"] = full(&diff["added_commands"]);
         diff["network_local"] = local(&diff["network_added"]);
         diff["network_named"] = named(&diff["network_added"]);
         tools(&mut diff["tools_added"]);

@@ -3,7 +3,7 @@
 //! headless on the shell's fixture (ui/shell_fixture.luau).
 //!
 //! A chat dragged from the sidebar onto a chat's edge sits beside it; a
-//! click focuses a pane; its × takes it out; the split is kept across a
+//! click focuses a pane; ⌘W takes it out; the split is kept across a
 //! reload and a launch; and resizing the window moves the panes without
 //! running any more script than one chat does. Zerun v2 (installed as
 //! `live` installs it, composed into `.live` as a switch composes it) has
@@ -23,7 +23,6 @@ use crate::plugins::{live, official, preview};
 
 const W: f32 = 1400.;
 const H: f32 = 860.;
-const DRAG_ROOM: f32 = 2000.;
 
 fn ui() -> PathBuf {
     // Compare an archived interface with the same host and frame clock.
@@ -65,8 +64,9 @@ fn full_tree(app: &mut TestApp) -> String {
     zgx_script::driver::tree_lines_text(&lines, hidden)
 }
 
+/// The panes showing (none for a chat alone).
 fn panes(app: &mut TestApp) -> usize {
-    full_tree(app).matches("\"Close pane\"").count()
+    shown_panes(app).len()
 }
 
 fn pointer(app: &mut TestApp, event: InputEvent) {
@@ -137,7 +137,7 @@ fn a_chat_dragged_to_a_chat_s_edge_sits_beside_it_and_is_focused() {
     let mut app = mount(&scratch("drag"));
     open(&mut app, "Fix the build");
     let alone = app.bounds("shell-page");
-    assert_eq!(panes(&mut app), 0, "a chat alone has no pane heads");
+    assert_eq!(panes(&mut app), 0, "a chat alone is no split");
     split_right(&mut app, "Tidy the tests");
     assert_eq!(panes(&mut app), 2, "{}", app.tree());
     // The page's card stands over the focused chat, the one dropped: the
@@ -199,17 +199,38 @@ fn a_pane_just_added_only_fades_in_a_little_where_it_lands() {
 }
 
 #[test]
+fn command_w_closes_the_right_panel_tab_before_the_focused_split_chat() {
+    let mut app = mount(&scratch("close-tab-before-chat"));
+    open(&mut app, "Fix the build");
+    split_right(&mut app, "Tidy the tests");
+    assert_eq!(panes(&mut app), 2);
+    app.click("#titlebar >> role:button \"Panel\"");
+    app.frames(40);
+    app.click("#panel-open-files");
+    app.frames(30);
+    assert!(app.find("#panel-strip >> role:tab").is_some());
+    app.click("#chat-composer >> role:textbox");
+    app.frames(10);
+    assert!(app.host.run_command("shell.close"));
+    app.frames(30);
+    assert!(app.find("#panel-strip >> role:tab").is_none(), "the panel tab closed");
+    assert_eq!(panes(&mut app), 2, "both split chats remain open");
+    // Once the panel has no tab, the same command closes the focused split.
+    assert!(app.host.run_command("shell.close"));
+    app.frames(30);
+    assert_eq!(panes(&mut app), 0, "one chat remains without split headers");
+}
+
+#[test]
 fn a_click_focuses_a_pane_and_its_close_takes_it_out() {
     let mut app = mount(&scratch("focus"));
     open(&mut app, "Fix the build");
     let alone = app.bounds("shell-page");
     split_right(&mut app, "Tidy the tests");
     let right = app.bounds("shell-page");
-    // A click on the left pane's head: it's focused, the page's card moves
-    // to it.
-    let head = Rect { x: alone.x + 60., y: alone.y + 8., width: 10., height: 10. };
+    // A click in the left pane: it's focused, the page's card moves to it.
     let button = PointerButton::Primary;
-    let (x, y) = (head.x, head.y);
+    let (x, y) = (alone.x + 60., alone.y + 8.);
     pointer(&mut app, InputEvent::PointerMove { x, y });
     pointer(&mut app, InputEvent::PointerDown { x, y, button });
     pointer(&mut app, InputEvent::PointerUp { x, y, button });
@@ -217,13 +238,9 @@ fn a_click_focuses_a_pane_and_its_close_takes_it_out() {
     app.frames(20);
     let left = app.bounds("shell-page");
     assert!(near(left.x, alone.x) && near(left.width, right.width), "{left:?}");
-    // Its × (the focused one's, at its head's right end: 8 in, 22 wide, the
-    // head 34 tall): back to one chat, its page the whole of it again.
-    let (x, y) = (left.x + left.width - 8. - 11., left.y + 17.);
-    pointer(&mut app, InputEvent::PointerMove { x, y });
-    pointer(&mut app, InputEvent::PointerDown { x, y, button });
-    pointer(&mut app, InputEvent::PointerUp { x, y, button });
-    app.ui.input.forget_clicks();
+    // Closed (⌘W, the focused one): back to one chat, its page the whole of it
+    // again.
+    assert!(app.host.run_command("shell.close"));
     app.frames(30);
     assert_eq!(panes(&mut app), 0);
     let after = app.bounds("shell-page");
@@ -260,25 +277,30 @@ fn a_split_is_kept_across_a_reload_and_a_launch() {
 /// told, not compared.)
 #[test]
 fn resizing_split_panes_costs_each_about_what_one_chat_does() {
-    fn resize_calls(app: &mut TestApp) -> u64 {
-        app.frames(30);
+    // (The sidebar folded, so it can't step aside mid-resize and be what's counted;
+    // and each pane about as wide, about 630, under the conversation's width all
+    // the way, so each follows the window and what's compared is how many. A split
+    // set as it's kept: its rows are out of reach.)
+    let mut calls = Vec::new();
+    for (n, ids) in [&["a1"][..], &["a1", "a3"], &["a1", "a3", "a2"], &["a1", "a3", "a2", "b1"]].into_iter().enumerate() {
+        let wide = 40. + 630. * ids.len().max(2) as f32;
+        let mut app = mount(&scratch(&format!("resize-{n}")));
+        app.ui.scene.borrow_mut().resize(wide, H);
+        app.frames(10);
+        split_of(&mut app, ids);
+        open(&mut app, "Fix the build");
+        assert!(app.host.run_command("shell.toggle_sidebar"));
+        app.frames(60);
+        assert_eq!(panes(&mut app), if n == 0 { 0 } else { n + 1 });
         let before = app.calls();
-        for w in (0..12).map(|i| W - 20. * i as f32) {
+        for w in (0..12).map(|i| wide - 20. * i as f32) {
             app.ui.scene.borrow_mut().resize(w, H);
             app.frame();
         }
-        app.ui.scene.borrow_mut().resize(W, H);
+        app.ui.scene.borrow_mut().resize(wide, H);
         app.frames(5);
-        app.calls() - before
+        calls.push(app.calls() - before);
     }
-    let mut app = mount(&scratch("resize"));
-    open(&mut app, "Fix the build");
-    let mut calls = vec![resize_calls(&mut app)];
-    for title in ["Tidy the tests", "Write the docs", "Ship the release"] {
-        split_right(&mut app, title);
-        calls.push(resize_calls(&mut app));
-    }
-    assert_eq!(panes(&mut app), 4);
     eprintln!("resize script calls, 1 to 4 chats: {calls:?}");
     let pane = calls[1] as f64 / 2.;
     for (n, c) in calls.iter().enumerate().skip(2) {
@@ -319,30 +341,65 @@ fn a_sidebar_row_splits_at_an_edge_and_attaches_in_the_middle_or_the_composer() 
     assert!(!mentioned(&mut app, "Tidy the tests"), "an edge doesn't attach");
 }
 
-/// A pane's head carried over another pane: its edge moves the pane there,
+/// Where pane `id`'s grip is grabbed: at its top's middle, there once the pointer
+/// is near.
+fn grip_of(app: &mut TestApp, id: &str) -> (f32, f32) {
+    let b = app.bounds(&format!("#split-pane-{id}"));
+    pointer(app, InputEvent::PointerMove { x: b.x + b.width / 2., y: b.y + 10. });
+    app.frames(4);
+    middle(app.bounds(&format!("#split-pane-{id} >> .pane-grip")))
+}
+
+/// A pane's grip carried over another pane: its edge moves the pane there,
 /// its middle and its composer mention it there.
 #[test]
-fn a_pane_s_head_moves_it_at_an_edge_and_attaches_in_the_middle_or_the_composer() {
-    let mut app = mount(&scratch("head-targets"));
+fn a_pane_s_grip_moves_it_at_an_edge_and_attaches_in_the_middle_or_the_composer() {
+    let mut app = mount(&scratch("grip-targets"));
     open(&mut app, "Fix the build");
-    let alone = app.bounds("shell-page");
     split_right(&mut app, "Tidy the tests");
-    // The left pane's head (Fix the build), the right one focused.
-    let head = (alone.x + 80., alone.y + 17.);
+    // The left pane's grip (Fix the build). (A press in a pane focuses it, the
+    // grip's too: the right one, not focused then, has "Drop to mention" of its
+    // own; dropped there, focused and mentioned.)
     let right = app.bounds("shell-page");
-    carry(&mut app, head, middle(right), |app| assert_eq!(showing(app), (false, true), "its middle shows Drop to mention"));
-    assert_eq!(panes(&mut app), 2, "still the two");
-    assert!(mentioned(&mut app, "Fix the build"), "its middle attaches:\n{}", app.tree());
+    // Its composer, at rest.
     let composer = middle(app.bounds("#chat-composer"));
-    carry(&mut app, head, composer, |app| assert_eq!(showing(app), (false, true)));
-    assert_eq!(panes(&mut app), 2);
+    let grip = grip_of(&mut app, "a1");
+    carry(&mut app, grip, composer, |app| assert!(app.find("#split-drop-mention-a3").is_some(), "its composer shows Drop to mention"));
+    assert_eq!(panes(&mut app), 2, "still the two");
+    assert!(mentioned(&mut app, "Fix the build"), "its composer attaches:\n{}", app.tree());
+    // Its middle: mentioned. (A chat is mentioned once: the same chip.)
+    let grip = grip_of(&mut app, "a1");
+    carry(&mut app, grip, middle(right), |app| assert!(app.find("#split-drop-mention-a3").is_some(), "its middle shows Drop to mention"));
+    assert_eq!(panes(&mut app), 2, "still the two");
+    assert!(mentioned(&mut app, "Fix the build"), "its middle attaches");
     // Its bottom band (above its composer, between the side bands): the
     // pane moves under it, the two stacked.
-    let low = (right.x + right.width / 2., composer.1 - 120.);
-    carry(&mut app, head, low, |app| assert_eq!(showing(app), (true, false), "the bottom band shows where it lands"));
+    let composer = app.bounds("#chat-composer");
+    let low = (right.x + right.width / 2., composer.y - 20.);
+    let grip = grip_of(&mut app, "a1");
+    carry(&mut app, grip, low, |app| assert_eq!(showing(app), (true, false), "the bottom band shows where it lands"));
     assert_eq!(panes(&mut app), 2);
     let now = app.bounds("shell-page");
     assert!(now.width > right.width * 1.5 && now.height < right.height * 0.6, "stacked: {now:?} from {right:?}");
+}
+
+/// A pane's composer grown past its rest (a chip in its draft) is still its
+/// composer to a chat carried over it, focused or not: mentioned, not a split.
+#[test]
+fn a_pane_s_grown_composer_takes_a_drop_as_a_mention() {
+    let mut app = mount(&scratch("grown-composer"));
+    open(&mut app, "Fix the build");
+    split_right(&mut app, "Tidy the tests");
+    let right = app.bounds("shell-page");
+    // A chip in the right pane's draft.
+    let grip = grip_of(&mut app, "a1");
+    carry(&mut app, grip, middle(right), |_| {});
+    assert!(mentioned(&mut app, "Fix the build"));
+    let composer = middle(app.bounds("#chat-composer"));
+    // Over it, the right pane not focused (the grip's press focused the left).
+    let grip = grip_of(&mut app, "a1");
+    carry(&mut app, grip, composer, |app| assert_eq!(showing(app).0, false, "its composer shows where a split lands"));
+    assert!(near(app.bounds("shell-page").x, app.bounds("#split-pane-a3").x), "the pane stayed where it was");
 }
 
 // ── Zerun v2 ────────────────────────────────────────────────────────────────
@@ -462,13 +519,13 @@ fn zeron_v2_is_installed_as_zeron_s_and_runs_one_page() {
     assert!(preview::trusted_at(&t, "zeron-v2", &root.join("approvals.json")), "no consent asked of Zerun's own");
     assert!(official::verified(&t.join("zeron-v2")).is_some());
 
-    // v3, the default: the page a card set in by the window's gap.
+    // v3, the default: the page a card under the top bar.
     let live_dir = compose(&t, live::BUILTIN);
     let storage = root.join("state");
     let mut app = mount_at(&live_dir.join("shell_fixture.luau"), &storage);
     open(&mut app, "Fix the build");
     let v3 = app.bounds("shell-page");
-    assert!(near(v3.y, 4.), "v3's page is a card under the gap: {v3:?}");
+    assert!(near(v3.y, 42.), "v3's page is a card under the top bar: {v3:?}");
 
     // Switched to v2, as a switch does: `.live` composed again, the window
     // reloaded in place. One page, to the window's edges: no card, and a
@@ -487,7 +544,7 @@ fn zeron_v2_is_installed_as_zeron_s_and_runs_one_page() {
     app.host.reload().expect("v3 didn't load again");
     app.frames(30);
     open(&mut app, "Fix the build");
-    assert!(near(app.bounds("shell-page").y, 4.));
+    assert!(near(app.bounds("shell-page").y, 42.));
 }
 
 // ── Drop indicators stand over the composers ────────────────────────────────
@@ -507,8 +564,7 @@ fn in_front(app: &mut TestApp, over: &str, under: &str, (x, y): (f32, f32)) -> R
 
 /// Each drop indicator, held, draws in front of the composer it covers:
 /// a split's landing over the focused pane's composer (the window's) and
-/// over another's (its own), "Drop to mention" over both, and the panel's
-/// tab-group landing over a side chat's composer in the panel.
+/// over another's (its own), and "Drop to mention" over both.
 #[test]
 fn every_drop_indicator_stands_over_the_composer_it_covers() {
     let mut app = mount(&scratch("indicators"));
@@ -552,27 +608,6 @@ fn every_drop_indicator_stands_over_the_composer_it_covers() {
     let from = row_at(&mut app, "Answer the review");
     carry(&mut app, from, (left.x + left.width / 2., left.y + left.height * 0.45), |app| {
         in_front(app, "#split-drop-mention-a1", "#lane-composer-split-a1", left_composer).unwrap();
-    });
-    // The panel's tab-group landing over a side chat's composer in it.
-    app.click("#titlebar >> role:button \"Panel\"");
-    app.frames(40);
-    app.click("#panel-open-files");
-    app.frames(30);
-    app.click("#panel-strip >> role:button \"New Tab\"");
-    app.frames(20);
-    app.click("#panel-open-side-chat");
-    app.frames(40);
-    let side = full_tree(&mut app)
-        .lines()
-        .find_map(|l| l.split_whitespace().find(|w| w.starts_with("#lane-composer-") && !w.contains("split-")).map(str::to_owned))
-        .expect("the side chat's composer in the panel");
-    let c = app.bounds(&side);
-    // (Into the side chat's composer, at the panel body's left edge: the
-    // files tab would start a group there.)
-    let at = (c.x + 20., c.y + c.height / 2.);
-    let tab = middle(app.bounds("#panel-strip >> role:tab \"Files\""));
-    carry(&mut app, tab, at, |app| {
-        in_front(app, "panel-drop-main", &side, at).unwrap();
     });
 }
 
@@ -771,7 +806,6 @@ fn check(app: &mut TestApp, host: &Host, chats: &std::collections::BTreeMap<Stri
         if near(b.x, page.x) && near(b.y, page.y) && near(b.width, page.width) && near(b.height, page.height) {
             focused.push(id.clone());
         }
-        assert!(has(app, &format!("{pane} >> role:button \"{}\"", c.title)), "{when}: {id}'s head says {}", c.title);
         for other in panes.iter().filter(|o| *o != id) {
             assert!(!has(app, &format!("{pane} >> ~\"This is {other}\"")), "{when}: {id} shows {other}'s transcript");
         }
@@ -786,6 +820,9 @@ fn check(app: &mut TestApp, host: &Host, chats: &std::collections::BTreeMap<Stri
         assert_ne!(at_end, Some(false), "{when}: {id} follows its end");
     }
     assert_eq!(focused, vec![route.clone()], "{when}: exactly one pane focused, the route's ({panes:?})");
+    // The tab says the chat focused.
+    let title = &chats[&route].title;
+    assert!(has(app, &format!("#session-tabs >> role:tab \"{title}\"")), "{when}: the tab showing says {title}");
 }
 
 fn split_into(app: &mut TestApp, title: &str, side: &str) {
@@ -799,8 +836,9 @@ fn split_into(app: &mut TestApp, title: &str, side: &str) {
 }
 
 fn focus_pane(app: &mut TestApp, id: &str) {
+    // (Off its grip, at its top's middle: anywhere else in it.)
     let b = app.bounds(&format!("#split-pane-{id}"));
-    let (x, y) = (b.x + b.width / 2., b.y + 17.);
+    let (x, y) = (b.x + 40., b.y + 17.);
     let button = PointerButton::Primary;
     pointer(app, InputEvent::PointerMove { x, y });
     pointer(app, InputEvent::PointerDown { x, y, button });
@@ -976,15 +1014,19 @@ fn a_side_giving_way_steps_nothing() {
 /// sidebar, split one in by a drop, close a pane, type a draft in the
 /// focused composer, stream a reply (and a tool call) into a chat that
 /// isn't focused, change a chat's status, a chat's agent asking, reload,
-/// resize; and in the focused chat's panel: open a tab from any source,
-/// focus a tab group, split one off, merge one into another. After each,
-/// every pane shows exactly its own chat, live as if focused (its title,
+/// resize; and in the focused chat's panel: open a tab from any source. After
+/// each, every pane shows exactly its own chat, live as if focused (its
 /// transcript, reply, tools, status, question and draft), and one pane is
-/// focused: the route's; and each tab opened landed in the panel's focused
-/// group.
+/// focused: the route's, its tab saying its title; and each tab opened in the
+/// panel showed, active.
 #[test]
 fn two_hundred_random_steps_keep_every_pane_its_own_chat() {
+    // (Wide enough for four panes, the sidebar and the panel: fewer, and the
+    // sidebar steps aside, its rows out of the steps' reach.)
+    const WIDE: f32 = 2200.;
     let mut app = mount(&scratch("random"));
+    app.ui.scene.borrow_mut().resize(WIDE, H);
+    app.frames(30);
     let mut host = Host::default();
     let mut c = chats();
     let mut seed: u64 = 0x5eed_0f_2e0;
@@ -1027,6 +1069,11 @@ fn two_hundred_random_steps_keep_every_pane_its_own_chat() {
             4 if route.is_some() && !host.chats.get(route.as_ref().unwrap()).is_some_and(|r| r.asking) => {
                 let r = route.clone().unwrap();
                 let text = format!("{r} draft {step}");
+                // (The pointer off the sidebar row it last clicked: that row's
+                // hover card can stand over the composer, as it can't for a
+                // person, whose pointer leaves the row to get there.)
+                app.hover("#shell-drag");
+                app.frames(30);
                 app.fill("#chat-composer >> role:textbox", &text);
                 app.frames(4);
                 c.get_mut(&r).unwrap().draft = text;
@@ -1065,50 +1112,15 @@ fn two_hundred_random_steps_keep_every_pane_its_own_chat() {
                     app.click("#titlebar >> role:button \"Panel\"");
                     app.frames(40);
                 }
-                let groups = panel_groups_shown(&mut app);
-                // (Focusing a group as often as there are groups to focus.)
-                let pick = if groups.len() >= 2 { [0, 2, 2, 3, 4][next(5)] } else { [0, 1, 3][next(3)] };
-                match pick {
-                    0 | 1 => {
-                        let source = ["pr", "file", "url", "terminal"][next(4)];
-                        opens_into_focus(&mut app, &r, source, &format!("step {step}"));
-                        format!("panel {r}: open a {source}")
-                    }
-                    2 if groups.len() >= 2 => {
-                        let gid = groups[next(groups.len())].clone();
-                        let tab = full_tree(&mut app)
-                            .lines()
-                            .skip_while(|l| !l.contains(&format!("#panel-group-{gid} ")))
-                            .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("#panel-tab-")).map(str::to_owned));
-                        let Some(tab) = tab else { continue };
-                        app.click(&format!("#panel-tab-{tab}"));
-                        app.frames(10);
-                        assert_eq!(panel_focus(&app, &r).1, gid, "step {step}: a press on {tab} focuses its group");
-                        format!("panel {r}: focus {gid}")
-                    }
-                    3 if groups.len() < 3 => {
-                        let (active, focus) = panel_focus(&app, &r);
-                        let Some(active) = active else { continue };
-                        let over = if groups.len() >= 2 { format!("#panel-group-{focus}") } else { "#shell-files".to_string() };
-                        let side = ["right", "bottom"][next(2)];
-                        tab_to(&mut app, &active, &over, side);
-                        format!("panel {r}: split {active} {side}")
-                    }
-                    _ if groups.len() >= 2 => {
-                        let (active, focus) = panel_focus(&app, &r);
-                        let Some(active) = active else { continue };
-                        let into = groups.iter().find(|g| **g != focus).unwrap().clone();
-                        tab_to(&mut app, &active, &format!("#panel-group-{into}"), "middle");
-                        format!("panel {r}: merge {active} into {into}")
-                    }
-                    _ => continue,
-                }
+                let source = ["pr", "file", "url", "terminal"][next(4)];
+                opens_a_tab(&mut app, &r, source, &format!("step {step}"));
+                format!("panel {r}: open a {source}")
             }
             9 => {
                 let w = 1100. + next(400) as f32;
                 app.ui.scene.borrow_mut().resize(w, H);
                 app.frames(6);
-                app.ui.scene.borrow_mut().resize(W, H);
+                app.ui.scene.borrow_mut().resize(WIDE, H);
                 app.frames(10);
                 format!("resize {w}")
             }
@@ -1120,20 +1132,15 @@ fn two_hundred_random_steps_keep_every_pane_its_own_chat() {
         assert!(app.error().is_none(), "{when}: {:?}", app.error());
     }
     assert!(log.len() >= 120, "most steps did something: {}", log.len());
-    for kind in ["open a", "focus g", ": focus", "focus main", "split tab", "merge tab", "split a", "focus a", "close", "reload", "asking true", "stream into"] {
+    for kind in ["open a", "split a", "focus a", "close", "reload", "asking true", "stream into"] {
         let n = log.iter().filter(|w| w.contains(kind)).count();
         eprintln!("{kind}: {n}");
     }
     let panel = log.iter().filter(|w| w.starts_with("panel ")).count();
-    let group_focus = log.iter().filter(|w| w.starts_with("panel ") && w.contains(": focus")).count();
-    assert!(panel >= 20 && group_focus >= 5, "the panel's groups got their share: {panel} of {}, {group_focus} focused", log.len());
+    assert!(panel >= 20, "the panel got its share: {panel} of {}", log.len());
 }
 
-
-
-
-
-// ── The panel's tab groups: one focus, every tab opened into it ────────────
+// ── The panel's tabs ────────────────────────────────────────────────────────
 
 /// A named state's value (`ui.state`s are named `module.luau::name`).
 fn state_of(app: &TestApp, name: &str) -> zgx_script::Value {
@@ -1145,139 +1152,22 @@ fn state_of(app: &TestApp, name: &str) -> zgx_script::Value {
         .unwrap_or_default()
 }
 
-fn text(v: Option<&zgx_script::Value>) -> Option<String> {
-    match v? {
+/// Chat `chat`'s panel's active tab.
+fn panel_active(app: &TestApp, chat: &str) -> Option<String> {
+    let sessions = state_of(app, "panel_sessions");
+    match sessions.field(&format!("chat:{chat}"))?.field("active")? {
         zgx_script::Value::Str(s) => Some(s.to_string()),
         _ => None,
     }
 }
 
-/// Chat `chat`'s panel: its active tab, the focused group, and the group a
-/// tab is in (by the groups as the panel keeps them; none: one group).
-fn panel_focus(app: &TestApp, chat: &str) -> (Option<String>, String) {
-    let key = format!("chat:{chat}");
-    let sessions = state_of(app, "panel_sessions");
-    let active = text(sessions.field(&key).and_then(|s| s.field("active")));
-    let groups = state_of(app, "panel_groups");
-    let focus = text(groups.field(&key).and_then(|r| r.field("focus"))).unwrap_or_else(|| "main".into());
-    (active, focus)
-}
-
-fn group_of_tab(app: &TestApp, chat: &str, tab: &str) -> String {
-    let groups = state_of(app, "panel_groups");
-    let Some(zgx_script::Value::Map(gs)) = groups.field(&format!("chat:{chat}")).and_then(|r| r.field("groups")).cloned() else {
-        return "main".into();
-    };
-    for (gid, g) in gs.iter() {
-        if let Some(zgx_script::Value::List(tabs)) = g.field("tabs")
-            && tabs.iter().any(|t| matches!(t, zgx_script::Value::Str(s) if s.as_ref() == tab))
-        {
-            return gid.to_string();
-        }
-    }
-    "main".into()
-}
-
-/// The groups showing, by their ids (`#panel-group-<gid>`).
-fn panel_groups_shown(app: &mut TestApp) -> Vec<String> {
-    let mut out: Vec<String> = full_tree(app).lines().filter_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("#panel-group-")).map(str::to_owned)).collect();
-    out.sort();
-    out.dedup();
-    out
-}
-
-/// A panel tab (its id) carried to `side` of the panel body or of group
-/// `gid`'s body: a new group there.
-fn tab_to(app: &mut TestApp, tab: &str, over: &str, side: &str) {
-    let b = app.bounds(over);
-    // (The body: under the strip's band.)
-    let (top, h) = (b.y + 40., b.height - 40.);
-    let to = match side {
-        "right" => (b.x + b.width - 12., top + h / 2.),
-        "left" => (b.x + 12., top + h / 2.),
-        "bottom" => (b.x + b.width / 2., top + h - 12.),
-        _ => (b.x + b.width / 2., top + h / 2.),
-    };
-    let from = middle(app.bounds(&format!("#panel-tab-{tab}")));
-    carry(app, from, to, |_| {});
-}
-
-/// Opening a tab from source `source` lands it in the focused group: the
-/// new tab active, in the group that was focused, still focused.
-fn opens_into_focus(app: &mut TestApp, chat: &str, source: &str, when: &str) {
-    let (_, focus) = panel_focus(app, chat);
+/// Opening a tab from source `source`: it's active, showing in the panel's
+/// strip.
+fn opens_a_tab(app: &mut TestApp, chat: &str, source: &str, when: &str) {
     assert!(app.host.run_command(&format!("fixture.open_{source}")), "{when}: fixture.open_{source}");
     app.frames(20);
-    let (active, now) = panel_focus(app, chat);
-    let active = active.unwrap_or_else(|| panic!("{when}: {source} opened no tab"));
-    assert_eq!(now, focus, "{when}: opening a {source} moved the focus");
-    assert_eq!(group_of_tab(app, chat, &active), focus, "{when}: the {source} landed outside the focused group");
-    if panel_groups_shown(app).len() >= 2 {
-        assert!(has(app, &format!("#panel-group-{focus} >> #panel-tab-{active}")), "{when}: the {source}'s tab shows in the focused group");
-    }
-}
-
-#[test]
-fn every_tab_opened_lands_in_the_focused_panel_group() {
-    let mut app = mount(&scratch("groups"));
-    open(&mut app, "Fix the build");
-    app.click("#titlebar >> role:button \"Panel\"");
-    app.frames(40);
-    app.click("#panel-open-files");
-    app.frames(30);
-    assert!(app.host.run_command("fixture.open_terminal"));
-    app.frames(20);
-    let (term, _) = panel_focus(&app, "a1");
-    let term = term.unwrap();
-    // Two groups: the terminal to the panel's right.
-    tab_to(&mut app, &term, "#shell-files", "right");
-    assert_eq!(panel_groups_shown(&mut app).len(), 2, "two groups");
-    for round in 0..2 {
-        for gid in panel_groups_shown(&mut app) {
-            // Focused by a press on a tab of its own.
-            let (_, before) = panel_focus(&app, "a1");
-            let tab = full_tree(&mut app)
-                .lines()
-                .skip_while(|l| !l.contains(&format!("#panel-group-{gid} ")))
-                .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("#panel-tab-")).map(str::to_owned))
-                .expect("a tab in the group");
-            app.click(&format!("#panel-tab-{tab}"));
-            app.frames(10);
-            assert_eq!(panel_focus(&app, "a1").1, gid, "a press focuses its group (from {before})");
-            for source in ["pr", "file", "url", "terminal"] {
-                opens_into_focus(&mut app, "a1", source, &format!("round {round}, {gid}"));
-            }
-        }
-        if round == 0 {
-            // Three: one of the right group's tabs under it.
-            let right = panel_groups_shown(&mut app).into_iter().find(|g| g != "main").unwrap();
-            let (active, _) = panel_focus(&app, "a1");
-            tab_to(&mut app, &active.unwrap(), &format!("#panel-group-{right}"), "bottom");
-            assert_eq!(panel_groups_shown(&mut app).len(), 3, "three groups");
-        }
-    }
-    // The focus survives a reload and a switch of chats.
-    let (_, focus) = panel_focus(&app, "a1");
-    app.host.reload().expect("the reload failed");
-    app.frames(30);
-    assert_eq!(panel_focus(&app, "a1").1, focus, "a reload keeps the focus");
-    opens_into_focus(&mut app, "a1", "pr", "after a reload");
-    open(&mut app, "Tidy the tests");
-    open(&mut app, "Fix the build");
-    app.frames(30);
-    assert_eq!(panel_focus(&app, "a1").1, focus, "a switch of chats keeps it");
-    opens_into_focus(&mut app, "a1", "pr", "after a switch");
-    // A tab already open (the same PR) focuses where it is.
-    let groups = panel_groups_shown(&mut app);
-    let other = groups.iter().find(|g| **g != focus).unwrap().clone();
-    let tab = full_tree(&mut app)
-        .lines()
-        .skip_while(|l| !l.contains(&format!("#panel-group-{other} ")))
-        .find_map(|l| l.split_whitespace().find_map(|w| w.strip_prefix("#panel-tab-")).map(str::to_owned))
-        .unwrap();
-    app.click(&format!("#panel-tab-{tab}"));
-    app.frames(10);
-    assert_eq!(panel_focus(&app, "a1").1, other);
+    let active = panel_active(app, chat).unwrap_or_else(|| panic!("{when}: {source} opened no tab"));
+    assert!(has(app, &format!("#panel-strip >> #panel-tab-{active}")), "{when}: the {source}'s tab shows in the strip");
 }
 
 // ── The panel's toggle over a chat of visuals ──────────────────────────────
@@ -1389,14 +1279,11 @@ fn panel_toggle_over_visuals_measured() {
 
 
 
-/// A panel toggle over a chat of visuals lays the chat out once a way, not
-/// at every frame of its glide: the transcript and a chart in it take at
-/// most three widths through an open and a close (as they were, beside the
-/// panel, and back), and the toggle runs about the script a plain chat's
-/// does. (Shipping's way: what's beside the moving column keeps its width;
-/// the card, a box, follows the edge.)
+/// A panel toggle over a chat of visuals reflows the chat live, at every
+/// frame of its glide, as v2 did: the transcript and a chart in it follow
+/// the page's edge through an open and a close, never held at one width.
 #[test]
-fn a_panel_toggle_lays_a_chat_of_visuals_out_once_a_way() {
+fn a_panel_toggle_reflows_a_chat_of_visuals_live() {
     let toggle = |visuals: bool| -> (u64, std::collections::BTreeSet<i64>, std::collections::BTreeSet<i64>) {
         let mut app = mount_visuals(&ui().join("shell_fixture.luau"), &scratch(&format!("once-{visuals}")), 1100.);
         open(&mut app, "Fix the build");
@@ -1411,7 +1298,7 @@ fn a_panel_toggle_lays_a_chat_of_visuals_out_once_a_way() {
                 app.frame();
                 transcript.insert(app.bounds("#chat-session >> #transcript").width.round() as i64);
                 if visuals {
-                    let plot = app.target(".chart-plot").or_else(|_| app.target("#chat-session >> .chart-plot"));
+                    let plot = app.target("#chat-session >> .chart-plot[1]");
                     if let Ok(node) = plot {
                         chart.insert(app.ui.scene.borrow().bounds(node).width.round() as i64);
                     }
@@ -1420,44 +1307,37 @@ fn a_panel_toggle_lays_a_chat_of_visuals_out_once_a_way() {
         }
         (app.calls() - calls, transcript, chart)
     };
-    let (plain, plain_widths, _) = toggle(false);
-    let (with, widths, chart) = toggle(true);
-    assert!(plain_widths.len() <= 3 && widths.len() <= 3, "the transcript took {widths:?} (plain {plain_widths:?})");
-    assert!(chart.len() <= 3, "a chart took {chart:?}");
-    assert!(with as f64 <= plain as f64 * 1.25, "{with} script calls over visuals, {plain} over a plain chat");
+    let (_, plain_widths, _) = toggle(false);
+    let (_, widths, chart) = toggle(true);
+    assert!(plain_widths.len() >= 8 && widths.len() >= 8, "the transcript took {widths:?} (plain {plain_widths:?})");
+    assert!(chart.len() >= 8, "a chart took {chart:?}");
 }
 
 
-// ── A new chat's page going flat ────────────────────────────────────────────
+// ── A new chat's page stays a card ──────────────────────────────────────────
 
-/// The sidebar closing over a new chat's page: the card's fill and edge
-/// fade out with the sidebar's own motion, and back as it opens, never in
-/// one frame; the gap round the card eases with them.
+/// The sidebar closing over a new chat's page: it stays a card, its fill and its
+/// place under the top bar as they were, on every frame there and back.
 #[test]
-fn a_new_chat_s_card_fades_with_the_sidebar_never_in_one_frame() {
-    let mut app = mount(&scratch("flat"));
+fn a_new_chat_s_page_stays_a_card_as_the_sidebar_folds() {
+    let mut app = mount(&scratch("card"));
     app.frames(30);
-    let sample = |app: &mut TestApp| -> (Vec<f32>, Vec<f32>) {
-        let (mut fill, mut gap) = (Vec::new(), Vec::new());
-        for _ in 0..40 {
+    let sample = |app: &mut TestApp, what: &str| {
+        for f in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(8));
             app.frame();
-            fill.push(app.opacity("shell-page-card"));
-            gap.push(app.bounds("shell-page").y);
+            let fill = app.opacity("shell-page-card");
+            let top = app.bounds("shell-page").y;
+            assert!((fill - 1.).abs() < 0.01, "{what}, frame {f}: the card's fill at {fill}");
+            assert!(near(top, 42.), "{what}, frame {f}: the page's top at {top}");
         }
-        (fill, gap)
     };
-    let between = |v: &[f32], lo: f32, hi: f32| v.iter().filter(|x| **x > lo + 0.01 && **x < hi - 0.01).count();
-    assert!((app.opacity("shell-page-card") - 1.).abs() < 0.01, "a card with the sidebar open");
+    sample(&mut app, "at rest");
     app.click("#titlebar >> role:button \"Toggle sidebar\"");
-    let (fill, gap) = sample(&mut app);
-    assert!(between(&fill, 0., 1.) >= 2, "it fades out over frames: {fill:?}");
-    assert!(between(&gap, 0., 4.) >= 2, "the gap eases: {gap:?}");
-    assert!(fill.last().unwrap().abs() < 0.01 && gap.last().unwrap().abs() < 0.5, "flat at last");
+    sample(&mut app, "folding");
+    assert_eq!(app.bounds("shell-page").width, W - 10., "the window's edge each side of it");
     app.click("#titlebar >> role:button \"Toggle sidebar\"");
-    let (fill, _) = sample(&mut app);
-    assert!(between(&fill, 0., 1.) >= 2, "and back in: {fill:?}");
-    assert!((fill.last().unwrap() - 1.).abs() < 0.01);
+    sample(&mut app, "coming back");
 }
 
 // ── v2, Inset as uploaded, v3: what each costs ─────────────────────────────
@@ -1622,18 +1502,21 @@ fn drag_sidebar<T>(app: &mut TestApp, by: f32, mut watch: impl FnMut(&mut TestAp
     seen
 }
 
-/// Dragging the sidebar's edge, what's in the page keeps one width: no
-/// transcript, composer or pane is laid out again at each move (each holds
-/// the width it had as the drag began, its card following the edge), and
-/// a frame's script (the sidebar's own, following its width) is the same
-/// whatever the panes; let go, each takes its own width once, the reading
-/// place where it stood.
+/// A window with room for four panes, and the sidebar beside them dragged wider.
+const DRAG_ROOM: f32 = 2000.;
+
+/// Dragging the sidebar's edge, what's in the page reflows live: each
+/// pane's transcript follows the edge at every move, never held at one
+/// width; let go, the reading place is where it stood.
 #[test]
-fn a_dragged_edge_lays_the_page_out_once_on_release_keeping_the_reading_place() {
-    let mut script = Vec::new();
+fn a_dragged_edge_reflows_the_page_live_keeping_the_reading_place() {
     for panes in [1usize, 4] {
         const IDS: [&str; 4] = ["a1", "a2", "a3", "b1"];
         let mut app = mount(&scratch(&format!("edge-{panes}")));
+        // (Room for the panes beside the sidebar: short of it, it steps aside,
+        // and there's no edge to drag.)
+        app.ui.scene.borrow_mut().resize(DRAG_ROOM, H);
+        app.frames(10);
         long_chats(&app, &IDS, None);
         if panes > 1 {
             use zgx_script::Value;
@@ -1670,22 +1553,13 @@ fn a_dragged_edge_lays_the_page_out_once_on_release_keeping_the_reading_place() 
             .map(|(_, id)| id)
             .expect("text in view");
         let before = app.bounds(&reading);
-        let calls = app.calls();
         let widths = drag_sidebar(&mut app, 120., |app| app.bounds(&list).width.round() as i64);
-        let per_frame = (app.calls() - calls) / 20;
         let distinct: std::collections::BTreeSet<i64> = widths.iter().copied().collect();
-        assert_eq!(distinct.len(), 1, "{panes} pane(s): the transcript held one width through the drag: {widths:?}");
-        script.push(per_frame);
-        // Let go: its own width, once.
-        let mut after = Vec::new();
+        assert!(distinct.len() >= 15, "{panes} pane(s): the transcript followed the edge: {widths:?}");
         for _ in 0..20 {
             std::thread::sleep(std::time::Duration::from_millis(16));
             app.frame();
-            after.push(app.bounds(&list).width.round() as i64);
         }
-        let settled: std::collections::BTreeSet<i64> = after.iter().copied().collect();
-        assert_eq!(settled.len(), 1, "{panes} pane(s): laid out once on release: {after:?}");
-        assert_ne!(after[0], widths[0], "{panes} pane(s): and to its own width");
         let now = app.bounds(&reading);
         assert!((now.y - before.y).abs() <= 2., "{panes} pane(s): the reading place kept: {reading} from {} to {}", before.y, now.y);
     }

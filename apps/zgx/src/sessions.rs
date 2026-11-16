@@ -2274,7 +2274,7 @@ mod tests {
         assert_eq!(super::workspace_locator("local", Some("d9"), None).as_deref(), Some("e2ee91fa9d910190"));
         assert_eq!(super::workspace_locator("synced", None, None), None, "signed out: not knowable");
         assert_eq!(super::workspace_locator("local", None, who()), None);
-        assert_eq!(super::conversation_link("c 1/x", "abc"), "zeron://open/chat/c%201%2Fx?workspace=abc");
+        assert_eq!(super::conversation_link("c 1/x", "abc"), "zerun-dev://open/chat/c%201%2Fx?workspace=abc");
     }
 
     /// The connection line says what production's pill says, a chat's

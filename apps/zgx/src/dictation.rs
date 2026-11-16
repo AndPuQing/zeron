@@ -121,9 +121,12 @@ impl Service {
     /// How long the poll loop waits: to the next slot while listening (the
     /// bars move once a slot), else its usual beat.
     fn poll_wait(&self) -> Duration {
+        self.poll_wait_at(Instant::now())
+    }
+    fn poll_wait_at(&self, now: Instant) -> Duration {
         const BEAT: Duration = Duration::from_millis(40);
         self.meter
-            .until_next(Instant::now())
+            .until_next(now)
             .map_or(BEAT, |d| (d + Duration::from_millis(1)).min(BEAT))
     }
     fn cancel(&mut self) {
@@ -215,6 +218,9 @@ impl Service {
         Ok(())
     }
     fn poll(&mut self) {
+        self.poll_at(Instant::now());
+    }
+    fn poll_at(&mut self, now: Instant) {
         let mut done = None;
         if let Some(job) = &self.download {
             while let Ok(event) = job.events.try_recv() {
@@ -238,7 +244,7 @@ impl Service {
                 }
             }
         }
-        if self.deadline.is_some_and(|end| Instant::now() >= end) {
+        if self.deadline.is_some_and(|end| now >= end) {
             self.cancel();
             self.state["phase"] = json!("failed");
             self.state["error"] = json!("Transcription timed out. Your draft is safe.");
@@ -250,15 +256,15 @@ impl Service {
                     zeron_voice::Event::Listening => {
                         if self.deadline.is_none() {
                             self.state["phase"] = json!("listening");
-                            self.meter.start(Instant::now());
+                            self.meter.start(now);
                             session.take_level();
                         }
                     }
                     zeron_voice::Event::Finalizing => {
                         self.state["phase"] = json!("finalizing");
-                        self.meter.freeze(Instant::now());
+                        self.meter.freeze(now);
                         self.deadline
-                            .get_or_insert_with(|| Instant::now() + Duration::from_secs(30));
+                            .get_or_insert_with(|| now + Duration::from_secs(30));
                     }
                     zeron_voice::Event::Final(text) => {
                         self.state["phase"] = json!("final");
@@ -272,7 +278,7 @@ impl Service {
                     }
                 }
             }
-            if !ended && self.meter.record(Instant::now(), session.take_level()) {
+            if !ended && self.meter.record(now, session.take_level()) {
                 self.levels_changed = true;
             }
         }
@@ -502,36 +508,37 @@ mod tests {
     #[test]
     fn dictation_levels_follow_the_microphone_at_slot_rate_while_listening() {
         let (mut s, events, level) = metered();
+        let mut now = Instant::now();
         // Starting: the microphone isn't live, no bars.
         level.set(0.3);
-        s.poll();
+        s.poll_at(now);
         assert_eq!(s.take_levels(), None);
-        assert_eq!(s.poll_wait(), Duration::from_millis(40));
+        assert_eq!(s.poll_wait_at(now), Duration::from_millis(40));
         events.borrow_mut().push_back(Event::Listening);
-        s.poll();
+        s.poll_at(now);
         // The first slot, at once (what came before listening isn't in it).
         assert_eq!(s.take_levels(), Some(vec![0.0]));
         // Within the slot nothing is published again, and the loop waits
         // for the next slot rather than its usual beat.
         level.set(0.1);
-        s.poll();
+        s.poll_at(now);
         assert_eq!(s.take_levels(), None);
-        let wait = s.poll_wait();
+        let wait = s.poll_wait_at(now);
         assert!(wait <= Duration::from_millis(61) && wait > Duration::ZERO, "{wait:?}");
-        std::thread::sleep(meter::STEP);
-        s.poll();
+        now += meter::STEP;
+        s.poll_at(now);
         let bars = s.take_levels().unwrap();
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0], meter::normalize(0.1));
         // Finalizing holds them: no more slots.
         events.borrow_mut().push_back(Event::Finalizing);
-        s.poll();
+        s.poll_at(now);
         let _ = s.take_levels();
         level.set(0.5);
-        std::thread::sleep(meter::STEP);
-        s.poll();
+        now += meter::STEP;
+        s.poll_at(now);
         assert_eq!(s.take_levels(), None);
-        assert_eq!(s.poll_wait(), Duration::from_millis(40));
+        assert_eq!(s.poll_wait_at(now), Duration::from_millis(40));
     }
     #[test]
     fn dictation_cancel_stops_capture_and_publishes_no_stale_text() {
