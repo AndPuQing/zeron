@@ -22,6 +22,8 @@ export type Key = {
 	group: string,
 	menu: string,
 	reserved: boolean?,
+	-- A line after this item in its menu.
+	rule: boolean?,
 	-- Made by its own screen, not the shell (its title and key kept the
 	-- same there).
 	elsewhere: boolean?,
@@ -56,7 +58,8 @@ end
 for _, k in
 	{
 		{ id = "shell.palette", title = "Search", key = "cmd+k", group = "App", menu = "File", reserved = true },
-		{ id = "shell.settings", title = "Settings", key = "cmd+,", group = "App", menu = "File", reserved = true },
+		{ id = "shell.check_updates", title = "Check for Updates…", key = "", group = "App", menu = "Application", rule = true },
+		{ id = "shell.settings", title = "Settings", key = "cmd+,", group = "App", menu = "Application", reserved = true },
 		{ id = "shell.find", title = "Find", key = "cmd+f", group = "App", menu = "Edit" },
 		-- (Held: screens/chat/dictation makes its command.)
 		{ id = "shell.dictate", title = "Hold to dictate", key = "cmd+d", group = "App", menu = "Edit", elsewhere = true },

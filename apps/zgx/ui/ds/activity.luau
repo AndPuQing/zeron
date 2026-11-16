@@ -69,6 +69,8 @@ export type Tool = {
 	pictures: { { path: string, name: string? } }?,
 }
 
+export type Writing = { words: (id: string) -> string?, seeded: () -> boolean }
+
 export type Props = {
 	tools: () -> { Tool },
 	live: (() -> boolean)?,
@@ -124,7 +126,7 @@ local GLYPH: { [Kind]: Icon.Name } = {
 -- The tree, in points: the trunk's x (under the working loader's middle, so
 -- the trunk runs down from it), the elbow's radius (Zerun's), where the
 -- branch ends, the glyph's place and size, and the gutter they take before
--- the words. Zerun hangs its tree off a chevron 12 points in; with no
+-- the words. Zeron hangs its tree off a chevron 12 points in; with no
 -- chevron the tree starts at the reply's own left edge. Rows are a little
 -- tighter than Zerun's 32: a long run of tools reads as one list, not a
 -- column of chips.
@@ -441,7 +443,8 @@ local function thought_row(
 	end
 	-- (A thought named only, without its words: its name.)
 	local function words(): string
-		return now().call or now().verb
+		local arriving = if writing then writing.words(id) else nil
+		return arriving or now().call or now().verb
 	end
 	-- Folds once the words run past four lines (half a point over for
 	-- rounding); a ref reads 0 before its first layout, so a thought stands
@@ -533,8 +536,12 @@ local function thought_row(
 						y = rise,
 						Markdown {
 							text = words,
-							-- (Parsed incrementally while it can grow.)
-							key = if now().live then `thought:{id}` else nil,
+							-- (Parsed incrementally while it can grow, its words
+							-- fading in as a reply's do. Named by its group too:
+							-- a part's id is only its own chat's.)
+							key = if now().live then `thought:{group or ""}:{id}` else nil,
+							veil = now().live == true,
+							veil_seed = if writing then writing.seeded() else nil,
 							small = true,
 							ink = "$text.secondary",
 						},

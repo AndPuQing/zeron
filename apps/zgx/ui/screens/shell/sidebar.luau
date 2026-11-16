@@ -26,6 +26,7 @@ local status = require("@ds/status")
 local route = require("@app/screens/shell/route")
 local view = require("@app/screens/shell/view")
 local fit = require("@app/screens/shell/fit")
+local motion = require("@ds/motion")
 local boundary = require("@app/screens/shell/boundary")
 local control = require("@ds/control")
 local locale = require("@ds/locale")
@@ -89,6 +90,32 @@ local shared = {
 	offset = ui.state("shell_sidebar_offset", 0),
 	folded = ui.persist("shell_sidebar_folded", {} :: { [string]: boolean }),
 }
+
+-- Scroll probe (for now: "it jumps back a step every few steps"): the
+-- list's offset moving back within a moment of moving down is printed
+-- (`sidebar-probe:` on the app's stderr), with how often the sidebar was
+-- built and the sessions changed. It reads and prints; it writes nothing.
+local probe = { last = 0, at = 0, dir = 0, builds = 0, built_at = 0, sessions_at = 0 }
+ui.effect(function()
+	sessions.now:get()
+	probe.sessions_at = ui.now()
+end)
+ui.effect(function()
+	local offset = shared.offset:get()
+	local t = ui.now()
+	local d = offset - probe.last
+	if d < -0.5 and probe.dir > 0 and t - probe.at < 300 then
+		print(
+			`sidebar-probe: back {math.floor(-d + 0.5)} pt to {math.floor(offset)} ({math.floor(t - probe.at)} ms after a step down);`
+				.. ` sidebar built {probe.builds}x, last {math.floor(t - probe.built_at)} ms ago;`
+				.. ` sessions changed {math.floor(t - probe.sessions_at)} ms ago`
+		)
+	end
+	if math.abs(d) > 0.5 then
+		probe.dir = if d > 0 then 1 else -1
+	end
+	probe.last, probe.at = offset, t
+end)
 
 -- The same, field by field.
 local function same(a: any, b: any): boolean
@@ -265,7 +292,9 @@ end
 -- A project is empty when every session it has had is archived: none
 -- listed, one or more on the Archived shelf. The sidebar folds those into
 -- one row at the projects' end. One with no sessions at all (just added)
--- isn't: it's where a new chat is about to start. Counted on all of them,
+-- isn't: it's where a new chat is about to start, listed with the rest, until
+-- Show → Empty projects is off, which hides it too (it's still in the project
+-- selector). Counted on all of them,
 -- not what a filter shows, so narrowing never moves a project in or out
 -- (the status filter hides every group with none anyway); the project the
 -- project filter is narrowed to is never folded away. Archived sessions
@@ -284,7 +313,7 @@ local ASKED: { [string]: string } = { approval = "approval", question = "input" 
 -- none). Written by a plugin, so read with care: what isn't that shape is
 -- nil, and a word it doesn't know counts for nothing. Who's narrowing it is
 -- the host's word (`sidebar.filter_by`: the name of the plugin allowed to,
--- src/plugins), never the plugin's own `by`, which could claim to be Zerun.
+-- src/plugins), never the plugin's own `by`, which could claim to be Zeron.
 local KNOWN = { working = true, waiting = true, input = true, approval = true, failed = true, done = true, woke = true, idle = true }
 local filter = ui.shared("sidebar.filter", nil :: any)
 local filter_by = ui.shared("sidebar.filter_by", nil :: any)
@@ -449,28 +478,51 @@ local projects = ui.computed(function(): { ds.SidebarProject }
 	local names = devices()
 	local out: { ds.SidebarProject } = {}
 	local by: { [string]: ds.SidebarProject } = {}
+	-- One group for each repository, whichever device its clones are on: it stands
+	-- where the first of them does, and reads as the oldest of them.
+	local of_repository: { [string]: ds.SidebarProject } = {}
 	for _, p in now.projects do
-		local l = route.look(p.id) or { hue = route.hue(p.id) }
-		local group: ds.SidebarProject = { id = p.id, name = p.name, hue = l.hue, src = l.src, emoji = l.emoji, sessions = {} }
-		by[p.id] = group
-		table.insert(out, group)
+		local group = if p.repository then of_repository[p.repository] else nil
+		if not group then
+			local first = oldest_checkout(p, now.projects)
+			local l = route.look(first.id) or { hue = route.hue(first.id) }
+			group = { id = first.id, name = first.name, hue = l.hue, src = l.src, emoji = l.emoji, sessions = {} }
+			table.insert(out, group :: any)
+			if p.repository then
+				of_repository[p.repository] = group :: any
+			end
+		end
+		by[p.id] = group :: any
 	end
-	local loose: ds.SidebarProject = { id = NO_PROJECT, name = locale.s("shell.sidebar.chats"), icon = "chat-round-line", sessions = {} }
+	local loose: ds.SidebarProject = { id = NO_PROJECT, name = locale.s("shell.sidebar.chats"), icon = "side-chat", sessions = {} }
 	-- (Which have sessions listed, and which archived ones.)
-	local listed: { [string]: boolean } = {}
+	-- (By group: a repository isn't empty while any clone of it has a session.)
+	local just_group = if just then by[just] else nil
+	local listed: { [any]: boolean } = {}
 	for _, c in now.chats do
-		if c.project then
-			listed[c.project] = true
+		local group = if c.project then by[c.project] else nil
+		if group then
+			listed[group] = true
 		end
 	end
+	local archived: { [any]: boolean } = {}
 	for _, c in now.archived or {} do
 		local group = if c.project then by[c.project] else nil
-		if group and not listed[c.project :: string] and c.project ~= just then
-			group.empty = true
+		if group then
+			archived[group] = true
+			if not listed[group] and group ~= just_group then
+				group.empty = true
+			end
+		end
+	end
+	-- (And which have never had one: gone with the empty ones when those are off.)
+	for _, group in out do
+		if not listed[group] and not archived[group] and group ~= just_group then
+			group.unused = true
 		end
 	end
 	for _, c in now.chats do
-		if just and c.project ~= just then
+		if just and not (just_group and c.project and by[c.project] == just_group) then
 			continue
 		end
 		local group = (c.project and by[c.project]) or loose
@@ -1244,6 +1296,8 @@ M.session_menu = menu
 -- right click.
 local project_acting = ui.state("shell_project_acting", nil :: string?)
 local project_remove_open = ui.state("shell_project_remove_open", false)
+-- Of a repository on several devices, the checkouts to remove, by id.
+local project_remove_chosen = ui.state("shell_project_remove_chosen", {} :: { [string]: boolean })
 local function project_of(id: string?): sessions.Project?
 	for _, p in sessions.projects:get() do
 		if p.id == id then
@@ -1270,6 +1324,15 @@ local function project_menu(id: string): { any }?
 			icon = "trash-bin-minimalistic",
 			danger = true,
 			on_select = function()
+				-- (Of a repository on several devices: this device's, to begin with.)
+				local now = sessions.now:peek()
+				local chosen: { [string]: boolean } = {}
+				for _, q in checkouts_of(p, now.projects) do
+					if q.device == now.here then
+						chosen[q.id] = true
+					end
+				end
+				project_remove_chosen:set(chosen)
 				project_acting:set(id)
 				project_remove_open:set(true)
 			end,
@@ -1299,7 +1362,7 @@ local function project_dialogs(): Node
 		end
 		return n
 	end
-	-- (Its sessions as Zerun counts them: those in it, not archived.)
+	-- (Its sessions as Zeron counts them: those in it, not archived.)
 	local function removing(): string
 		local id = project_acting:get()
 		local p = project_of(id)
@@ -1338,17 +1401,69 @@ local function project_dialogs(): Node
 					if not id then
 						return
 					end
-					-- (Showing it, or one of its sessions: a new chat instead.)
-					local shown = route.session:peek()
-					if route.chat:peek().project == id or (shown and shown.project == id) then
-						route.new_chat()
+					-- The one project, or the checkouts ticked.
+					local going: { string } = { id }
+					local list = acting_checkouts()
+					if #list > 1 then
+						going = {}
+						for _, q in list do
+							if project_remove_chosen:peek()[q.id] then
+								table.insert(going, q.id)
+							end
+						end
 					end
-					project_calls.delete(id):after(function() end, function(err: any)
-						ds.toast.show { title = locale.s("shell.sidebar.project.couldnt_remove"), body = if type(err) == "string" then err else nil, tone = "danger" }
-					end)
+					for _, gone in going do
+						-- (Showing it, or one of its sessions: a new chat instead.)
+						local shown = route.session:peek()
+						if route.chat:peek().project == gone or (shown and shown.project == gone) then
+							route.new_chat()
+						end
+						project_calls.delete(gone):after(function() end, function(err: any)
+							ds.toast.show { title = locale.s("shell.sidebar.project.couldnt_remove"), body = if type(err) == "string" then err else nil, tone = "danger" }
+						end)
+					end
 				end,
 			},
-			ui.text { removing, w_full = true, wrap = true, text_size = "$font.size.md", line_height = 20, color = "$text.secondary" },
+			ui.presence(function(): string
+				return if #acting_checkouts() > 1 then "several" else "one"
+			end, function(kind: string): Node
+				if kind == "one" then
+					return ui.text { removing, w_full = true, wrap = true, text_size = "$font.size.md", line_height = 20, color = "$text.secondary" }
+				end
+				return ui.column {
+					w_full = true,
+					gap = "$space.3",
+					ui.text {
+						function(): string
+							local p = project_of(project_acting:get())
+							return locale.s("shell.sidebar.project.removing_where", { name = if p then p.name else "" })
+						end,
+						w_full = true,
+						wrap = true,
+						text_size = "$font.size.md",
+						line_height = 20,
+						color = "$text.secondary",
+					},
+					ui.each(ui.computed(acting_checkouts), function(q: any): Node
+						return ds.Checkbox {
+							label = device_of(q),
+							description = locale.s("shell.sidebar.project.checkout", { n = chats_in(q.id), path = q.path }),
+							value = function(): boolean
+								return project_remove_chosen:get()[q.id] == true
+							end,
+							on_change = function(on: boolean)
+								local next = table.clone(project_remove_chosen:peek())
+								next[q.id] = if on then true else nil
+								project_remove_chosen:set(next)
+							end,
+						}
+					end, {
+						key = function(q: any): string
+							return q.id
+						end,
+					}),
+				}
+			end, { w_full = true }),
 		},
 	}
 end
@@ -1471,6 +1586,8 @@ local function rename_dialog(): Node
 end
 
 M.Sidebar = ui.component(function(props: Props): Node
+	probe.builds += 1
+	probe.built_at = ui.now()
 	-- (Made again, a reload: no row is rested on yet.)
 	if not props.island then
 		M.card:set(nil)
@@ -1506,9 +1623,10 @@ M.Sidebar = ui.component(function(props: Props): Node
 		end :: any,
 		user = user,
 		top = props.top,
+		card = not props.island,
 		-- (A device's "+", inside a project's group: on that device too.)
 		on_new = function(project: string?, device: string?)
-			route.new_chat(project, if device then device_named(device, project) else nil)
+			route.new_chat(if device then project else checkout_here(project), if device then device_named(device, project) else nil)
 		end,
 		on_archive = M.archive,
 		archived = shelf,

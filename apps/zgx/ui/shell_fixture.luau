@@ -537,7 +537,7 @@ ui.command {
 -- Cloud chats' machines, each with its own copy of the repository's
 -- project (as the engine stamps them, one repository identity), as Wing's
 -- beta.5 had them: zeronsh/zeron on three, acme/app on a fourth, and a
--- clone of zeronsh/zeron on this Mac too.
+-- clone of zeronsh/zeron on this computer too.
 ui.command {
 	id = "fixture.cloud_projects",
 	title = "Fixture: Cloud machines, each with a copy of a repository's project",
@@ -1146,7 +1146,7 @@ ui.command {
 		publish()
 	end,
 }
--- Five hundred repositories on this Mac and fifteen hundred sessions in
+-- Five hundred repositories on this computer and fifteen hundred sessions in
 -- them, three each on branches of their own (`r<i>-<k>`): fifty touched in
 -- the last day, four hundred and fifty in the last fortnight, the rest
 -- older (GitHub's watch at scale: examples_tests' github_scale).
@@ -1187,12 +1187,12 @@ ui.command {
 		require("@app/screens/shell/route").plugin_page("fixture", "board")
 	end,
 }
--- Six more projects on this Mac, a session each, older than Atlas's (Proj 1
+-- Six more projects on this computer, a session each, older than Atlas's (Proj 1
 -- the newest): by device then project, MacBook Pro holds seven project
 -- groups, its first five then "Show 2 more" (tests/sidebar_tree).
 ui.command {
 	id = "many_projects",
-	title = "Six more projects on this Mac",
+	title = "Six more projects on this computer",
 	run = function()
 		for i = 1, 6 do
 			table.insert(model.projects, { id = `p{i}`, name = `Proj {i}`, device = "mac", path = `/work/p{i}`, git = true })
@@ -1201,7 +1201,7 @@ ui.command {
 		publish()
 	end,
 }
--- Three more projects on this Mac: Cobalt and Dune with every session
+-- Three more projects on this computer: Cobalt and Dune with every session
 -- archived (empty: folded into the sidebar's "2 empty projects"), and Ember,
 -- just added, with none at all (not empty: a new chat is about to start
 -- in it) (tests/sidebar_empty_projects).
@@ -1322,7 +1322,7 @@ ui.command {
 		publish()
 	end,
 }
--- Fix the build's side chats, on this Mac as Tidy the tests is (no branch):
+-- Fix the build's side chats, on this computer as Tidy the tests is (no branch):
 -- the panel home's rows to set beside the sidebar's (tests/
 -- sidebar_panel_parity). One moved last and made first, one the other way.
 ui.command {
@@ -1556,8 +1556,8 @@ ui.command {
 		settings.add { id = "profile", title = "Profile", group = "Personal", before = "general", view = function(): Node
 			return ui.text { "Your profile" }
 		end }
-		settings.add { id = "devices", title = "This Mac", group = "Devices", before = "archived", view = function(): Node
-			return ui.text { "This Mac" }
+		settings.add { id = "devices", title = "This computer", group = "Devices", before = "archived", view = function(): Node
+			return ui.text { "This computer" }
 		end }
 	end,
 }

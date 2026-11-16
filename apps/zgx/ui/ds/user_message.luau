@@ -3,7 +3,7 @@
 -- four fifths of the column, its text the reply's size.
 --
 -- A long message folds to five lines. Its foot fades out over the last line
--- and a half rather than cutting a line in two (Zerun's an earlier change), and "Show
+-- and a half rather than cutting a line in two at the collapsed boundary, and "Show
 -- more" under it opens it: the bubble's height eases to the whole text,
 -- which is laid out all along behind the clip, so nothing rewraps as it
 -- opens. Whether it folds is measured, not guessed from its length: a

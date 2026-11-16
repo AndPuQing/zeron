@@ -150,8 +150,8 @@ test("Settings → Appshots records a new shortcut, and Escape keeps the old one
 	expect(app:state("appshots_shortcut")).to_be(before)
 	app:click('#settings-page >> role:button ~"Change shortcut"')
 	app:frames(10)
-	-- (⌘ itself: `meta`, which `cmd` is only on a Mac; Ctrl elsewhere.)
-	app:key("meta+shift+k")
+	-- Record the platform command key: physical Command on macOS, Ctrl elsewhere.
+	app:key(if app:state("test_macos") then "meta+shift+k" else "ctrl+shift+k")
 	app:frames(10)
 	expect(app:state("appshots_shortcut")).to_be(if app:state("test_macos") then "shift+cmd+k" else "ctrl+shift+k")
 end)

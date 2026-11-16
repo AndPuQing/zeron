@@ -22,7 +22,7 @@ local prefs = require("@app/screens/settings/prefs")
 
 local M = {}
 
-M.GAP = 16
+M.GAP = 8
 M.FOOTER = 32
 M.REST = 81
 -- The title bar's height (Zerun's): a new chat's composer centres under it,
@@ -36,7 +36,13 @@ function M.hero_offset(): number
 	return M.TITLE_H / 2 - M.LIFT
 end
 -- Its sides' room from the page's edges.
-M.SIDES = "$space.6"
+M.SIDES = ui.raw(32, "the composer's room from the page's edges")
+
+-- A chat's head: the height of a code pane's (`zeron.files.head`), so the two stand
+-- level side by side.
+function M.head(): number
+	return (ui.theme.get("zeron.files.head") :: number?) or 40
+end
 
 function M.page_pad(): any
 	return ui.raw(M.FOOTER + M.GAP, "the docked composer's footer line and its gap to the foot")

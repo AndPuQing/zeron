@@ -40,17 +40,23 @@ local ToggleButton = require("@self/toggle_button")
 local Syntax = require("@self/syntax")
 -- (By the alias the shell uses too: a module is one instance per resolved
 -- path, and the opener the shell sets must be the one markdown reads.)
+local Motion = require("@self/motion")
 local Links = require("@ds/links")
 local Rail = require("@self/rail")
 local FileIcon = require("@self/file_icons")
 -- LaTeX math: `$$…$$` and `$…$` read before markdown is (ds/math).
 local Math = require("@self/math")
+-- ```mermaid fences drawn as their diagrams (ds/mermaid).
+local Mermaid = require("@self/mermaid")
 local MarkdownFind = require("@self/markdown_find")
 local locale = require("@self/locale")
+local look = require("@self/look")
 
 -- A link's context menu entry (ds/links, ds/context_menu's).
 export type LinkEntry = Links.Entry
 export type Props = {
+	veil: boolean?,
+	veil_seed: boolean?,
 	text: string | () -> string,
 	key: string?,
 	breaks: boolean?,
@@ -97,8 +103,10 @@ export type Props = {
 	-- the scroll by the difference, so what shows stays put.
 	-- (`live`: whether the text is being written, its last run then always
 	-- built; `at_end`: whether the view rests at its end, which it then
-	-- holds rather than a returning run's place.)
-	window: { key: string, view: Ref, offset: State<number>, live: (() -> boolean)?, at_end: State<boolean>? }?,
+	-- holds rather than a returning run's place; `row`: the list's row holding
+	-- the text, if the view is a list, which keeps what shows itself as a row
+	-- wholly above it changes.)
+	window: { key: string, view: Ref, offset: State<number>, live: (() -> boolean)?, at_end: State<boolean>?, row: Ref? }?,
 	-- A reply's own pictures (screens/chat/reply_images): each drawn as
 	-- Zerun's reply image row (ds/reply_picture), read as it is asked for;
 	-- `group` names the reply, whose pictures open together in the
@@ -270,6 +278,7 @@ end
 
 -- (`tasks`: each task item's place among them, from the latest parse.)
 type Ctx = {
+	veil: Veil?,
 	image: ((src: string) -> string?)?,
 	image_size: ((src: string) -> (number?, number?))?,
 	open: ((target: string) -> ())?,
@@ -285,6 +294,9 @@ type Ctx = {
 	find: { q: string, cur: number, n: number }?,
 	-- Set a step smaller (Props' `small`).
 	small: boolean?,
+	-- The whole text now: a ```mermaid fence reads its end to know whether
+	-- it's still being written (ds/mermaid).
+	source: (() -> string)?,
 }
 
 -- A reply's pictures in the order it wrote them, by its group (each of its
@@ -629,6 +641,16 @@ local function runs_now(list: { MarkdownRun }, style: { [string]: any }?, ctx: C
 		f.n += #marks
 	end
 	local pos = 0
+	-- What's still fading in the paragraph (the streaming veil).
+	local veil = if ctx then ctx.veil else nil
+	local fading: { VeilChunk } = {}
+	if veil then
+		local flat: { string } = {}
+		for _, run in list do
+			table.insert(flat, if run.img then MarkdownFind.PICTURE else run.x)
+		end
+		fading = veil_chunks(veil, table.concat(flat))
+	end
 	local function emit(span: { [any]: any }, text: string)
 		local from, to = pos + 1, pos + #text
 		pos = to
@@ -1006,7 +1028,9 @@ local fit = ui.persist("markdown_code_fit", false)
 -- (`find`: a find's matches to mark in it, numbered on from `from`, the
 -- current one `cur`.)
 type CodeFind = { q: string, from: number, cur: number }
-local function code_text(text: string, lang: string, wrap: boolean?, find: CodeFind?): Node
+-- (`veil`, `fading`: what of it is still fading in, as it's written.)
+type CodeVeil = { veil: Veil, fading: { VeilChunk } }
+local function code_text(text: string, lang: string, wrap: boolean?, find: CodeFind?, veil: CodeVeil?): Node
 	local props: { [any]: any } = {
 		wrap = wrap,
 		font = "$font.mono",
@@ -1021,13 +1045,14 @@ local function code_text(text: string, lang: string, wrap: boolean?, find: CodeF
 	local marks = if find then MarkdownFind.occurrences(text, find.q) else {}
 	local base = if find then find.from else 0
 	local cur = if find then find.cur else 0
-	if Syntax.highlighter(lang) == nil and #marks == 0 then
+	local fading = if veil then veil.fading else {}
+	if Syntax.highlighter(lang) == nil and #marks == 0 and #fading == 0 then
 		props[1] = text
 		return ui.text(props)
 	end
 	-- Each piece of the text, cut where a match starts or ends.
 	local pos = 0
-	local function piece(t: string, color: string?)
+	local function cut(t: string, color: any)
 		local from, to = pos + 1, pos + #t
 		pos = to
 		local at = from
@@ -1050,6 +1075,17 @@ local function code_text(text: string, lang: string, wrap: boolean?, find: CodeF
 			table.insert(props, ui.span { string.sub(t, at - from + 1), color = color, literal = true })
 		end
 	end
+	-- And where what's fading starts or ends, its colour fading.
+	local function piece(t: string, color: string?)
+		if #fading == 0 or not veil then
+			cut(t, color)
+			return
+		end
+		local from = pos + 1
+		veil_pieces(fading, from, pos + #t, function(s: number, e: number, c: VeilChunk?)
+			cut(string.sub(t, s - from + 1, e - from + 1), if c then veil_color(veil.veil, color or props.color, c) else color)
+		end)
+	end
 	if Syntax.highlighter(lang) == nil then
 		piece(text)
 		return ui.rich(props)
@@ -1065,16 +1101,21 @@ local function code_text(text: string, lang: string, wrap: boolean?, find: CodeF
 	return ui.rich(props)
 end
 
+-- A code block's text as it's shown: without its trailing newline (a paste into a
+-- terminal shouldn't run it), tabs as four spaces (a tab's eight read as a gap).
+local function code_shown(text: string): string
+	local shown = string.gsub(string.gsub(text, "\n$", ""), "\t", "    ")
+	return shown
+end
+
 -- A code block: a strip with its language and Copy over its lines, one
 -- quiet panel.
 -- (`class` and `provide`: what plugins place it by, and read where they
 -- do; `block` gives them.)
-local CodeBlock = ui.component(function(props: { lang: string, text: string, class: string?, provide: { [string]: any }?, find: CodeFind? }): Node
+local CodeBlock = ui.component(function(props: { lang: string, text: string, class: string?, provide: { [string]: any }?, find: CodeFind?, veil: CodeVeil? }): Node
 	local copied = ui.use_state(false)
 	local stop: (() -> ())? = nil
-	-- Without its trailing newline (a paste into a terminal shouldn't run
-	-- it), tabs as four spaces (a tab's eight read as a gap).
-	local text = string.gsub(string.gsub(props.text, "\n$", ""), "\t", "    ")
+	local text = code_shown(props.text)
 	local function copy()
 		ui.clipboard.write(text)
 		copied:set(true)
@@ -1153,13 +1194,13 @@ local CodeBlock = ui.component(function(props: { lang: string, text: string, cla
 			return fit:get()
 		end, function(fitted: boolean): Node
 			if fitted then
-				return ui.column { w_full = true, min_w = 0, code_text(text, props.lang, true, props.find) }
+				return ui.column { w_full = true, min_w = 0, code_text(text, props.lang, true, props.find, props.veil) }
 			end
 			return ui.scroll_x {
 				w_full = true,
 				fade_x = { 16, 32 },
 				fade_overflow = true,
-				code_text(text, props.lang, nil, props.find),
+				code_text(text, props.lang, nil, props.find, props.veil),
 			}
 		end, { w_full = true, min_w = 0 }),
 	}
@@ -1404,6 +1445,32 @@ local function block(b: MarkdownBlock, ink: string?, ctx: Ctx?): Node
 			find = { q = f.q, from = f.n, cur = f.cur }
 			f.n += #MarkdownFind.occurrences(b.text, f.q)
 		end
+		-- (Its fade kept here, in the block's order: what it has shown is by its place.)
+		local veil = if ctx then ctx.veil else nil
+		local code_veil = if veil then { veil = veil, fading = veil_chunks(veil, code_shown(b.text)) } else nil
+		if lang == "mermaid" then
+			-- Its diagram once the fence has closed and the host has drawn
+			-- it; the code until then, or if it can't be (ds/mermaid).
+			local source = if ctx then ctx.source else nil
+			local code = b.text
+			return ui.div {
+				provide = { code = token.block({ lang = b.lang or "", source = b.text }) },
+				w_full = true,
+				min_w = 0,
+				Mermaid.Diagram {
+					text = b.text,
+					lang = b.lang,
+					writing = if source
+						then function(): boolean
+							return Mermaid.writing(source(), code)
+						end
+						else nil,
+					code = function(): Node
+						return CodeBlock { lang = b.lang, text = b.text, find = find, veil = code_veil, class = `md-code lang-{lang}` }
+					end,
+				},
+			}
+		end
 		return ui.div {
 			provide = { code = token.block({ lang = b.lang or "", source = b.text }) },
 			w_full = true,
@@ -1412,6 +1479,7 @@ local function block(b: MarkdownBlock, ink: string?, ctx: Ctx?): Node
 				lang = b.lang,
 				text = b.text,
 				find = find,
+				veil = code_veil,
 				class = if lang ~= "" then `md-code lang-{lang}` else "md-code",
 			},
 		}
@@ -1560,15 +1628,56 @@ function blocks(list: { MarkdownBlock }, ink: string?, ctx: Ctx?): { Node }
 	return out
 end
 
--- A windowed text's blocks' heights, as last laid out, by the text's key
--- and the block's place in it: a reply scrolled back holds each block at
--- the height it had, not a guess.
--- (Kept in keyed state, a key at a time: a reload keeps them, so a view
--- made again lays out exactly as it was.)
-local HEIGHTS = ui.state("markdown_window_heights", {} :: { [string]: number })
--- Whether each run was built (near the view) when last judged: a reload
--- builds the same runs, so nothing moves.
-local NEAR = ui.state("markdown_window_near", {} :: { [string]: boolean })
+-- What windowed texts keep by a text's key and a run's place in it: plain tables
+-- here, read and written a key at a time, as each run is judged and laid out while
+-- a chat scrolls. (A keyed state would copy every text's on each write, and make all
+-- of them a table again on the next read.) Keyed state carries them across a reload
+-- alone. The oldest half goes as they fill, so a long day's chats don't add up.
+local KEPT_MOST = 8192
+local function kept<T>(key: string): { get: (string) -> T?, set: (string, T) -> () }
+	local carried = ui.state(key, {} :: { [string]: T })
+	local now: { [string]: T } = table.clone(carried:peek())
+	local older: { [string]: T } = {}
+	local count = 0
+	for _ in now do
+		count += 1
+	end
+	local function set(k: string, value: T)
+		if now[k] == nil then
+			if count >= KEPT_MOST then
+				now, older, count = {}, now, 0
+			end
+			count += 1
+		end
+		now[k] = value
+	end
+	ui.on_cleanup(function()
+		local all = table.clone(older)
+		for k, value in now do
+			all[k] = value
+		end
+		carried:set(all)
+	end)
+	return {
+		get = function(k: string): T?
+			local value = now[k]
+			if value == nil then
+				value = older[k]
+				if value ~= nil then
+					set(k, value)
+				end
+			end
+			return value
+		end,
+		set = set,
+	}
+end
+-- A windowed text's blocks' heights, as last laid out: a reply scrolled back holds
+-- each block at the height it had, not a guess.
+local HEIGHTS = kept("markdown_window_heights") :: { get: (string) -> number?, set: (string, number) -> () }
+-- Whether each run was built (near the view) when last judged: a reload builds the
+-- same runs, so nothing moves.
+local NEAR = kept("markdown_window_near") :: { get: (string) -> boolean?, set: (string, boolean) -> () }
 -- How far past the view a windowed block is built ahead of coming in.
 local OVERSCAN = 600
 -- How many blocks a windowed run holds (a long reply away from the view
@@ -1657,6 +1766,25 @@ return function(props: Props): Node
 	local ctx: Ctx? = if props.image or props.open or props.link_menu or props.link_chip or props.attached or props.task or props.pictures or props.small
 		then { image = props.image, image_size = props.image_size, open = props.open, link_menu = props.link_menu, link_chip = props.link_chip, attached = props.attached, task = props.task, tasks = {}, pictures = props.pictures, group = props.group, small = props.small }
 		else nil
+	-- A text that grows: what a ```mermaid fence reads to know whether
+	-- it's still being written (ds/mermaid).
+	if type(text) == "function" then
+		ctx = ctx or { tasks = {} }
+		;(ctx :: Ctx).source = text
+	end
+	-- Fading in as it streams (`veil`, with `key`), unless motion is reduced. `veil_seed`:
+	-- what's there as it's first built stays as it is (a chat opened mid-reply).
+	if props.veil and props.key and not Motion.reduced_now() then
+		local v = veil_of(props.key, props.veil_seed == true)
+		v.tick = ui.use_state(0)
+		if v.seeding then
+			ui.after(0, function()
+				v.seeding = false
+			end)
+		end
+		ctx = ctx or ({ tasks = {} } :: any)
+		;(ctx :: any).veil = v
+	end
 	-- Its words' ink, where the caller sets it (a thought's secondary).
 	local ink = props.ink
 	local column: { [any]: any } = { w_full = true, min_w = 0, gap = if props.small then "$space.3" else "$space.4" }
@@ -1670,6 +1798,13 @@ return function(props: Props): Node
 		ui.on_cleanup(track(r))
 		return ui.div { ref = r, w_full = true, min_w = 0, node }
 	end
+	-- The veil's place, as block `n` is made (and made again): its paragraphs are
+	-- counted from here, so each finds what it has already shown.
+	local function veil_at(n: number)
+		if ctx and ctx.veil then
+			ctx.veil.block, ctx.veil.n = n, 0
+		end
+	end
 	-- A top-level block, the `n`th: with a find, made again as its matches
 	-- change (the query, or the current match coming or going), its marks
 	-- numbered from its first part; holding the current match, handed to
@@ -1679,6 +1814,7 @@ return function(props: Props): Node
 	-- for none; `k`: the current match's place in it, 0 if it's elsewhere).
 	-- Holding the current match, it's handed to `reveal` once laid out.
 	local function marked(b: MarkdownBlock, n: number, q: string?, k: number): Node
+		veil_at(n)
 		if not find or not q or q == "" then
 			return boxed(block(b, ink,ctx))
 		end
@@ -1721,6 +1857,7 @@ return function(props: Props): Node
 	end
 	local function top(b: MarkdownBlock, n: number): Node
 		if not find then
+			veil_at(n)
 			return boxed(block(b, ink,ctx))
 		end
 		local f = find :: Find
@@ -1744,6 +1881,7 @@ return function(props: Props): Node
 				local k, q = string.match(sig, "^(%d+):(.*)$")
 				local mine: Ctx = if ctx then table.clone(ctx) else { tasks = {} }
 				mine.find = if q and q ~= "" then { q = string.lower(q), cur = tonumber(k) or 0, n = 0 } else nil
+				veil_at(n)
 				if mine.find and mine.find.cur > 0 and f.reveal then
 					local reveal = f.reveal
 					ui.after(0, function()
@@ -1772,6 +1910,7 @@ return function(props: Props): Node
 			offset: State<number>,
 			live: (() -> boolean)?,
 			at_end: State<boolean>?,
+			row: Ref?,
 		}
 		local k = `{w.key}:{at}`
 		-- Built as it was last judged. One never judged is built if it's
@@ -1782,7 +1921,8 @@ return function(props: Props): Node
 		local function last(): boolean
 			return after() == 0
 		end
-		local near = ui.use_state(if NEAR:peek()[k] ~= nil then NEAR:peek()[k] else after() < 1)
+		local was_near = NEAR.get(k)
+		local near = ui.use_state(if was_near ~= nil then was_near else after() < 1)
 		local function guess(): number
 			local h = 0
 			for _, b in run:peek() do
@@ -1790,7 +1930,7 @@ return function(props: Props): Node
 			end
 			return h
 		end
-		local held = ui.use_state(HEIGHTS:peek()[k] or guess())
+		local held = ui.use_state(HEIGHTS.get(k) or guess())
 		local r = ui.ref()
 		-- Built again after being held: its first layout may come in at
 		-- another height than it was held at (the width changed meanwhile).
@@ -1840,9 +1980,9 @@ return function(props: Props): Node
 				local was = held:peek()
 				local back = returning
 				returning = false
-				local kept = HEIGHTS:peek()[k]
-				if kept == nil or math.abs(size.h - kept) >= 0.5 then
-					HEIGHTS:set_key(k, size.h)
+				local last_height = HEIGHTS.get(k)
+				if last_height == nil or math.abs(size.h - last_height) >= 0.5 then
+					HEIGHTS.set(k, size.h)
 				end
 				if math.abs(size.h - was) < 0.5 then
 					return
@@ -1852,9 +1992,18 @@ return function(props: Props): Node
 					return
 				end
 				-- Above the view's top (it came in from there): the view moves
-				-- with it, so what shows doesn't.
+				-- with it, so what shows doesn't. (Its row wholly above the top,
+				-- the list has already kept what shows, as it does for any row
+				-- there: moved again, the view would slip by the difference.)
 				local el, view = r:peek(), w.view:peek()
-				if el and view and el.y and view.y and (el.y :: number) < (view.y :: number) then
+				local row = if w.row then w.row:peek() else nil
+				local row_above = row ~= nil
+					and view ~= nil
+					and row.y ~= nil
+					and row.height ~= nil
+					and view.y ~= nil
+					and (row.y :: number) + (row.height :: number) <= (view.y :: number)
+				if el and view and el.y and view.y and (el.y :: number) < (view.y :: number) and not row_above then
 					w.offset:set(math.max(0, w.offset:peek() + size.h - was))
 				end
 			end,

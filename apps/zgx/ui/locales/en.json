@@ -14,7 +14,9 @@
       "hours": "{n}h",
       "days": "{n}d",
       "weeks": "{n}w",
-      "hours_minutes": "{h}h {m}m"
+      "hours_minutes": "{h}h {m}m",
+      "minutes_seconds": "{m}m {s}s",
+      "hours_minutes_seconds": "{h}h {m}m {s}s"
     },
     "ago": {
       "minutes": "{n, plural, one {# minute ago} other {# minutes ago}}",
@@ -733,7 +735,8 @@
       "new_reply": "New reply",
       "display_failed": "This couldn't be shown",
       "image_failed": "Couldn't show this image",
-      "visual_failed": "Couldn't show this visual"
+      "visual_failed": "Couldn't show this visual",
+      "message_from": "Message from"
     },
     "user_message": {
       "open_named": "Open {name}",
@@ -1104,6 +1107,13 @@
         "attachments": "No attachments match “{q}”"
       },
       "placeholder": "Search files, chats, attachments"
+    },
+    "mermaid": {
+      "show_source": "Show source",
+      "show_diagram": "Show diagram",
+      "failed": "Couldn't draw this diagram: {reason}",
+      "view": "View diagram",
+      "name": "Mermaid diagram"
     }
   },
   "settings": {
@@ -1111,7 +1121,7 @@
       "language": {
         "label": "Language",
         "terms": "language locale translation chinese english 中文 简体 语言",
-        "system": "Follows your Mac's preferred language.",
+        "system": "Follows your computer's preferred language.",
         "chosen": "The menu bar changes the next time Zerun opens."
       },
       "title": "General",
@@ -1165,7 +1175,7 @@
         "model": "A small model keeps titles fast and cheap."
       },
       "git": "Git",
-      "git_description": "On this Mac.",
+      "git_description": "On this computer.",
       "worktrees": {
         "label": "Custom worktree location",
         "terms": "folder directory path checkout branches",
@@ -1184,8 +1194,8 @@
       }
     },
     "engine": {
-      "outdated": "Update Zerun on this Mac to change this.",
-      "offline": "Zerun isn't running on this Mac.",
+      "outdated": "Update Zerun on this computer to change this.",
+      "offline": "Zerun isn't running on this computer.",
       "couldnt_save": "Couldn't save that"
     },
     "prefs": {
@@ -1209,7 +1219,7 @@
     "appearance": {
       "title": "Appearance",
       "terms": "theme look colors",
-      "description": "How Zerun looks on this Mac.",
+      "description": "How Zerun looks on this computer.",
       "motion": "Motion",
       "fonts": "Fonts and layout",
       "new_chat": "New chat",
@@ -1239,8 +1249,8 @@
       "reduce_motion": {
         "label": "Reduce motion",
         "terms": "animation accessibility movement fade spring",
-        "system_on": "On while your Mac's Reduce motion is on: moves land at once and fades stay short.",
-        "description": "Moves land at once and fades stay short. On whenever your Mac's Reduce motion is on."
+        "system_on": "On while your computer's Reduce motion is on: moves land at once and fades stay short.",
+        "description": "Moves land at once and fades stay short. On whenever your computer's Reduce motion is on."
       },
       "accented": {
         "label": "Accent color throughout",
@@ -1334,6 +1344,19 @@
           "label": "Scanlines",
           "description": "Adds a pronounced horizontal display-line texture."
         }
+      },
+      "font_default": "Default ({name})",
+      "font_search": "Search fonts",
+      "font_none": "No fonts match.",
+      "interface_font": {
+        "label": "Interface font",
+        "terms": "typeface family font menus conversations geist system installed",
+        "description": "Menus and conversations."
+      },
+      "code_font": {
+        "label": "Code font",
+        "terms": "monospace typeface family font editor terminal diffs tool output geist mono installed",
+        "description": "Code, diffs, and terminals · monospaced only."
       }
     },
     "notifications": {
@@ -1376,7 +1399,7 @@
         "name": "Errors and disconnections sound"
       },
       "unread": {
-        "title": "Couldn't read this Mac's notification settings",
+        "title": "Couldn't read this computer's notification settings",
         "body": "Banners follow what Zerun last saved. Try again in a moment."
       }
     },
@@ -1514,7 +1537,7 @@
         "terms": "install add new",
         "description": "Install one and it appears above, ready to sign in."
       },
-      "this_mac": "this Mac",
+      "this_mac": "this computer",
       "couldnt_update": "Couldn't update {name}",
       "cant_reach": "Zerun can't reach {device}.",
       "try_later": "Try again in a moment.",
@@ -1621,7 +1644,18 @@
         },
         "remove_row_description": "Chats that used it stay."
       },
-      "couldnt_switch": "Couldn't switch accounts"
+      "couldnt_switch": "Couldn't switch accounts",
+      "cloud": "Cloud",
+      "cloud_keys": {
+        "title": "API keys",
+        "section_description": "Instead of signing in, Cloud can use an API key. A key saved here becomes the account its agent uses on every Cloud machine, from its next turn.",
+        "anthropic": "Anthropic API key",
+        "openai": "OpenAI API key",
+        "description": "For {agent} on Cloud. Kept in Zerun's vault, never on this computer.",
+        "placeholder": "Paste a key",
+        "save": "Save",
+        "saved": "{agent} on Cloud now uses this key"
+      }
     },
     "devices": {
       "title": "Devices",
@@ -1781,7 +1815,7 @@
       "version": {
         "label": "Version",
         "terms": "zeron engine version build about",
-        "description": "The engine on this Mac."
+        "description": "The engine on this computer."
       },
       "updates": {
         "label": "Check for updates",
@@ -1816,10 +1850,10 @@
         "updated_running": "The engine is running the new version.",
         "updated_starting": "The engine is starting again on it.",
         "unmanaged": "Update from the Zerun app",
-        "unmanaged_line": "This Mac's engine came with the Zerun app, which updates it: open Zerun and choose Check for Updates.",
+        "unmanaged_line": "This computer's engine came with the Zerun app, which updates it: open Zerun and choose Check for Updates.",
         "check_again": "Check again",
         "couldnt_check": "Couldn't check for updates",
-        "offline_line": "This Mac seems to be offline.",
+        "offline_line": "This computer seems to be offline.",
         "couldnt_update": "Couldn't update",
         "failed_line": "Something went wrong. Try again in a moment.",
         "not_connected": "Not connected to the engine",
@@ -1862,7 +1896,7 @@
         "description": "For a bug report: the versions and builds above.",
         "copied": "Version info copied"
       },
-      "updates_description": "Updates go to the engine on this Mac, as the Zerun app's do. This app isn't packaged yet, so it isn't updated here."
+      "updates_description": "Updates go to the engine on this computer, as the Zerun app's do. This app isn't packaged yet, so it isn't updated here."
     },
     "archived": {
       "title": "Archived",
@@ -2115,7 +2149,7 @@
         "label": "Signed in as",
         "terms": "email address mail account organization sync",
         "not_signed_in": "Not signed in",
-        "local": "Sessions stay on this Mac.",
+        "local": "Sessions stay on this computer.",
         "org": "In {org}. Your sessions sync across your devices.",
         "sync": "Your sessions sync across your devices."
       },
@@ -2134,9 +2168,9 @@
         "label": "Sign out",
         "terms": "log out logout leave account session",
         "busy": "Signing out…",
-        "description": "This Mac stops syncing until you sign in again.",
+        "description": "This computer stops syncing until you sign in again.",
         "confirm_title": "Sign out of Zerun?",
-        "confirm_body": "Your sessions stay in your account. On this Mac, setup opens again."
+        "confirm_body": "Your sessions stay in your account. On this computer, setup opens again."
       },
       "delete": {
         "label": "Delete account",
@@ -2176,7 +2210,7 @@
         "label": "Signing keys",
         "terms": "keys signing plugins templates security revoke fingerprint devices",
         "description": "Your devices sign the plugins and templates you make with these. If you don't recognise a key, revoke it.",
-        "this_mac": "This Mac",
+        "this_mac": "This computer",
         "another_device": "Another device",
         "new": "New",
         "added": "Added {date}",
@@ -2193,7 +2227,7 @@
     },
     "browser": {
       "title": "Browser",
-      "description": "Sites you sign into stay signed in on this Mac, separately for each account.",
+      "description": "Sites you sign into stay signed in on this computer, separately for each account.",
       "terms": "browser web page website links search engine home page zoom history cookies sign in inspector",
       "search_engine": {
         "label": "Search engine",
@@ -2224,7 +2258,7 @@
       },
       "history": "History",
       "history_terms": "history visited pages recent",
-      "history_description": "Pages you’ve visited, kept on this Mac for your account.",
+      "history_description": "Pages you’ve visited, kept on this computer for your account.",
       "keep_history": {
         "label": "Keep history",
         "description": "So you can find a page again. Off, nothing new is kept.",
@@ -2451,12 +2485,14 @@
             "too_large": "That image is too large.",
             "open": "Couldn't open that image. Choose a PNG or JPEG.",
             "save": "Couldn't save the project. Try again.",
-            "save_outdated": "Zerun on this Mac needs an update to save project icons. Update it, then save again.",
+            "save_outdated": "Zerun on this computer needs an update to save project icons. Update it, then save again.",
             "save_gone": "This project was removed on another device.",
             "save_offline": "Zerun on this computer isn't responding. Try again in a moment.",
             "unavailable": "Image icons aren't available for your account yet. Choose an emoji or a color instead."
           }
-        }
+        },
+        "removing_where": "Choose where to remove “{name}”. Its sessions there are permanently deleted. This can’t be undone.",
+        "checkout": "{n, plural, one {# session} other {# sessions}} · {path}"
       },
       "session": {
         "new_session": "New session",
@@ -2529,7 +2565,8 @@
         "shell_close": "Close",
         "shell_reload": "Reload Zerun",
         "shell_reload_interface": "Reload interface",
-        "shell_dictate": "Hold to dictate"
+        "shell_dictate": "Hold to dictate",
+        "shell_check_updates": "Check for Updates…"
       },
       "group": {
         "sessions": "Sessions",
@@ -2574,7 +2611,10 @@
       "search": "Search sessions, commands and files…",
       "app": "App",
       "reload_zeron": "Reload Zerun",
-      "reload_interface": "Reload interface"
+      "reload_interface": "Reload interface",
+      "commands": "Commands",
+      "run": "Run",
+      "default_interface": "Use Zerun v3"
     },
     "add_project": {
       "something_went_wrong": "Something went wrong",
@@ -2689,7 +2729,7 @@
         "custom": "Custom…",
         "custom_title": "Sleep until",
         "failed": "Couldn't put this chat to sleep",
-        "needs_update": "Zeron on this chat's device needs an update for Sleep.",
+        "needs_update": "Zerun on this chat's device needs an update for Sleep.",
         "until_when": "{day}, {date} at {time}"
       },
       "stop_waiting": "Stop waiting",
@@ -2731,7 +2771,7 @@
         "description": "Your chats and agents sync across all your devices."
       },
       "local": {
-        "label": "Chats stay on this Mac",
+        "label": "Chats stay on this computer",
         "description": "Sign in any time to sync them to your other devices."
       },
       "open_org": "Open {org}",
@@ -2798,13 +2838,14 @@
     "providers": {
       "title_install": "Install an agent",
       "title": "Your agents",
-      "looking": "Looking for coding agents on this Mac…",
+      "looking": "Looking for coding agents on this computer…",
       "unavailable": "Zerun runs the coding agents you already use.",
-      "none": "None are on this Mac yet. Install one to continue.",
-      "found": "{n, plural, one {Found # agent on this Mac. Sign in to any you'd like to use.} other {Found # agents on this Mac. Sign in to any you'd like to use.}}",
-      "this_mac": "this Mac"
+      "none": "None are on this computer yet. Install one to continue.",
+      "found": "{n, plural, one {Found # agent on this computer. Sign in to any you'd like to use.} other {Found # agents on this computer. Sign in to any you'd like to use.}}",
+      "this_mac": "this computer"
     },
-    "try_again": "Try again"
+    "try_again": "Try again",
+    "not_now": "Not now"
   },
   "intro": {
     "headline": {
@@ -2955,7 +2996,8 @@
         "appshot": "Appshot",
         "image": "Image",
         "file": "File"
-      }
+      },
+      "account_not_switched": "Couldn't switch accounts"
     },
     "dictation": {
       "failed": "Dictation stopped",
@@ -3202,7 +3244,8 @@
         "show": "Show in Finder",
         "dismiss": "Dismiss {name}",
         "saving": "Saving…"
-      }
+      },
+      "dismiss_error": "Dismiss"
     },
     "browser_api": {
       "empty": "Enter a website or localhost address.",
@@ -3261,7 +3304,11 @@
       "port_copy": "Copy URL",
       "port_copied": "URL copied",
       "port_closed": "Closed",
-      "previews_unavailable": "Local previews aren't available right now"
+      "previews_unavailable": "Local previews aren't available right now",
+      "working_first": "Working first",
+      "mark_all_read": "Mark all done as read",
+      "new_side_in": "New side chat in {name}",
+      "new_side_on": "New side chat on {name}"
     }
   },
   "files": {
@@ -3462,7 +3509,11 @@
         },
         "compose": {
           "title": "Put text in the message box",
-          "detail": "You still send it."
+          "detail": "It can add to what you've written or replace it. You still send it."
+        },
+        "draft": {
+          "title": "Read what you type in the message box, and set it aside",
+          "detail": "It sees your words in any chat before you send them, and can take the draft away and put it back later. It never sends it."
         },
         "network": {
           "title": "Connect to the internet",
@@ -3489,13 +3540,14 @@
           "title": "Send data between your own devices"
         },
         "commands": {
-          "title": "Run {list} on this Mac as you",
+          "title": "Run {list} on this computer as you",
           "title_on": "Run {list} on {device} as you",
           "detail": "It can do whatever {list} can do with your sign-ins.",
-          "detail_anything": "These can do anything you can, with your sign-ins."
+          "detail_anything": "These can do anything you can, with your sign-ins.",
+          "detail_each": "They run as you, with your sign-ins."
         },
         "native": {
-          "title": "Run its own program on this Mac for your agents",
+          "title": "Run its own program on this computer for your agents",
           "title_on": "Run its own program on {device} for your agents",
           "detail": "It can do anything you can."
         },
@@ -3546,12 +3598,13 @@
       },
       "can_anything": "{name}: can do anything you can",
       "any_site": "Any site on the internet",
-      "near_host": "{host}: this Mac or your network",
+      "near_host": "{host}: this computer or your network",
       "details": {
         "changes": "Parts of Zerun it changes",
         "replaces": "Screens it replaces",
         "changes_since": "Also changes, since you allowed it"
-      }
+      },
+      "full_control": "It can run {name}, which gives it full control of your computer."
     },
     "page": {
       "title": "Plugins",

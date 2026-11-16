@@ -30,6 +30,7 @@
 -- grows by itself beside a split: new room is the panes'.
 --
 --   fit.current:get()     { sidebar, right, files, sidebar_limit }, now
+--   fit.page_floor:get()  what the page wants beside the columns
 --   fit.toggle_sidebar()  fit.toggle_panel()
 --   fit.panels(viewport, sidebar_width, sidebar, right, files, expanded)
 --                         the policy alone, each column { open, opened_at }
@@ -46,16 +47,17 @@ M.FILES_PANEL_MIN, M.FILES_PANEL_DEFAULT, M.FILES_PANEL_MAX = policy.FILES_PANEL
 M.RIGHT_PANE_MIN, M.RIGHT_PANE_DEFAULT = policy.RIGHT_PANE_MIN, policy.RIGHT_PANE_DEFAULT
 M.CHAT_PANEL_MIN = policy.CHAT_PANEL_MIN
 M.panels = policy.panels
+M.floor_of = policy.page_floor
+M.panel_room = policy.panel_room
 M.content_split = policy.content_split
 M.right_pane_max_width = policy.right_pane_max_width
 M.right_pane_takeover_width = policy.right_pane_takeover_width
 export type Column = policy.Column
 export type Fit = policy.Fit
 
--- Files' least here: the panel's docked tree at its own width (wider than
--- Zerun's Files at its least), so the fit shows Files only where the file
--- beside the tree keeps the panel's least.
-M.TREE = (ui.theme.get("zeron.files.tree") :: number?) or policy.FILES_PANEL_MIN
+-- What a file tab's tree adds to the panel's width: nothing. It stands beside the
+-- file inside the panel, whatever the panel's width.
+M.TREE = 0
 
 -- When each column was last opened (asked for): an order, newest highest.
 -- (Kept across launches, so what gave way for room before a relaunch is
@@ -68,6 +70,9 @@ local function session(): string?
 	local c = route.chat:peek()
 	if c.name == "plugin" then
 		return `page:{c.plugin}/{c.page}`
+	end
+	if c.name == "home" then
+		return "home"
 	end
 	return if c.name == "session" then c.session else nil
 end
@@ -112,6 +117,21 @@ function M.sidebar_width(read: () -> number)
 	preferred = read
 	registered:set(registered:peek() + 1)
 end
+-- What the page wants beside the columns: said by the page that lays it out
+-- (a template's without a split says nothing: one chat's least).
+local page_floor_of: (() -> number)? = nil
+function M.page_holds(read: () -> number)
+	page_floor_of = read
+	registered:set(registered:peek() + 1)
+end
+M.page_floor = ui.computed(function(): number
+	registered:get()
+	return if page_floor_of then page_floor_of() else M.CHAT_PANEL_MIN
+end)
+-- The window's width where the sidebar was asked for though a split's panes
+-- then narrow: a toggle always shows it. It gives way again only under this
+-- width; room for it all forgets it.
+local sidebar_kept = ui.state("shell_fit_sidebar_kept", nil :: number?)
 -- The fit now. (Nothing hides before the window's width is known.)
 M.current = ui.computed(function(): Fit
 	local vw = M.viewport:get()
@@ -120,10 +140,12 @@ M.current = ui.computed(function(): Fit
 	local width = if preferred then preferred() else M.SIDEBAR_DEFAULT
 	local c = route.chat:get()
 	-- (A plugin's page's panel is its own, ranked by its key.)
-	local id = if c.name == "session" then c.session elseif c.name == "plugin" then `page:{c.plugin}/{c.page}` else nil
-	local on_session = route.current:get().name == "session"
-	local on_page = route.current:get().name == "plugin"
-	local open_panel = (on_session or on_page) and view.files:get()
+	local id = if c.name == "session" then c.session elseif c.name == "plugin" then `page:{c.plugin}/{c.page}` elseif c.name == "home" then "home" else nil
+	-- (Held under settings: the panel stands beside them as it was, in v3.)
+	local on_session = c.name == "session"
+	local on_page = c.name == "plugin"
+	local on_home = c.name == "home"
+	local open_panel = (on_session or on_page or on_home) and view.files:get()
 	-- (A page has no files to dock a tree for.)
 	local open_tree = on_session and view.files:get()
 	if vw <= 0 then
@@ -182,13 +204,11 @@ function M.files_part(f: Fit): number
 end
 function M.panel_share(f: Fit, viewport: number, sidebar: number): number
 	local files = M.files_part(f)
-	return files + M.content_split(math.max(viewport - sidebar - files, 0))
+	return files + M.content_split(math.max(viewport - sidebar - files, 0), M.page_floor:peek())
 end
--- The widest the panel may be (dragged, or kept from before): the chat
--- keeps its least beside it.
+-- The widest the panel may be (dragged, or kept from before).
 function M.panel_max(f: Fit, viewport: number, sidebar: number): number
-	local files = M.files_part(f)
-	return files + M.right_pane_max_width(viewport - files, sidebar, M.CHAT_PANEL_MIN)
+	return M.files_part(f) + M.panel_room(viewport, sidebar, M.files_part(f), M.page_floor:peek())
 end
 
 -- The width the sidebar lays out at: its limit while it shows; while it
@@ -202,6 +222,19 @@ M.sidebar_room = ui.computed(function(): number
 		return f.sidebar_limit
 	end
 	return held_room or (if preferred then preferred() else M.SIDEBAR_DEFAULT)
+end)
+
+-- The sidebar asked for at a width: forgotten once its panes have room, so it
+-- gives way the next time they don't.
+ui.effect(function()
+	local kept = sidebar_kept:get()
+	if kept == nil then
+		return
+	end
+	local width = if preferred then preferred() else M.SIDEBAR_DEFAULT
+	if policy.panes_fit(M.viewport:get(), policy.page_comfort(M.page_floor:get()), width, if view.files:get() then M.RIGHT_PANE_MIN else 0) then
+		sidebar_kept:set(nil)
+	end
 end)
 
 -- Asked for while hidden for room: ranked newest, so it comes back (another

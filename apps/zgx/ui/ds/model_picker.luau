@@ -23,6 +23,9 @@ local icon_button = require("@self/icon_button")
 local IconButton = icon_button.IconButton
 local Menu = require("@self/menu")
 local FadeText = require("@self/fade_text")
+local Tooltip = require("@self/tooltip")
+local PrivateText = require("@self/private_text")
+local context_usage = require("@self/context_usage")
 local locale = require("@self/locale")
 
 -- An agent: a tab of its own.
@@ -66,7 +69,7 @@ export type Account = {
 }
 -- The accounts a model runs on, where its agent keeps a login per model
 -- provider (Pi, OpenCode, Hermes): who they're with ("ChatGPT"), and, where
--- Zerun can sign in to it, what adds one and what that does.
+-- Zeron can sign in to it, what adds one and what that does.
 export type AccountGroup = { name: string, add: string?, on_add: (() -> ())? }
 export type Props = {
 	-- The accounts of a model's agent (nil or none: no row, no ring), followed
@@ -113,6 +116,9 @@ export type Props = {
 	open_with: State<number>?,
 	-- Set to whether it is open (Dropdown's `showing`).
 	showing: State<boolean>?,
+	-- How far its chip folds (Dropdown's `fold`): 1, without the effort; 2, its
+	-- mark alone.
+	fold: (() -> number)?,
 }
 
 -- Devin Fusion's lead (what runs), listed first among its options.
@@ -243,7 +249,7 @@ return ui.component(function(props: Props): Node
 		return opt.choices[1] or { id = opt.default, label = "" }
 	end
 	-- A choice picked: kept by option id; the option's own start is no pick
-	-- (Zerun leaves a default out of the chat's options).
+	-- (Zeron leaves a default out of the chat's options).
 	local function pick(opt: Option, choice: string)
 		if not props.options then
 			return
@@ -597,7 +603,7 @@ return ui.component(function(props: Props): Node
 			width = 300,
 			placement = { side = "right", align = "start", offset = 7 },
 			on_open = sync,
-			-- (Another of the model's provider's accounts, where Zerun can
+			-- (Another of the model's provider's accounts, where Zeron can
 			-- sign in to it: "Add ChatGPT account".)
 			actions = {
 				{
@@ -829,6 +835,9 @@ return ui.component(function(props: Props): Node
 			end
 			return ""
 		end,
+		trail = usage_ring(),
+		-- (Another chat's model and effort, shown as it's moved to: at once.)
+		roll_in_panel = true,
 		-- (Dropdown hands its label on, as the trigger's name.)
 		label = props.label or locale.t("ds.model_picker.model") :: any,
 		search = function(): string
@@ -868,9 +877,13 @@ return ui.component(function(props: Props): Node
 		on_open = function()
 			tab:set(nil)
 			expanded:set(false)
+			if props.on_accounts_open then
+				props.on_accounts_open()
+			end
 		end,
+		-- (Nothing chosen, nothing to fold onto: opened out.)
 		expanded = function(): boolean
-			return expanded:get()
+			return expanded:get() or current() == nil
 		end,
 		on_expand = function()
 			expanded:set(true)

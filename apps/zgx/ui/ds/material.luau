@@ -1,6 +1,16 @@
 -- How Zerun's surfaces stand: frosted (the window's glass; menus over the
 -- platform's frosted material) or opaque (solid colours throughout). One
--- setting for the whole app, kept across launches; components read it.
+-- setting for the whole app, kept across launches.
+--
+-- `material.frosted` is the setting (what Settings → Appearance switches).
+-- What draws reads `material.see_through()`: frosted, unless the system
+-- asks for no transparency (macOS's Reduce transparency; Windows'
+-- Transparency effects off, which the host reports, src/transparency.rs),
+-- when every glass turns solid whatever the setting says.
+
+local prefers = require("@self/prefers")
+
+local glass_tint = require("@self/glass_tint")
 
 local M = {}
 

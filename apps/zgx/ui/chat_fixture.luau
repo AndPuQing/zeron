@@ -124,8 +124,8 @@ ui.command {
 		end
 	end,
 }
--- The open session with subagents in its transcript's spawn chips:
--- `subagents_running` has two working and one
+-- The open session with subagents (the host says them, as it does from the
+-- transcript's spawn chips): `subagents_running` has two working and one
 -- done; opening one is noted (`open_subagent:<session>:<doc>`).
 do
 	local lanes = require("@app/screens/chat/lanes") :: any
@@ -162,16 +162,11 @@ do
 		id = "subagents_running",
 		title = "Subagents run: two working, one done",
 		run = function()
-			store.messages:push {
-				id = "subagent-spawns",
-				role = "assistant",
-				text = "",
-				tools = {
-					{ id = "spawn1", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d1", title = "scan the repo", status = "running" } },
-					{ id = "spawn2", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d2", title = "read the docs", status = "running" } },
-					{ id = "spawn3", kind = "agent", verb = "Ran a subagent", subagent = { ref = "d3", title = "find the flaky test", status = "done" } },
-				},
-			}
+			published:set({
+				{ ref = "d1", title = "scan the repo", status = "running" },
+				{ ref = "d2", title = "read the docs", status = "running" },
+				{ ref = "d3", title = "find the flaky test", status = "done" },
+			})
 		end,
 	}
 end
@@ -891,6 +886,28 @@ ui.command {
 	end,
 }
 
+-- A settled reply the host gave no time (as Windows did before it could
+-- read one): its Copy shows all the same (tests/chat_in_place).
+ui.command {
+	id = "reply_without_time",
+	title = "A reply with no time",
+	run = function()
+		store.messages:push { id = "notime1", role = "assistant", text = "Answered with no clock.", copy = "Answered with no clock." }
+	end,
+}
+
+-- Messages from other chats, as the host gives them: one from a chat that's
+-- listed, one from a chat that isn't, one with a long title (tests/chat_sender).
+ui.command {
+	id = "messages_from_chats",
+	title = "Other chats send messages",
+	run = function()
+		store.messages:push { id = "from1", role = "user", text = "The layout pass is done.", at = "Sep 8, 5:00 PM", copy = "The layout pass is done.", sender = { chat = "s2", title = "Old title" } }
+		store.messages:push { id = "from2", role = "user", text = "Waiting on you.", at = "Sep 8, 5:01 PM", copy = "Waiting on you.", sender = { chat = "gone", title = "Gone chat" } }
+		store.messages:push { id = "from3", role = "user", text = "And a word from far away.", at = "Sep 8, 5:02 PM", copy = "And a word from far away.", sender = { chat = "gone2", title = string.rep("A very long chat title ", 12) } }
+	end,
+}
+
 -- The theme, for captures in both.
 ui.command { id = "theme_light", title = "Light theme", run = function() ui.theme.follow_system(false); ui.theme.current:set("zeron-light") end }
 ui.command { id = "theme_dark", title = "Dark theme", run = function() ui.theme.follow_system(false); ui.theme.current:set("zeron-dark") end }
@@ -1599,6 +1616,29 @@ ui.effect(function()
 	table.sort(keys)
 	plugin_comments:set(table.concat(keys, ","))
 end)
+-- The draft lifted out whole and laid back (a plugin's `zeron.take_draft`
+-- and `put_draft`; screens/plugins keeps it between the two, as this
+-- does). `test_lifted` says what was lifted: its words and how many chips.
+local lifted: any = nil
+local lifted_said = ui.state("test_lifted", "")
+ui.command {
+	id = "draft_lift",
+	title = "A plugin takes the draft",
+	run = function()
+		lifted = require("@app/screens/chat/shared").lift()
+		lifted_said:set(if lifted then `{lifted.text}|{#lifted.cargo}` else "nothing")
+	end,
+}
+ui.command {
+	id = "draft_lay",
+	title = "A plugin puts the draft back",
+	run = function()
+		if lifted then
+			require("@app/screens/chat/shared").lay(lifted)
+			lifted = nil
+		end
+	end,
+}
 ui.command {
 	id = "comment_moves",
 	title = "The comment is carried two lines down",

@@ -123,7 +123,7 @@ return ui.component(function(props: { [any]: any }): Node
 		local from = last
 		last = now
 		count += 1
-		if motion.reduced_now() or from == "" then
+		if motion.reduced_now() or from == "" or (props.rolls ~= nil and not props.rolls()) then
 			roll:set(nil)
 			return
 		end

@@ -353,6 +353,15 @@ local answers: { [string]: (arg: any) -> any } = {
 		end
 		return settled({ version = "0.2.140" })
 	end,
+	-- This computer's fonts (src/fonts.rs), a few of each kind.
+	["fonts.list"] = function()
+		return settled({
+			{ family = "Fira Code", mono = true },
+			{ family = "Inter", mono = false },
+			{ family = "JetBrains Mono", mono = true },
+			{ family = "Noto Serif", mono = false },
+		})
+	end,
 	-- A background image kept: the picked file itself (the app's own PNG,
 	-- so a headless host can draw it), 512 square.
 	["wallpaper.keep"] = function(arg: any)
@@ -429,6 +438,21 @@ end
 -- a switch of device shows whose.
 local agents = require("@account/agents")
 local function agents_of(target: string?): any
+	-- Cloud (the engine answers for it from the vault): Claude Code and
+	-- Codex, always installed; Codex with an account, so on.
+	if target == "cloud" then
+		local function one(id: string, name: string, mark: string, accounts: { any }): any
+			return { id = id, name = name, mark = mark, installed = true, can_install = false, enabled = #accounts > 0, version = nil, installing = false, login = "idle", accounts = accounts }
+		end
+		return {
+			state = "ready",
+			target = target,
+			list = {
+				one("claude-code", "Claude Code", "claude", {}),
+				one("codex", "Codex", "openai", { { id = "c1", email = "ada@example.com", plan = "Pro", session = 0.1, week = 0.2, active = true } }),
+			},
+		}
+	end
 	local name = if target then "Codex" else "Claude Code"
 	local id = if target then "codex" else "claude-code"
 	return {

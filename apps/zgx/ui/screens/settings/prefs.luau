@@ -10,7 +10,6 @@
 --   prefs.compact_transcript:get()  thinking and tool calls folded in a transcript
 --   prefs.open_links:get()          "zeron" | "external": a web link in a chat opens in
 --                                   the panel's browser tab, or the default browser
---   prefs.pull_requests:get()       "native" | "browser" | "external": where a PR opens
 --   prefs.hide_emails:get()        email addresses drawn blurred (ds.PrivateText,
 --                                   which reads the same state)
 --   prefs.autosave:get()            an edited file saves itself, `autosave_delay` ms
@@ -156,13 +155,6 @@ end
 function M.OPEN_LINKS(): { { value: string, label: string } }
 	return {
 		{ value = "zeron", label = "Zerun" },
-		{ value = "external", label = ui.t("settings.prefs.default_browser"):get() },
-	}
-end
-function M.PULL_REQUESTS(): { { value: string, label: string } }
-	return {
-		{ value = "native", label = ui.t("settings.prefs.pull_requests.native"):get() },
-		{ value = "browser", label = ui.t("settings.prefs.pull_requests.browser"):get() },
 		{ value = "external", label = ui.t("settings.prefs.default_browser"):get() },
 	}
 end

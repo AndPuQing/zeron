@@ -21,9 +21,6 @@ local Dictation = require("@app/screens/chat/dictation")
 local motion = require("@ds/motion")
 local Placement = require("@app/screens/chat/composer_place")
 local T = require("@ds/transcript")
-local Quote = require("@ds/quote")
-local Comments = require("@app/screens/chat/comments")
-local Annotation = require("@ds/annotation")
 local prefs = require("@app/screens/settings/prefs")
 local store = require("@app/screens/chat/store")
 local lanes = require("@app/screens/chat/lanes")
@@ -38,11 +35,12 @@ local CloudMachine = require("@app/screens/chat/cloud_machine")
 local Where = require("@app/screens/chat/where")
 local DropOverlay = require("@ds/drop_overlay")
 local Asks = require("@app/screens/chat/asks")
-local mentions = require("@ds/composer_mentions")
 local Invocations = require("@app/screens/chat/invocations")
-local ZerunCommands = require("@app/screens/chat/zeron_commands")
+local ZeronCommands = require("@app/screens/chat/zeron_commands")
 -- (Loaded with the chat page: captures land on its composer.)
 local Appshots = require("@app/screens/chat/appshots")
+local Carried = require("@app/screens/chat/carried")
+local Completions = require("@app/screens/chat/completions")
 
 -- Zerun's dock spring (ω ≈ 27).
 local DOCK: SpringOptions = { stiffness = 730, damping = 54 }
@@ -484,6 +482,15 @@ local function Composer(): Node
 		branch = branch,
 		active = new_chat,
 	}
+	-- (A new chat's project, for what follows the route: its panel.)
+	ui.effect(function()
+		if new_chat() then
+			local id = project:get()
+			if route.new_chat_project:peek() ~= id then
+				route.new_chat_project:set(id)
+			end
+		end
+	end)
 
 	local running = ui.computed(function(): boolean
 		local s = open()
@@ -738,46 +745,6 @@ local function Composer(): Node
 		end
 	end)
 
-	-- What a sent message shows of what it carries.
-	local function shown_attachments(list: { any }, quotes: { Quote.Quote }?, picks: { { [string]: any } }?, comments: { Comments.Comment }?): { any }
-		local out = {}
-		for _, a in list do
-			table.insert(out, {
-				kind = if a.kind == "image" then "image" else "file",
-				name = a.name,
-				src = if a.kind == "image" then a.path else nil,
-			})
-		end
-		-- And each passage it carries, as a chip (as the host's copy shows
-		-- them: chat.rs `split_quotes`).
-		for _, q in quotes or {} do
-			table.insert(out, { kind = "file", icon = "cursor", name = Quote.where(q), meta = Quote.excerpt(q.text) })
-		end
-		-- And each element picked on a page (chat.rs `split_annotations`).
-		for _, chip in Annotation.shown(picks or {}) do
-			table.insert(out, chip)
-		end
-		-- And its review comments, one chip (chat.rs `comments_chip`).
-		local said = comments or {}
-		if #said > 0 then
-			local places: { string } = {}
-			for _, c in said do
-				table.insert(places, Comments.place(c))
-			end
-			table.insert(out, {
-				kind = "file",
-				icon = "chat-round-line",
-				name = ui.t("chat.composer.comments", { n = #said }):get(),
-				meta = table.concat(places, ", "),
-			})
-		end
-		return out
-	end
-
-	-- What `@` offers: the files of where it works (the session's folder,
-	-- or a new chat's project), searched as the mention is typed. (`/` and
-	-- `$` offer nothing yet.)
-	local mention_sources = ui.state("chat_mentions", { ["/"] = {}, ["$"] = {} } :: any)
 	-- The agent the chat runs (its model's): whose completion settings the
 	-- composer follows (the chat's own when the catalog doesn't name it).
 	local function agent(): string?
@@ -906,45 +873,15 @@ local function Composer(): Node
 		end
 		-- A draft that is only one of Zerun's own commands runs it (its
 		-- token goes; anything carried stays).
-		local zeron = ZerunCommands.of_text(shared.text:peek(), (mention_lists:peek() or {})["/"] or {})
+		local zeron = completions.command_of(shared.text:peek())
 		if zeron then
 			shared.text:set("")
-			ZerunCommands.run(zeron, session_id:peek())
+			ZeronCommands.run(zeron, session_id:peek())
 			return
 		end
 		local typed, carried = shared.take()
-		local attachments = {}
-		-- Passages attached from the conversation: a block after the words
-		-- (Quote.with_quotes), each with who said it and when.
-		local quotes: { Quote.Quote } = {}
-		-- Elements picked on a page in the panel's browser: each a token
-		-- after the words (Annotation.with_annotations), which the engine
-		-- expands for the agent.
-		local picks: { { [string]: any } } = {}
-		-- Review comments left on files: a block after the words
-		-- (screens/chat/comments), each its file and line.
-		local comments: { Comments.Comment } = {}
-		for _, item in carried do
-			if item.kind == "comment" then
-				table.insert(comments, { file = item.file, line = item.line, body = item.body, to = item.to, side = item.side, snippet = item.snippet })
-			elseif item.path then
-				-- (A project's file: on the session's computer already.)
-				-- (An Appshot goes as its picture; what it shows of the app, below.)
-				table.insert(attachments, { kind = if item.kind == "appshot" then "image" else item.kind, path = item.path, name = item.name, rel = item.rel, on_host = item.on_host })
-			elseif item.kind == "annotation" and item.quote then
-				table.insert(quotes, { text = item.quote, who = item.name, from = item.from })
-			elseif item.kind == "annotation" and item.annotation then
-				table.insert(picks, item)
-			elseif item.kind == "text" and item.text then
-				-- A pasted text carried as a chip: its words go in the text.
-				typed = typed .. "\n\n" .. item.text
-			elseif item.kind == "chat" and item.chat then
-				-- Another chat mentioned (a session dropped from the sidebar):
-				-- its link in the words, the engine's to read out to the agent.
-				local link = shared.chat_link(item.name, item.chat)
-				typed = if typed ~= "" then `{typed} {link}` elseif text ~= "" then `{text} {link}` else link
-			end
-		end
+		local pack = Carried.pack(carried, typed, text)
+		local attachments = pack.attachments
 		-- (Each command or skill picked: its canonical reference.)
 		-- (And each reference to what it carries, `@` picked: its name, as
 		-- what follows names it.)
@@ -1227,6 +1164,7 @@ local function Composer(): Node
 			end
 		end
 		return {
+			device = on,
 			name = name,
 			worktree = path ~= nil and s.cwd ~= nil and s.cwd ~= path,
 			project = project,
@@ -1362,7 +1300,7 @@ local function Composer(): Node
 				shared.attach_files(files)
 			end,
 			-- A picture pasted (a screenshot): written out by the host, then
-			-- carried as an image, as one dropped is, named as Zerun names
+			-- carried as an image, as one dropped is, named as Zeron names
 			-- it (attachments.rs `stage_clipboard_image`).
 			on_paste_image = function(): boolean
 				store.paste_image():after(function(path: string?)
@@ -1680,7 +1618,9 @@ local function Composer(): Node
 			return if route.current:get().name == "plugin" then 0 else 1
 		end,
 		on_resize = function(size: { w: number, h: number })
-			if math.abs(page_h:peek() - size.h) >= 1 then
+			-- (Hidden, Settings standing in its place, it has no height: not somewhere to
+			-- move to, nor to glide back from.)
+			if size.h >= 1 and math.abs(page_h:peek() - size.h) >= 1 then
 				page_h:set(size.h)
 			end
 		end,
@@ -1695,7 +1635,15 @@ local function Composer(): Node
 			pointer_events = "none",
 			left = 0,
 			right = 0,
-			bottom = FOOT,
+			-- On a new chat by its top, from the page's middle: it moves with
+			-- the page as the page lays out, and what's written grows it down.
+			-- Docked, by its foot.
+			top = function(): any
+				return if new_chat() then "50%" else nil
+			end,
+			bottom = function(): any
+				return if new_chat() then nil else FOOT
+			end,
 			px = require("@app/screens/chat/dock").SIDES,
 			justify = "center",
 			-- Mid-page on a new chat, docked on a session: sliding there as it

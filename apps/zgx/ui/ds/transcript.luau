@@ -39,6 +39,9 @@
 -- goes to the end (a person sending goes there too, whatever they were
 -- reading).
 
+-- When a transcript was last made: a reply already streaming then keeps what it shows,
+-- only what comes after fading in.
+local opened_at = 0
 local Icon = require("@self/icon")
 local Markdown = require("@self/markdown")
 local UserMessage = require("@self/user_message")
@@ -74,7 +77,7 @@ export type Message = {
 	-- A reply's model, for naming who said a selection.
 	model: string?,
 	tools: { Tool }?,
-	-- Its parts in order, as Zerun lays a reply out: its text, and between
+	-- Its parts in order, as Zeron lays a reply out: its text, and between
 	-- the text each run of tools as a group of its own (keyed by its first
 	-- part), open while it is the tail of a reply being written. Given,
 	-- they are what shows (`text` and `tools` then only say what it holds).
@@ -98,6 +101,8 @@ export type Message = {
 	to: string?,
 	from_mark: Mark.Name?,
 	to_mark: Mark.Name?,
+	-- A person's that another chat sent: which, and its title when it was sent.
+	sender: { chat: string, title: string }?,
 }
 
 export type Props = {
@@ -144,6 +149,11 @@ export type Props = {
 	-- The widest the conversation runs (points; a function follows a
 	-- setting as it changes); by default the theme's measure.
 	measure: (number | () -> number)?,
+	-- Its rows' inset each side, in points; by default the theme's.
+	side: number?,
+	-- How far over what floats at its foot its fade starts. (A fade's first fifth
+	-- hardly shows: this has it show from where it should start.)
+	fade_lead: number?,
 	-- What floats over its foot (a composer, docked), in points: the
 	-- conversation runs under it, its end held clear of it, fading out as
 	-- it passes behind (Zerun's band, from the composer's top to the
@@ -164,6 +174,11 @@ export type Props = {
 	-- names, a prompt's file mention): what opens it. Without it, it's
 	-- styled only.
 	open_link: ((target: string) -> ())?,
+	-- A chat as it's listed now: its title and agent's mark. Nil for one that
+	-- isn't listed, which a message from it can't open.
+	chat_of: ((id: string) -> { title: string, mark: Mark.Name? }?)?,
+	-- What pressing `Message from Chat` does: opens that chat beside this one.
+	open_sender: ((chat: string, title: string) -> ())?,
 	-- Those links' context menus where they aren't the web's (ds/markdown's
 	-- `link_menu`).
 	link_menu: ((target: string) -> { Markdown.LinkEntry }?)?,
@@ -185,7 +200,8 @@ export type TranscriptFind = {
 }
 -- The words being written: the whole reply's (`text`), and, with blocks,
 -- the text block they grow (`part`) and its words alone (`part_text`).
-export type Draft = { id: string, text: string, part: string?, part_text: string? }
+-- (`thought`, `thought_text`: the thought the reply is at, and its words so far.)
+export type Draft = { id: string, text: string, part: string?, part_text: string?, thought: string?, thought_text: string? }
 -- A block of a reply: a text, or a group of tools (its line, and whether
 -- it is open while the reply is written).
 -- In a compact transcript, a reply's work is one group ("work") holding
@@ -220,8 +236,9 @@ local WORD, ACTION, CLEAR, MARGIN, FOOT = 26, 32, 6, 8, 46
 -- How often a shown action looks whether the selection is still there.
 local WATCH = 200
 
--- The room left under the conversation's last row.
-local TAIL = 12
+-- The room left under the conversation's last row, over what floats at its
+-- foot: Zerun's (transcript.rs, the fade band and 8).
+local TAIL = 32
 -- Zerun's gaps over a message (transcript.rs `top_gap_for`): a turn's, and
 -- a prompt's under the switch seam over it.
 local TURN_GAP = 16
@@ -232,7 +249,7 @@ local SEAM_GAP = 6
 local TRACING = ui.shared("transcript.trace_enabled", false):peek() == true
 local function trace(what: string, ...: any)
 	if TRACING then
-		print(`zerun-experimental: transcript {math.floor(ui.now())} {what}`, ...)
+		print(`[transcript] {math.floor(ui.now())} {what}`, ...)
 	end
 end
 
@@ -269,7 +286,7 @@ local function strip(m: Message, row: State<Message>, hovered: () -> boolean): N
 		if stop then
 			stop()
 		end
-		-- (Zerun clears it after 1.2 s.)
+		-- (Zeron clears it after 1.2 s.)
 		stop = ui.after(1200, function()
 			stop = nil
 			set_copied(false)
@@ -283,9 +300,11 @@ local function strip(m: Message, row: State<Message>, hovered: () -> boolean): N
 		justify = if mine then "end" else "start",
 		selectable = false,
 		ui.presence(function(): string?
-			-- (Never while a reply is written: it has no time yet.)
+			-- (Never while a reply is written. A settled message shows it
+			-- with or without its time: a time missing, as on a platform
+			-- that couldn't read one, mustn't take Copy with it.)
 			local now = row:get()
-			return if hovered() and now.at and not now.streaming then "shown" else nil
+			return if hovered() and (now.at or now.copy) and not now.streaming then "shown" else nil
 		end, function(): Node
 			return ui.row {
 				class = "message-actions",
@@ -370,11 +389,79 @@ local function seam(m: Message): Node
 	}
 end
 
+-- A message another chat sent: `Message from [mark] Chat`, muted, on the right
+-- over its bubble (Zerun's `render_agent_sender`). The chat's title as it is
+-- now, and a click opens it in the panel; one that isn't listed reads as it
+-- did when sent.
+local function sender_line(m: Message, props: Props): Node
+	local from = m.sender :: { chat: string, title: string }
+	local function now(): { title: string, mark: Mark.Name? }?
+		return if props.chat_of then props.chat_of(from.chat) else nil
+	end
+	return ui.presence(function(): string
+		local c = now()
+		return if c then `known:{c.mark or ""}` else "unknown"
+	end, function(kind: string): Node
+		local known = kind ~= "unknown"
+		local c = now()
+		local mark = if c then c.mark else nil
+		local line: { [any]: any } = {
+			gap = ui.raw(6, "Zerun's caption gap"),
+			items = "center",
+			min_w = 0,
+			max_w = "80%",
+			text_size = "$font.size.md",
+			color = "$text.secondary",
+			selectable = false,
+			ui.text { locale.t("ds.transcript.message_from"), shrink = 0 },
+			ui.row {
+				gap = ui.raw(5, "Zerun's caption mark-to-name gap"),
+				items = "center",
+				min_w = 0,
+				ui.div {
+					aria_hidden = true,
+					if mark then Mark { name = mark, size = 14, bare = true } else Icon { name = "chat-round-line", size = 14 },
+				},
+				ui.text {
+					function(): string
+						local live = now()
+						return if live then live.title else from.title
+					end,
+					literal = true,
+					truncate = true,
+					weight = "$font.weight.medium",
+				},
+			},
+		}
+		if known then
+			line.label = function(): string
+				local live = now()
+				return `{locale.s("ds.transcript.message_from")} {if live then live.title else from.title}`
+			end
+			line.cursor = "pointer"
+			-- (A line of text that opens, not a control: no box of its own.)
+			line.h, line.px, line.py, line.bg = "auto" :: any, 0, 0, "#00000000"
+			line.hover = { color = "$text.primary" }
+			line.active = { color = "$text.primary" }
+			line.on_click = function()
+				if props.open_sender then
+					local live = now()
+					props.open_sender(from.chat, if live then live.title else from.title)
+				elseif props.open_link then
+					props.open_link(`zeron-chat:{from.chat}`)
+				end
+			end
+			return ui.row { w_full = true, justify = "end", ui.button(line) }
+		end
+		return ui.row { w_full = true, justify = "end", ui.row(line) }
+	end, { w_full = true, pb = ui.raw(6, "Zerun's USER_CAPTION_GAP") })
+end
+
 -- A reply's row: its tools, its text, and while it waits for either, that it
 -- is working.
 -- Where a turn's working words start: from its message's id, so the word
 -- shown is the same however often the line is made (a reload, a row
--- scrolled back), as Zerun seeds it per chat (transcript.rs
+-- scrolled back), as Zeron seeds it per chat (transcript.rs
 -- `flavour_seed`).
 local function seed_of(id: string): number
 	local n = 0
@@ -537,6 +624,8 @@ type View = {
 	view: Ref,
 	offset: State<number>,
 	at_end: State<boolean>?,
+	-- The list's row holding the reply (Markdown's `window`).
+	row: Ref?,
 	pictures: ReplyPicture.Pictures?,
 	-- Where the pictures an agent showed are read from (Props'
 	-- `sent_pictures`: they're files on the chat's host, as sent ones are).
@@ -547,6 +636,23 @@ type View = {
 	-- A message text's find (its key: `<id>:u`, `<id>:<block>`, `<id>:r`).
 	find: ((key: string) -> any)?,
 }
+
+-- A reply's thought being written, for its row (ds/activity's `thought`): the
+-- draft's words while it's the one the reply is at.
+local function thought_of(m: Message, now: () -> Message, draft: State<Draft>?): Activity.Writing
+	return {
+		words = function(id: string): string?
+			if not (draft and now().streaming) then
+				return nil
+			end
+			local d = draft:get()
+			return if d.id == m.id and d.thought == id then d.thought_text else nil
+		end,
+		seeded = function(): boolean
+			return ui.now() - opened_at < 300
+		end,
+	}
+end
 
 local function blocks_of(list: () -> { Block }, m: Message, now: () -> Message, draft: State<Draft>?, view: View?): Node
 	local shown = ui.computed(list)
@@ -641,6 +747,8 @@ local function blocks_of(list: () -> { Block }, m: Message, now: () -> Message, 
 			text = words,
 			-- Parsed incrementally only while it can grow.
 			key = if m.streaming then `reply:{m.id}:{b.id}` else nil,
+			veil = m.streaming == true,
+			veil_seed = ui.now() - opened_at < 300,
 			track = track(m.id),
 			window = if view
 				then {
@@ -651,6 +759,7 @@ local function blocks_of(list: () -> { Block }, m: Message, now: () -> Message, 
 						return now().streaming == true
 					end,
 					at_end = view.at_end,
+					row = view.row,
 				}
 				else nil,
 			pictures = if view then view.pictures else nil,
@@ -732,12 +841,15 @@ local function reply(
 			text = text,
 			-- Parsed incrementally only while it can grow.
 			key = if m.streaming then `reply:{m.id}` else nil,
+			veil = m.streaming == true,
+			veil_seed = ui.now() - opened_at < 300,
 			pictures = if view then view.pictures else nil,
 			open = if view then view.open else nil,
 			link_menu = if view then view.link_menu else nil,
 			link_chip = if view then view.link_chip else nil,
 			find = if view and view.find then view.find(`{m.id}:r`) else nil,
 			group = `reply:{m.id}`,
+			track = track(m.id),
 		},
 		-- Its foot, one lane: while the turn runs, that it's working and how
 		-- long; once it settles, its time and Copy on hover. The lane keeps
@@ -798,7 +910,7 @@ local function to_end(list: Ref, offset: State<number>, rows: number)
 	offset:set(PAST_END)
 end
 -- The prompts sent from this window (kept across a reload): only a turn
--- sent here holds the runway under its prompt, as Zerun reserves the view
+-- sent here holds the runway under its prompt, as Zeron reserves the view
 -- for a turn sent locally (transcript.rs `OwnTurnAnchor`); a conversation
 -- opened as it stands shows its end.
 local SENT = ui.state("transcript_sent_here", {} :: { [string]: boolean })
@@ -822,6 +934,7 @@ local named_shown: { [string]: () -> () } = {}
 local named_sending: { [string]: (push: () -> (), landing: string?) -> () } = {}
 
 local function Transcript(props: Props): Node
+	opened_at = ui.now()
 	local messages = props.messages
 	-- (Its own kept states, by its name: a side chat's beside the chat
 	-- page's never shares the chat page's glide, runway or hover.)
@@ -1033,6 +1146,10 @@ local function Transcript(props: Props): Node
 		-- taken meanwhile stays where it went.
 		local function rise(prompt: Message?)
 			ui.after(16, function()
+				-- (Scrolled meanwhile: the view is the reader's, see `wheeled`.)
+				if glides ~= turn then
+					return
+				end
 				local row_el = prompt and tops[prompt.id] and tops[prompt.id]:peek()
 				local list_el = list:peek()
 				if not row_el or not list_el or row_el.y == nil or list_el.y == nil then
@@ -1045,6 +1162,9 @@ local function Transcript(props: Props): Node
 					duration = motion.ms(GLIDE_MS),
 					ease = "outQuad",
 					onComplete = function()
+						if glides ~= turn then
+							return
+						end
 						-- Landed: the old reply lets go of the room it held
 						-- (above the view, so nothing seen moves), and the
 						-- offset says where the list now rests, a real place
@@ -1130,7 +1250,7 @@ local function Transcript(props: Props): Node
 			if not c then
 				return
 			end
-			local m = messages:peek()[c.row]
+			local m = messages:at(c.row)
 			local row = if m then rows[m.id] else nil
 			if row and row.outer:peek() then
 				return
@@ -1331,6 +1451,18 @@ local function Transcript(props: Props): Node
 		-- (Taken somewhere of their own: a place still to come back to is
 		-- let go.)
 		waiting = nil
+		-- A send's glide under way (or its prompt still to land, a steer's):
+		-- the scroll is theirs, so the glide stops where it is rather than
+		-- pulling the view back to the end. The old reply keeps the room it
+		-- held until it's out of view (`rested`), so nothing shown moves.
+		if gliding:peek() then
+			glides += 1
+			if glide then
+				glide:pause()
+				glide = nil
+			end
+			gliding:set(false)
+		end
 		return nil
 	end
 	-- When focus last came to something in the list (Tab, ⇧Tab to a row's
@@ -1339,6 +1471,8 @@ local function Transcript(props: Props): Node
 	-- While the width is changing (and a moment after): the reading row
 	-- puts the place back as its lines rewrap, the frame they do.
 	local resizing_until = 0
+	-- When the view's size last changed.
+	local resized_at = -math.huge
 	local function find_reading()
 		reading = nil
 		local el = list:peek()
@@ -1420,8 +1554,31 @@ local function Transcript(props: Props): Node
 	local function rested()
 		remember()
 		find_reading()
-		if not at_end:peek() and ui.now() >= resizing_until then
+		-- Resting away from the end: let go of it once no change of size is
+		-- under way, or at once if a person scrolled since the last one (a
+		-- scroll begun just after a resize is theirs; held, the next resize,
+		-- however much later, would pull the view back to the end).
+		if not at_end:peek() and (ui.now() >= resizing_until or wheeled_at >= resized_at) then
 			end_held = false
+		end
+		-- A send's glide a scroll stopped (`wheeled`): the old reply's held
+		-- room goes once that reply is out of view, where it moves nothing.
+		local h = held:peek()
+		if h.id ~= "" and not gliding:peek() then
+			local r = rows[h.id]
+			local row_el = r and r.outer:peek()
+			local el = list:peek()
+			local away_from_view = not row_el
+				or not el
+				or row_el.y == nil
+				or row_el.height == nil
+				or el.y == nil
+				or el.height == nil
+				or (row_el.y :: number) + (row_el.height :: number) <= (el.y :: number)
+				or (row_el.y :: number) >= (el.y :: number) + (el.height :: number)
+			if away_from_view then
+				held:set { id = "", h = 0 }
+			end
 		end
 	end
 	local rest = ui.debounced(offset, 150, { every = true })
@@ -1585,15 +1742,21 @@ local function Transcript(props: Props): Node
 				text,
 			}
 		end
+		-- Where it stands: the last place it was given, so it fades out there.
+		local stood: any = nil
+		local function standing(): any
+			stood = spot:get() or stood
+			return stood
+		end
 		local bar: ContainerProps = {
 			ref = pill,
 			absolute = true,
 			top = function(): number
-				local at = spot:get()
+				local at = standing()
 				return if at then at.y else 0
 			end,
 			left = function(): number
-				local at = spot:get()
+				local at = standing()
 				local el = list:peek()
 				if not at or not el then
 					return 0
@@ -1721,7 +1884,7 @@ local function Transcript(props: Props): Node
 			w_full = true,
 			justify = "center",
 			items = "start",
-			px = "$space.5",
+			px = if props.side then ui.raw(props.side, "a little wider than the composer") else "$space.5",
 			pt = function(): number
 				return ui.raw(pt(), "Zerun's gaps over a message (transcript.rs top_gap_for)")
 			end,
@@ -1766,6 +1929,7 @@ local function Transcript(props: Props): Node
 						class = "message message-user",
 						provide = { message = m.id },
 						w_full = true,
+						if m.sender then sender_line(m, props) else nil,
 						UserMessage {
 							id = m.id,
 							text = m.text,
@@ -1798,7 +1962,7 @@ local function Transcript(props: Props): Node
 				hover:set("")
 			end
 		end,
-		SelectionMenu { w_full = true, h_full = true, more = offers, on_release = if props.on_mention or props.on_attach
+		ui.div { absolute = true, left = 0, right = 0, top = 0, bottom = 0, SelectionMenu { w_full = true, h_full = true, more = offers, on_release = if props.on_mention or props.on_attach
 			then function()
 				-- (A turn on: the release ends the gesture first.)
 				ui.after(0, settle)
@@ -1808,12 +1972,10 @@ local function Transcript(props: Props): Node
 			ref = list,
 			label = locale.t("ds.transcript.conversation"),
 			data = messages,
-			key = function(m: Message): string
-				return m.id
-			end,
+			key = "id",
 			row = row,
 			row_text = function(i: number): string
-				local m = messages:peek()[i]
+				local m = messages:at(i)
 				return if m then m.text else ""
 			end,
 			offset = offset,
@@ -1876,7 +2038,8 @@ local function Transcript(props: Props): Node
 					ui.after(48, settle)
 				end
 				if changed then
-					resizing_until = ui.now() + 300
+					resized_at = ui.now()
+					resizing_until = resized_at + 300
 					-- At the end: on it still, every frame of the change.
 					if end_held and not gliding:peek() then
 						-- (Asked of the list itself, which lands it as it lays
@@ -1933,7 +2096,7 @@ local function Transcript(props: Props): Node
 			-- (Zerun's 24 under the title bar; at the foot, the band the
 			-- composer covers, or 24.)
 			fade = function(): { number }
-				return { 24, math.max(24, foot()) }
+				return { 24, math.max(24, foot()) + (props.fade_lead or 0) }
 			end,
 			-- A row Tab (or ⇧Tab) focuses scrolls clear of both bands: the
 			-- title bar's fade at the top, the composer at the foot (followed
@@ -1948,7 +2111,7 @@ local function Transcript(props: Props): Node
 			-- On whole points, so a scroll moves its pixels rather than
 			-- painting them again (a view between device pixels can't).
 			snap = true,
-		} },
+		} } },
 		-- The scrollbar, over the list and never faded, running its whole
 		-- height: at the window's edge, beside the composer rather than
 		-- under it, so scrolled to the end it reaches the page's end.
@@ -2022,6 +2185,8 @@ local function Transcript(props: Props): Node
 					end
 				end
 				pill.on_click = function()
+					-- (It leaves as the view arrives: the keys go where it's
+					-- told, not on to the next control.)
 					if props.on_jump then
 						local el = pill_ref:peek()
 						if el then

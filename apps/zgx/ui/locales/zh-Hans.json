@@ -14,7 +14,9 @@
       "hours": "{n}时",
       "days": "{n}天",
       "weeks": "{n}周",
-      "hours_minutes": "{h}小时{m}分"
+      "hours_minutes": "{h}小时{m}分",
+      "minutes_seconds": "{m}分{s}秒",
+      "hours_minutes_seconds": "{h}小时{m}分{s}秒"
     },
     "ago": {
       "minutes": "{n, plural, other {# 分钟前}}",
@@ -733,7 +735,8 @@
       "new_reply": "新回复",
       "display_failed": "无法显示此内容",
       "image_failed": "无法显示这张图片",
-      "visual_failed": "无法显示这个可视化"
+      "visual_failed": "无法显示这个可视化",
+      "message_from": "消息来自"
     },
     "user_message": {
       "open_named": "打开 {name}",
@@ -1104,6 +1107,13 @@
         "attachments": "没有与“{q}”匹配的附件"
       },
       "placeholder": "搜索文件、对话和附件"
+    },
+    "mermaid": {
+      "show_source": "显示源代码",
+      "show_diagram": "显示图表",
+      "failed": "无法绘制此图表：{reason}",
+      "view": "查看图表",
+      "name": "Mermaid 图表"
     }
   },
   "settings": {
@@ -1111,7 +1121,7 @@
       "language": {
         "label": "语言",
         "terms": "语言 区域 翻译 中文 简体 英文 language locale translation chinese english",
-        "system": "跟随 Mac 的首选语言。",
+        "system": "跟随 电脑的首选语言。",
         "chosen": "菜单栏将在下次打开 Zerun 时更改。"
       },
       "title": "通用",
@@ -1165,7 +1175,7 @@
         "model": "使用小型模型快速、低成本地生成标题。"
       },
       "git": "Git",
-      "git_description": "在此 Mac 上。",
+      "git_description": "在此电脑上。",
       "worktrees": {
         "label": "自定工作树位置",
         "terms": "文件夹 目录 路径 检出 分支 folder directory path checkout branches",
@@ -1184,8 +1194,8 @@
       }
     },
     "engine": {
-      "outdated": "更新此 Mac 上的 Zerun 以更改此设置。",
-      "offline": "Zerun 未在此 Mac 上运行。",
+      "outdated": "更新此电脑上的 Zerun 以更改此设置。",
+      "offline": "Zerun 未在此电脑上运行。",
       "couldnt_save": "无法保存"
     },
     "prefs": {
@@ -1209,7 +1219,7 @@
     "appearance": {
       "title": "外观",
       "terms": "主题 外观 颜色 theme look colors",
-      "description": "此 Mac 上 Zerun 的外观。",
+      "description": "此电脑上 Zerun 的外观。",
       "motion": "动态效果",
       "fonts": "字体与布局",
       "new_chat": "新建对话",
@@ -1239,8 +1249,8 @@
       "reduce_motion": {
         "label": "减弱动态效果",
         "terms": "动画 辅助功能 动态 淡入淡出 animation accessibility movement fade spring",
-        "system_on": "Mac 的“减弱动态效果”开启时启用：移动立即完成，淡入淡出时间缩短。",
-        "description": "移动立即完成，淡入淡出时间缩短。Mac 的“减弱动态效果”开启时始终启用。"
+        "system_on": "电脑的“减弱动态效果”开启时启用：移动立即完成，淡入淡出时间缩短。",
+        "description": "移动立即完成，淡入淡出时间缩短。电脑的“减弱动态效果”开启时始终启用。"
       },
       "accented": {
         "label": "全局强调色",
@@ -1334,6 +1344,19 @@
           "label": "扫描线",
           "description": "添加明显的水平显示扫描线纹理。"
         }
+      },
+      "font_default": "默认（{name}）",
+      "font_search": "搜索字体",
+      "font_none": "没有匹配的字体。",
+      "interface_font": {
+        "label": "界面字体",
+        "terms": "字体 字型 菜单 对话 系统 已安装 typeface family font menus conversations geist system installed",
+        "description": "适用于菜单和对话。"
+      },
+      "code_font": {
+        "label": "代码字体",
+        "terms": "等宽 字体 编辑器 终端 差异 工具输出 monospace typeface family font editor terminal diffs tool output geist mono installed",
+        "description": "适用于代码、差异和终端 · 仅限等宽字体。"
       }
     },
     "notifications": {
@@ -1376,7 +1399,7 @@
         "name": "错误和断开连接提示音"
       },
       "unread": {
-        "title": "无法读取此 Mac 的通知设置",
+        "title": "无法读取此电脑的通知设置",
         "body": "横幅使用 Zerun 上次保存的设置。请稍后重试。"
       }
     },
@@ -1514,7 +1537,7 @@
         "terms": "安装 添加 新建 install add new",
         "description": "安装后会显示在上方，可随时登录。"
       },
-      "this_mac": "此 Mac",
+      "this_mac": "此电脑",
       "couldnt_update": "无法更新 {name}",
       "cant_reach": "Zerun 无法连接到 {device}。",
       "try_later": "请稍后重试。",
@@ -1621,7 +1644,18 @@
         },
         "remove_row_description": "使用过它的对话会保留。"
       },
-      "couldnt_switch": "无法切换账户"
+      "couldnt_switch": "无法切换账户",
+      "cloud": "云端",
+      "cloud_keys": {
+        "title": "API 密钥",
+        "section_description": "云端也可以使用 API 密钥，而不必登录。在此保存的密钥会成为该代理在每台云端机器上使用的账户，从下一轮开始生效。",
+        "anthropic": "Anthropic API 密钥",
+        "openai": "OpenAI API 密钥",
+        "description": "用于云端的 {agent}。保存在 Zerun 的密钥库中，不会存放在这台电脑上。",
+        "placeholder": "粘贴密钥",
+        "save": "保存",
+        "saved": "云端的 {agent} 现在使用此密钥"
+      }
     },
     "devices": {
       "title": "设备",
@@ -1781,7 +1815,7 @@
       "version": {
         "label": "版本",
         "terms": "引擎 版本 构建 关于 zeron engine version build about",
-        "description": "此 Mac 上的引擎。"
+        "description": "此电脑上的引擎。"
       },
       "updates": {
         "label": "检查更新",
@@ -1816,10 +1850,10 @@
         "updated_running": "引擎正在运行新版本。",
         "updated_starting": "引擎正在以新版本重新启动。",
         "unmanaged": "从 Zerun App 更新",
-        "unmanaged_line": "此 Mac 的引擎随 Zerun App 安装，由该 App 更新：打开 Zerun 并选择“检查更新”。",
+        "unmanaged_line": "此电脑的引擎随 Zerun App 安装，由该 App 更新：打开 Zerun 并选择“检查更新”。",
         "check_again": "再次检查",
         "couldnt_check": "无法检查更新",
-        "offline_line": "此 Mac 似乎处于离线状态。",
+        "offline_line": "此电脑似乎处于离线状态。",
         "couldnt_update": "无法更新",
         "failed_line": "出错了。请稍后重试。",
         "not_connected": "未连接到引擎",
@@ -1862,7 +1896,7 @@
         "description": "用于问题报告的上述版本和构建信息。",
         "copied": "已拷贝版本信息"
       },
-      "updates_description": "更新会应用到此 Mac 上的引擎，与 Zerun App 的更新一样。此 App 尚未打包，因此不会在此更新。"
+      "updates_description": "更新会应用到此电脑上的引擎，与 Zerun App 的更新一样。此 App 尚未打包，因此不会在此更新。"
     },
     "archived": {
       "title": "已归档",
@@ -2115,7 +2149,7 @@
         "label": "登录身份",
         "terms": "电子邮件 地址 邮件 账户 组织 同步 email address mail account organization sync",
         "not_signed_in": "未登录",
-        "local": "会话保留在此 Mac 上。",
+        "local": "会话保留在此电脑上。",
         "org": "属于 {org}。你的会话会在所有设备间同步。",
         "sync": "你的会话会在所有设备间同步。"
       },
@@ -2134,9 +2168,9 @@
         "label": "退出登录",
         "terms": "退出登录 离开 账户 会话 log out logout leave account session",
         "busy": "正在退出登录…",
-        "description": "此 Mac 将停止同步，直到你重新登录。",
+        "description": "此电脑将停止同步，直到你重新登录。",
         "confirm_title": "退出登录 Zerun？",
-        "confirm_body": "你的会话会保留在账户中。此 Mac 上将重新打开设置流程。"
+        "confirm_body": "你的会话会保留在账户中。此电脑上将重新打开设置流程。"
       },
       "delete": {
         "label": "删除账户",
@@ -2176,7 +2210,7 @@
         "label": "签名密钥",
         "terms": "密钥 签名 插件 模板 安全 撤销 指纹 设备 keys signing plugins templates revoke fingerprint",
         "description": "你的设备使用这些密钥为你制作的插件和模板签名。如果有你不认识的密钥，请撤销它。",
-        "this_mac": "这台 Mac",
+        "this_mac": "这台电脑",
         "another_device": "其他设备",
         "new": "新",
         "added": "添加于 {date}",
@@ -2193,7 +2227,7 @@
     },
     "browser": {
       "title": "浏览器",
-      "description": "你登录的网站会在这台 Mac 上保持登录，每个账户分开保存。",
+      "description": "你登录的网站会在这台电脑上保持登录，每个账户分开保存。",
       "terms": "浏览器 网页 网站 链接 搜索引擎 主页 缩放 历史记录 Cookie 登录 检查器 browser",
       "search_engine": {
         "label": "搜索引擎",
@@ -2224,7 +2258,7 @@
       },
       "history": "历史记录",
       "history_terms": "历史记录 访问过的页面 最近 history",
-      "history_description": "你访问过的页面，按账户保存在这台 Mac 上。",
+      "history_description": "你访问过的页面，按账户保存在这台电脑上。",
       "keep_history": {
         "label": "保留历史记录",
         "description": "方便你再次找到某个页面。关闭后，不再保留新的页面。",
@@ -2451,12 +2485,14 @@
             "too_large": "图片太大。",
             "open": "无法打开该图片，请选择 PNG 或 JPEG。",
             "save": "无法保存项目，请重试。",
-            "save_outdated": "这台 Mac 上的 Zerun 需要更新才能保存项目图标。更新后再保存。",
+            "save_outdated": "这台电脑上的 Zerun 需要更新才能保存项目图标。更新后再保存。",
             "save_gone": "此项目已在另一台设备上被移除。",
             "save_offline": "这台电脑上的 Zerun 没有响应，请稍后再试。",
             "unavailable": "你的账户暂时还不能使用图片图标。请先选择表情符号或颜色。"
           }
-        }
+        },
+        "removing_where": "选择要从哪些设备移除“{name}”。这些设备上的会话将被永久删除。此操作无法撤销。",
+        "checkout": "{n, plural, other {# 个会话}} · {path}"
       },
       "session": {
         "new_session": "新建会话",
@@ -2529,7 +2565,8 @@
         "shell_close": "关闭",
         "shell_reload": "重新启动 Zerun",
         "shell_reload_interface": "重新加载界面",
-        "shell_dictate": "按住听写"
+        "shell_dictate": "按住听写",
+        "shell_check_updates": "检查更新…"
       },
       "group": {
         "sessions": "会话",
@@ -2574,7 +2611,10 @@
       "search": "搜索会话、命令和文件…",
       "app": "应用",
       "reload_zeron": "重新启动 Zerun",
-      "reload_interface": "重新加载界面"
+      "reload_interface": "重新加载界面",
+      "commands": "命令",
+      "run": "运行",
+      "default_interface": "使用 Zerun v3"
     },
     "add_project": {
       "something_went_wrong": "出错了",
@@ -2689,7 +2729,7 @@
         "custom": "自定义…",
         "custom_title": "休眠至",
         "failed": "无法让此会话休眠",
-        "needs_update": "此会话所在设备上的 Zeron 需要更新才能使用休眠。",
+        "needs_update": "此会话所在设备上的 Zerun 需要更新才能使用休眠。",
         "until_when": "{date}（{day}）{time}"
       },
       "stop_waiting": "停止等待",
@@ -2731,7 +2771,7 @@
         "description": "你的对话和智能体会在所有设备间同步。"
       },
       "local": {
-        "label": "对话保留在此 Mac 上",
+        "label": "对话保留在此电脑上",
         "description": "随时登录，将对话同步到其他设备。"
       },
       "open_org": "打开{org}",
@@ -2798,13 +2838,14 @@
     "providers": {
       "title_install": "安装智能体",
       "title": "你的智能体",
-      "looking": "正在此 Mac 上查找编码智能体…",
+      "looking": "正在此电脑上查找编码智能体…",
       "unavailable": "Zerun 运行你已经使用的编码智能体。",
-      "none": "此 Mac 上还没有智能体。请安装一个以继续。",
-      "found": "{n, plural, other {在此 Mac 上找到 # 个智能体。请登录你想使用的智能体。}}",
-      "this_mac": "此 Mac"
+      "none": "此电脑上还没有智能体。请安装一个以继续。",
+      "found": "{n, plural, other {在此电脑上找到 # 个智能体。请登录你想使用的智能体。}}",
+      "this_mac": "此电脑"
     },
-    "try_again": "重试"
+    "try_again": "重试",
+    "not_now": "以后再说"
   },
   "intro": {
     "headline": {
@@ -2955,7 +2996,8 @@
         "appshot": "应用截图",
         "image": "图片",
         "file": "文件"
-      }
+      },
+      "account_not_switched": "无法切换账号"
     },
     "dictation": {
       "failed": "听写已停止",
@@ -3202,7 +3244,8 @@
         "show": "在访达中显示",
         "dismiss": "关闭 {name}",
         "saving": "正在保存…"
-      }
+      },
+      "dismiss_error": "关闭"
     },
     "browser_api": {
       "empty": "输入网站或 localhost 地址。",
@@ -3261,7 +3304,11 @@
       "port_copy": "复制网址",
       "port_copied": "网址已复制",
       "port_closed": "已关闭",
-      "previews_unavailable": "本地预览暂时不可用"
+      "previews_unavailable": "本地预览暂时不可用",
+      "working_first": "进行中的优先",
+      "mark_all_read": "将已完成的全部标为已读",
+      "new_side_in": "在 {name} 中新建侧边对话",
+      "new_side_on": "在 {name} 上新建侧边对话"
     }
   },
   "files": {
@@ -3462,7 +3509,11 @@
         },
         "compose": {
           "title": "在消息输入框中填写文本",
-          "detail": "仍由你来发送。"
+          "detail": "它可以补充或替换你写的内容，仍由你来发送。"
+        },
+        "draft": {
+          "title": "读取你在消息输入框中输入的内容，并可暂存",
+          "detail": "它能在你发送前看到你在任意聊天中输入的文字，也能把草稿暂时取走、稍后放回。它不会替你发送。"
         },
         "network": {
           "title": "连接互联网",
@@ -3489,13 +3540,14 @@
           "title": "在你的设备之间发送数据"
         },
         "commands": {
-          "title": "以你的身份在此 Mac 上运行 {list}",
+          "title": "以你的身份在此电脑上运行 {list}",
           "title_on": "以你的身份在 {device} 上运行 {list}",
           "detail": "它可以使用你的登录身份执行 {list} 能做的任何操作。",
-          "detail_anything": "这些程序可以使用你的登录做你能做的任何事。"
+          "detail_anything": "这些程序可以使用你的登录做你能做的任何事。",
+          "detail_each": "它们以你的身份运行，使用你的登录。"
         },
         "native": {
-          "title": "在此 Mac 上为你的智能体运行它自己的程序",
+          "title": "在此电脑上为你的智能体运行它自己的程序",
           "title_on": "在 {device} 上为你的智能体运行它自己的程序",
           "detail": "它可以执行你能做的任何操作。"
         },
@@ -3546,12 +3598,13 @@
       },
       "can_anything": "{name}：可以做你能做的任何事",
       "any_site": "互联网上的任何网站",
-      "near_host": "{host}：这台 Mac 或你的网络",
+      "near_host": "{host}：这台电脑或你的网络",
       "details": {
         "changes": "它更改的 Zerun 部分",
         "replaces": "它替换的界面",
         "changes_since": "自你允许以来还更改"
-      }
+      },
+      "full_control": "它可以运行 {name}，这等于完全控制你的电脑。"
     },
     "page": {
       "title": "插件",

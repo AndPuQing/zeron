@@ -5,7 +5,7 @@
 -- from nine tenths), and the card itself.
 --
 --   context_usage.fraction(u)  0 to 1, or nil while it can't be said
---   context_usage.lines(u)     the card's two lines, as Zerun writes them
+--   context_usage.lines(u)     the card's two lines, as Zeron writes them
 --   context_usage.ink(f)       the ring's and the bar's ink at `f`
 --   Card { usage = fn }        the card (ds/hover_card's), "Context window"
 --                              and how full at its head, a slim bar, the
@@ -51,6 +51,31 @@ end
 
 function M.ink(f: number): string
 	return if f >= 0.9 then "$danger" elseif f >= 0.75 then "$warning" else "$text.secondary"
+end
+
+-- The ring itself: a faint track under an arc from twelve o'clock, in the
+-- ink of how full it is, the chips' glyph size (12 across its ink, so it
+-- reads as one of them rather than a size up).
+function M.Ring(props: { fraction: () -> number, ink: ((f: number) -> string)? }): Node
+	local ink = props.ink or M.ink
+	return ui.canvas {
+		w = 12,
+		h = 12,
+		shrink = 0,
+		draw = function(c, w, h)
+			local f = props.fraction()
+			c:stroke(ui.path():arc(w / 2, h / 2, 5.25, 0, 360), "$border.strong", 1.5)
+			if f > 0 then
+				c:stroke(ui.path():arc(w / 2, h / 2, 5.25, -90, 360 * f), ink(f), 1.5, { cap = "round" })
+			end
+		end,
+	}
+end
+
+-- A plan's usage, as Zerun's account ring reads it: the accent, so it reads
+-- apart from the context ring; amber from four fifths, red from 95%.
+function M.usage_ink(f: number): string
+	return if f >= 0.95 then "$danger" elseif f >= 0.8 then "$warning" else "$accent"
 end
 
 local function tone(f: number): progress.Tone

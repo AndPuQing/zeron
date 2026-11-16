@@ -183,9 +183,9 @@ local function looping(props: ContainerProps, start: (el: Element) -> Animation,
 				playing = true
 				M.in_phase(start(el), period)
 			end
-		elseif held.anim then
-			held.anim:cancel()
-			held.anim = nil
+		elseif playing then
+			playing = false
+			anime.utils.remove(el)
 		end
 	end
 	return ui.div(props)

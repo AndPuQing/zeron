@@ -36,12 +36,14 @@ mod chat;
 mod cloud;
 mod dev;
 mod dictation;
+mod desktop_blur;
 mod completion;
 mod engine;
 mod engine_update;
 mod editor_menu;
 mod favicons;
 mod files;
+mod fonts;
 mod github;
 mod haptics;
 mod heap;
@@ -51,6 +53,7 @@ mod links;
 mod pasted;
 mod math;
 mod menu_bar;
+mod mermaid;
 mod plugins;
 mod previews;
 mod projects;
@@ -63,7 +66,9 @@ mod system_sound;
 mod terminal;
 mod tool_details;
 mod themes;
+mod transparency;
 mod visuals;
+mod updates;
 #[cfg(test)]
 mod audit_shots;
 #[cfg(test)]
@@ -330,6 +335,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
     }
+    // A clicked banner: Zerun forward on its chat (src/links.rs).
+    links::take_banner_clicks();
     let options = match screen {
         Screen::Intro => intro_window(),
         Screen::Onboarding => onboarding_window(),
@@ -714,7 +721,12 @@ fn script_host_at(cx: &mut WindowContext, path: PathBuf, entry: &str) -> ScriptH
         })
     });
     // LaTeX math laid out for `ds/math` (src/math.rs): every window.
+    transparency::install(cx, &host);
+    desktop_blur::install(cx, &host);
     math::install(&host);
+    mermaid::install(&host);
+    // System font families for the Appearance pickers.
+    fonts::install(&host);
     // A slider's detents tapped under the trackpad (src/haptics.rs).
     haptics::install(&host);
     // The engine's account (src/auth.rs), this Mac's agents (src/agents.rs)
@@ -729,6 +741,8 @@ fn script_host_at(cx: &mut WindowContext, path: PathBuf, entry: &str) -> ScriptH
         cloud::install(cx, &host);
         // The sessions behind the main window (src/sessions.rs).
         sessions::install(cx, &host);
+        // Agent and application updates across connected devices.
+        updates::install(&host);
         // Adding a project, removing one (src/projects.rs).
         projects::install(&host);
         // A session's files (src/files.rs): the files pane and editor.
