@@ -159,6 +159,9 @@ struct RunHandle {
     voice: Option<zeron_harness::codex::realtime::RealtimeHandle>,
     voice_active: Arc<VoiceActivity>,
     run_id: String,
+    /// Messages and assistant segments in the unfinished turn. A steer splits
+    /// the transcript without making a Stop aimed at its earlier segment stale.
+    turn_entries: std::collections::HashSet<String>,
     steerable: bool,
     runtime_config: RuntimeConfig,
     steer_tx: mpsc::Sender<SteerMessage>,
@@ -741,6 +744,12 @@ impl SessionsEngine {
         lock(&self.inner.statuses)
             .get(chat_id)
             .is_some_and(is_active)
+    }
+
+    pub(crate) fn current_turn_contains(&self, chat_id: &str, entry_id: &str) -> bool {
+        lock(&self.inner.runs)
+            .get(chat_id)
+            .is_some_and(|run| run.turn_entries.contains(entry_id))
     }
 
     /// Whether the chat's live runtime reports background work (subagents,
@@ -1592,6 +1601,11 @@ impl SessionsEngine {
                 voice: (harness_id == HarnessId::Codex).then_some(voice_handle),
                 voice_active: voice_active.clone(),
                 run_id: run_id.clone(),
+                turn_entries: if idle {
+                    Default::default()
+                } else {
+                    [user_id.clone()].into()
+                },
                 steerable: harness.supports_steering(),
                 runtime_config: RuntimeConfig::new(harness_id, &request, harness.clone()),
                 steer_tx,
@@ -5129,7 +5143,17 @@ async fn drive_run(
 
     let mut final_completed_turn = None;
     let mut final_outcome = None;
+    let mut tracked_entry_id = None;
     let final_status = loop {
+        if idle_since.is_none() && tracked_entry_id.as_deref() != Some(entry_id.as_str()) {
+            if let Some(run) = lock(&inner.runs)
+                .get_mut(&chat_id)
+                .filter(|run| run.run_id == run_id)
+            {
+                run.turn_entries.insert(entry_id.clone());
+            }
+            tracked_entry_id = Some(entry_id.clone());
+        }
         let event: AgentEvent = if let Some(event) = prepared_events.pop_front() {
             event
         } else {
@@ -6035,9 +6059,15 @@ async fn drive_run(
             // The boundary confirms delivery of the oldest accepted steer —
             // retire its at-least-once ledger entry.
             let confirmed = lock(&inner.runs)
-                .get(&chat_id)
+                .get_mut(&chat_id)
                 .filter(|h| h.run_id == run_id)
-                .and_then(|h| lock(&h.routed_steers).pop_front());
+                .and_then(|h| {
+                    let confirmed = lock(&h.routed_steers).pop_front();
+                    if let Some(steer) = &confirmed {
+                        h.turn_entries.insert(steer.message_id.clone());
+                    }
+                    confirmed
+                });
             // Consumed: a steer carrying the fork history delivered it to
             // this runtime's provider session.
             if confirmed.is_some_and(|steer| steer.fork_history)
@@ -6111,6 +6141,13 @@ async fn drive_run(
         }
 
         if let AgentEvent::Done { status, .. } = &event {
+            tracked_entry_id = None;
+            if let Some(run) = lock(&inner.runs)
+                .get_mut(&chat_id)
+                .filter(|run| run.run_id == run_id)
+            {
+                run.turn_entries.clear();
+            }
             // A question still pending at turn end can never be legitimately
             // answered (its turn is over): drain the resolvers NOW, or a late
             // `respond_input` finds one, emits InputResolved, and un-parks

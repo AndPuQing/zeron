@@ -5763,7 +5763,10 @@ impl DocHost {
         let commands = handle.doc.read_commands()?;
         let messages = handle.doc.read_entries_shared().unwrap_or_default();
         let current_turn_id = messages.last().map(|m| m.id.clone());
-        let turn_is_past = |turn_id: &str| messages.iter().any(|m| m.id == turn_id);
+        let turn_is_past = |turn_id: &str| {
+            messages.iter().any(|m| m.id == turn_id)
+                && !sessions.current_turn_contains(chat_id, turn_id)
+        };
         let is_processed = |id: &str| self.inner.store.is_processed(id).unwrap_or(false);
         let disposition = evaluate_command(
             &entry,
@@ -6142,7 +6145,10 @@ impl DocHost {
             };
             let messages = handle.doc.read_entries_shared().unwrap_or_default();
             let current_turn_id = messages.last().map(|m| m.id.clone());
-            let turn_is_past = |turn_id: &str| messages.iter().any(|m| m.id == turn_id);
+            let turn_is_past = |turn_id: &str| {
+                messages.iter().any(|m| m.id == turn_id)
+                    && !sessions.current_turn_contains(&handle.chat_id, turn_id)
+            };
             let disposition = evaluate_command(
                 &entry,
                 &EvaluationContext {

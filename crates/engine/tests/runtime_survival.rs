@@ -974,6 +974,145 @@ async fn a_steer_sent_before_stop_is_cancelled_with_it() {
     rig.core.sessions.shutdown().await;
 }
 
+/// Both command transports distinguish transcript splits from completed turns.
+#[tokio::test]
+async fn stops_cover_steered_segments_but_do_not_cross_a_completed_turn() {
+    use zeron_doc::{CommandBasedOn, MessageRole, SessionCommandEntry, SessionCommandStatus};
+
+    for relayed in [false, true] {
+        for completed in [false, true] {
+            let rig = rig();
+            rig.core
+                .sessions
+                .dispatch(CHAT, HarnessId::Mock, request("hold: first"), None)
+                .await
+                .unwrap();
+            let handle = rig.core.doc_host.open(CHAT).unwrap();
+            wait_for(
+                || {
+                    handle.doc().read_entries().unwrap().iter().any(|entry| {
+                        entry.role == MessageRole::Assistant
+                            && entry.status == Some(MessageStatus::Streaming)
+                    })
+                },
+                "the first reply to stream",
+            )
+            .await;
+            let observed = handle
+                .doc()
+                .read_entries()
+                .unwrap()
+                .last()
+                .unwrap()
+                .id
+                .clone();
+            rig.core
+                .sessions
+                .dispatch(
+                    CHAT,
+                    HarnessId::Mock,
+                    request(if completed {
+                        "finish the steer"
+                    } else {
+                        "hold: steered"
+                    }),
+                    None,
+                )
+                .await
+                .unwrap();
+            if completed {
+                settle(&rig, 2).await;
+                rig.core
+                    .sessions
+                    .dispatch(CHAT, HarnessId::Mock, request("hold: later turn"), None)
+                    .await
+                    .unwrap();
+            }
+            wait_for(
+                || {
+                    rig.ledger.prompts.lock().unwrap().len() == if completed { 3 } else { 2 }
+                        && handle
+                            .doc()
+                            .read_entries()
+                            .unwrap()
+                            .last()
+                            .is_some_and(|entry| {
+                                entry.role == MessageRole::Assistant
+                                    && entry.status == Some(MessageStatus::Streaming)
+                            })
+                },
+                "the current reply to stream",
+            )
+            .await;
+            let stop = SessionCommandEntry {
+                id: "stop-observed-turn".into(),
+                payload: SessionCommandPayload::Interrupt {},
+                issued_by: "viewer".into(),
+                issued_at: chrono::Utc::now().timestamp_millis(),
+                based_on: Some(CommandBasedOn {
+                    turn_id: Some(observed),
+                    frontier: None,
+                }),
+                expires_at: None,
+                status: SessionCommandStatus::Pending,
+                resolution: None,
+            };
+            if relayed {
+                let outcome = rig
+                    .core
+                    .doc_host
+                    .ingest_relayed_command(CHAT, stop)
+                    .await
+                    .unwrap();
+                assert_eq!(outcome, if completed { "superseded" } else { "executed" });
+            } else {
+                handle.doc().queue_command(&stop).unwrap();
+                rig.core.doc_host.drain_commands(&handle).await;
+                wait_for(
+                    || {
+                        handle.doc().read_commands().unwrap().iter().any(|command| {
+                            command.id == stop.id && command.status != SessionCommandStatus::Pending
+                        })
+                    },
+                    "the Stop outcome",
+                )
+                .await;
+                let commands = handle.doc().read_commands().unwrap();
+                assert_eq!(
+                    commands
+                        .iter()
+                        .find(|command| command.id == stop.id)
+                        .unwrap()
+                        .status,
+                    if completed {
+                        SessionCommandStatus::Superseded
+                    } else {
+                        SessionCommandStatus::Applied
+                    }
+                );
+            }
+            if completed {
+                assert_eq!(
+                    rig.ledger.kills.load(Ordering::SeqCst),
+                    0,
+                    "the later turn survives"
+                );
+                assert_eq!(status(&rig.core), Some(SessionStatus::Working));
+            } else {
+                wait_for(
+                    || {
+                        rig.ledger.kills.load(Ordering::SeqCst) == 1
+                            && status(&rig.core) == Some(SessionStatus::Idle)
+                    },
+                    "the steered turn to stop",
+                )
+                .await;
+            }
+            rig.core.sessions.shutdown().await;
+        }
+    }
+}
+
 /// The idle reaper spares a parked runtime holding background work, so the
 /// user's Stop must reach it and end that work.
 #[tokio::test]
