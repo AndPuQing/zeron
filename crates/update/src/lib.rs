@@ -1384,10 +1384,9 @@ fn on_cloud() -> bool {
     on_cloud_platform(std::env::var("ZERON_DEVICE_PLATFORM").ok().as_deref())
 }
 
-/// Release files a Cloud machine never runs: the desktop app's background
-/// engine (78 MB). A Cloud machine runs `zeron headless`, which links the
-/// engine, and its disk is copied back in on every wake.
-pub const CLOUD_UNUSED_FILES: &[&str] = &["zerun-engine"];
+/// Keep every release file on Cloud, including `zerun-engine`: desktop
+/// entry points may delegate headless work to their matching sibling engine.
+pub const CLOUD_UNUSED_FILES: &[&str] = &[];
 
 /// Remove [`CLOUD_UNUSED_FILES`] from the version folder `dir`.
 pub fn strip_cloud_unused(dir: &Path) {
@@ -4048,9 +4047,10 @@ mod tests {
         assert_eq!(folders(&app_root), ["0.2.10", "0.2.11", "0.2.12", "current"]);
     }
 
+    /// A Cloud machine keeps the matching sibling engine in every version.
     #[cfg(unix)]
     #[test]
-    fn a_cloud_machine_keeps_no_desktop_engine() {
+    fn a_cloud_machine_keeps_the_engine_its_headless_runs() {
         let tmp = tempfile::tempdir().unwrap();
         let app_root = tmp.path().join("app");
         versions_installed(&app_root, &["0.2.10", "0.2.11"]);
@@ -4064,7 +4064,7 @@ mod tests {
         strip_unused_from_versions(&app_root);
 
         for ver in ["0.2.10", "0.2.11"] {
-            assert!(!app_root.join(ver).join("zerun-engine").exists(), "{ver}");
+            assert!(app_root.join(ver).join("zerun-engine").exists(), "{ver}");
             assert!(app_root.join(ver).join("zerun").exists(), "{ver}");
         }
         assert!(app_root.join("notes").join("zerun-engine").exists());
@@ -4191,7 +4191,7 @@ mod tests {
     #[test]
     fn a_bundle_s_engine_version_is_its_key_else_the_app_s() {
         let tmp = tempfile::tempdir().unwrap();
-        let bundle = tmp.path().join("Zeron.app");
+        let bundle = tmp.path().join("Zerun.app");
         std::fs::create_dir_all(bundle.join("Contents")).unwrap();
         let write = |body: &str| std::fs::write(bundle.join("Contents/Info.plist"), body).unwrap();
         // A beta: the app is 0.2.136-beta.1, its engine stable's 0.2.135. An
@@ -4641,11 +4641,10 @@ mod tests {
         assert_eq!(staged, broken);
     }
 
-    /// The release carries the desktop's background engine; a Cloud machine
-    /// stages the release without it, anywhere else keeps it.
+    /// A Cloud machine stages the complete release, including its matching engine.
     #[cfg(unix)]
     #[tokio::test]
-    async fn a_cloud_machine_stages_a_release_without_the_desktop_engine() {
+    async fn a_cloud_machine_stages_a_release_with_its_engine() {
         let tmp = tempfile::tempdir().unwrap();
         let pkg = tmp.path().join("pkg");
         std::fs::create_dir_all(pkg.join("zerun-pkg")).unwrap();
@@ -4662,7 +4661,7 @@ mod tests {
             .into(),
             ..Manifest::default()
         };
-        for (cloud, kept) in [(true, false), (false, true)] {
+        for (cloud, kept) in [(true, true), (false, true)] {
             let app_root = tmp.path().join(format!("app-{cloud}"));
             std::fs::create_dir_all(&app_root).unwrap();
             let (base, server) = serve_forever(bytes.clone()).await;

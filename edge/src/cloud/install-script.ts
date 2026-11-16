@@ -48,6 +48,56 @@ ExecStart=/bin/systemctl start --no-block ${CLOUD_UNIT_NAME}
 WantedBy=multi-user.target
 `;
 
+/**
+ * Restores a missing sibling engine from the installed release. Entry points
+ * that delegate headless work need an engine with the same version. The unit
+ * runs this before each start; a failed repair never prevents a start attempt.
+ * Downloads only when the engine is missing, from the configured release feed.
+ */
+export const REPAIR_ENGINE_SCRIPT = `#!/bin/sh
+# Zerun Cloud: put back a missing zerun-engine (edge/src/cloud/install-script.ts).
+home="\${ZERON_CLOUD_HOME:-$HOME}"
+cur="$home/.zerun/app/current"
+[ -x "$cur/zerun" ] || exit 0
+[ -f "$cur/zerun-engine" ] && exit 0
+dest="$(readlink -f "$cur")" || exit 0
+ver="$(basename "$dest")"
+case "$ver" in
+  "" | *[!A-Za-z0-9._+-]*) exit 0 ;;
+esac
+case "$(uname -m)" in
+  x86_64 | amd64) arch=x86_64 ;;
+  aarch64 | arm64) arch=aarch64 ;;
+  *) exit 0 ;;
+esac
+[ -n "\${ZERON_EDGE_URL:-}" ] || exit 0
+tmp="$(mktemp -d "$home/.zerun/.repair.XXXXXX")" || exit 0
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL --retry 3 --connect-timeout 15 --speed-limit 1048576 --speed-time 15 \\
+  -o "$tmp/zerun.tar.gz" "$ZERON_EDGE_URL/releases/zerun-$ver-linux-$arch.tar.gz" || exit 0
+tar -xzf "$tmp/zerun.tar.gz" -C "$tmp" "zerun-$ver-linux-$arch/zerun-engine" || exit 0
+chmod 755 "$tmp/zerun-$ver-linux-$arch/zerun-engine"
+mv -f "$tmp/zerun-$ver-linux-$arch/zerun-engine" "$dest/zerun-engine"
+echo "zerun cloud: put back zerun-engine for $ver"
+`;
+
+/**
+ * Writes the repair script (`REPAIR_ENGINE_SCRIPT`) to `~/.zerun/repair-engine`
+ * and a drop-in running it before the engine's unit starts, each only when it
+ * differs, reloading systemd only then. Run by the installer and by every
+ * wake's first command, so machines set up before it get it as they wake.
+ * Best effort: a failure here never stops what follows.
+ * `ZERON_CLOUD_HOME` / `ZERON_CLOUD_UNIT_DIR` exist for the unit tier.
+ */
+export const ENSURE_REPAIR =
+  `{ h="\${ZERON_CLOUD_HOME:-$HOME}"; r="$h/.zerun/repair-engine"; ` +
+  `dd="\${ZERON_CLOUD_UNIT_DIR:-/etc/systemd/system}/${CLOUD_UNIT_NAME}.d"; ` +
+  `t="$(mktemp)" && printf %s '${btoa(REPAIR_ENGINE_SCRIPT)}' | base64 -d >"$t" && ` +
+  `{ cmp -s "$t" "$r" || install -m 0700 "$t" "$r"; } && ` +
+  `printf '[Service]\\nExecStartPre=-%s\\n' "$r" >"$t" && ` +
+  `{ cmp -s "$t" "$dd/repair-engine.conf" || { sudo mkdir -p "$dd" && sudo install -m 0644 "$t" "$dd/repair-engine.conf" && sudo systemctl daemon-reload; }; }; ` +
+  `rm -f "$t"; } >/dev/null 2>&1 || true`;
+
 export const CLOUD_INSTALL_SCRIPT = `#!/bin/sh
 # Zerun Cloud engine installer (edge/src/cloud/install-script.ts).
 # POSIX sh, idempotent, provider-neutral.
@@ -85,7 +135,8 @@ esac
 
 restart=0
 dest="$app/$ver"
-if [ -x "$dest/zerun" ]; then
+# Require the complete release, including its matching sibling engine.
+if [ -x "$dest/zerun" ] && [ -f "$dest/zerun-engine" ]; then
   echo "zerun $ver already installed"
 else
   tmp="$(mktemp -d "$data/.download.XXXXXX")"
@@ -99,10 +150,7 @@ else
   tar -xzf "$tmp/zerun.tar.gz" -C "$tmp/unpacked" --strip-components=1
   # Probe before switching: a binary that cannot start must not replace one that can.
   "$tmp/unpacked/zerun" --version >/dev/null
-  # The desktop app's background engine (78 MB): never run here (the unit runs
-  # \`zerun headless\`, which links the engine), and every byte on this disk is
-  # copied back in on every wake. The engine's updater leaves it out too.
-  rm -f "$tmp/unpacked/zerun-engine"
+  # Keep the matching engine for entry points that delegate headless work.
   rm -rf "$dest"
   mv "$tmp/unpacked" "$dest"
 fi
@@ -172,6 +220,8 @@ else
   rm -f "$boot_new"
 fi
 
+# A zerun-engine an update leaves out is put back before each start.
+${ENSURE_REPAIR}
 sudo systemctl daemon-reload
 sudo systemctl enable ${CLOUD_UNIT_NAME} ${CLOUD_BOOT_UNIT_NAME} >/dev/null
 sudo systemctl start ${CLOUD_BOOT_UNIT_NAME}
@@ -253,6 +303,9 @@ export const RESTART_ENGINE_COMMAND = `sudo systemctl restart ${CLOUD_UNIT_NAME}
  * systemd hasn't read yet gets one reload. `--no-block` answers at once (the
  * engine's first token says it's up). Idempotent: a no-op when it's running. */
 export const START_ENGINE_COMMAND =
+  // (First, the repair of a missing zerun-engine before each start, for
+  // machines set up before it: a no-op once it's there.)
+  `${ENSURE_REPAIR}; ` +
   `sudo systemctl start --no-block ${CLOUD_UNIT_NAME} || ` +
   `{ sudo systemctl daemon-reload; sudo systemctl start --no-block ${CLOUD_UNIT_NAME}; }`;
 

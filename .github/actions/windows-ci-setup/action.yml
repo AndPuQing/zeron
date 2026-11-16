@@ -90,3 +90,11 @@ runs:
         # Workspace crates are rebuilt on every change anyway and are cheap at
         # opt-level 0, so keep them out of the cache.
         cache-workspace-crates: false
+
+    - name: Prepare ONNX Runtime DLL output
+      shell: pwsh
+      # ort-sys copies runtime DLLs into examples even when none are built.
+      run: |
+        $target = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).target_directory
+        if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
+        New-Item -ItemType Directory -Force -Path (Join-Path $target 'release/examples') | Out-Null

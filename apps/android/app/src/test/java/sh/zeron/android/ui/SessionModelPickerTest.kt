@@ -10,6 +10,7 @@ class SessionModelPickerTest {
         "chat", 0uL, "Chat", HostInfo("host", "Computer", true, HostCapabilities(true, true, true, true, true, true, true, true)),
         LiveStatus(ChatIndicator.IDLE, false, null, false, false), emptyList(), emptyList(), null, false,
         RoomState(true, null, false), null, null, null, null, null,
+        transcriptLoad = TranscriptLoad.READY,
     )
 
     @Test fun changingAgentClearsProviderSpecificOptionsButKeepsPermissions() {

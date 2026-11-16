@@ -447,7 +447,7 @@ mod versioned {
         fn install_old(&self, versions: &[&str]) {
             for version in versions {
                 std::fs::create_dir_all(self.app.join(version)).unwrap();
-                std::fs::write(self.app.join(version).join("zeron"), version).unwrap();
+                std::fs::write(self.app.join(version).join("zerun"), version).unwrap();
             }
         }
 
@@ -489,20 +489,17 @@ mod versioned {
             let mut rig = Rig::new("ok");
             rig.platform = platform;
             rig.install_old(&["0.8.0", "0.9.0"]);
-            // The desktop's background engine, as the release ships it.
+            // The engine `zerun headless` runs, as the release ships it.
             for version in ["1.0.0", "2.0.0"] {
-                std::fs::write(rig.app.join(version).join("zeron-engine"), "desktop").unwrap();
+                std::fs::write(rig.app.join(version).join("zerun-engine"), "desktop").unwrap();
             }
             let id = rig.request(Rig::service(), 60);
             rig.run_until_settled();
             rig.assert_updated(&id);
             rig.app_settles_to(expected);
-            // A Cloud machine never runs it, and copies it back in on every wake.
-            assert_eq!(
-                rig.app.join("2.0.0/zeron-engine").exists(),
-                platform.is_none(),
-                "platform {platform:?}"
-            );
+            // Kept everywhere, Cloud too: `zerun headless` runs it (a Cloud
+            // machine once left it out, and never came online).
+            assert!(rig.app.join("2.0.0/zerun-engine").exists(), "platform {platform:?}");
         }
     }
 
@@ -565,7 +562,7 @@ mod versioned {
         assert!(reason.ends_with("will try 2.0.0 again."), "{reason}");
         assert_eq!(zeron_update::boot_skip_reason(&rig.data, "2.0.0", "1.0.0"), None);
         // Kept for the next try, unlike a release it gave up on.
-        assert!(rig.app.join("2.0.0").join("zeron").exists());
+        assert!(rig.app.join("2.0.0").join("zerun").exists());
     }
 
     /// A trial that crashes says what it said, so a rollback found later can be

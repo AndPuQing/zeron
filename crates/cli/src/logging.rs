@@ -319,7 +319,7 @@ mod rotating_log_tests {
     #[test]
     fn rotating_again_keeps_the_log_before_too() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeron-headless.log");
+        let path = dir.path().join("zerun-headless.log");
         let file = std::fs::File::create(&path).unwrap();
         let log = RotatingLog::new(file, path.clone(), 10);
         let mut writer = &log;
@@ -328,9 +328,9 @@ mod rotating_log_tests {
         writer.write_all(b"third\n").unwrap();
         writer.flush().unwrap();
         let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
-        assert_eq!(read("zeron-headless.log"), "third\n");
-        assert_eq!(read("zeron-headless.log.old"), "second----\n");
-        assert_eq!(read("zeron-headless.log.old.2"), "first-----\n");
+        assert_eq!(read("zerun-headless.log"), "third\n");
+        assert_eq!(read("zerun-headless.log.old"), "second----\n");
+        assert_eq!(read("zerun-headless.log.old.2"), "first-----\n");
     }
 }
 
@@ -355,13 +355,13 @@ mod log_history_tests {
     #[test]
     fn several_launches_back_are_kept_newest_first() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeron-headless.log");
+        let path = dir.path().join("zerun-headless.log");
         for n in 1..=5 {
             launch(&path, &format!("launch {n}\n"), 10, 1 << 20);
         }
         assert_eq!(read(&path).as_deref(), Some("launch 5\n"));
         assert_eq!(
-            dir.path().join("zeron-headless.log.old"),
+            dir.path().join("zerun-headless.log.old"),
             previous_log(&path, 1)
         );
         for (generation, n) in [(1, 4), (2, 3), (3, 2), (4, 1)] {
@@ -377,7 +377,7 @@ mod log_history_tests {
     #[test]
     fn only_so_many_are_kept() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeron-headless.log");
+        let path = dir.path().join("zerun-headless.log");
         for n in 1..=7 {
             launch(&path, &format!("launch {n}\n"), 3, 1 << 20);
         }
@@ -391,7 +391,7 @@ mod log_history_tests {
     #[test]
     fn the_oldest_go_once_they_weigh_too_much_but_the_last_one_stays() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("zeron-headless.log");
+        let path = dir.path().join("zerun-headless.log");
         launch(&path, &"a".repeat(40), 10, 100);
         launch(&path, &"b".repeat(40), 10, 100);
         launch(&path, &"c".repeat(40), 10, 100);
@@ -449,9 +449,9 @@ mod log_file_tests {
             writeln!(file, "launch {n}").unwrap();
         }
         let read = |name: &str| std::fs::read_to_string(dir.join(name)).unwrap();
-        assert_eq!(read("zeron-headless.log"), "launch 3\n");
-        assert_eq!(read("zeron-headless.log.old"), "launch 2\n");
-        assert_eq!(read("zeron-headless.log.old.2"), "launch 1\n");
+        assert_eq!(read("zerun-headless.log"), "launch 3\n");
+        assert_eq!(read("zerun-headless.log.old"), "launch 2\n");
+        assert_eq!(read("zerun-headless.log.old.2"), "launch 1\n");
     }
 }
 
