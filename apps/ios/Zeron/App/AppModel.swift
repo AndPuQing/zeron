@@ -292,14 +292,12 @@ final class AppModel {
         }
     }
 
-    /// Relaying is opt-in for local protocol development. Installed builds use stored logs.
+    /// Advertise relay support by default; the room decides whether a chat uses it.
     static var runsRelayLayer: Bool {
         #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        return args.contains("-relay-layer") && !args.contains("-no-relay-layer")
-        #else
-        return false
+        if ProcessInfo.processInfo.arguments.contains("-no-relay-layer") { return false }
         #endif
+        return true
     }
 
     /// `-edge <url>` points at a local `wrangler dev` edge; otherwise production.

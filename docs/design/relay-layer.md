@@ -1,9 +1,10 @@
 # Chat relay protocol
 
-The generation-3 relay implementation is available for development. It remains
-disabled by default in this fork: `ClientConfig::relay_layer` is false and
-`CHAT_RELAY_LAYER` is empty. Mobile builds also require explicit debug opt-in.
-Existing clients continue to use stored logs.
+The generation-3 relay implementation is enabled by default on the edge
+(`CHAT_RELAY_LAYER=1`), in the engine, and in iOS and Android builds. A chat
+uses it only after the room, host and account clients negotiate support.
+Older clients and rooms without relay support continue to use stored logs.
+Other consumers of `ClientConfig` must explicitly enable `relay_layer`.
 
 ## Roles and negotiation
 

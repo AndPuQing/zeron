@@ -93,8 +93,6 @@ data class LaunchOptions(
     val edge: String? = null,
     /** `--ez no-relay-layer true`: behave as a build without the relay layer does, an old phone in an account of new devices (debuggable builds). */
     val noRelayLayer: Boolean = false,
-    /** Opt-in for local relay protocol development (debuggable builds). */
-    val relayLayer: Boolean = false,
     /** `--es send-on-open <text>`: with `route chat:<id>`, send this once the session is open, for rigs (debuggable builds). */
     val sendOnOpen: String? = null,
 )
@@ -317,7 +315,7 @@ class AppModel(private val app: Application) {
             appVersion = app.packageManager.getPackageInfo(app.packageName, 0).versionName ?: "0",
             // Not behind a remote flag: rooms have to hear this from the build for the 14 days
             // before any engine flips (docs/design/relay-mobile.md). The room's answer decides the rest.
-            relayLayer = launch.relayLayer && !launch.noRelayLayer,
+            relayLayer = !launch.noRelayLayer,
         )
         return try {
             val client = CoreClient(config, credentials, listener)

@@ -1,16 +1,18 @@
 # Mobile relay support
 
 The relay protocol is implemented by `crates/client` and `crates/sync`.
-Installed iOS and Android builds leave it disabled, as does the edge's
-`CHAT_RELAY_LAYER` setting. See [relay-layer.md](relay-layer.md) for negotiation
-and compatibility. Ordinary clients continue to use stored logs.
+Installed iOS and Android builds advertise relay support by default, and
+the edge offers it to all users with `CHAT_RELAY_LAYER=1`. See
+[relay-layer.md](relay-layer.md) for negotiation and compatibility. A chat
+stays on stored logs while any required participant lacks relay support.
 
 ## Local development
 
-A debug iOS build accepts `-relay-layer`. A debuggable Android build accepts
-`--ez relay-layer true`. `no-relay-layer` overrides either opt-in. The room
-must also enable the protocol; a client opt-in alone cannot migrate a chat.
-Use an isolated profile and a development edge when exercising negotiation.
+A debug iOS build accepts `-no-relay-layer`; a debuggable Android build
+accepts `--ez no-relay-layer true`. These switches simulate an older client
+without relay support. The room must also enable the protocol; advertising
+client support alone cannot migrate a chat. Use an isolated profile and a
+development edge when exercising negotiation.
 
 ## Platform responsibilities
 

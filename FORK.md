@@ -45,7 +45,6 @@ conflicts.
 | Windows Rust | CI and stable/Beta packaging use Rust 1.99.1 while `ort-sys` depends on its build-script directory layout; local Windows builds should use the same toolchain |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22`; WorkOS user directory migration `v6` without upstream Cloud migration `v5` |
-| Chat relay | Relay clients, durable inboxes and the offline queue are implemented but disabled by default (`ClientConfig::relay_layer` is false and `CHAT_RELAY_LAYER` is empty); normal clients continue to use the stored-log protocol |
 | Endpoints | shared `crates/cli`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
 | URL scheme | `zerun-dev` (OAuth callback, `zerun-dev://open/chat/...` deep links and Live Activity return links) |
 | Branding | display name `Zerun`; desktop executable `zerun`, macOS bundle `Zerun.app`, bundles `work.puqing.zerun[.ios]`; internal Rust package names remain `zeron-*` |

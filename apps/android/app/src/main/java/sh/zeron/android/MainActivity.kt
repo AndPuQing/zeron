@@ -52,7 +52,6 @@ class MainActivity : ComponentActivity() {
                 dev = rig?.getString("dev-user")?.let { user -> rig.getString("dev-org")?.let { org -> user to org } },
                 edge = rig?.getString("edge"),
                 noRelayLayer = rig?.getBoolean("no-relay-layer") == true,
-                relayLayer = rig?.getBoolean("relay-layer") == true,
                 sendOnOpen = rig?.getString("send-on-open"),
             ),
         )
