@@ -365,7 +365,10 @@ local function run(r: any)
 		-- A plugin's link (the host checked "links.open" and that it's a web
 		-- link): where Zerun opens links, never back into a plugin's tab (the
 		-- GitHub viewer's Open on GitHub is a pull request's link too).
-		require("@ds/links").open(r.value)
+		local url = r.value
+		require("@app/screens/shell/plugin_links").unclaimed(function()
+			require("@ds/links").open(url)
+		end)
 	elseif r.kind == "toast" then
 		ds.toast.show { title = r.title, body = r.value }
 	elseif r.kind == "plugin_failed" then

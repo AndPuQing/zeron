@@ -1234,6 +1234,7 @@ ui.command {
 -- (tests/plugin_links).
 for id, url in {
 	click_pr_link = "https://github.com/acme/atlas/pull/12/files",
+	click_other_pr_link = "https://github.com/acme/other/pull/12",
 	click_issue_link = "https://github.com/acme/atlas/issues/12",
 	click_other_link = "https://example.com/acme/atlas/pull/12",
 } do

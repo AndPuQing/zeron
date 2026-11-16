@@ -96,3 +96,9 @@ keeping them; the host menu always offers a way back to the default interface.
 
 On Linux, browser tabs need WebKitGTK 4.1 at runtime. Without it, the panel
 shows a placeholder for the page.
+
+When the GitHub plugin is enabled, pull request links in a chat open in its
+viewer beside the conversation. Its **Open pull request links in Zerun**
+setting controls this behavior. Choosing the external browser in
+**Settings → Browser → Browsing → Open links in** also bypasses the plugin.
+Other web links keep their normal destination.

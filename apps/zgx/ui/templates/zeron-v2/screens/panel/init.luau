@@ -505,13 +505,14 @@ function M.open_plugin_tab(session: any, tab: { [string]: any })
 	if not k then
 		return
 	end
-	-- The one already there: by `data.key` when the plugin gives one (a
-	-- commit, whose subject two may share), else by its title.
+	-- Reuse by `data.key`, else by a linked resource's address, else its title.
 	local key = if type(tab.data) == "table" then tab.data.key else nil
+	local address = if type(tab.data) == "table" then tab.data.url else nil
 	local found: string? = nil
 	for _, t in state.of(k).tabs do
 		if t.kind == "plugin" and t.plugin == tab.plugin and t.plugin_kind == tab.kind then
-			local same = if key ~= nil then type(t.data) == "table" and t.data.key == key else t.title == tab.title
+			local there = if type(t.data) == "table" then t.data else {}
+			local same = if key ~= nil then there.key == key elseif address ~= nil then there.url == address else t.title == tab.title
 			if same then
 				found = t.id
 			end
