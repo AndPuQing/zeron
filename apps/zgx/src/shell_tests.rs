@@ -455,7 +455,7 @@ fn a_sessions_copy_menu_copies_and_says_so() {
     app.frames(20);
     app.click("role:menuitem \"Zerun conversation link\"");
     assert!(
-        app.wait_until(|app| app.desktop.as_ref().unwrap().clipboard().starts_with("zeron://open/chat/a3?workspace=")),
+        app.wait_until(|app| app.desktop.as_ref().unwrap().clipboard().starts_with("zerun-dev://open/chat/a3?workspace=")),
         "the Zerun link: {:?}",
         app.desktop.as_ref().unwrap().clipboard()
     );
