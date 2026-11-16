@@ -717,9 +717,10 @@ describe("a machine that goes dark during a turn", () => {
     // Seen on a real machine: stopped seconds after the send.
     await call("POST", `/device/${s.deviceId}/nudge`, userBearer(u), { chatId: s.chatId });
     await boatControl("__set", { sandboxId: s.sandboxId, state: "archived" });
-    const before = Date.now();
     await withSession(u, s.chatId, (r) => {
-      expect(r.idleCheckAt!).toBeLessThanOrEqual(before + HEARTBEAT_STALE_MS);
+      // Compare timestamps from the same record, rather than the test worker's clock.
+      expect(r.lastNudgeAt).toBeDefined();
+      expect(r.idleCheckAt!).toBeLessThanOrEqual(r.lastNudgeAt! + HEARTBEAT_STALE_MS);
       r.lastHeartbeatAt = r.lastNudgeAt! - HEARTBEAT_STALE_MS;
       r.idleCheckAt = Date.now() - 1;
     });
