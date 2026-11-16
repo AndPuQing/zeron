@@ -2316,7 +2316,7 @@ impl EngineRpc {
                 }
                 if switching && !self.host_switches_providers(&chat_id) {
                     return Err(RpcError::Failed(
-                        "This chat's computer needs a newer Zeron to switch provider".into(),
+                        "This chat's computer needs a newer Zerun to switch provider".into(),
                     ));
                 }
                 self.voice.retire_chat(&chat_id);

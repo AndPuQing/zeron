@@ -42,7 +42,7 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Shown when a mutation is attempted on a runtime that can't use Cloud.
 pub(crate) const UNAVAILABLE: &str =
-    "Cloud needs a signed-in Zeron account with sync on. Sign in from Settings → Account.";
+    "Cloud needs a signed-in Zerun account with sync on. Sign in from Settings → Account.";
 
 fn http() -> reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
