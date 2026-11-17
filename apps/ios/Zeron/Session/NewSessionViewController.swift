@@ -12,6 +12,7 @@ struct NewSessionDraft: Equatable, Codable {
     var harness = "claude-code"
     var model: String?
     var effort: String?
+    var modelOptions: [String: String]?
     /// Run on its own Cloud machine (optional: drafts saved before Cloud).
     var cloud: Bool?
 }
@@ -50,6 +51,7 @@ struct ModelChoice: Equatable {
     let label: String
     let efforts: [String]
     var detail: String? = nil
+    var options: [ModelOption] = []
 }
 
 /// "Ask anything" → a composer-first canvas. Context is set with native menus
@@ -247,6 +249,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
                 draft.harness = first.harness
                 draft.model = nil
                 draft.effort = nil
+                draft.modelOptions = nil
             }
         } else {
             models = Self.modelCache[device] ?? Self.catalogModels()
@@ -267,7 +270,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
 
     private static func catalogModels() -> [ModelChoice] {
         fallbackHarnesses().filter(\.offered).flatMap { h in
-            fallbackModels(harness: h.id).map { ModelChoice(harness: h.id, harnessLabel: h.label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description) }
+            fallbackModels(harness: h.id).map { ModelChoice(harness: h.id, harnessLabel: h.label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description, options: $0.options) }
         }
     }
 
@@ -336,6 +339,9 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
         if let efforts = model?.efforts, !efforts.isEmpty {
             chips.append(ComposerChip(id: "effort", title: (draft.effort ?? efforts[efforts.count / 2]).capitalized, symbol: "gauge.with.dots.needle.67percent"))
         }
+        if let fast = FastModeOption.find(in: model?.options ?? []) {
+            chips.append(ComposerChip(id: "fast", title: fast.title(in: draft.modelOptions ?? [:]), symbol: "bolt.fill"))
+        }
         chips.append(ComposerChip(id: "permissions", title: accessModeLabel(draft.accessMode ?? "full-access"), symbol: "lock.shield"))
         chips.append(ComposerChip(id: "plan", title: draft.plan == true ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
         composer.chips = chips
@@ -344,6 +350,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             "host": { [weak self] in self?.hostMenu() },
             "branch": { [weak self] in self?.branchMenu() },
             "effort": { [weak self] in self?.effortMenu() },
+            "fast": { [weak self] in self?.fastMenu() },
             "permissions": { [weak self] in self?.executionMenu(plan: false) },
             "plan": { [weak self] in self?.executionMenu(plan: true) },
         ]
@@ -516,7 +523,12 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             UIMenu(children: [self?.executionMenu(plan: false), self?.executionMenu(plan: true)].compactMap { $0 })
         }) { [weak self] harness, model in
             guard let self else { return }
-            if harness != self.draft.harness { self.draft.effort = nil }
+            if harness != self.draft.harness {
+                self.draft.effort = nil
+                self.draft.modelOptions = nil
+            } else if (self.draft.model ?? self.draftModel?.id) != model.id, let fast = FastModeOption.find(in: self.draftModel?.options ?? []) {
+                self.draft.modelOptions?.removeValue(forKey: fast.id)
+            }
             self.draft.harness = harness
             self.draft.model = model.id
             self.refreshChips()
@@ -541,6 +553,17 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             case .access(let mode): self.draft.accessMode = mode
             case .plan(let enabled): self.draft.plan = enabled
             }
+            self.refreshChips()
+        }
+    }
+
+    private func fastMenu() -> UIMenu? {
+        guard let fast = FastModeOption.find(in: draftModel?.options ?? []) else { return nil }
+        let harness = draft.harness
+        let model = draft.model
+        return fast.menu(values: draft.modelOptions ?? [:]) { [weak self] enabled in
+            guard let self, self.draft.harness == harness, self.draft.model == model else { return }
+            self.draft.modelOptions = fast.applying(enabled, to: self.draft.modelOptions ?? [:])
             self.refreshChips()
         }
     }

@@ -8,13 +8,15 @@ internal fun canSwitchAgent(c: ComposerState) = c.host.capabilities.providerSwit
     !c.live.turnRunning && c.sendState != SendState.SENDING && c.sendState != SendState.QUEUED
 
 /** Preserve the current provider's settings, but never carry them into a different provider. */
-internal fun modelSelection(config: ChatConfig, harness: String, model: String): ChatConfig =
-    if (harness == config.harness) config.copy(model = model)
+internal fun modelSelection(config: ChatConfig, harness: String, model: String, previousFastOptionId: String? = null, previousModelId: String? = config.model): ChatConfig =
+    if (harness == config.harness) config.copy(model = model,
+        modelOptions = if (model != previousModelId && previousFastOptionId != null) config.modelOptions - previousFastOptionId else config.modelOptions)
     else config.copy(harness = harness, model = model, reasoning = null, modelOptions = emptyMap())
 
 @Composable
 internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: SessionRow?, onDismiss: () -> Unit) {
     val current = row?.harness ?: "claude-code"
+    val catalogs = remember(client, c.host.deviceId) { mutableStateMapOf<String, List<ModelInfo>>() }
     var policy by remember(c.chatId) { mutableStateOf(client.sessionConfig(c.chatId)) }
     var policyError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(c.revision) { policy = client.sessionConfig(c.chatId) }
@@ -32,7 +34,9 @@ internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: Sessi
     val available = listOf(current to (row?.harnessLabel ?: harnessLabel(current))) + providers.map { it.id to it.label }
     val tabs = available.map { (harness, label) ->
         ModelPickerTab(harness, label, footer = if (harness != current) "Your next message continues this chat with $label." else notice) {
-            client.listModels(c.host.deviceId, harness).map { ModelPickerRow(it.id, it.label, it.description) }
+            val models = client.listModels(c.host.deviceId, harness)
+            catalogs[harness] = models
+            models.map { ModelPickerRow(it.id, it.label, it.description) }
         }
     }
     ModelPickerSheet(tabs, current, row?.model, host = c.host.name ?: "This computer", hostIcon = ZIcons.Laptop,
@@ -55,6 +59,9 @@ internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: Sessi
             val latest = client.openSession(c.chatId).composer()
             check(latest.host.deviceId == c.host.deviceId) { "This chat has moved to a different computer. Reopen the model picker." }
             check(harness == config.harness || canSwitchAgent(latest)) { "Wait for the pending turn or message before switching agent." }
-            client.setSessionConfig(c.chatId, modelSelection(config, harness, picked.id))
+            val previousModels = catalogs[config.harness].orEmpty()
+            val previousModel = if (config.model == null) previousModels.firstOrNull() else previousModels.firstOrNull { it.id == config.model }
+            val previousFast = FastModeOption.find(previousModel?.options.orEmpty())?.id
+            client.setSessionConfig(c.chatId, modelSelection(config, harness, picked.id, previousFast, previousModel?.id ?: config.model))
         })
 }

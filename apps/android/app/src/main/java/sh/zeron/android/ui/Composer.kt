@@ -361,6 +361,11 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     var models by remember(c.chatId, c.host.deviceId, harness) { mutableStateOf<List<ModelInfo>?>(null) }
     var menu by remember { mutableStateOf<String?>(null) }
     var configError by remember(c.chatId) { mutableStateOf<String?>(null) }
+    var execution by remember(client, c.chatId) { mutableStateOf(client.sessionConfig(c.chatId)) }
+    LaunchedEffect(c.revision) { execution = client.sessionConfig(c.chatId) }
+    LaunchedEffect(client, c.host.deviceId, harness, row?.model) {
+        models = client.listModels(c.host.deviceId, harness)
+    }
 
     fun open(which: String) {
         menu = which
@@ -371,7 +376,12 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
 
     fun setConfig(change: (ChatConfig) -> ChatConfig) {
         val current = client.sessionConfig(c.chatId) ?: ChatConfig("full-access", false, harness, row?.model, row?.reasoning, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
-        runCatching { client.setSessionConfig(c.chatId, change(current)) }
+        runCatching {
+            val next = change(current)
+            client.setSessionConfig(c.chatId, next)
+            execution = next
+            configError = null
+        }
             .onFailure { configError = it.message ?: "Couldn't update this chat." }
     }
 
@@ -381,7 +391,16 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     if (modelLabel != null) {
         ContextChip(modelLabel, leading = { HarnessMark(harness, 14.dp) }, onClick = onOpenModel)
     }
-    val execution = client.sessionConfig(c.chatId)
+    val catalog = models ?: fallbackModels(harness)
+    val selectedModel = if (row?.model == null) catalog.firstOrNull() else catalog.firstOrNull { it.id == row.model }
+    FastModeOption.find(selectedModel?.options.orEmpty())?.let { fast ->
+        FastModeChip(fast, execution?.modelOptions.orEmpty()) { enabled ->
+            setConfig { current ->
+                check(current.harness == harness && current.model == row?.model) { "The model changed. Reopen Fast mode." }
+                current.copy(modelOptions = fast.applying(enabled, current.modelOptions))
+            }
+        }
+    }
     ExecutionChips(client, harness, c.host.deviceId, execution?.accessMode ?: "full-access", execution?.plan ?: false) { access, plan ->
         setConfig { it.copy(accessMode = access ?: it.accessMode, plan = plan ?: it.plan) }
     }

@@ -148,7 +148,7 @@ fun NewSessionScreen(
         mutableStateOf(modelCache[modelsKey] ?: catalogModels().filter { !runsOnCloud || it.harness in sh.zeron.android.core.CloudStore.harnesses })
     }
     LaunchedEffect(modelsKey, models) {
-        if (runsOnCloud && models.none { it.harness == draft.harness }) models.firstOrNull()?.let { draft = draft.copy(harness = it.harness, model = null, effort = null) }
+        if (runsOnCloud && models.none { it.harness == draft.harness }) models.firstOrNull()?.let { draft = draft.copy(harness = it.harness, model = null, effort = null, modelOptions = emptyMap()) }
     }
     LaunchedEffect(modelsKey, client) {
         val c = client ?: return@LaunchedEffect
@@ -172,8 +172,8 @@ fun NewSessionScreen(
             models = fresh
         }
     }
-    val choice = models.firstOrNull { it.harness == draft.harness && it.model.id == draft.model }
-        ?: models.firstOrNull { it.harness == draft.harness }
+    val choice = if (draft.model == null) models.firstOrNull { it.harness == draft.harness }
+        else models.firstOrNull { it.harness == draft.harness && it.model.id == draft.model }
 
     LaunchedEffect(Unit) { if (focusOnAppear) focus.requestFocus() }
 
@@ -336,6 +336,11 @@ fun NewSessionScreen(
                 client?.let { core ->
                     ExecutionChips(core, draft.harness, if (runsOnCloud) null else deviceId, draft.accessMode, draft.plan) { access, plan ->
                         draft = draft.copy(accessMode = access ?: draft.accessMode, plan = plan ?: draft.plan)
+                    }
+                }
+                FastModeOption.find(choice?.model?.options.orEmpty())?.let { fast ->
+                    FastModeChip(fast, draft.modelOptions) { enabled ->
+                        draft = draft.copy(modelOptions = fast.applying(enabled, draft.modelOptions))
                     }
                 }
                 val efforts = choice?.model?.reasoningLevels.orEmpty()
@@ -688,7 +693,12 @@ private fun ModelChip(
             hostIcon = hostIcon,
             settings = settings,
             onPick = { harness, row ->
-                onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort))
+                onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort,
+                    modelOptions = when {
+                        harness != draft.harness -> emptyMap()
+                        row.id != (draft.model ?: choice?.model?.id) -> FastModeOption.find(choice?.model?.options.orEmpty())?.let { draft.modelOptions - it.id } ?: draft.modelOptions
+                        else -> draft.modelOptions
+                    }))
             },
             onDismiss = { open = false },
         )

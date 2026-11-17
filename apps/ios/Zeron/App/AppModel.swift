@@ -855,7 +855,7 @@ final class AppModel {
         var out: [ModelChoice] = []
         for h in harnesses where h.offered {
             let models = (try? await client.listModels(deviceId: deviceId, harness: h.id)) ?? fallbackModels(harness: h.id)
-            out += models.map { ModelChoice(harness: h.id, harnessLabel: h.label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description) }
+            out += models.map { ModelChoice(harness: h.id, harnessLabel: h.label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description, options: $0.options) }
         }
         return out
     }
@@ -873,7 +873,7 @@ final class AppModel {
         var out: [ModelChoice] = []
         for h in Self.cloudHarnesses {
             let label = HarnessNames.label(h)
-            out += await client.cloudModels(harness: h).map { ModelChoice(harness: h, harnessLabel: label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description) }
+            out += await client.cloudModels(harness: h).map { ModelChoice(harness: h, harnessLabel: label, id: $0.id, label: $0.label, efforts: $0.reasoningLevels, detail: $0.description, options: $0.options) }
         }
         return out
     }
@@ -913,7 +913,7 @@ final class AppModel {
     @MainActor
     func createCloudSession(draft: NewSessionDraft, text: String, images: [StagedImage]) async throws -> String {
         guard let client, let spaceId = draft.projectId else { throw CoreError.Closed }
-        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
+        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: draft.modelOptions ?? [:], sandbox: .workspaceWrite)
         // A retry after a failed first send reuses that chat (and machine)
         // instead of starting a second one.
         let chatId: String
@@ -963,7 +963,7 @@ final class AppModel {
         } else {
             return nil
         }
-        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: [:], sandbox: .workspaceWrite)
+        let config = ChatConfig(accessMode: draft.accessMode ?? "full-access", plan: draft.plan ?? false, harness: draft.harness, model: draft.model, reasoning: draft.effort, modelOptions: draft.modelOptions ?? [:], sandbox: .workspaceWrite)
         do {
             let worktree = Self.worktreeSpec(draft: draft, project: rawProjects.first { $0.id == draft.projectId })
             let chatId = try client.createSession(newSession: NewSession(target: target, config: config, branch: worktree == nil ? draft.branch : nil, cwd: nil, title: nil))
