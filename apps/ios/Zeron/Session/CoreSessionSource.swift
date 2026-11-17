@@ -334,12 +334,14 @@ final class CoreSessionSource: SessionSource {
     func modelPicker() -> UIViewController? {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
+        let pickerDevice = hostDevice
         let rows: (String) async -> [ModelPickerRow] = { [weak self] id in
             guard let self else { return [] }
-            let device = self.hostDevice
-            let models = (try? await self.client.listModels(deviceId: device, harness: id)) ?? fallbackModels(harness: id)
-            self.modelCatalogs["\(device)|\(id)"] = models
-            self.refresh()
+            let models = (try? await self.client.listModels(deviceId: pickerDevice, harness: id)) ?? fallbackModels(harness: id)
+            await MainActor.run {
+                self.modelCatalogs["\(pickerDevice)|\(id)"] = models
+                self.refresh()
+            }
             return models.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
         }
         var tabs = [ModelPickerTab(harness: harness, label: row.harnessLabel ?? HarnessNames.label(harness)) { await rows(harness) }]
