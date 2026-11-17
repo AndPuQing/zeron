@@ -340,7 +340,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             chips.append(ComposerChip(id: "effort", title: (draft.effort ?? efforts[efforts.count / 2]).capitalized, symbol: "gauge.with.dots.needle.67percent"))
         }
         if let fast = FastModeOption.find(in: model?.options ?? []) {
-            chips.append(ComposerChip(id: "fast", title: fast.title(in: draft.modelOptions ?? [:]), symbol: "bolt.fill"))
+            chips.append(fast.chip(values: draft.modelOptions ?? [:]))
         }
         chips.append(ComposerChip(id: "permissions", title: accessModeLabel(draft.accessMode ?? "full-access"), symbol: "lock.shield"))
         chips.append(ComposerChip(id: "plan", title: draft.plan == true ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))

@@ -34,6 +34,12 @@ struct FastModeOption: Equatable {
         enabled(in: values).map { $0 ? "Fast on" : "Fast off" } ?? "Fast: Default"
     }
 
+    func chip(values: [String: String]) -> ComposerChip {
+        ComposerChip(id: "fast", title: "", symbol: "bolt.fill",
+                     tint: enabled(in: values) == true ? Palette.accent : nil,
+                     accessibilityLabel: title(in: values))
+    }
+
     func applying(_ enabled: Bool?, to values: [String: String]) -> [String: String] {
         var next = values
         next[id] = enabled.map { $0 ? on : off }

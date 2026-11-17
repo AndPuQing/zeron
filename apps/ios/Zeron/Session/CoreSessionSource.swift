@@ -129,7 +129,7 @@ final class CoreSessionSource: SessionSource {
             chips.append(ComposerChip(id: "plan", title: config.plan ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
         }
         if let row, let fast = fastOption(for: row), let config = client.sessionConfig(chatId: chatId) {
-            chips.append(ComposerChip(id: "fast", title: fast.title(in: config.modelOptions), symbol: "bolt.fill"))
+            chips.append(fast.chip(values: config.modelOptions))
         }
         next.chips = chips
         // The workspace indicator includes active side chats, while

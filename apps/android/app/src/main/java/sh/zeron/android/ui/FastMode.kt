@@ -2,6 +2,11 @@ package sh.zeron.android.ui
 
 import androidx.compose.runtime.*
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Alignment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Icon
@@ -40,8 +45,19 @@ internal data class FastModeOption(val id: String, val on: String, val off: Stri
 @Composable
 internal fun FastModeChip(option: FastModeOption, values: Map<String, String>, onPick: (Boolean?) -> Unit) {
     var open by remember(option.id) { mutableStateOf(false) }
-    ContextChip(option.title(values), leading = { Icon(Icons.Default.Bolt, null, Modifier.size(16.dp)) }, onClick = { open = true }) {
-        val selected = option.enabled(values)
+    val selected = option.enabled(values)
+    Box {
+        Surface(
+            onClick = { open = true },
+            shape = CircleShape,
+            color = if (selected == true) MaterialTheme.colorScheme.primaryContainer else chipContainer(),
+            contentColor = if (selected == true) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(34.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.Bolt, option.title(values), Modifier.size(16.dp))
+            }
+        }
         ChoiceMenu(open, { open = false }, listOf(MenuSection("Fast mode", listOf(
             MenuChoice("Use default", selected == null) { onPick(null) },
             MenuChoice("Off", selected == false) { onPick(false) },
