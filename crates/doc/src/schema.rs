@@ -161,6 +161,9 @@ struct DocPartJson {
     /// `outputTruncated`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     output_lines: Option<u64>,
+    /// The agent's own reviewer's verdict on the call (additive; Auto).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    review: Option<serde_json::Value>,
 }
 
 /// App parts → doc part json (mirror of `toDocParts`).
@@ -217,6 +220,7 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             exit_code,
             output_truncated,
             output_lines,
+            review,
         } => DocPartJson {
             id: id.clone(),
             kind: "tool".into(),
@@ -244,6 +248,7 @@ fn to_doc_part(part: &MessagePart) -> Result<DocPartJson, DocError> {
             exit_code: *exit_code,
             output_truncated: output_truncated.then_some(true),
             output_lines: *output_lines,
+            review: review.as_ref().map(serde_json::to_value).transpose()?,
             ..Default::default()
         },
         MessagePart::Input {
@@ -340,6 +345,9 @@ fn from_doc_part(p: DocPartJson) -> MessagePart {
                 exit_code: p.exit_code,
                 output_truncated: p.output_truncated.unwrap_or(false),
                 output_lines: p.output_lines,
+                review: p
+                    .review
+                    .and_then(|value| serde_json::from_value(value).ok()),
             },
             None => MessagePart::Text {
                 id: p.id,
@@ -1679,6 +1687,9 @@ fn push_part(parts: &LoroList, part: &MessagePart) -> Result<(), DocError> {
     if let Some(lines) = doc_part.output_lines {
         map.insert("outputLines", lines as i64)?;
     }
+    if let Some(review) = &doc_part.review {
+        map.insert("review", loro_value_from_json(review))?;
+    }
     Ok(())
 }
 
@@ -1856,6 +1867,9 @@ fn salvage_part(part: &serde_json::Value, entry_id: &str, ix: usize) -> Option<M
                 .and_then(|x| x.as_bool())
                 .unwrap_or(false),
             output_lines: obj.get("outputLines").and_then(|x| x.as_u64()),
+            review: obj
+                .get("review")
+                .and_then(|value| serde_json::from_value(value.clone()).ok()),
         });
     }
     if let Some(message) = obj.get("message").and_then(|x| x.as_str()) {
@@ -2221,6 +2235,9 @@ fn update_part_fields(map: &LoroMap, part: &MessagePart) -> Result<(), DocError>
     }
     if let Some(lines) = doc_part.output_lines {
         map.insert("outputLines", lines as i64)?;
+    }
+    if let Some(review) = &doc_part.review {
+        map.insert("review", loro_value_from_json(review))?;
     }
     if let Some(text) = &doc_part.text {
         // Defensive path only — the fold never rewrites earlier text.
@@ -2996,6 +3013,7 @@ mod tests {
             exit_code: None,
             output_truncated: false,
             output_lines: None,
+            review: None,
         };
         let doc = SessionDoc::init("c1").unwrap();
         let mut w = SegmentWriter::begin(&doc, "e1", "dev", 1).unwrap();
@@ -3064,6 +3082,7 @@ mod tests {
             exit_code: None,
             output_truncated: false,
             output_lines: None,
+            review: None,
         };
         w.sync(std::slice::from_ref(&part)).unwrap();
         if let MessagePart::Tool {
@@ -3120,6 +3139,7 @@ mod tests {
             exit_code: None,
             output_truncated: false,
             output_lines: None,
+            review: None,
         };
         let parts = vec![
             tool(
@@ -3595,6 +3615,60 @@ mod tests {
         ));
     }
 
+    /// A reviewer's verdict lands after its call was written: the call's
+    /// entry takes it in place, and a later verdict replaces the first.
+    #[test]
+    fn a_review_round_trips_through_the_doc() {
+        use zeron_proto::{ToolReview, ToolReviewStatus};
+        let doc = SessionDoc::init("chat-5").unwrap();
+        let mut writer = SegmentWriter::begin(&doc, "a1", "dev-a", 5).unwrap();
+        let mut folded = Vec::new();
+        fold_event_into_parts(
+            &mut folded,
+            &AgentEvent::ToolCall {
+                id: "c1".into(),
+                call: ToolCall::Exec {
+                    command: "rm -rf ~/x".into(),
+                },
+            },
+        );
+        writer.sync(&folded).unwrap();
+        for status in [ToolReviewStatus::Reviewing, ToolReviewStatus::Denied] {
+            fold_event_into_parts(
+                &mut folded,
+                &AgentEvent::ToolReviewed {
+                    id: "c1".into(),
+                    review: ToolReview {
+                        status,
+                        risk: Some("high".into()),
+                        reason: Some("outside the workspace".into()),
+                    },
+                },
+            );
+            writer.sync(&folded).unwrap();
+        }
+        writer.finish(&folded, MessageStatus::Complete).unwrap();
+        let snapshot = doc.export_snapshot().unwrap();
+        let replica = loro::LoroDoc::new();
+        replica.import(&snapshot).unwrap();
+        for entries in [
+            doc.read_entries().unwrap(),
+            SessionDoc::from_doc(replica).read_entries().unwrap(),
+        ] {
+            match &entries[0].parts[0] {
+                MessagePart::Tool {
+                    review: Some(review),
+                    ..
+                } => {
+                    assert_eq!(review.status, ToolReviewStatus::Denied);
+                    assert_eq!(review.risk.as_deref(), Some("high"));
+                    assert_eq!(review.reason.as_deref(), Some("outside the workspace"));
+                }
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
     /// Old pre-strip docs carry inline `output`/`diff` — they must still read
     /// back (schema changes are serde-additive ONLY; old readers, old docs).
     #[test]
@@ -3627,6 +3701,7 @@ mod tests {
                 exit_code: None,
                 output_truncated: false,
                 output_lines: None,
+                review: None,
             }],
             created_at: 1,
             device_id: "dev-a".into(),

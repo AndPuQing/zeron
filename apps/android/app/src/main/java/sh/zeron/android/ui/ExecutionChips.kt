@@ -7,6 +7,7 @@ import uniffi.zeron_core.CoreClient
 internal fun accessModeLabel(mode: String): String = when (mode) {
     "supervised" -> "Supervised"
     "auto-accept-edits" -> "Auto-accept edits"
+    "auto" -> "Auto"
     "full-access" -> "Full access"
     else -> mode
 }

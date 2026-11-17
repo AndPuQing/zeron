@@ -1346,6 +1346,7 @@ fn spawn_chip(id: &str, status: SubagentStatus) -> MessagePart {
         exit_code: None,
         output_truncated: false,
         output_lines: None,
+        review: None,
     }
 }
 

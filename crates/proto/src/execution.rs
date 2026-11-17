@@ -36,7 +36,8 @@ fn rank(mode: AccessMode) -> u8 {
     match mode {
         AccessMode::Supervised => 0,
         AccessMode::AutoAcceptEdits => 1,
-        AccessMode::FullAccess => 2,
+        AccessMode::Auto => 2,
+        AccessMode::FullAccess => 3,
     }
 }
 
@@ -123,6 +124,41 @@ mod tests {
             .validate(&AccessMode::ALL, false)
             .is_err()
         );
+        let auto = ExecutionPolicy {
+            access: AccessMode::Auto,
+            plan: false,
+        };
+        for modes in [&[][..], &[AccessMode::FullAccess][..], &AccessMode::ALL[..]] {
+            assert!(auto.validate(modes, true).is_err());
+        }
+        assert!(auto.validate(&AccessMode::WITH_AUTO, true).is_ok());
+    }
+
+    #[test]
+    fn auto_preserves_command_and_delegation_ceilings() {
+        let auto = ExecutionPolicy {
+            access: AccessMode::Auto,
+            plan: true,
+        };
+        for access in [AccessMode::Supervised, AccessMode::AutoAcceptEdits] {
+            let stricter = ExecutionPolicy { access, ..auto };
+            assert!(!stricter.permits_child(auto));
+            assert_eq!(auto.restricted_by(stricter), stricter);
+            assert_eq!(stricter.restricted_by(auto), stricter);
+            assert!(auto.permits_child(stricter));
+        }
+        let full = ExecutionPolicy {
+            access: AccessMode::FullAccess,
+            ..auto
+        };
+        assert!(!auto.permits_child(full));
+        assert_eq!(auto.restricted_by(full), auto);
+        assert_eq!(full.restricted_by(auto), auto);
+        assert!(auto.permits_child(auto));
+        assert!(!auto.permits_child(ExecutionPolicy {
+            plan: false,
+            ..auto
+        }));
     }
 
     #[test]

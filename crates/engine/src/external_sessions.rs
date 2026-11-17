@@ -552,6 +552,7 @@ impl ExternalSessionImporter {
                         } => MessagePart::Tool {
                             exit_code: None,
                             output_lines: None,
+                            review: None,
                             output_truncated: false,
                             id,
                             call: zeron_doc::sanitize_tool_call(call),

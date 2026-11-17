@@ -165,6 +165,7 @@ fn messages_the_agent_sent_show_as_one_line_naming_the_recipient() {
         exit_code: None,
         output_truncated: false,
         output_lines: None,
+        review: None,
     };
     let mut w = worker(390.0);
     w.input = TranscriptInput {
@@ -808,6 +809,7 @@ fn running_subagent_shows_a_spinner_after_its_spawn_resolves() {
         exit_code: None,
         output_truncated: false,
         output_lines: None,
+        review: None,
     };
     let frame_for = |status: SubagentStatus| {
         let mut w = worker(390.0);
@@ -1691,7 +1693,7 @@ fn tool_result_images_only_load_in_expanded_details() {
         id: "tool".into(),
         call: zeron_proto::ToolCall::ReadFile { path: "/outside/shot.png".into() },
         resolved: true, is_error: false, output: None, diff: None,
-        exit_code: None, output_lines: None, output_truncated: false,
+        exit_code: None, output_lines: None, output_truncated: false, review: None,
         output_ref: None, output_bytes: None, diff_ref: None, diff_stats: None,
         subagent_ref: None, subagent_status: None, subagent_tail: None,
         preview_paths: vec!["/uploads/stored-image.png".into()],

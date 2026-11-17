@@ -442,6 +442,7 @@ func accessModeLabel(_ mode: String) -> String {
     switch mode {
     case "supervised": "Supervised"
     case "auto-accept-edits": "Auto-accept edits"
+    case "auto": "Auto"
     case "full-access": "Full access"
     default: mode
     }

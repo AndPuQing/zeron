@@ -245,6 +245,7 @@ mod tests {
                     MessagePart::Tool {
                         exit_code: None,
                         output_lines: None,
+                        review: None,
                         output_truncated: false,
                         id: format!("{id}-tool"),
                         call: zeron_proto::ToolCall::Unknown {

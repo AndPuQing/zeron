@@ -170,6 +170,7 @@ mod tests {
         let chip = |id: &str, status| MessagePart::Tool {
             exit_code: None,
             output_lines: None,
+            review: None,
             output_truncated: false,
             id: id.into(),
             call: zeron_proto::ToolCall::Unknown { name: "Agent: scout".into(), input: None },

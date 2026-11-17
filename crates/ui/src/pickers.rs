@@ -7389,6 +7389,10 @@ mod tests {
         assert_eq!(resolve_access(Supervised, &[FullAccess]), Supervised);
         // A legacy catalog cannot silently relax the selection.
         assert_eq!(resolve_access(Supervised, &[]), Supervised);
+        assert_eq!(resolve_access(Auto, &AccessMode::WITH_AUTO), Auto);
+        assert_eq!(resolve_access(Auto, &ALL_MODES), Auto);
+        assert_eq!(resolve_access(Auto, &[FullAccess]), Auto);
+        assert_eq!(resolve_access(Auto, &[]), Auto);
     }
 
     const ALL_MODES: [AccessMode; 3] = AccessMode::ALL;
