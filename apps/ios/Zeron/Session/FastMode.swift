@@ -24,6 +24,17 @@ struct FastModeOption: Equatable {
 
     static func find(in options: [ModelOption]) -> Self? { options.compactMap(Self.init).first }
 
+    /// Called only for a model change within the same provider. Codex's
+    /// explicit Standard tier resets native/global Fast and must not become
+    /// inheritance, even when the new model has no speed choices.
+    static func afterModelChange(_ values: [String: String], harness: String, previousOptionID: String?) -> [String: String] {
+        guard let id = previousOptionID else { return values }
+        if harness == "codex", id == "serviceTier", values[id] == "default" { return values }
+        var next = values
+        next.removeValue(forKey: id)
+        return next
+    }
+
     func enabled(in values: [String: String]) -> Bool? {
         guard let value = values[id] else { return nil }
         // FFI also reads native booleans and legacy Codex tier values as strings.

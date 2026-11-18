@@ -696,7 +696,7 @@ private fun ModelChip(
                 onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort,
                     modelOptions = when {
                         harness != draft.harness -> emptyMap()
-                        row.id != (draft.model ?: choice?.model?.id) -> FastModeOption.find(choice?.model?.options.orEmpty())?.let { draft.modelOptions - it.id } ?: draft.modelOptions
+                        row.id != (draft.model ?: choice?.model?.id) -> FastModeOption.afterModelChange(draft.modelOptions, harness, FastModeOption.find(choice?.model?.options.orEmpty())?.id)
                         else -> draft.modelOptions
                     }))
             },

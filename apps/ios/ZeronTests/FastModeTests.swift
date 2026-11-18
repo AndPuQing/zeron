@@ -49,4 +49,35 @@ final class FastModeTests: XCTestCase {
         let restored = try JSONDecoder().decode(NewSessionDraft.self, from: JSONEncoder().encode(draft))
         XCTAssertEqual(restored, draft)
     }
+
+    func testExplicitCodexOffSurvivesModelChangesAndDraftRestore() throws {
+        // A Fast default must not win again after On -> Off -> another model.
+        let fast = try XCTUnwrap(FastModeOption(option("serviceTier", ["default", "fast"], "fast")))
+        let other = ["contextWindow": "1m"]
+        let off = fast.applying(false, to: fast.applying(true, to: other))
+        let changed = FastModeOption.afterModelChange(off, harness: "codex", previousOptionID: fast.id)
+        XCTAssertEqual(changed, ["serviceTier": "default", "contextWindow": "1m"])
+        // Switching onward from a model/catalog without speed choices also keeps the reset.
+        XCTAssertEqual(FastModeOption.afterModelChange(changed, harness: "codex", previousOptionID: nil), changed)
+        var draft = NewSessionDraft()
+        draft.harness = "codex"
+        draft.model = "another-model"
+        draft.modelOptions = changed
+        let restored = try JSONDecoder().decode(NewSessionDraft.self, from: JSONEncoder().encode(draft))
+        XCTAssertEqual(restored.modelOptions, changed)
+        XCTAssertEqual(fast.enabled(in: restored.modelOptions ?? [:]), false)
+        XCTAssertEqual(fast.applying(nil, to: changed), other, "Use default must still explicitly remove the reset")
+    }
+
+    func testModelChangeStillPrunesFastOnAndDoesNotCreateAnOffOverride() {
+        let other = ["contextWindow": "1m"]
+        for value in ["fast", "priority"] {
+            XCTAssertEqual(FastModeOption.afterModelChange(["serviceTier": value, "contextWindow": "1m"], harness: "codex", previousOptionID: "serviceTier"), other)
+        }
+        XCTAssertEqual(FastModeOption.afterModelChange(other, harness: "codex", previousOptionID: "serviceTier"), other)
+        XCTAssertEqual(FastModeOption.afterModelChange([:], harness: "codex", previousOptionID: "serviceTier"), [:])
+        // The exception belongs only to Codex; other providers retain their pruning behavior.
+        XCTAssertEqual(FastModeOption.afterModelChange(["serviceTier": "default"], harness: "other", previousOptionID: "serviceTier"), [:])
+        XCTAssertEqual(FastModeOption.afterModelChange(["fastMode": "off", "contextWindow": "1m"], harness: "claude-code", previousOptionID: "fastMode"), other)
+    }
 }

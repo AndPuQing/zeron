@@ -28,6 +28,13 @@ internal data class FastModeOption(val id: String, val on: String, val off: Stri
         if (enabled == null) values - id else values + (id to if (enabled) on else off)
 
     companion object {
+        /** Same-provider model changes must keep Codex's explicit reset of native/global Fast. */
+        fun afterModelChange(values: Map<String, String>, harness: String, previousOptionId: String?): Map<String, String> {
+            val id = previousOptionId ?: return values
+            if (harness == "codex" && id == "serviceTier" && values[id] == "default") return values
+            return values - id
+        }
+
         fun find(options: List<ModelOption>): FastModeOption? = options.firstNotNullOfOrNull { option ->
             val choices = option.choices.map { it.id }
             val on = when {

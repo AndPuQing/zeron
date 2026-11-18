@@ -381,8 +381,8 @@ final class CoreSessionSource: SessionSource {
                     // The old provider's effort and options don't carry over.
                     $0.reasoning = nil
                     $0.modelOptions = [:]
-                } else if previousModel != model.id, let previousFast {
-                    $0.modelOptions.removeValue(forKey: previousFast)
+                } else if previousModel != model.id {
+                    $0.modelOptions = FastModeOption.afterModelChange($0.modelOptions, harness: $0.harness, previousOptionID: previousFast)
                 }
                 $0.model = model.id
             }

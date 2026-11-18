@@ -10,7 +10,7 @@ internal fun canSwitchAgent(c: ComposerState) = c.host.capabilities.providerSwit
 /** Preserve the current provider's settings, but never carry them into a different provider. */
 internal fun modelSelection(config: ChatConfig, harness: String, model: String, previousFastOptionId: String? = null, previousModelId: String? = config.model): ChatConfig =
     if (harness == config.harness) config.copy(model = model,
-        modelOptions = if (model != previousModelId && previousFastOptionId != null) config.modelOptions - previousFastOptionId else config.modelOptions)
+        modelOptions = if (model != previousModelId) FastModeOption.afterModelChange(config.modelOptions, harness, previousFastOptionId) else config.modelOptions)
     else config.copy(harness = harness, model = model, reasoning = null, modelOptions = emptyMap())
 
 @Composable

@@ -527,7 +527,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
                 self.draft.effort = nil
                 self.draft.modelOptions = nil
             } else if (self.draft.model ?? self.draftModel?.id) != model.id, let fast = FastModeOption.find(in: self.draftModel?.options ?? []) {
-                self.draft.modelOptions?.removeValue(forKey: fast.id)
+                self.draft.modelOptions = FastModeOption.afterModelChange(self.draft.modelOptions ?? [:], harness: harness, previousOptionID: fast.id)
             }
             self.draft.harness = harness
             self.draft.model = model.id
