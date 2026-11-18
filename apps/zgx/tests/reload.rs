@@ -23,6 +23,7 @@ const CALLS: &[&str] = &[
     "about.apply",
     "about.check",
     "account.delete",
+    "account.keeps_chats_local",
     "account.photo_file",
     "account.photo_size",
     "account.remove_photo",
@@ -102,6 +103,7 @@ const INVOKES: &[&str] = &[
     "app.open_main",
     "appearance",
     "chat.catalog",
+    "chat.catalog_on",
     "chat.open",
     "done",
     "files.unwatch",
@@ -167,6 +169,7 @@ fn fetches(name: &str) -> bool {
 /// What the stubs answer, as JSON (the rest answer nothing): an account
 /// with its username and card.
 const ANSWERS: &[(&str, &str)] = &[
+    ("account.keeps_chats_local", "false"),
     ("account.username", r#""ada""#),
     ("account.orgs", "[]"),
     ("account.onboarding", "[]"),
@@ -239,7 +242,7 @@ fn mount_with(window: &'static str, step: &'static str, log: &Log, inspector: Op
             let catalog = catalog.clone();
             host.action(name, move |_| {
                 log.borrow_mut().push(name.to_owned());
-                if name == "chat.catalog" {
+                if matches!(name, "chat.catalog" | "chat.catalog_on") {
                     catalog.set(Value::from_json(r#"{"state":"ready","harnesses":[],"models":[]}"#).unwrap());
                 }
             });
@@ -760,19 +763,17 @@ fn a_reload_keeps_the_sidebar_and_settings_where_they_were_scrolled() {
     // Settings' page, scrolled down.
     assert!(app.host.run_command("shell.settings"));
     app.frames(60);
+    let headings = "#settings-page >> role:heading";
+    let at_top = on_screen(&mut app, headings);
     let scroll_settings = |app: &mut TestApp, delta| {
-        // (At a heading in view: the page runs on below the window.)
-        let target = zgx_script::driver::parse("#settings-page >> role:heading").unwrap();
-        app.ui.prepare_frame();
-        let found = zgx_script::driver::find_all(&app.ui, &app.handle, &target).unwrap_or_default();
-        let id = found
-            .into_iter()
-            .find(|&id| {
-                let b = app.ui.scene.borrow().hit_bounds(id);
-                b.y > 40. && b.y < 560.
-            })
-            .expect("a heading in view");
-        zgx_script::driver::scroll(&mut app.ui, id, delta);
+        let page = app.find("#settings-page").expect("the settings page");
+        let view = app.ui.scene.borrow().visible_bounds(page).expect("the page is visible");
+        app.ui.dispatch(zgx::input::InputEvent::Scroll {
+            x: view.x + view.width / 2.,
+            y: view.y + view.height / 2.,
+            delta_x: 0.,
+            delta_y: delta,
+        });
     };
     for _ in 0..4 {
         scroll_settings(&mut app, 150.);
@@ -780,9 +781,8 @@ fn a_reload_keeps_the_sidebar_and_settings_where_they_were_scrolled() {
         app.frames(4);
     }
     app.frames(60);
-    let headings = "#settings-page >> role:heading";
     let before = on_screen(&mut app, headings);
-    assert!(before[0] != "54.0", "settings never scrolled: {before:?}");
+    assert_ne!(before, at_top, "settings never scrolled");
     let _ = app.host.reload();
     for (frame, n) in [(1, 1), (3, 2), (10, 7), (60, 50)] {
         app.frames(n);
