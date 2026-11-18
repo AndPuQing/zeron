@@ -249,7 +249,7 @@ local SEAM_GAP = 6
 local TRACING = ui.shared("transcript.trace_enabled", false):peek() == true
 local function trace(what: string, ...: any)
 	if TRACING then
-		print(`[transcript] {math.floor(ui.now())} {what}`, ...)
+		print(`zerun-experimental: [transcript] {math.floor(ui.now())} {what}`, ...)
 	end
 end
 
