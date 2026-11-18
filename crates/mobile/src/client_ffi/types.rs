@@ -526,6 +526,7 @@ pub struct SessionRow {
     /// Waiting on a background process its agent said it waits on: the
     /// person may stop waiting (`CoreClient::stop_waiting`).
     pub waits_on_process: bool,
+    pub descendant_indicator: ChatIndicator,
 }
 
 impl From<&zc::SessionRow> for SessionRow {
@@ -569,6 +570,7 @@ impl From<&zc::SessionRow> for SessionRow {
             sleep_until_ms: r.sleep_until_ms,
             woke_at_ms: r.woke_at_ms,
             waits_on_process: r.waits_on_process,
+            descendant_indicator: r.descendant_indicator.into(),
         }
     }
 }

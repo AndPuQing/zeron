@@ -14019,6 +14019,7 @@ public struct SessionRow: Equatable, Hashable {
      * person may stop waiting (`CoreClient::stop_waiting`).
      */
     public var waitsOnProcess: Bool
+    public var descendantIndicator: ChatIndicator
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
@@ -14069,7 +14070,7 @@ public struct SessionRow: Equatable, Hashable {
         /**
          * Waiting on a background process its agent said it waits on: the
          * person may stop waiting (`CoreClient::stop_waiting`).
-         */waitsOnProcess: Bool) {
+         */waitsOnProcess: Bool, descendantIndicator: ChatIndicator) {
         self.id = id
         self.revision = revision
         self.title = title
@@ -14104,6 +14105,7 @@ public struct SessionRow: Equatable, Hashable {
         self.sleepUntilMs = sleepUntilMs
         self.wokeAtMs = wokeAtMs
         self.waitsOnProcess = waitsOnProcess
+        self.descendantIndicator = descendantIndicator
     }
 
     
@@ -14155,7 +14157,8 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
                 roomGen: FfiConverterUInt32.read(from: &buf), 
                 sleepUntilMs: FfiConverterOptionInt64.read(from: &buf), 
                 wokeAtMs: FfiConverterOptionInt64.read(from: &buf), 
-                waitsOnProcess: FfiConverterBool.read(from: &buf)
+                waitsOnProcess: FfiConverterBool.read(from: &buf), 
+                descendantIndicator: FfiConverterTypeChatIndicator.read(from: &buf)
         )
     }
 
@@ -14194,6 +14197,7 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
         FfiConverterOptionInt64.write(value.sleepUntilMs, into: &buf)
         FfiConverterOptionInt64.write(value.wokeAtMs, into: &buf)
         FfiConverterBool.write(value.waitsOnProcess, into: &buf)
+        FfiConverterTypeChatIndicator.write(value.descendantIndicator, into: &buf)
     }
 }
 
