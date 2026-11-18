@@ -760,7 +760,7 @@ fn a_reload_keeps_the_sidebar_and_settings_where_they_were_scrolled() {
     // Settings' page, scrolled down.
     assert!(app.host.run_command("shell.settings"));
     app.frames(60);
-    for _ in 0..4 {
+    let scroll_settings = |app: &mut TestApp, delta| {
         // (At a heading in view: the page runs on below the window.)
         let target = zgx_script::driver::parse("#settings-page >> role:heading").unwrap();
         app.ui.prepare_frame();
@@ -772,7 +772,10 @@ fn a_reload_keeps_the_sidebar_and_settings_where_they_were_scrolled() {
                 b.y > 40. && b.y < 560.
             })
             .expect("a heading in view");
-        zgx_script::driver::scroll(&mut app.ui, id, 150.);
+        zgx_script::driver::scroll(&mut app.ui, id, delta);
+    };
+    for _ in 0..4 {
+        scroll_settings(&mut app, 150.);
         app.settle();
         app.frames(4);
     }
@@ -793,8 +796,7 @@ fn a_reload_keeps_the_sidebar_and_settings_where_they_were_scrolled() {
     app.frames(30);
     assert_eq!(on_screen(&mut app, headings), before, "once settled after the reload: settings' page moved");
     let kept = scroll(&app);
-    let heading = app.target("#settings-page >> role:heading \"Links\"").expect("a heading in view");
-    zgx_script::driver::scroll(&mut app.ui, heading, -100.);
+    scroll_settings(&mut app, -100.);
     app.settle();
     app.frames(30);
     assert_ne!(scroll(&app), kept, "a scroll after the reload isn't kept ({kept:?})");
