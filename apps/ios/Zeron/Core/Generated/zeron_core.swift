@@ -8991,12 +8991,14 @@ public func FfiConverterTypeCloudUsageInfo_lower(_ value: CloudUsageInfo) -> Rus
 public struct ComposerCatalog: Equatable, Hashable {
     public var commands: [ComposerCommand]
     public var warning: String?
+    public var skillLabels: [String: String]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(commands: [ComposerCommand], warning: String?) {
+    public init(commands: [ComposerCommand], warning: String?, skillLabels: [String: String]) {
         self.commands = commands
         self.warning = warning
+        self.skillLabels = skillLabels
     }
 
     
@@ -9016,13 +9018,15 @@ public struct FfiConverterTypeComposerCatalog: FfiConverterRustBuffer {
         return
             try ComposerCatalog(
                 commands: FfiConverterSequenceTypeComposerCommand.read(from: &buf), 
-                warning: FfiConverterOptionString.read(from: &buf)
+                warning: FfiConverterOptionString.read(from: &buf), 
+                skillLabels: FfiConverterDictionaryStringString.read(from: &buf)
         )
     }
 
     public static func write(_ value: ComposerCatalog, into buf: inout [UInt8]) {
         FfiConverterSequenceTypeComposerCommand.write(value.commands, into: &buf)
         FfiConverterOptionString.write(value.warning, into: &buf)
+        FfiConverterDictionaryStringString.write(value.skillLabels, into: &buf)
     }
 }
 

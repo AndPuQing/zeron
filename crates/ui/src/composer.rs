@@ -25,6 +25,7 @@ use gpui::{
 use unicode_segmentation::UnicodeSegmentation;
 
 use zeron_doc::{MessagePart, MessageRole, SessionCommandPayload, SessionMessageEntry};
+use zeron_proto::invocation::skill_display_name;
 use zeron_proto::{
     FileSearchMatch, HarnessId, RunRequest, SandboxLevel, SlashCommand, UserInputAnswer,
     UserInputQuestion, capabilities,
@@ -5948,22 +5949,6 @@ fn completion_trigger(
     let token = skill_token.or_else(|| slash_token(text, cursor));
     let commands_allowed = token.is_some() && !skill;
     (token, skill, include_skills, commands_allowed)
-}
-
-/// Human-readable presentation only; invocation names and paths stay canonical.
-fn skill_display_name(name: &str) -> String {
-    name.rsplit(':')
-        .next()
-        .unwrap_or(name)
-        .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
-        .filter(|word| !word.is_empty())
-        .map(|word| {
-            let mut chars = word.chars();
-            let first = chars.next().unwrap();
-            first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Commands implemented by Zeron, independently of the provider protocol.

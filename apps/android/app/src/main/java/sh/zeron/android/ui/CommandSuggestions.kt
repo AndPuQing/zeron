@@ -87,7 +87,7 @@ fun CommandSuggestions(
             rows.forEach { command ->
                 val enabled = command.unavailableReason == null
                 CommandSuggestionRow(
-                    title = commandDisplayName(command),
+                    title = catalog?.skillLabels?.get(command.token) ?: command.token,
                     detail = commandDetail(command),
                     icon = if (command.token.startsWith("$")) ZIcons.Magic else ZIcons.Command,
                     enabled = enabled,
@@ -181,42 +181,8 @@ private fun CommandSuggestionRow(
     }
 }
 
-/** Desktop `skill_display_name`, plus the catalog's `:N` same-name disambiguation. */
-internal fun commandDisplayName(command: ComposerCommand): String {
-    val token = command.token
-    if (!token.startsWith("$")) return token
-    val suffix = disambiguationSuffix(token)
-    if (suffix != null) {
-        val base = canonicalToken(command) ?: return token
-        if (token == "$base:$suffix") return "${desktopSkillName(base)} · $suffix"
-    }
-    return desktopSkillName(token)
-}
-
 internal fun commandDetail(command: ComposerCommand): String = buildList {
     if (command.description.isNotEmpty()) add(command.description)
     command.unavailableReason?.takeIf { it.isNotEmpty() }?.let { add(it) }
     command.inputHint?.takeIf { it.isNotEmpty() }?.let { add("<$it>") }
 }.joinToString(" · ")
-
-private fun desktopSkillName(token: String): String =
-    token.drop(1).substringAfterLast(':').split(Regex("[-_\\s]+"))
-        .filter { it.isNotEmpty() }
-        .joinToString(" ") { word -> word.first().uppercase() + word.drop(1).lowercase() }
-
-/** Only a trailing numeric `:N` (N >= 2) can be a catalog suffix; verify its base. */
-private fun disambiguationSuffix(token: String): String? {
-    val colon = token.lastIndexOf(':')
-    if (colon < 0) return null
-    val suffix = token.substring(colon + 1)
-    if (suffix.isEmpty() || suffix.any { !it.isDigit() }) return null
-    return suffix.takeIf { (it.toIntOrNull() ?: 0) >= 2 }
-}
-
-private fun canonicalToken(command: ComposerCommand): String? {
-    val restored = uniffi.zeron_core.restoreComposerDraft(command.insertion)
-    if (restored.selections.size != 1) return null
-    if (restored.selections[0].insertion != command.insertion) return null
-    if (!restored.text.startsWith("$")) return null
-    return restored.text
-}

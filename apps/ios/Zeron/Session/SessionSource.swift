@@ -270,7 +270,7 @@ final class FixtureSessionSource: SessionSource {
     @MainActor func loadImage(_ ref: TranscriptImageRef, into view: UIImageView) {}
     func image(_ ref: TranscriptImageRef) async -> UIImage? { nil }
     func searchFiles(_ query: String) async -> [FileMatch] { [] }
-    func commandCatalog() async throws -> ComposerCatalog { ComposerCatalog(commands: [], warning: nil) }
+    func commandCatalog() async throws -> ComposerCatalog { ComposerCatalog(commands: [], warning: nil, skillLabels: [:]) }
 }
 
 extension SessionSource {

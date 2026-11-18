@@ -5,6 +5,22 @@ use std::ops::Range;
 
 pub const INVOCATION_SCHEME: &str = "zeron-invoke:";
 
+/// Human-readable presentation only; invocation names and paths stay canonical.
+pub fn skill_display_name(name: &str) -> String {
+    name.rsplit(':')
+        .next()
+        .unwrap_or(name)
+        .split(|c: char| c == '-' || c == '_' || c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            let first = chars.next().unwrap();
+            first.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn escape_label(label: &str) -> String {
     label
         .replace('\\', "\\\\")
