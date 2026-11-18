@@ -290,13 +290,20 @@ pub fn offered_options(
     model: &Model,
     mut selections: serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
-    selections.retain(|id, choice| {
-        model.options.iter().any(|option| {
-            option.id == *id
-                && choice
-                    .as_str()
-                    .is_some_and(|choice| option.choices.iter().any(|c| c.id == choice))
-        })
+    selections.retain(|id, value| {
+        let Some(option) = model.options.iter().find(|option| option.id == *id) else {
+            return false;
+        };
+        if value.as_str().is_some_and(|s| option.choices.iter().any(|c| c.id == s)) {
+            return true;
+        }
+        let Some(canonical) = fast_mode_values(option).and_then(|(on, off)| {
+            zeron_proto::fast_mode::legacy_choice(id, on, off, value)
+        }) else {
+            return false;
+        };
+        *value = canonical.into();
+        true
     });
     selections
 }
@@ -7050,13 +7057,15 @@ fn fast_mode_values(option: &zeron_proto::ModelOption) -> Option<(&str, &str)> {
     )
 }
 
-fn fast_selection_enabled(option: &zeron_proto::ModelOption, on: &str, value: Option<&serde_json::Value>) -> bool {
-    let value = match value {
-        Some(serde_json::Value::Bool(true)) => "true",
-        Some(serde_json::Value::Bool(false)) => "false",
-        value => value.and_then(|v| v.as_str()).unwrap_or(&option.default_choice),
-    };
-    zeron_proto::fast_mode::enabled(&option.id, on, value)
+fn fast_selection_enabled(
+    option: &zeron_proto::ModelOption,
+    on: &str,
+    value: Option<&serde_json::Value>,
+) -> bool {
+    match value {
+        Some(value) => zeron_proto::fast_mode::enabled_json(&option.id, on, value),
+        None => zeron_proto::fast_mode::enabled(&option.id, on, &option.default_choice),
+    }
 }
 
 /// Attach the (single) open popover above a selector trigger.
@@ -10259,6 +10268,74 @@ mod tests {
                 );
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn changing_reasoning_preserves_legacy_fast_choices(cx: &mut gpui::TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        cx.update(|cx| {
+            cx.set_global(Theme::dark());
+            crate::settings::init(crate::settings::UiSettings::default(), dir.path(), cx);
+        });
+        for (harness, key, legacy, on, off) in [
+            (
+                HarnessId::Codex,
+                "serviceTier",
+                serde_json::json!("priority"),
+                "fast",
+                "default",
+            ),
+            (
+                HarnessId::ClaudeCode,
+                "fastMode",
+                serde_json::json!(true),
+                "on",
+                "off",
+            ),
+        ] {
+            let state =
+                cx.new(|_| {
+                    let mut state = AppState::new();
+                    state.chats.push(serde_json::from_value(serde_json::json!({
+                    "id":"legacy", "deviceId":"device", "archived":false,
+                    "createdAt":"2026-10-28T00:00:00Z",
+                    "config":{ "harness":harness, "model":"m", "reasoning":"medium",
+                               "sandbox":"workspace-write", "modelOptions":{ (key):legacy } }
+                })).unwrap());
+                    state.selected_chat = Some("legacy".into());
+                    state
+                });
+            let pickers = cx.new(|cx| Pickers::new(state.clone(), cx));
+            pickers.update(cx, |pickers, cx| {
+                let mut model = bare_model("m", "Model");
+                model.reasoning_levels = vec![ReasoningLevel::Medium, ReasoningLevel::High];
+                model.options = vec![ModelOption {
+                    id: key.into(),
+                    label: "Fast".into(),
+                    default_choice: off.into(),
+                    choices: [off, on]
+                        .map(|id| ModelOptionChoice {
+                            id: id.into(),
+                            label: id.into(),
+                        })
+                        .into(),
+                }];
+                pickers.models.insert(harness, Loadable::Ready(vec![model]));
+                assert!(pickers.compact_fast_choice(cx).unwrap().3);
+                pickers.pick_reasoning(ReasoningLevel::High, cx);
+                let config = state
+                    .read(cx)
+                    .selected_chat_row()
+                    .unwrap()
+                    .config
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(config.reasoning, Some(ReasoningLevel::High));
+                assert_eq!(config.model_options[key], on);
+                assert_eq!(pickers.run_model_options(cx)[key], on);
+                assert!(pickers.compact_fast_choice(cx).unwrap().3);
+            });
+        }
     }
 
     #[gpui::test]

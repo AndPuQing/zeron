@@ -23,8 +23,40 @@ pub fn choices<'a>(
     Some((on, off))
 }
 
+/// Migrate only known Fast encodings. An unknown or retired choice is not an Off selection.
+pub fn legacy_choice<'a>(
+    id: &str,
+    on: &'a str,
+    off: &'a str,
+    value: &serde_json::Value,
+) -> Option<&'a str> {
+    legacy_state(id, on, stored_value(value)?).map(|state| choice(on, off, state))
+}
+
+fn stored_value(value: &serde_json::Value) -> Option<&str> {
+    match value {
+        serde_json::Value::Bool(true) => Some("true"),
+        serde_json::Value::Bool(false) => Some("false"),
+        other => other.as_str(),
+    }
+}
+
+fn legacy_state(id: &str, on: &str, value: &str) -> Option<bool> {
+    match (id, on, value) {
+        ("serviceTier", "fast", "priority") => Some(true),
+        ("fastMode" | "fast_mode", "on", boolean) | ("fast", "true", boolean) => {
+            boolean.parse().ok()
+        }
+        _ => None,
+    }
+}
+
 pub fn enabled(id: &str, on: &str, value: &str) -> bool {
-    value == on || (on == "on" && value == "true") || (id == "serviceTier" && value == "priority")
+    value == on || legacy_state(id, on, value) == Some(true)
+}
+
+pub fn enabled_json(id: &str, on: &str, value: &serde_json::Value) -> bool {
+    stored_value(value).is_some_and(|s| enabled(id, on, s))
 }
 
 pub fn choice<'a>(on: &'a str, off: &'a str, enabled: bool) -> &'a str {
@@ -70,6 +102,29 @@ mod tests {
         }
         assert_eq!(choices("thinking", "off", ["off", "on"].into_iter()), None);
         assert_eq!(choices("speed", "fast", ["fast"].into_iter()), None);
+    }
+
+    #[test]
+    fn canonicalize_only_known_legacy_choices() {
+        use serde_json::json;
+
+        assert_eq!(
+            legacy_choice("serviceTier", "fast", "default", &json!("priority")),
+            Some("fast")
+        );
+        for id in ["fastMode", "fast_mode"] {
+            assert_eq!(legacy_choice(id, "on", "off", &json!(true)), Some("on"));
+            assert_eq!(legacy_choice(id, "on", "off", &json!("false")), Some("off"));
+        }
+        assert_eq!(
+            legacy_choice("fast", "true", "false", &json!(false)),
+            Some("false")
+        );
+        assert_eq!(legacy_choice("speed", "fast", "normal", &json!(true)), None);
+        assert_eq!(
+            legacy_choice("serviceTier", "fast", "default", &json!("retired")),
+            None
+        );
     }
 
     #[test]
