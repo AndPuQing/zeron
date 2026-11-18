@@ -73,6 +73,8 @@ struct Shared {
     tx: broadcast::Sender<(String, Row)>,
     /// Chat sockets currently open (per chat).
     sockets: Mutex<HashMap<String, usize>>,
+    /// Hold STATE after recording HELLO to exercise a handshake in flight.
+    chat_handshake: tokio::sync::Mutex<()>,
     /// Refuse chat2 joins (outage simulation).
     refuse_chat: Mutex<bool>,
     relays: Mutex<HashMap<String, RelayState>>,
@@ -133,6 +135,7 @@ impl MockEdge {
             tx,
             sockets: Mutex::new(HashMap::new()),
             refuse_chat: Mutex::new(false),
+            chat_handshake: Default::default(),
             relays: Mutex::new(HashMap::new()),
             relay_dials: Mutex::new(HashMap::new()),
             connections: Default::default(),
@@ -325,6 +328,10 @@ impl MockEdge {
         *edge.shared.relay_layer.lock().unwrap() = true;
         *edge.shared.http.lock().unwrap() = true;
         edge
+    }
+
+    pub async fn hold_chat_handshake(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.shared.chat_handshake.lock().await
     }
 
     /// Turn the edge flag on or off for rooms' next answers.
@@ -748,6 +755,7 @@ async fn serve_chat(ws: Ws, chat: String, shared: Arc<Shared>) {
                             }
                             state_frame(Some(room), head_seq, relay)
                         };
+                        drop(shared.chat_handshake.lock().await);
                         if tx.send(Message::Binary(state)).await.is_err() {
                             break;
                         }

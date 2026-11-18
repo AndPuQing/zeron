@@ -985,14 +985,12 @@ impl Room {
         });
     }
 
-    /// Liveness hint (view attached / foreground): probe or redial now.
+    /// Verify liveness when a view attaches or returns to the foreground.
     pub(crate) fn kick(&self) {
         if let Some(client) = &lock(&self.slot).client {
-            if client.stats().connected {
-                client.probe();
-            } else {
-                client.redial();
-            }
+            // The actor consumes this after its handshake. A redial requested
+            // while connecting would tear down the socket it has just joined.
+            client.probe();
         }
     }
 

@@ -893,8 +893,12 @@ async fn a_row_no_checkpoint_can_fill_never_sets_off_the_download_loop() {
     let dir = tempfile::tempdir().unwrap();
     let client = phone(&edge, dir.path());
     registered(&client, chat).await;
+    let handshake = edge.hold_chat_handshake().await;
     let session = client.open_session(chat).unwrap();
+    eventually("the initial hello", 10, || !edge.hellos(chat).is_empty()).await;
+    // A view may attach while HELLO is in flight. It must not discard that socket.
     session.set_view_attached(true);
+    drop(handshake);
     eventually("the checkpoint", 15, || shows(&session, "in the checkpoint")).await;
     // Long enough for a loop to show itself: each round is a redial and a download.
     tokio::time::sleep(Duration::from_secs(12)).await;
