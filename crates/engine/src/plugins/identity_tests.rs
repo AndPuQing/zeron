@@ -34,7 +34,7 @@ mod shim {
         plugins.register_key().await;
     }
 
-    /// What allowing needs from Zeron's consent window (a review), if anything.
+    /// What allowing needs from Zerun's consent window (a review), if anything.
     pub async fn review(plugins: &Plugins, id: &str, hash: &serde_json::Value) -> serde_json::Value {
         match super::call(plugins, methods::REVIEW_PLUGIN, serde_json::json!({ "id": id, "hash": hash })).await {
             Ok(reply) => reply["review"].clone(),
@@ -174,7 +174,7 @@ async fn r3_an_update_inside_its_powers_does_not_ask() {
     let mut fewer = extra.clone();
     fewer["commands"] = serde_json::json!(["gh"]);
     fewer["name"] = serde_json::json!("Focus, renamed");
-    // A new place in Zeron's UI it changes: shown, never asked about.
+    // A new place in Zerun's UI it changes: shown, never asked about.
     fewer["ui"] = serde_json::json!({ "change": ["#composer", "#sidebar"] });
     std::fs::write(&path, package(&ada, "focus", "1.1.0", fewer)).unwrap();
     let updated = call(&f.plugins, methods::UPDATE_PLUGIN, serde_json::json!({ "id": "focus" })).await.unwrap();
@@ -368,7 +368,7 @@ async fn r14_deliveries_fail_closed() {
     assert_eq!(stamped["outcome"], "delivered");
     assert_eq!(channel.next().await.unwrap()["from"]["id"], "dev-7");
 
-    // Zeron's own only with Zeron's own.
+    // Zerun's own only with Zerun's own.
     let shipped = f.data.join("app-plugins");
     std::fs::create_dir_all(shipped.join("git")).unwrap();
     std::fs::write(shipped.join("git/init.luau"), "return 1").unwrap();
@@ -622,4 +622,23 @@ async fn r13_revoking_a_devices_key_tells_that_device() {
     // No device links here: the word can't go, the revoke still happens.
     call(&f.plugins, methods::PLUGIN_SIGNING_KEY, serde_json::json!({ "revoke": "B-KEY" })).await.unwrap();
     assert_eq!(shim::revoked(&fake), vec!["B-KEY".to_string()]);
+}
+
+/// Signed out (a directory to ask, as a production engine has, but no
+/// account), the key checks have nothing to do: no rescan of every plugin
+/// folder each half minute (`KEYS_RETRY`) while nothing changes.
+#[tokio::test(start_paused = true)]
+async fn signed_out_no_rescan_every_half_minute() {
+    let f = fixture();
+    let fake = Arc::new(FakeDirectory::default());
+    f.plugins.set_directory(fake.clone());
+    f.plugins.set_account(|| None);
+    f.plugins.start();
+    // (Past the start's own scans and the first look for updates.)
+    tokio::time::sleep(super::lifecycle::FIRST_CHECK + std::time::Duration::from_secs(10)).await;
+    let scans = || f.plugins.inner.scans.load(std::sync::atomic::Ordering::SeqCst);
+    let settled = scans();
+    assert!(settled >= 1, "the start's own scan");
+    tokio::time::sleep(std::time::Duration::from_secs(150)).await;
+    assert_eq!(scans(), settled, "rescanned with nothing to look up");
 }
