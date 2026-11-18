@@ -1,2 +1,0 @@
-# UniFFI emits trailing spaces; CI compares this binding byte for byte.
-zeron_core.swift whitespace=-blank-at-eol,blank-at-eof,space-before-tab
