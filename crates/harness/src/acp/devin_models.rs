@@ -147,7 +147,7 @@ impl Catalog {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd.spawn()?;
+        let mut child = crate::process::spawn_agent(&mut cmd)?;
         let mut stdout = child.stdout.take().expect("piped stdout");
         let mut stderr = child.stderr.take().expect("piped stderr");
         let mut out = Vec::new();
@@ -293,7 +293,7 @@ fn parse_variant(family: &str, label: &str) -> (String, Option<ReasoningLevel>, 
 
 fn effort_word(word: &str, next: Option<&&str>) -> Option<(ReasoningLevel, bool)> {
     Some(match word {
-        // "No Thinking" is Devin's `none`; Zeron's lowest level stands in.
+        // "No Thinking" is Devin's `none`; Zerun's lowest level stands in.
         "No" if next == Some(&"Thinking") => (ReasoningLevel::Minimal, true),
         "None" | "Minimal" => (ReasoningLevel::Minimal, false),
         "Low" => (ReasoningLevel::Low, false),

@@ -349,7 +349,7 @@ impl Harness for CursorHarness {
     }
     /// "Installed" means the user evidently uses Cursor: their own
     /// cursor-agent CLI, or credentials the SDK itself runs on —
-    /// `CURSOR_API_KEY`, or its saved login (which Zeron's own Cursor sign-in
+    /// `CURSOR_API_KEY`, or its saved login (which Zerun's own Cursor sign-in
     /// writes). The SDK never uses the CLI, so requiring it hid Cursor from
     /// users who signed in without installing it (common on Windows). The SDK
     /// itself is a managed install zeron performs on demand.
@@ -456,7 +456,7 @@ impl Harness for CursorHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             let cwd = (!request.cwd.is_empty()).then(|| std::path::Path::new(&request.cwd));
             crate::executable::spawn_error(e, cwd, || exe.display().to_string())
         })?;
@@ -495,7 +495,7 @@ impl Harness for CursorHarness {
             "modelOptions": request.model_options,
             "resume": request.resume,
             "mcp": request.mcp,
-            // The plugins' native servers, beside Zeron's own.
+            // The plugins' native servers, beside Zerun's own.
             "extraMcp": request.extra_mcp,
             "storeDir": lease.as_ref().and_then(|lease| lease.store_dir.as_ref()),
             "images": images,
