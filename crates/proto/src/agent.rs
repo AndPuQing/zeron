@@ -21,7 +21,7 @@ pub struct HarnessConfigFiles {
 
 /// The wire prefix of an agent added from the ACP registry: its harness
 /// slug is `acp.<registry id>` (`acp.gemini`), kept apart from the built-in
-/// slugs (the registry also lists agents Zeron drives itself, `cursor`,
+/// slugs (the registry also lists agents Zerun drives itself, `cursor`,
 /// `devin`, …) and safe as a directory name on every platform.
 pub const REGISTRY_SLUG_PREFIX: &str = "acp.";
 
@@ -569,7 +569,7 @@ impl SandboxLevel {
 
 /// What an agent-made chat may run with: `sandbox` and `access` no more
 /// trusting than its creator's (`ceiling`), and whether either was lowered.
-/// A chat created through Zeron's MCP never gets more access than the chat
+/// A chat created through Zerun's MCP never gets more access than the chat
 /// that created it.
 pub fn cap_access(
     (sandbox, access): (SandboxLevel, AccessMode),
@@ -697,12 +697,12 @@ pub struct RunRequest {
     /// host ignores it and runs in `cwd` (the repo's main checkout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeSpec>,
-    /// Zeron's own MCP server, injected by the HOST engine as it starts the
+    /// Zerun's own MCP server, injected by the HOST engine as it starts the
     /// run: the `zeron mcp` subcommand of this same binary, pointed at the
     /// engine's loopback IPC and stamped with the originating chat so the
     /// agent can spawn, read, and message side chats. Additive +
     /// serde-defaulted — an old host leaves it unset and the agent simply has
-    /// no Zeron tools; title runs never carry it.
+    /// no Zerun tools; title runs never carry it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpServer>,
     /// Native MCP servers from the host's plugins (those `on` with `native`
@@ -774,7 +774,12 @@ impl std::fmt::Debug for RunRequest {
 /// of whatever the user configured. Each driver spells it in its own dialect
 /// (Claude `--mcp-config`, ACP `session/new` `mcpServers`, Codex
 /// `mcp_servers.*` config overrides).
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+///
+/// Zerun's own server also carries [`Self::http`]: the engine serves its
+/// tools itself, over loopback Streamable HTTP, so a driver whose agent
+/// speaks HTTP MCP adds that and starts no process. `command`/`args`/`env`
+/// then name a small stdio-to-HTTP proxy for agents that only speak stdio.
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServer {
     pub name: String,
@@ -783,10 +788,79 @@ pub struct McpServer {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// The same server over Streamable HTTP, for agents that speak it.
+    /// Additive + serde-defaulted for wire compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub http: Option<McpHttp>,
+}
+
+/// Values of these keys are credentials: never printed.
+const SECRET_ENV: [&str; 1] = [McpServer::TOKEN_ENV];
+
+/// Hand-written so a `{:?}` never prints a run's MCP token.
+impl std::fmt::Debug for McpServer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let env: std::collections::BTreeMap<&str, &str> = self
+            .env
+            .iter()
+            .map(|(key, value)| {
+                let value = if SECRET_ENV.contains(&key.as_str()) {
+                    "<redacted>"
+                } else {
+                    value.as_str()
+                };
+                (key.as_str(), value)
+            })
+            .collect();
+        f.debug_struct("McpServer")
+            .field("name", &self.name)
+            .field("command", &self.command)
+            .field("args", &self.args)
+            .field("env", &env)
+            .field("http", &self.http)
+            .finish()
+    }
+}
+
+/// An MCP server's Streamable HTTP endpoint: its URL and the headers every
+/// request carries (the run's bearer token).
+#[derive(Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpHttp {
+    pub url: String,
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
+}
+
+impl McpHttp {
+    /// The bearer token of an `Authorization: Bearer …` header, if any.
+    pub fn bearer_token(&self) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+            .and_then(|(_, value)| value.strip_prefix("Bearer "))
+    }
+}
+
+/// Header names only: the values are credentials.
+impl std::fmt::Debug for McpHttp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("McpHttp")
+            .field("url", &self.url)
+            .field("headers", &self.headers.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 impl McpServer {
-    /// Set to `1` on Zeron's own server when its host turned the provider's
+    /// The stdio proxy's endpoint URL ([`Self::http`]'s, for agents that
+    /// only speak stdio).
+    pub const URL_ENV: &'static str = "ZERON_MCP_URL";
+    /// The stdio proxy's bearer token: the run's own, scoped to its chat and
+    /// revoked when the run ends.
+    pub const TOKEN_ENV: &'static str = "ZERON_MCP_TOKEN";
+
+    /// Set to `1` on Zerun's own server when its host turned the provider's
     /// native subagents off (Settings → Providers) and the chat has no
     /// parent: the agent delegates through this server's side chats instead,
     /// and the driver launches it without its subagent tools.
@@ -798,17 +872,17 @@ impl McpServer {
             .is_some_and(|value| value == "1")
     }
 
-    /// The chat Zeron's own server speaks for, set when the engine launched
+    /// The chat Zerun's own server speaks for, set when the engine launched
     /// it for a chat's run (its in-chat tools are offered only then).
     pub const CHAT_ID_ENV: &'static str = "ZERON_CHAT_ID";
 
-    /// Set to `1` on Zeron's own server for a chat's run when the runtime
+    /// Set to `1` on Zerun's own server for a chat's run when the runtime
     /// brings its agent back on its own as background work ends: only then
     /// is the agent offered `wait_on_background` (anywhere else a turn that
     /// ends is the agent done, and the call would only be refused).
     pub const WAITS_ON_BACKGROUND_ENV: &'static str = "ZERON_WAITS_ON_BACKGROUND";
 
-    /// Whether this is Zeron's server for a chat's run whose agent may say
+    /// Whether this is Zerun's server for a chat's run whose agent may say
     /// it waits on background work.
     pub fn waits_on_background(&self) -> bool {
         self.env.get(Self::CHAT_ID_ENV).is_some_and(|id| !id.is_empty())
@@ -986,7 +1060,7 @@ pub const SUBAGENT_INPUT_KEEP: [&str; 5] = [
 ];
 
 /// Bounds on an agent's inline visual ([`AgentEvent::Visual`]): a Luau
-/// script Zeron runs in a sandbox and renders natively.
+/// script Zerun runs in a sandbox and renders natively.
 pub const VISUAL_MAX_BYTES: usize = 256 * 1024;
 pub const VISUAL_MAX_TITLE_CHARS: usize = 200;
 /// Files a visual may ship with (models, textures, environment maps).
@@ -1256,7 +1330,7 @@ pub enum AgentEvent {
     },
     /// An agent-authored visual shown inline in the reply: a Luau script
     /// that builds native UI (`zeron-visual`). The engine emits it when the
-    /// agent calls Zeron's `show_visual` MCP tool; `path` is the stored
+    /// agent calls Zerun's `show_visual` MCP tool; `path` is the stored
     /// script on the host device.
     Visual {
         id: String,

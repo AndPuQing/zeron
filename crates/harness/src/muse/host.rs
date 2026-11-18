@@ -70,7 +70,7 @@ impl Host {
         crate::compose_child_path(&mut cmd, exe);
         // An inherited API key would silently replace the user's own Muse
         // login; a run's explicit one (a Cloud device's) still wins below.
-        // Zeron updates Muse itself: no background self-update mid-session.
+        // Zerun updates Muse itself: no background self-update mid-session.
         cmd.env_remove("META_API_KEY")
             .env("MUSE_NO_AUTO_UPDATE", "1");
         environment.apply(&mut cmd);
@@ -81,7 +81,7 @@ impl Host {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = Child::new(cmd.spawn().map_err(|e| {
+        let mut child = Child::new(crate::process::spawn_agent(&mut cmd).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 HarnessError::NotInstalled(crate::executable::binary_hint(exe))
             } else {

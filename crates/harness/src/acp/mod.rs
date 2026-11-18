@@ -223,7 +223,7 @@ fn default_effort_values(
 }
 
 /// Devin's `thought_level` also offers `none` ("No Thinking"), which the
-/// catalog maps to Zeron's lowest level.
+/// catalog maps to Zerun's lowest level.
 fn devin_effort_values(
     reasoning: Option<ReasoningLevel>,
     model: Option<&str>,
@@ -1928,6 +1928,44 @@ pub struct AcpHarness {
     models_cache: crate::catalog::Catalog,
     workspace_commands: crate::skills::CommandDiscovery,
     devin_models: std::sync::Arc<devin_models::Catalog>,
+    /// Agents started before their chat's first message ([`Harness::prewarm`]),
+    /// by key: launched, their handshake left to the run.
+    warm: std::sync::Mutex<std::collections::HashMap<String, WarmAgent>>,
+}
+
+/// A parked warm start: the agent process and what it was launched with
+/// (its folder, MCP server and environment: all `spawn_agent` takes).
+struct WarmAgent {
+    cwd: String,
+    mcp: Option<zeron_proto::McpServer>,
+    env: std::collections::BTreeMap<String, String>,
+    spawned: Spawned,
+}
+
+/// What `spawn_agent` hands a run.
+type Spawned = (Option<ScratchDir>, Child, crate::StderrTail, CancellationToken);
+
+fn lock_warm<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// End a warm start no message reached.
+async fn retire_warm(warm: WarmAgent, kill_grace: Duration) {
+    let (scratch, mut child, _, _) = warm.spawned;
+    drop(child.stdin.take());
+    child.shutdown(kill_grace).await;
+    drop(scratch);
+}
+
+/// [`retire_warm`], in the background.
+fn spawn_retire(warm: WarmAgent, kill_grace: Duration) {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            handle.spawn(retire_warm(warm, kill_grace));
+        }
+        // (No runtime: the child is killed on drop.)
+        Err(_) => drop(warm),
+    }
 }
 
 impl AcpHarness {
@@ -1960,6 +1998,7 @@ impl AcpHarness {
             models_cache: crate::catalog::Catalog::default(),
             workspace_commands: crate::skills::CommandDiscovery::default(),
             devin_models: Default::default(),
+            warm: Default::default(),
         }
     }
 
@@ -2135,7 +2174,7 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             let home = std::env::var_os("HOME");
             let cwd = home.as_deref().map(std::path::Path::new);
             crate::executable::spawn_error(e, cwd, || crate::executable::binary_hint(&exe))
@@ -2267,7 +2306,7 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             crate::executable::spawn_error(e, None, || crate::executable::binary_hint(&exe))
         })?;
         if let Some(stderr) = child.stderr.take() {
@@ -2550,7 +2589,7 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             crate::executable::spawn_error(e, None, || crate::executable::binary_hint(&exe))
         })?;
         let (client, incoming) = match (child.stdin.take(), child.stdout.take()) {
@@ -2638,9 +2677,9 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut login = cmd
-            .spawn()
-            .map_err(|e| crate::executable::spawn_error(e, None, || crate::executable::binary_hint(exe)))?;
+        let mut login = crate::process::spawn_agent(&mut cmd).map_err(|e| {
+            crate::executable::spawn_error(e, None, || crate::executable::binary_hint(exe))
+        })?;
         let mut readers = Vec::new();
         if let Some(out) = login.stdout.take() {
             readers.push(tokio::spawn(report_lines(out, on_progress.clone())));
@@ -2976,7 +3015,7 @@ impl AcpHarness {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let child = cmd.spawn().map_err(|e| {
+        let child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             let cwd = cwd.filter(|c| !c.is_empty()).map(std::path::Path::new);
             crate::executable::spawn_error(e, cwd, || crate::executable::binary_hint(&exe))
         })?;
@@ -3794,22 +3833,94 @@ impl Harness for AcpHarness {
         request: RunRequest,
         controls: RunControls,
     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        self.run_spawned(request, controls, None).await
+    }
+
+    /// An ACP agent asks no model anything until `session/prompt`: launched
+    /// early, its process's own startup is done by the first message (the
+    /// handshake, `initialize` and `session/new`, stays the run's: an agent's
+    /// sign-in prompt belongs to a run the person sees).
+    fn prewarms(&self) -> bool {
+        true
+    }
+
+    async fn prewarm(&self, key: &str, request: RunRequest) -> Result<(), HarnessError> {
+        self.discard_warm(key).await;
+        // (Never an install on the way: a warm start only uses what's there.)
+        let spawned = self
+            .spawn_agent(Some(&request.cwd), false, &[], request.mcp.as_ref(), &request.env, false)
+            .await?;
+        let warm = WarmAgent {
+            cwd: request.cwd.clone(),
+            mcp: request.mcp.clone(),
+            env: request.env.clone(),
+            spawned,
+        };
+        if let Some(old) = lock_warm(&self.warm).insert(key.to_owned(), warm) {
+            spawn_retire(old, self.kill_grace);
+        }
+        Ok(())
+    }
+
+    async fn run_warm(
+        &self,
+        key: &str,
+        request: RunRequest,
+        controls: RunControls,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+        let mut warm = lock_warm(&self.warm).remove(key);
+        let alive = warm
+            .as_mut()
+            .is_some_and(|w| matches!(w.spawned.1.try_wait(), Ok(None)));
+        let spawned = match warm {
+            Some(w) if alive && w.cwd == request.cwd && w.mcp == request.mcp && w.env == request.env => {
+                Some(w.spawned)
+            }
+            Some(w) => {
+                tracing::info!(target: "zeron_harness::acp", key, "warm start not used; starting afresh");
+                spawn_retire(w, self.kill_grace);
+                None
+            }
+            None => None,
+        };
+        self.run_spawned(request, controls, spawned).await
+    }
+
+    async fn discard_warm(&self, key: &str) {
+        let warm = lock_warm(&self.warm).remove(key);
+        if let Some(warm) = warm {
+            retire_warm(warm, self.kill_grace).await;
+        }
+    }
+}
+
+impl AcpHarness {
+    async fn run_spawned(
+        &self,
+        request: RunRequest,
+        controls: RunControls,
+        spawned: Option<Spawned>,
+    ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
         let access = self.access_for(&request).ok_or_else(|| {
             HarnessError::Protocol(format!(
                 "{} cannot run in Auto or a stricter access mode. Choose another agent or explicitly select Full access.",
                 self.spec.display_name
             ))
         })?;
-        let (scratch, mut child, stderr_tail, sign_in_prompted) = self
-            .spawn_agent(
-                Some(&request.cwd),
-                true,
-                &[],
-                request.mcp.as_ref(),
-                &request.env,
-                false,
-            )
-            .await?;
+        let (scratch, mut child, stderr_tail, sign_in_prompted) = match spawned {
+            Some(spawned) => spawned,
+            None => {
+                self.spawn_agent(
+                    Some(&request.cwd),
+                    true,
+                    &[],
+                    request.mcp.as_ref(),
+                    &request.env,
+                    false,
+                )
+                .await?
+            }
+        };
         let stdin = child
             .stdin
             .take()
@@ -3984,7 +4095,7 @@ fn initialize_params(harness: HarnessId) -> Value {
         // Devin otherwise exposes only the parent's run_subagent call. This
         // unlocks lifecycle tags plus every nested message, thought, and tool
         // update, all of which DevinTracker can route. Do not advertise the
-        // separate subagentControl extension: Zeron has no matching UI yet.
+        // separate subagentControl extension: Zerun has no matching UI yet.
         capabilities["_meta"] = json!({ "cognition.ai/subagentSupport": true });
     }
     // Grok gets no `_meta.clientType`, deliberately: naming a client type
@@ -4021,28 +4132,47 @@ fn cancel_params(harness: HarnessId, session_id: &str) -> Value {
 /// config, never from here.
 #[cfg(test)]
 fn acp_mcp_servers(mcp: Option<&zeron_proto::McpServer>) -> Vec<Value> {
-    acp_session_mcp_servers(mcp, &[])
+    acp_session_mcp_servers(mcp, &[], false)
+}
+
+/// Whether the agent takes HTTP MCP servers in `session/new`
+/// (`agentCapabilities.mcpCapabilities.http`).
+fn takes_http_mcp(init: &Value) -> bool {
+    init.pointer("/agentCapabilities/mcpCapabilities/http")
+        .and_then(Value::as_bool)
+        == Some(true)
 }
 
 /// [`acp_mcp_servers`] plus the plugins' native servers
-/// ([`RunRequest::extra_mcp`]), Zeron's own first.
+/// ([`RunRequest::extra_mcp`]), Zerun's own first. With `http` (the agent
+/// takes HTTP servers), Zerun's own is the engine's endpoint
+/// (`{type: "http", name, url, headers: [{name, value}]}`) and no process
+/// starts; otherwise its stdio command — the engine's `mcp-proxy`.
 fn acp_session_mcp_servers(
     mcp: Option<&zeron_proto::McpServer>,
     extras: &[zeron_proto::McpServer],
+    http: bool,
 ) -> Vec<Value> {
+    let pairs = |map: &std::collections::BTreeMap<String, String>| {
+        map.iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect::<Vec<_>>()
+    };
     mcp.into_iter()
         .chain(extras)
-        .map(|mcp| {
-            json!({
+        .map(|mcp| match mcp.http.as_ref().filter(|_| http) {
+            Some(endpoint) => json!({
+                "type": "http",
+                "name": mcp.name,
+                "url": endpoint.url,
+                "headers": pairs(&endpoint.headers),
+            }),
+            None => json!({
                 "name": mcp.name,
                 "command": mcp.command,
                 "args": mcp.args,
-                "env": mcp
-                    .env
-                    .iter()
-                    .map(|(name, value)| json!({ "name": name, "value": value }))
-                    .collect::<Vec<_>>(),
-            })
+                "env": pairs(&mcp.env),
+            }),
         })
         .collect()
 }
@@ -4895,7 +5025,7 @@ fn elicit_choices(field: &Value) -> Vec<(String, String)> {
 }
 
 /// The primitive one property's answer must be spelled as. `None` for a type
-/// Zeron cannot render faithfully (a custom `_` extension or a future variant),
+/// Zerun cannot render faithfully (a custom `_` extension or a future variant),
 /// which declines the form rather than answering it wrong.
 fn elicit_kind(field: &Value, choices: &[(String, String)]) -> Option<ElicitKind> {
     match field.get("type").and_then(Value::as_str) {
@@ -5253,7 +5383,11 @@ async fn open_session(
 ) -> Result<(String, Value), HarnessError> {
     let params = json!({
         "cwd": request.cwd,
-        "mcpServers": acp_session_mcp_servers(request.mcp.as_ref(), &request.extra_mcp),
+        "mcpServers": acp_session_mcp_servers(
+            request.mcp.as_ref(),
+            &request.extra_mcp,
+            takes_http_mcp(init),
+        ),
     });
     if let Some(resume) = &request.resume {
         let method = restore_method(init, harness);
@@ -8316,7 +8450,7 @@ mod tests {
         assert_eq!(form.kinds[at("note")], ElicitKind::Text);
         assert!(form.questions[at("note")].multiline);
 
-        // A type Zeron cannot render declines the whole form.
+        // A type Zerun cannot render declines the whole form.
         assert!(
             elicit_form(&json!({
                 "mode": "form",
@@ -9492,6 +9626,7 @@ mod mcp_injection_tests {
             env: [("ZERUN_IPC_PORT".to_owned(), "27655".to_owned())]
                 .into_iter()
                 .collect(),
+            http: None,
         };
         let servers = acp_mcp_servers(Some(&mcp));
         assert_eq!(
@@ -9511,14 +9646,16 @@ mod mcp_injection_tests {
             command: "/opt/zeron/zeron".into(),
             args: vec!["mcp".into()],
             env: Default::default(),
+            http: None,
         };
         let extra = zeron_proto::McpServer {
             name: "plugin-focus".into(),
             command: "/data/plugins/.loaded/focus/0123/bin/server".into(),
             args: vec![],
             env: [("FOCUS".to_owned(), "1".to_owned())].into_iter().collect(),
+            http: None,
         };
-        let servers = acp_session_mcp_servers(Some(&zeron), std::slice::from_ref(&extra));
+        let servers = acp_session_mcp_servers(Some(&zeron), std::slice::from_ref(&extra), false);
         assert_eq!(servers.len(), 2);
         assert_eq!(servers[0]["name"], "zeron");
         assert_eq!(
@@ -9530,6 +9667,35 @@ mod mcp_injection_tests {
                 "env": [{ "name": "FOCUS", "value": "1" }],
             })
         );
-        assert_eq!(acp_session_mcp_servers(None, &[extra]).len(), 1);
+        assert_eq!(acp_session_mcp_servers(None, &[extra], false).len(), 1);
+    }
+
+    /// An agent that takes HTTP servers gets the engine's endpoint for
+    /// Zerun's own (no process); one that doesn't gets the stdio proxy.
+    #[test]
+    fn zeron_s_server_is_http_only_where_the_agent_takes_it() {
+        let zeron = zeron_proto::McpServer {
+            name: "zeron".into(),
+            command: "/opt/zeron/zeron-engine".into(),
+            args: vec!["mcp-proxy".into()],
+            env: [("ZERON_MCP_TOKEN".to_owned(), "t".to_owned())].into_iter().collect(),
+            http: Some(zeron_proto::McpHttp {
+                url: "http://127.0.0.1:4321/mcp".into(),
+                headers: [("Authorization".to_owned(), "Bearer t".to_owned())]
+                    .into_iter()
+                    .collect(),
+            }),
+        };
+        let http = acp_session_mcp_servers(Some(&zeron), &[], true);
+        assert_eq!(http[0]["type"], "http");
+        assert_eq!(http[0]["url"], "http://127.0.0.1:4321/mcp");
+        assert_eq!(http[0]["headers"], json!([{ "name": "Authorization", "value": "Bearer t" }]));
+        let stdio = acp_session_mcp_servers(Some(&zeron), &[], false);
+        assert_eq!(stdio[0]["command"], "/opt/zeron/zeron-engine");
+        assert_eq!(stdio[0]["args"], json!(["mcp-proxy"]));
+        assert!(stdio[0].get("type").is_none());
+        let init = json!({ "agentCapabilities": { "mcpCapabilities": { "http": true } } });
+        assert!(takes_http_mcp(&init));
+        assert!(!takes_http_mcp(&json!({ "agentCapabilities": {} })));
     }
 }

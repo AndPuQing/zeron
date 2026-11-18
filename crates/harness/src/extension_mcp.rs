@@ -79,11 +79,11 @@ mod tests {
     fn plugin_servers_keep_separate_configs_for_both_extension_hosts() {
         let app = zeron_proto::McpServer {
             name: "zeron".into(), command: "zerun".into(),
-            args: vec!["mcp".into()], env: Default::default(),
+            args: vec!["mcp".into()], env: Default::default(), http: None,
         };
         let plugin = zeron_proto::McpServer {
             name: "plugin-focus".into(), command: "focus-server".into(),
-            args: vec![], env: Default::default(),
+            args: vec![], env: Default::default(), http: None,
         };
         for host in [&PI, &OMP] {
             let mut cmd = Command::new("fixture-agent");

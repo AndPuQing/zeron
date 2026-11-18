@@ -1019,7 +1019,7 @@ impl Server {
         let restricted = !access.is_full_access();
         if mcp.is_some() || !extra_mcp.is_empty() || restricted {
             // The config shape differs by generation. If even the cold probe
-            // can't tell, run without the Zeron MCP server rather than fail,
+            // can't tell, run without the Zerun MCP server rather than fail,
             // but never without the rules a restricted mode relies on: the
             // run would do unasked what the person chose to approve.
             match preferred {
@@ -1079,7 +1079,7 @@ impl Server {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| {
+        let mut child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             let cwd = cwd.map(std::path::Path::new);
             fatal(crate::executable::spawn_error(e, cwd, || {
                 crate::executable::binary_hint(exe)
@@ -5871,7 +5871,7 @@ fn mcp_config(
     Ok(config.to_string())
 }
 
-/// [`mcp_config`] for Zeron's own server and then each plugin server
+/// [`mcp_config`] for Zerun's own server and then each plugin server
 /// ([`RunRequest::extra_mcp`]); the inherited config passes through
 /// untouched when there are none.
 fn mcp_configs(
@@ -6173,12 +6173,14 @@ mod mcp_injection_tests {
             command: "/opt/zeron/zeron".into(),
             args: vec!["mcp".into()],
             env: Default::default(),
+            http: None,
         };
         let extra = zeron_proto::McpServer {
             name: "plugin-focus".into(),
             command: "/data/plugins/.loaded/focus/0123/bin/server".into(),
             args: vec!["--stdio".into()],
             env: [("FOCUS".to_owned(), "1".to_owned())].into_iter().collect(),
+            http: None,
         };
         assert_eq!(
             mcp_configs(Some("{\"model\":\"keep\"}".into()), None, &[], Protocol::V1).unwrap(),
@@ -6243,6 +6245,7 @@ http.createServer((req, res) => {{
                 command: "/path with spaces/zeron".into(),
                 args: vec!["mcp".into()],
                 env: [("ZERON_CHAT_ID".into(), "first".into())].into(),
+                http: None,
             };
             let mut second = first.clone();
             second.env.insert("ZERON_CHAT_ID".into(), "second".into());
@@ -6335,6 +6338,7 @@ http.createServer((req, res) => {
             command: "zeron".into(),
             args: vec!["mcp".into()],
             env: Default::default(),
+            http: None,
         };
         let mut server = Server::spawn(
             &exe,
@@ -6464,6 +6468,7 @@ if (process.argv.includes('--version')) {{
             command: "zeron".into(),
             args: vec!["mcp".into()],
             env: Default::default(),
+            http: None,
         };
         for _ in 0..2 {
             let mut server = Server::spawn(
@@ -6490,6 +6495,7 @@ if (process.argv.includes('--version')) {{
             command: "/path with spaces/zeron".into(),
             args: vec!["mcp".into()],
             env: [("ZERON_CHAT_ID".into(), "first".into())].into(),
+            http: None,
         };
         for protocol in [Protocol::V1, Protocol::V2] {
             let inherited = match protocol {
