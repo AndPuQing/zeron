@@ -49,11 +49,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       - name: Build matching engine
         run: cargo build --locked -p zeron --bin zerun-engine --no-default-features
-      - name: Check experimental desktop and run host and interface regressions
+      - name: Check experimental desktop
+        id: check-desktop
         working-directory: apps/zgx
         run: |
           cargo check --locked --all-targets
-          cargo test --locked -- --skip transcript_paint_tests::
       - name: Verify transcript paint cases in separate processes
         working-directory: apps/zgx
         shell: bash
@@ -66,6 +66,10 @@ jobs:
           while IFS= read -r name; do
             cargo test --locked --bin zerun-experimental "$name" -- --exact
           done <<< "$cases"
+      - name: Run remaining host and interface regressions
+        if: ${{ !cancelled() && steps.check-desktop.outcome == 'success' }}
+        working-directory: apps/zgx
+        run: cargo test --locked --no-fail-fast -- --skip transcript_paint_tests::
       - name: Check build helper
         run: bash -n scripts/experimental-desktop.sh
       - name: Check packaged Beta profile and account configuration

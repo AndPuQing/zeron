@@ -320,10 +320,6 @@ function M.use(opts: Use)
 		refs:set(next)
 		el:set_selection_bytes(from, to)
 		el:replace_selection(text)
-		if M.debug then
-			local a, b = el:selection_bytes()
-			print(`[mentions] after: selection {a}..{b} text {string.sub(opts.value:peek(), 1, 80)}`)
-		end
 		-- The caret is past what was put in (the field says so on its next
 		-- caret event; said here too, so the list goes with the token at
 		-- once). The token's session is over; the next trigger opens one.
