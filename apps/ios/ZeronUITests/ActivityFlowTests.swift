@@ -30,8 +30,7 @@ final class ActivityFlowTests: XCTestCase {
 
     private func open(_ app: XCUIApplication, shelf id: String) {
         let header = section(app, id)
-        XCTAssertTrue(header.waitForExistence(timeout: 10), "\(id) shelf")
-        if !header.isHittable { app.collectionViews.firstMatch.swipeUp() }
+        reveal(header, in: app, down: true)
         if header.value as? String == "Collapsed" { header.tap() }
         XCTAssertEqual(header.value as? String, "Expanded")
     }
@@ -41,13 +40,27 @@ final class ActivityFlowTests: XCTestCase {
     @discardableResult
     private func row(_ app: XCUIApplication, _ id: String, down: Bool = true) -> XCUIElement {
         let cell = app.cells["session-\(id)"]
+        reveal(cell, in: app, down: down)
+        return cell
+    }
+
+    /// A collection view creates cells as they approach the viewport. Scroll
+    /// before querying offscreen cells, including the headers at the foot.
+    private func reveal(_ cell: XCUIElement, in app: XCUIApplication, down: Bool) {
         let list = app.collectionViews.firstMatch
-        // That way first, then back the other way.
-        for step in 0..<14 where !(cell.exists && cell.isHittable) {
+        XCTAssertTrue(list.waitForExistence(timeout: 10))
+        for step in 0..<14 {
+            if cell.exists && cell.isHittable { return }
             if (step < 5) == down { list.swipeUp(velocity: .slow) } else { list.swipeDown(velocity: .slow) }
         }
-        XCTAssertTrue(cell.waitForExistence(timeout: 5), id)
-        return cell
+        XCTAssertTrue(cell.exists && cell.isHittable, "Could not reveal \(cell)")
+    }
+
+    /// Reveal the actions without crossing the floating controls at the
+    /// trailing edge or performing the first action with a full swipe.
+    private func showActions(on cell: XCUIElement) {
+        cell.coordinate(withNormalizedOffset: CGVector(dx: 0.70, dy: 0.5))
+            .press(forDuration: 0.05, thenDragTo: cell.coordinate(withNormalizedOffset: CGVector(dx: 0.26, dy: 0.5)))
     }
 
     /// A menu item by its title (one with a subtitle reads "Title, subtitle").
@@ -85,8 +98,7 @@ final class ActivityFlowTests: XCTestCase {
         XCTAssertTrue(section(app, "activity").waitForExistence(timeout: 5))
         for shelf in ["activity.working", "activity.asleep", "activity.archived"] {
             let header = section(app, shelf)
-            if !header.exists { app.collectionViews.firstMatch.swipeUp() }
-            XCTAssertTrue(header.waitForExistence(timeout: 5), shelf)
+            reveal(header, in: app, down: true)
             XCTAssertEqual(header.value as? String, "Collapsed", "\(shelf) starts folded")
         }
         // Woke: near the top of the list, with the alarm.
@@ -145,9 +157,7 @@ final class ActivityFlowTests: XCTestCase {
         XCTAssertEqual(section(app, "activity.asleep").label, "Asleep, 3")
         let asleep = row(app, "chat-deploy")
         snapshot(app, "activity-asleep-shelf")
-        // (Along its top edge: the list's foot sits under the bottom bar.)
-        asleep.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.2))
-            .press(forDuration: 0.05, thenDragTo: asleep.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.2)))
+        showActions(on: asleep)
         let wake = app.buttons["Wake"]
         XCTAssertTrue(wake.waitForExistence(timeout: 5))
         snapshot(app, "activity-wake-swipe")
@@ -164,7 +174,7 @@ final class ActivityFlowTests: XCTestCase {
         open(app, shelf: "activity.working")
         let waiting = row(app, "chat-ios-keyboard")
         // Under way: Sleep in its swipe, no Archive (stop it first).
-        waiting.swipeLeft()
+        showActions(on: waiting)
         XCTAssertTrue(app.buttons["Sleep"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["Archive"].exists, "a working chat isn't archived")
         snapshot(app, "activity-working-swipe")
