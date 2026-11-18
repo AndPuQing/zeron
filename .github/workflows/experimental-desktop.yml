@@ -69,7 +69,8 @@ jobs:
       - name: Run remaining host and interface regressions
         if: ${{ !cancelled() && steps.check-desktop.outcome == 'success' }}
         working-directory: apps/zgx
-        run: cargo test --locked --no-fail-fast -- --skip transcript_paint_tests::
+        run: |
+          cargo test --locked --no-fail-fast -- --skip transcript_paint_tests::
       - name: Check build helper
         run: bash -n scripts/experimental-desktop.sh
       - name: Check packaged Beta profile and account configuration
