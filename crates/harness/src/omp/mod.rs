@@ -174,7 +174,7 @@ impl OmpHarness {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let scratch = crate::extension_mcp::configure_all(&crate::extension_mcp::OMP, &mut cmd, mcp, extra_mcp)?;
-        let mut child = Child::new(cmd.spawn()?);
+        let mut child = Child::new(crate::process::spawn_agent(&mut cmd)?);
         let tail = crate::StderrTail::default();
         let mut lines = BufReader::new(child.stderr.take().expect("piped stderr")).lines();
         let stderr = tail.clone();

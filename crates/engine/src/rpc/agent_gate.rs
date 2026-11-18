@@ -3,7 +3,7 @@
 //!
 //! - A chat it creates never runs with more access than its own: the new
 //!   chat's sandbox and access mode are capped at the creating chat's,
-//!   silently (Zeron's MCP tool says so in its reply). Cloud children too.
+//!   silently (Zerun's MCP tool says so in its reply). Cloud children too.
 //! - Of `Mutate`, only what its tools do: create, rename and archive chats.
 //!   Never `setChatConfig` (raising a chat's access) or deleting.
 //! - A run it starts in a chat runs as that chat is set (its harness,
@@ -12,8 +12,15 @@
 //!   change files, use a tool) is only for an agent whose own chat runs with
 //!   full access: anything less would let a supervised agent approve, through
 //!   a chat it made, what it would itself have to ask the person for.
-//! - What it writes into a chat carries Zeron's header naming the sending
+//! - What it writes into a chat carries Zerun's header naming the sending
 //!   chat, built here; a header in the text can't claim another chat.
+//! - A command it runs (`RunCommand`, on this device or any other of the
+//!   person's) runs as the person, unconfined: only an agent whose own chat
+//!   runs with full access outside Plan mode may. That is what full access already means to
+//!   every harness (Codex and Muse drop their sandbox for it, Claude Code
+//!   allows every tool call), whatever sandbox level the chat records, so
+//!   it gains nothing; anything less would let a supervised agent do
+//!   through it what it would itself have to ask for.
 //!
 //! The calling chat is the one its MCP server names (`x-zeron-chat`): the
 //! engine sets that server's environment, so a sandboxed agent can't change
@@ -31,7 +38,7 @@ pub(super) struct Calling {
     pub id: String,
     pub label: String,
     /// Its sandbox and access: what a chat it makes may have at most. `None`
-    /// for Zeron's voice orchestrator (the person speaking).
+    /// for Zerun's voice orchestrator (the person speaking).
     pub ceiling: Option<(SandboxLevel, AccessMode)>,
     pub plan: bool,
 }
@@ -84,7 +91,11 @@ impl EngineRpc {
             params["chatId"] = json!(chat);
             return Ok(params);
         }
-        if !matches!(method, methods::MUTATE | methods::QUEUE_MESSAGE | methods::QUEUE_COMMAND) {
+        let command = matches!(
+            method,
+            methods::RUN_COMMAND | methods::READ_COMMAND_OUTPUT | methods::STOP_COMMAND | methods::LIST_BACKGROUND_COMMANDS
+        );
+        if !command && !matches!(method, methods::MUTATE | methods::QUEUE_MESSAGE | methods::QUEUE_COMMAND) {
             return Ok(params);
         }
         let chats = self.workspace.read_chats().unwrap_or_default();
@@ -96,6 +107,27 @@ impl EngineRpc {
                 text,
             )
         };
+        if command {
+            if calling.as_ref().is_some_and(|c| c.plan && c.ceiling.is_some()) {
+                return Err(refused("A chat in Plan mode cannot run or manage shell commands. Ask the person to leave Plan mode first"));
+            }
+            let full = calling.as_ref().is_none_or(|c| {
+                c.ceiling.is_none_or(|(_, access)| access == AccessMode::FullAccess)
+            });
+            if !full {
+                return Err(refused(
+                    "A command runs as the person, unconfined: only a chat with full access runs one. Ask the person to give this chat full access, or to run it themselves",
+                ));
+            }
+            // A command is its agent's own chat's (it stops when that chat
+            // goes, and lists under it), whatever chat the call names.
+            if let Some(chat) = chat
+                && matches!(method, methods::RUN_COMMAND | methods::LIST_BACKGROUND_COMMANDS)
+            {
+                params["chatId"] = json!(chat);
+            }
+            return Ok(params);
+        }
         match method {
             methods::MUTATE => match params["op"].as_str().unwrap_or_default() {
                 "createChat" => {
@@ -217,7 +249,7 @@ mod tests {
         (temp, core)
     }
 
-    /// The person's chat `id`, as set in Zeron (Local caller).
+    /// The person's chat `id`, as set in Zerun (Local caller).
     async fn chat(core: &crate::EngineCore, id: &str, title: &str, sandbox: &str, access: &str) {
         let rpc = core.rpc_service();
         rpc.handle(
@@ -299,6 +331,218 @@ mod tests {
         core.sessions.shutdown().await;
     }
 
+    /// A command, here or on another device, only for an agent whose chat
+    /// runs with full access, whatever sandbox level it records (the app's
+    /// chats record workspace-write); the person's own calls pass.
+    #[tokio::test]
+    async fn only_a_full_access_agent_runs_a_command() {
+        let (_temp, core) = core().await;
+        chat(&core, "careful", "Careful", "read-only", "supervised").await;
+        chat(&core, "edits", "Edits", "workspace-write", "auto-accept-edits").await;
+        chat(&core, "auto", "Auto", "workspace-write", "auto").await;
+        chat(&core, "app", "App", "workspace-write", "full-access").await;
+        chat(&core, "free", "Free", "danger-full-access", "full-access").await;
+        let rpc = core.rpc_service();
+        // Naming another chat: a command is filed under the caller's own.
+        let open = json!({"command":"ls", "targetDeviceId":"laptop", "chatId":"careful"});
+        let as_from = |chat: &str, method: &str| {
+            let mut params = open.clone();
+            if matches!(method, methods::RUN_COMMAND | methods::LIST_BACKGROUND_COMMANDS) {
+                params["chatId"] = json!(chat);
+            }
+            params
+        };
+        for method in [
+            methods::RUN_COMMAND,
+            methods::READ_COMMAND_OUTPUT,
+            methods::STOP_COMMAND,
+            methods::LIST_BACKGROUND_COMMANDS,
+        ] {
+            for who in ["careful", "edits", "auto", "nowhere"] {
+                let refused =
+                    with_caller(agent(who), async { rpc.agent_gate(method, open.clone()) }).await;
+                assert!(
+                    matches!(&refused, Err(zeron_rpc::RpcError::Failed(m)) if m.contains("only a chat with full access")),
+                    "{who} {method}: {refused:?}"
+                );
+            }
+            // A chat made in the app: full access, workspace-write recorded.
+            let app = with_caller(agent("app"), async { rpc.agent_gate(method, open.clone()) })
+                .await
+                .unwrap();
+            assert_eq!(app, as_from("app", method), "{method}");
+            let allowed = with_caller(agent("free"), async {
+                rpc.agent_gate(method, open.clone())
+            })
+            .await
+            .unwrap();
+            assert_eq!(allowed, as_from("free", method), "{method}");
+            // A server with no chat (set up by hand) is capped by nothing.
+            with_caller(Caller::Agent { chat: None }, async {
+                rpc.agent_gate(method, open.clone())
+            })
+            .await
+            .unwrap();
+            assert_eq!(rpc.agent_gate(method, open.clone()).unwrap(), open);
+        }
+        // Through the engine, it runs here and says how it went.
+        let dir = tempfile::tempdir().unwrap();
+        let ran = with_caller(
+            agent("free"),
+            rpc.handle(
+                methods::RUN_COMMAND,
+                json!({"command":"echo hi; exit 2", "cwd": dir.path()}),
+            ),
+        )
+        .await
+        .unwrap();
+        let zeron_rpc::RpcReply::Value(ran) = ran else {
+            panic!("a stream")
+        };
+        // (`echo` and `exit` mean the same in sh and PowerShell.)
+        assert_eq!(
+            (
+                ran["exitCode"].clone(),
+                ran["output"].as_str().unwrap().trim_end() == "hi"
+            ),
+            (json!(2), true),
+            "{ran}"
+        );
+        let refused = with_caller(
+            agent("careful"),
+            rpc.handle(methods::RUN_COMMAND, json!({"command":"echo hi"})),
+        )
+        .await;
+        assert!(refused.is_err());
+        core.sessions.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn plan_mode_cannot_bypass_its_restrictions_with_command_tools() {
+        let (_temp, core) = core().await;
+        chat(&core, "planning", "Planning", "danger-full-access", "full-access").await;
+        let rpc = core.rpc_service();
+        rpc.handle(
+            methods::MUTATE,
+            json!({"op":"setChatConfig", "chatId":"planning",
+                "config":{"harness":"codex","sandbox":"danger-full-access","access":"full-access","plan":true}}),
+        )
+        .await
+        .unwrap();
+        for target in [None, Some("another-device")] {
+            for method in [
+                methods::RUN_COMMAND,
+                methods::READ_COMMAND_OUTPUT,
+                methods::STOP_COMMAND,
+                methods::LIST_BACKGROUND_COMMANDS,
+            ] {
+                let params = json!({"command":"echo should-not-run", "targetDeviceId":target,
+                    "chatId":"other-chat", "plan":false, "id":"other-command"});
+                let result = with_caller(agent("planning"), rpc.handle(method, params)).await;
+                assert!(
+                    matches!(result, Err(zeron_rpc::RpcError::Failed(ref message)) if message.contains("Plan mode")),
+                    "{method} on {target:?} must be refused before execution or forwarding"
+                );
+            }
+        }
+        core.sessions.shutdown().await;
+    }
+
+    /// A command an agent leaves running shows on its chat's row with its
+    /// runtime's background processes: the person reads it (without taking
+    /// what the agent reads next) and stops it there; one that ends goes.
+    #[tokio::test]
+    async fn a_chat_shows_the_commands_its_agent_left_running() {
+        let (_temp, core) = core().await;
+        chat(&core, "free", "Free", "danger-full-access", "full-access").await;
+        core.sessions
+            .seed_status("free", zeron_proto::SessionStatus::Working);
+        let rpc = core.rpc_service();
+        let dir = tempfile::tempdir().unwrap();
+        let value = |reply: zeron_rpc::RpcReply| match reply {
+            zeron_rpc::RpcReply::Value(value) => value,
+            zeron_rpc::RpcReply::Stream(_) => panic!("a stream"),
+        };
+        let start = |command: &str| {
+            with_caller(
+                agent("free"),
+                rpc.handle(
+                    methods::RUN_COMMAND,
+                    json!({"command": command, "cwd": dir.path(), "chatId": "free", "background": true}),
+                ),
+            )
+        };
+        // A server that runs until stopped, in this platform's shell.
+        let server_command = if cfg!(windows) {
+            "Write-Output listening; while ($true) { Start-Sleep -Milliseconds 50 }"
+        } else {
+            "echo listening; while true; do sleep 0.05; done"
+        };
+        let server = value(start(server_command).await.unwrap());
+        let quick = value(start("echo done").await.unwrap());
+        let shown = |core: &crate::EngineCore| -> Vec<String> {
+            core.sessions
+                .session_status("free")
+                .map(|s| s.background_tasks.into_iter().map(|t| t.id).collect())
+                .unwrap_or_default()
+        };
+        let server_id = server["id"].as_str().unwrap().to_owned();
+        let quick_id = quick["id"].as_str().unwrap().to_owned();
+        assert_eq!(shown(&core), vec![server_id.clone(), quick_id.clone()]);
+
+        // The person reads it; the agent still reads it all after.
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let tail = value(
+                rpc.handle(
+                    methods::READ_BACKGROUND_TASK_OUTPUT,
+                    json!({"chatId": "free", "taskId": server_id}),
+                )
+                .await
+                .unwrap(),
+            );
+            if tail["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("listening"))
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < give_up, "{tail}");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        let read = value(
+            with_caller(
+                agent("free"),
+                rpc.handle(methods::READ_COMMAND_OUTPUT, json!({"id": server_id})),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(read["output"].as_str().map(str::trim_end), Some("listening"));
+
+        // One that ended goes from the row as it ends (followed, not polled).
+        let give_up = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while shown(&core).contains(&quick_id) {
+            assert!(std::time::Instant::now() < give_up, "{:?}", shown(&core));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        assert_eq!(shown(&core), vec![server_id.clone()]);
+
+        // Stopped from the row, the person's call: gone, and it ended.
+        let stopped = value(
+            rpc.handle(
+                methods::STOP_BACKGROUND_TASK,
+                json!({"chatId": "free", "taskId": server_id}),
+            )
+            .await
+            .unwrap(),
+        );
+        assert_eq!(stopped["stopping"], true);
+        assert!(shown(&core).is_empty());
+        assert_eq!(core.commands.read(&server_id).unwrap().status, "stopped");
+        core.sessions.shutdown().await;
+    }
+
     /// An agent can't raise a chat's access after the fact, nor delete.
     #[tokio::test]
     async fn an_agent_cannot_change_a_chats_config() {
@@ -369,7 +613,7 @@ mod tests {
         core.sessions.shutdown().await;
     }
 
-    /// The "from another chat" header is Zeron's: text can't claim another
+    /// The "from another chat" header is Zerun's: text can't claim another
     /// chat, and a chat's title can't break out of the header.
     #[tokio::test]
     async fn the_sender_label_cannot_be_forged() {

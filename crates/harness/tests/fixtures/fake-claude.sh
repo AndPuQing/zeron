@@ -9,6 +9,10 @@
 
 if [ "$1" = "--version" ]; then printf '2.1.308 (Claude Code)\n'; exit 0; fi
 
+# (A warm start's test counts launches, and the prompts each was handed:
+# the log, the launch's pid in `<log>.pids`, and the first user line in
+# `<log>.first`.)
+[ -n "$FAKE_CLAUDE_LOG" ] && echo launch >> "$FAKE_CLAUDE_LOG" && echo $$ >> "$FAKE_CLAUDE_LOG.pids"
 read -r first || exit 1
 # A run opens with an `initialize` control request (the SDK handshake); the
 # real CLI answers it before the first user line. (Command discovery sends
@@ -24,6 +28,8 @@ while :; do
     *) break ;;
   esac
 done
+
+[ -n "$FAKE_CLAUDE_LOG" ] && echo prompt >> "$FAKE_CLAUDE_LOG" && printf '%s\n' "$first" >> "$FAKE_CLAUDE_LOG.first"
 
 emit() { printf '%s\n' "$1"; }
 uuid_of() { printf '%s\n' "$1" | sed 's/.*"uuid":"\([^"]*\)".*/\1/'; }
