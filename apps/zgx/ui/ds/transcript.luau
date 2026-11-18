@@ -146,6 +146,8 @@ export type Props = {
 	-- back where it was: the message at the view's top, and how far above
 	-- the top it started, written as the view goes; nil at the end.
 	keep: State<Anchor?>?,
+	-- Lets the session save a scroll immediately before replacing its list.
+	reader: { save: (() -> ())? }?,
 	-- Replies laid out compact (each one's work folded into one group),
 	-- as the setting says.
 	compact: (() -> boolean)?,
@@ -1851,7 +1853,7 @@ local function Transcript(props: Props): Node
 	end
 	local function remember()
 		-- (Not yet back where it was: nothing new to say.)
-		if waiting then
+		if waiting or returning or (props.session and props.session:peek() ~= showing) then
 			return
 		end
 		local el = list:peek()
@@ -1868,10 +1870,22 @@ local function Transcript(props: Props): Node
 				end
 			end
 		end
+		if not best and not at_end:peek() then
+			return
+		end
 		here = if best then { id = best.id, dy = best.y - el.y, index = best.index } else nil
 		if keep then
 			keep:set(if best then { id = best.id, dy = best.y - el.y } else nil)
 		end
+	end
+	if props.reader then
+		local reader = props.reader
+		reader.save = remember
+		ui.on_cleanup(function()
+			if reader.save == remember then
+				reader.save = nil
+			end
+		end)
 	end
 	-- The reading place: the block (a paragraph, a list, a code block)
 	-- crossing the view's top, and how far down its message it stands. As
