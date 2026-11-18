@@ -1232,6 +1232,11 @@ public protocol CoreClientProtocol: AnyObject, Sendable {
     func readChatImage(deviceId: String, chatId: String, path: String) async throws  -> Data
     
     /**
+     * Revalidate the catalog for a visible chat or model picker.
+     */
+    func refreshModels(deviceId: String, harness: String) async  -> [ModelInfo]
+    
+    /**
      * Ask for session notifications on this device (APNs token as hex,
      * "production" | "sandbox", and which kinds).
      */
@@ -2217,6 +2222,26 @@ open func readChatImage(deviceId: String, chatId: String, path: String)async thr
             freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
             liftFunc: FfiConverterData.lift,
             errorHandler: FfiConverterTypeCoreError_lift
+        )
+}
+    
+    /**
+     * Revalidate the catalog for a visible chat or model picker.
+     */
+open func refreshModels(deviceId: String, harness: String)async  -> [ModelInfo]  {
+    return
+        try!  await uniffiRustCallAsync(
+            rustFutureFunc: {
+                uniffi_zeron_mobile_fn_method_coreclient_refresh_models(
+                        self.uniffiCloneHandle(),FfiConverterString.lower(deviceId),FfiConverterString.lower(harness)
+                )
+            },
+            pollFunc: ffi_zeron_mobile_rust_future_poll_rust_buffer,
+            completeFunc: ffi_zeron_mobile_rust_future_complete_rust_buffer,
+            freeFunc: ffi_zeron_mobile_rust_future_free_rust_buffer,
+            liftFunc: FfiConverterSequenceTypeModelInfo.lift,
+            errorHandler: nil
+            
         )
 }
     
@@ -24776,6 +24801,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_read_chat_image() != 13052) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_coreclient_refresh_models() != 48990) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_coreclient_register_push_target() != 33942) {

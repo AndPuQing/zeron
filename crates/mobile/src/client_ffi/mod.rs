@@ -491,6 +491,18 @@ impl CoreClient {
             .collect()
     }
 
+    /// Revalidate the catalog for a visible chat or model picker.
+    pub async fn refresh_models(&self, device_id: String, harness: String) -> Vec<ModelInfo> {
+        let client = self.client.clone();
+        let fallback = harness.clone();
+        on_runtime(async move { Ok(client.refresh_models(&device_id, &harness).await) })
+            .await
+            .unwrap_or_else(|_| zc::catalog::fallback_models(&fallback))
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
     /// Cloud's model catalog for `harness`: the edge's list, else the last
     /// one read, else the static list.
     pub async fn cloud_models(&self, harness: String) -> Vec<ModelInfo> {

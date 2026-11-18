@@ -121,6 +121,8 @@ final class AppModel {
     /// The network path's shape last seen (interfaces in order), so only a
     /// real change re-pairs direct connections.
     private var pathShape: String?
+    /// The OS route, without the grace period used for the offline banner.
+    private(set) var networkPathOnline = true
 
     var onSignedIn: (() -> Void)?
     var onSignOut: (() -> Void)?
@@ -180,11 +182,16 @@ final class AppModel {
                     return
                 }
                 #endif
-                self.client?.setNetworkOnline(online: p.status == .satisfied)
+                let online = p.status == .satisfied
+                self.client?.setNetworkOnline(online: online)
                 if let last = self.pathShape, last != shape, !shape.isEmpty {
                     self.client?.networkPathChanged()
                 }
                 self.pathShape = shape
+                if self.networkPathOnline != online {
+                    self.networkPathOnline = online
+                    self.observers.values.forEach { $0() }
+                }
             }
         }
         path.start(queue: DispatchQueue(label: "sh.zeron.path"))

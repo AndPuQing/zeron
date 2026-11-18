@@ -27,7 +27,7 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
     private let onPick: (_ harness: String, _ model: ModelPickerRow) -> Void
 
     private var selected: Int
-    private var pages: [Page] = []
+    private var pages: [ModelPickerPage] = []
     private let header = UIView()
     private let pager = UIScrollView()
     private var switcher: ProviderSwitcher?
@@ -36,7 +36,7 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
     private var settingsMenu: (() -> UIMenu)?
 
     /// The picker in its sheet, ready to present.
-    static func sheet(tabs: [ModelPickerTab], harness: String, model: String?, host: (name: String, symbol: String), note: String? = nil, settingsMenu: (() -> UIMenu)? = nil, onPick: @escaping (String, ModelPickerRow) -> Void) -> UIViewController {
+    static func sheet(tabs: [ModelPickerTab], harness: String, model: String?, host: (name: String, symbol: String), note: String? = nil, settingsMenu: (() -> UIMenu)? = nil, onPick: @escaping (String, ModelPickerRow) -> Void) -> ModelPickerViewController {
         let picker = ModelPickerViewController(tabs: tabs, harness: harness, model: model, host: host, note: note, onPick: onPick)
         picker.settingsMenu = settingsMenu
         picker.modalPresentationStyle = .pageSheet
@@ -62,7 +62,7 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
         self.selected = tabs.firstIndex { $0.harness == harness } ?? 0
         super.init(nibName: nil, bundle: nil)
         pages = tabs.enumerated().map { ix, tab in
-            Page(tab: tab, current: (harness, model), notice: tab.footer ?? (ix == selected ? note : nil))
+            ModelPickerPage(tab: tab, current: (harness, model), notice: tab.footer ?? (ix == selected ? note : nil))
         }
     }
 
@@ -111,9 +111,14 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
         switcher?.setPosition(CGFloat(selected))
         // The current provider first, then the rest, so a swipe lands on
         // a loaded list.
+        reloadCatalogs()
+        setContentScrollView(pages[selected].list, for: .top)
+    }
+
+    func reloadCatalogs() {
+        guard isViewLoaded else { return }
         pages[selected].load()
         for (ix, page) in pages.enumerated() where ix != selected { page.load() }
-        setContentScrollView(pages[selected].list, for: .top)
     }
 
     override func viewDidLayoutSubviews() {
@@ -272,7 +277,7 @@ final class ModelPickerViewController: UIViewController, UIScrollViewDelegate {
 /// One provider's models, straight on the glass; a notice over them when
 /// there's something to know, and a search field once the list is long
 /// (OpenCode can offer hundreds).
-private final class Page: UIView, UICollectionViewDelegate, UISearchTextFieldDelegate {
+final class ModelPickerPage: UIView, UICollectionViewDelegate, UISearchTextFieldDelegate {
     private enum Item: Hashable {
         case model(String)
         case placeholder(Int)
@@ -288,7 +293,8 @@ private final class Page: UIView, UICollectionViewDelegate, UISearchTextFieldDel
     private var byId: [String: ModelPickerRow] = [:]
     private var query = ""
     private var data: UICollectionViewDiffableDataSource<Int, Item>!
-    private var started = false
+    private var loadID = UUID()
+    private var searchField: UISearchTextField?
     private var listTop: NSLayoutConstraint!
 
     static let searchThreshold = 12
@@ -354,17 +360,19 @@ private final class Page: UIView, UICollectionViewDelegate, UISearchTextFieldDel
         }
     }
 
-    func load() {
-        guard !started else { return }
-        started = true
-        Task { @MainActor [weak self] in
+    @discardableResult
+    func load() -> Task<Void, Never> {
+        let id = UUID()
+        loadID = id
+        return Task { @MainActor [weak self] in
             guard let self else { return }
             var seen = Set<String>()
             let rows = await self.tab.load().filter { seen.insert($0.id).inserted }
+            guard self.loadID == id else { return }
             self.rows = rows
             self.byId = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0) })
-            if rows.count > Self.searchThreshold { self.addSearch() }
-            self.apply(animated: true)
+            if rows.count > Self.searchThreshold, self.searchField == nil { self.addSearch() }
+            self.apply(animated: true, refreshExisting: true)
             self.onLoaded?()
         }
     }
@@ -393,13 +401,17 @@ private final class Page: UIView, UICollectionViewDelegate, UISearchTextFieldDel
         return all.filter { $0.label.lowercased().contains(q) || $0.id.lowercased().contains(q) }
     }
 
-    private func apply(animated: Bool) {
+    private func apply(animated: Bool, refreshExisting: Bool = false) {
         var snap = NSDiffableDataSourceSnapshot<Int, Item>()
         snap.appendSections([0])
         if rows == nil {
             snap.appendItems((0..<4).map(Item.placeholder))
         } else {
             snap.appendItems(visible.map { .model($0.id) })
+        }
+        if refreshExisting {
+            let existing = Set(data.snapshot().itemIdentifiers)
+            snap.reconfigureItems(snap.itemIdentifiers.filter(existing.contains))
         }
         data.apply(snap, animatingDifferences: animated && !UIAccessibility.isReduceMotionEnabled)
         list.backgroundView = rows != nil && visible.isEmpty ? emptyLabel() : nil
@@ -423,6 +435,7 @@ private final class Page: UIView, UICollectionViewDelegate, UISearchTextFieldDel
 
     private func addSearch() {
         let field = UISearchTextField()
+        searchField = field
         field.placeholder = "Search \(tab.label) models"
         field.font = Fonts.ui(.sans, 15)
         field.returnKeyType = .done

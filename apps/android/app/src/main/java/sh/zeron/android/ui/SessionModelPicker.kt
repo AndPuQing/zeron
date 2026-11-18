@@ -34,7 +34,7 @@ internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: Sessi
     val available = listOf(current to (row?.harnessLabel ?: harnessLabel(current))) + providers.map { it.id to it.label }
     val tabs = available.map { (harness, label) ->
         ModelPickerTab(harness, label, footer = if (harness != current) "Your next message continues this chat with $label." else notice) {
-            val models = client.listModels(c.host.deviceId, harness)
+            val models = client.refreshModels(c.host.deviceId, harness)
             catalogs[harness] = models
             models.map { ModelPickerRow(it.id, it.label, it.description) }
         }

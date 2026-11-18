@@ -364,13 +364,13 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     var execution by remember(client, c.chatId) { mutableStateOf(client.sessionConfig(c.chatId)) }
     LaunchedEffect(c.revision) { execution = client.sessionConfig(c.chatId) }
     LaunchedEffect(client, c.host.deviceId, harness, row?.model) {
-        models = client.listModels(c.host.deviceId, harness)
+        models = client.refreshModels(c.host.deviceId, harness)
     }
 
     fun open(which: String) {
         menu = which
         if (models == null) scope.launch {
-            models = runCatching { client.listModels(c.host.deviceId, harness) }.getOrNull() ?: fallbackModels(harness)
+            models = runCatching { client.refreshModels(c.host.deviceId, harness) }.getOrNull() ?: fallbackModels(harness)
         }
     }
 

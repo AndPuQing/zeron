@@ -1646,6 +1646,21 @@ impl Client {
     /// Model catalog for `harness` on `device_id` (normalized live reply,
     /// else the cached one, else the curated static list).
     pub async fn list_models(&self, device_id: &str, harness: &str) -> Vec<ModelInfo> {
+        self.read_models(device_id, harness, false).await
+    }
+
+    /// Wait for discovery for the visible chat or picker. Bulk prefetch can
+    /// serve cached rows while the host refreshes them in the background.
+    pub async fn refresh_models(&self, device_id: &str, harness: &str) -> Vec<ModelInfo> {
+        self.read_models(device_id, harness, true).await
+    }
+
+    async fn read_models(
+        &self,
+        device_id: &str,
+        harness: &str,
+        wait_for_refresh: bool,
+    ) -> Vec<ModelInfo> {
         match self.inner.backend() {
             Backend::Demo(demo) => demo.list_models(harness).await,
             Backend::Live(_) if zeron_proto::is_cloud_device(device_id, "") => {
@@ -1658,7 +1673,7 @@ impl Client {
                     .call(
                         device_id,
                         zeron_rpc::methods::LIST_MODELS,
-                        serde_json::json!({ "harness": harness, "waitForRefresh": true }),
+                        serde_json::json!({ "harness": harness, "waitForRefresh": wait_for_refresh }),
                     )
                     .await
                     .and_then(|v| {

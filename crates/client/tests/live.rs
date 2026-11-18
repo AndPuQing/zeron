@@ -543,6 +543,7 @@ fn unb64(input: &str) -> Vec<u8> {
 /// The host engine's relay surface (shapes from crates/engine/src/rpc.rs).
 #[derive(Default)]
 struct HostService {
+    model_refresh_requests: Mutex<Vec<bool>>,
     chunks: Mutex<std::collections::BTreeMap<(String, u64), String>>,
     committed: Mutex<Vec<(String, String, Vec<u8>)>>,
     spaces: Mutex<Vec<String>>,
@@ -608,10 +609,15 @@ impl zeron_rpc::RpcService for HostService {
                 {"id": "mock", "name": "Mock", "supportsSteering": false,
                  "steeringMode": "turn-boundary", "reasoningLevels": [], "installed": true, "canInstall": false},
             ]),
-            m::LIST_MODELS => json!([
-                {"id": "claude-opus-5", "label": "claude-opus-5", "reasoningLevels": ["high"], "options": []},
-                {"id": "claude-opus-5[1m]", "label": "Opus 5 (1M)", "reasoningLevels": ["high"], "options": []},
-            ]),
+            m::LIST_MODELS => {
+                self.model_refresh_requests.lock().unwrap().push(
+                    params["waitForRefresh"].as_bool().unwrap_or(false)
+                );
+                json!([
+                    {"id": "claude-opus-5", "label": "claude-opus-5", "reasoningLevels": ["high"], "options": []},
+                    {"id": "claude-opus-5[1m]", "label": "Opus 5 (1M)", "reasoningLevels": ["high"], "options": []},
+                ])
+            }
             m::LIST_REFS => {
                 json!([{ "name": "main", "current": true }, { "name": "feature/live", "current": false, "worktreePath": "/wt/live" }])
             }
@@ -765,6 +771,14 @@ async fn host_rpcs_ride_the_device_relay() {
             .unwrap();
     assert_eq!(models.len(), 1, "[1m] variant folded: {models:?}");
     assert_eq!(models[0].label, "Opus 5");
+
+    let c = client.clone();
+    let refreshed =
+        zeron_client::runtime::run(async move { Ok(c.refresh_models(HOST, "claude-code").await) })
+            .await
+            .unwrap();
+    assert_eq!(refreshed, models);
+    assert_eq!(*service.model_refresh_requests.lock().unwrap(), [false, true]);
 
     let c = client.clone();
     let refs =
