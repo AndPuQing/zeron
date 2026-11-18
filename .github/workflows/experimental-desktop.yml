@@ -53,7 +53,19 @@ jobs:
         working-directory: apps/zgx
         run: |
           cargo check --locked --all-targets
-          cargo test --locked
+          cargo test --locked -- --skip transcript_paint_tests::
+      - name: Verify transcript paint cases in separate processes
+        working-directory: apps/zgx
+        shell: bash
+        run: |
+          # Libtest shares one process across cases. Metal can exhaust device
+          # resources even when the long frame comparisons run under a mutex.
+          listing=$(cargo test --locked --bin zerun-experimental -- --list transcript_paint_tests::)
+          cases=$(sed -n 's/^\(transcript_paint_tests::[^ ]*\): test$/\1/p' <<< "$listing")
+          [[ -n "$cases" ]] || { echo "No transcript paint tests discovered" >&2; exit 1; }
+          while IFS= read -r name; do
+            cargo test --locked --bin zerun-experimental "$name" -- --exact
+          done <<< "$cases"
       - name: Check build helper
         run: bash -n scripts/experimental-desktop.sh
       - name: Check packaged Beta profile and account configuration
