@@ -1,6 +1,6 @@
 //! `tests/fixtures/fake-acp-tool.py`: a fake ACP agent whose turn starts the
 //! MCP servers it was handed in `session/new` and calls one tool. Checked
-//! here against a tiny stub MCP server, with Zeron's own server in `mcp` and
+//! here against a tiny stub MCP server, with Zerun's own server in `mcp` and
 //! a plugin's in `extra_mcp`.
 
 #![cfg(unix)]
@@ -72,6 +72,7 @@ fn server(name: &str, command: &Path, tool: &str) -> McpServer {
         ]
         .into_iter()
         .collect(),
+        http: None,
     }
 }
 
@@ -154,7 +155,7 @@ async fn calls_the_named_tool_on_the_server_that_lists_it() {
             ("FAKE_ACP_CALL_ARGS", r#"{"text":"a b c"}"#),
         ],
     );
-    // Zeron's own server does not list it; the plugin's does.
+    // Zerun's own server does not list it; the plugin's does.
     req.mcp = Some(server("zeron", &stub, "whoami"));
     req.extra_mcp = vec![server("plugin-focus", &stub, "focus__count_words")];
     let text = reply(req).await;

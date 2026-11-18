@@ -1,10 +1,10 @@
 {
-  "ds/sidebar.luau": "b0cb0238090d1f1e",
+  "ds/sidebar.luau": "b7e7319f092e9432",
   "ds/tokens.luau": "62327c7105856494",
-  "screens/chat/composer.luau": "0926e8c16770c981",
-  "screens/chat/lane_tab.luau": "2dd62ed6b047221e",
-  "screens/panel/init.luau": "29e858bd4660015e",
-  "screens/shell/init.luau": "6bab6fcb4f4e4d3f",
+  "screens/chat/composer.luau": "5f3295bdf53c0f05",
+  "screens/chat/lane_tab.luau": "a5bfdd13e0fb5d3d",
+  "screens/panel/init.luau": "38dea883ab037970",
+  "screens/shell/init.luau": "deb621bcfedcf6a0",
   "screens/shell/page.luau": "5e35cc7573e84973",
   "screens/shell/view.luau": "57948195fbdbd302"
 }

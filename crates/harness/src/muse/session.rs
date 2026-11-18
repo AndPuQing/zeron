@@ -1,5 +1,5 @@
 //! One Muse session over one host: open (or resume) it, run its turns, and
-//! carry Zeron's steering, stops and answers in.
+//! carry Zerun's steering, stops and answers in.
 //!
 //! - TURNS. A fresh turn's id is its `turn/start` command id, so the run
 //!   knows it before the ack and owns every frame naming it. Its end is the
@@ -199,7 +199,7 @@ impl Runner {
         }
     }
 
-    /// Zeron's MCP server, as a session-scoped stdio server. `optional`: a
+    /// Zerun's MCP server, as a session-scoped stdio server. `optional`: a
     /// server that cannot start must not fail the whole turn.
     /// The plugins' native servers ([`RunRequest::extra_mcp`]) ride beside it.
     fn config(&self) -> Option<Value> {
@@ -372,7 +372,7 @@ impl Runner {
             "ifBusy": if_busy,
         });
         // A resumed session keeps the root it was created with; pin it to
-        // this run's checkout so edits land where Zeron tracks them. The root
+        // this run's checkout so edits land where Zerun tracks them. The root
         // is sticky (it binds at this turn and persists), and Muse refuses it
         // on a steer, which may launch no turn to bind it to: the run's first
         // prompt carries it, later ones inherit it.
@@ -1054,7 +1054,7 @@ mod tests {
     }
 }
 
-/// `mcpServers` for a session: Zeron's own server and the plugins' native
+/// `mcpServers` for a session: Zerun's own server and the plugins' native
 /// ones, each optional. `None` when there are none, or when the build can't
 /// take session servers (`granted` lacks `sessionMcp`).
 fn session_mcp_config(
@@ -1099,12 +1099,14 @@ mod session_mcp_tests {
             command: "/opt/zeron/zeron".into(),
             args: vec!["mcp".into()],
             env: Default::default(),
+            http: None,
         };
         let extra = zeron_proto::McpServer {
             name: "plugin-focus".into(),
             command: "/data/plugins/.loaded/focus/0123/bin/server".into(),
             args: vec![],
             env: [("FOCUS".to_owned(), "1".to_owned())].into_iter().collect(),
+            http: None,
         };
         assert_eq!(session_mcp_config(None, &[], true), None);
         assert_eq!(

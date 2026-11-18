@@ -22,7 +22,7 @@ permissions:
 jobs:
   experimental-desktop:
     runs-on: ${{ inputs.macos_runner || 'macos-15' }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       CARGO_PROFILE_DEV_DEBUG: 0

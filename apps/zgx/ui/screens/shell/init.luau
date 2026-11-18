@@ -127,8 +127,15 @@ return function(): Node
 		local find: any = boundary.load("@app/screens/chat/find")
 		return find ~= nil and find.open ~= nil and (find.open :: any)() == true
 	end
+	-- ⌘N: the new chat, its composer given the keys in the same step (one
+	-- composer, its draft now the new chat's), so a key typed straight after
+	-- is the new chat's, never the one left.
 	runs["shell.new_chat"] = function()
 		route.new_chat()
+		local shared: any = boundary.load("@app/screens/chat/shared")
+		if shared and shared.focus then
+			shared.focus:add(1)
+		end
 	end
 	runs["shell.palette"] = function()
 		view.palette:set(not view.palette:peek())
@@ -202,7 +209,7 @@ return function(): Node
 	end
 	-- A web link in a chat (ds/markdown's): the panel's browser tab beside
 	-- the session showing (or the plugin page showing: its own panel), with
-	-- Settings → Links "Open links in" Zeron (the shipping app's
+	-- Settings → Links "Open links in" Zerun (the shipping app's
 	-- `open_web_links_in_zeron`); else, or with neither open, the default
 	-- browser.
 	-- (`panel`: that tab whatever the setting, a link's menu's "Open in
@@ -300,7 +307,7 @@ return function(): Node
 			end
 		end
 	end
-	-- Reload Zeron: the app quits and starts again, the same launch, its
+	-- Reload Zerun: the app quits and starts again, the same launch, its
 	-- engine left running (src/relaunch.rs). Reload interface: every script
 	-- evaluated again in place, as a save does (src/main.rs `serve`).
 	-- (Through settings' host calls, which a fixture answers.)

@@ -86,7 +86,7 @@ impl PiHarness {
         self
     }
     /// Pi's settings/credentials directory (`PI_CODING_AGENT_DIR`) for the
-    /// child and for Zeron's own reads of it; defaults to the inherited one.
+    /// child and for Zerun's own reads of it; defaults to the inherited one.
     pub fn with_agent_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.agent_dir = Some(path.into());
         self
@@ -185,7 +185,7 @@ impl PiHarness {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         let scratch = crate::extension_mcp::configure_all(&crate::extension_mcp::PI, &mut cmd, mcp, extra_mcp)?;
-        let child = cmd.spawn().map_err(|e| {
+        let child = crate::process::spawn_agent(&mut cmd).map_err(|e| {
             crate::executable::spawn_error(e, Some(cwd), || crate::executable::binary_hint(&exe))
         })?;
         let mut child = Child::new(child);
@@ -635,7 +635,7 @@ impl Runner {
         self.submit(text, images, false)
     }
     async fn bootstrap(&mut self, backlog: &mut Vec<Value>) -> Result<Value, HarnessError> {
-        // Pi defaults to one-at-a-time. Zeron's pending steers belong together
+        // Pi defaults to one-at-a-time. Zerun's pending steers belong together
         // at the next model step. Pi persists this in its global settings, so
         // select it only while no mode is configured: an explicit choice (the
         // user's, or `/steering` in a chat) is never overwritten.

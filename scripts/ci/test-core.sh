@@ -42,7 +42,8 @@ for f in crates/harness/tests/*.rs crates/preview/tests/*.rs crates/doc/tests/*.
 done
 # `misc` (harness, engine and preview): the small suites, one binary each.
 # The orb geometry tests live in zeron-orb's `geometry`.
-for t in misc geometry session_publication restart_resume runtime_survival side_chats message_queue voice_runtime device_routing device_room big_remote_chats e2e transcript_search usage_insights plugin_services restart_hook delete_ends_run terminal_query_order registry_writes_live; do
+for t in misc geometry session_publication restart_resume runtime_survival side_chats message_queue voice_runtime device_routing device_room big_remote_chats e2e transcript_search usage_insights plugin_services restart_hook delete_ends_run terminal_query_order registry_writes_live \
+  agent_commands agent_lifecycle agents_die_with_engine launch_agents warm_start local_first cloud_rpc; do
   tests+=(--test "$t")
 done
 
