@@ -271,7 +271,7 @@ fn test_modules(src: &Source) -> Vec<(usize, usize)> {
 
 /// A comment marking something to take out again.
 fn marker(comment: &str) -> Option<&'static str> {
-    let words: Vec<&str> = comment.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let words: Vec<&str> = comment.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
     for word in ["TEMP", "XXX", "DEBUG"] {
         if words.contains(&word) {
             return Some(word);
@@ -412,6 +412,8 @@ fn the_scanner_tells_code_from_text() {
     assert_eq!(s.calls("warn(", true), Vec::<usize>::new());
     assert!(probe_name(s.literal_after(s.calls("ui.state(", false)[0] + 9).unwrap()));
     assert!(!probe_name("templates_tab"));
+    assert_eq!(marker("Set `DEBUG_TREE=1` to print the layout"), None);
+    assert_eq!(marker("DEBUG: take this out"), Some("DEBUG"));
     let marks: Vec<_> = s.comments.iter().filter_map(|(_, c)| marker(c)).collect();
     assert_eq!(marks, vec!["XXX"]);
 
