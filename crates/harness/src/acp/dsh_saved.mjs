@@ -3,7 +3,7 @@
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { readdir, realpath } from 'node:fs/promises';
+import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
 const MAX_SOURCE = 64 * 1024 * 1024;
@@ -25,32 +25,33 @@ const [{ Context }, persistenceModule, { Session }, { buildForkSeed }, projectio
   load('@deepseek-ai/dsh-session-format-catalog/message-projections'),
 ]);
 const root = await realpath(request.root);
-let compression;
-// Determine the store's physical encoding without opening any conversation.
-let count = 0;
-for (const project of await readdir(root, { withFileTypes: true })) {
-  if (!project.isDirectory()) continue;
-  for (const session of await readdir(join(root, project.name), { withFileTypes: true })) {
-    if (!session.isDirectory()) continue;
-    if (++count > 20000) throw new Error('dsh discovery exceeded 20000 sessions.');
-    for (const file of await readdir(join(root, project.name, session.name), { withFileTypes: true })) {
-      if (!file.isFile() || !/\.jsonl(?:\.zstd)?$/.test(file.name)) continue;
-      const encoding = file.name.endsWith('.zstd') ? 'zstd' : 'none';
-      if (compression && compression !== encoding) throw new Error('dsh store has mixed physical encodings.');
-      compression = encoding;
+// Ask the installed backend which encoding can read this store. Only retry
+// read-only discovery; a failed copy must never create a second destination.
+async function discover() {
+  const errors = [];
+  for (const compression of ['zstd', 'none']) {
+    const ctx = new Context();
+    try {
+      const config = { root, compression };
+      let persistence;
+      if (typeof persistenceModule.default === 'function') {
+        persistence = new persistenceModule.default(ctx, config);
+      } else {
+        await ctx.plugin(persistenceModule, config).await();
+        persistence = ctx.get('sessionPersistence');
+      }
+      if (!persistence) throw new Error('The installed dsh package did not provide sessionPersistence.');
+      const snapshots = request.action === 'list'
+        ? await persistence.list()
+        : [await persistence.stat(request.session.native_id)].filter(Boolean);
+      if (snapshots.length || !errors.length && compression === 'none') return { ctx, persistence, snapshots };
+    } catch (error) {
+      errors.push(compression + ': ' + error.message);
     }
+    await ctx.fiber.dispose();
   }
+  throw new Error('Could not read native dsh history. ' + errors.join('; '));
 }
-const ctx = new Context();
-const config = { root, compression: compression ?? 'zstd' };
-let persistence;
-if (typeof persistenceModule.default === 'function') {
-  persistence = new persistenceModule.default(ctx, config);
-} else {
-  await ctx.plugin(persistenceModule, config).await();
-  persistence = ctx.get('sessionPersistence');
-}
-if (!persistence) throw new Error('The installed dsh package did not provide sessionPersistence.');
 const restored = (handle, events) => Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, 'shared-frozen', projections.currentSessionMessageProjections);
 const text = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(p => p.text ?? '').filter(Boolean).join('\n') : '';
 function running(events) {
@@ -78,10 +79,9 @@ function metadata(handle, events) {
     locator: null, running: running(events),
   };
 }
-async function open(id) {
-  const snapshot = await persistence.stat(id);
+async function open(persistence, snapshot) {
   if (!snapshot || snapshot.sizeBytes > MAX_SOURCE) throw new Error('dsh session is missing or exceeds the import limit.');
-  const handle = await persistence.open(id, 'read');
+  const handle = await persistence.open(snapshot.header.id, 'read');
   try {
     const { events } = await handle.read();
     if (Buffer.byteLength(JSON.stringify(events)) > MAX_SOURCE) throw new Error('dsh decoded history exceeds the import limit.');
@@ -122,20 +122,21 @@ function history(handle, events) {
   if (messages.length > 20000 || Buffer.byteLength(JSON.stringify(result)) > MAX_HISTORY) throw new Error('dsh display history exceeds the import limit.');
   return result;
 }
+const { ctx, persistence, snapshots } = await discover();
 try {
   let result;
   if (request.action === 'list') {
-    const all = (await persistence.list()).filter(s => s.header.origin !== 'subagent' && !s.header.parentSession).sort((a,b) => b.header.createdAt - a.header.createdAt || a.header.id.localeCompare(b.header.id));
+    const all = snapshots.filter(s => s.header.origin !== 'subagent' && !s.header.parentSession).sort((a,b) => b.header.createdAt - a.header.createdAt || a.header.id.localeCompare(b.header.id));
     const offset = request.cursor === null ? 0 : Number(request.cursor);
     if (!Number.isSafeInteger(offset) || offset < 0 || offset > all.length) throw new Error('Invalid dsh history cursor.');
     const sessions = [];
     for (const snapshot of all.slice(offset, offset + 50)) {
-      const { handle, events } = await open(snapshot.header.id);
+      const { handle, events } = await open(persistence, snapshot);
       try { sessions.push(metadata(handle, events)); } finally { await handle.close(); }
     }
     result = { sessions, next_cursor: offset + 50 < all.length ? String(offset + 50) : null };
   } else {
-    const { handle, events } = await open(request.session.native_id);
+    const { handle, events } = await open(persistence, snapshots[0]);
     try {
       if (handle.header.cwd !== request.session.cwd || handle.header.origin === 'subagent' || handle.header.parentSession) throw new Error('dsh source identity or working directory changed. Scan again.');
       if (request.action === 'history') result = history(handle, events);

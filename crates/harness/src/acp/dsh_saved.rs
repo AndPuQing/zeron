@@ -298,6 +298,15 @@ mod tests {
                 std::os::unix::fs::symlink(profiles, home.path().join("profiles")).unwrap();
             }
             fixture(home.path(), "create", compression, "", &packages).await;
+            // An unrelated log in the opposite encoding is not a native generation.
+            let extra = home.path().join("sessions/diagnostics/logs");
+            fs::create_dir_all(&extra).unwrap();
+            let filename = if compression == "none" {
+                "trace.jsonl.zstd"
+            } else {
+                "trace.jsonl"
+            };
+            fs::write(extra.join(filename), b"diagnostics").unwrap();
             let mut originals = vec![];
             snapshot(&home.path().join("sessions"), &mut originals);
             let harness = AcpHarness::dsh().with_saved_session_home(home.path());
