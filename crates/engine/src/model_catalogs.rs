@@ -514,10 +514,10 @@ mod tests {
             .unwrap();
         assert_eq!(fresh, models());
         assert!(!probe.forced.load(SeqCst));
-        assert_eq!(
-            list(dir.path(), probe.clone(), true).await.unwrap(),
-            models()
-        );
+        let mut newest = models();
+        newest[0].id = "newly-released".into();
+        *probe.rows.lock().unwrap() = Some(newest.clone());
+        assert_eq!(list(dir.path(), probe.clone(), true).await.unwrap(), newest);
         assert!(probe.forced.load(SeqCst));
     }
 
