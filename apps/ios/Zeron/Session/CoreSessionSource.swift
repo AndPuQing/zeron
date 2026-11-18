@@ -30,7 +30,7 @@ final class CoreSessionSource: SessionSource {
     /// What a chat with no model of its own runs: its host's default (the
     /// catalog's first model), by "device|harness". Seeded from the built-in
     /// list so the chip never shows a bare provider name, then the host's.
-    private var defaultModels: [String: ModelPickerRow] = [:]
+    private var modelCatalogs: [String: [ModelInfo]] = [:]
     private var defaultModelsLoading: Set<String> = []
     private weak var engine: TranscriptView?
 
@@ -127,6 +127,9 @@ final class CoreSessionSource: SessionSource {
         if let config = client.sessionConfig(chatId: chatId) {
             chips.append(ComposerChip(id: "permissions", title: accessModeLabel(config.accessMode), symbol: "lock.shield"))
             chips.append(ComposerChip(id: "plan", title: config.plan ? "Plan on" : "Plan off", symbol: "list.bullet.clipboard"))
+        }
+        if let row, let fast = fastOption(for: row), let config = client.sessionConfig(chatId: chatId) {
+            chips.append(fast.chip(values: config.modelOptions))
         }
         next.chips = chips
         // The workspace indicator includes active side chats, while
@@ -285,6 +288,16 @@ final class CoreSessionSource: SessionSource {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
         switch id {
+        case "fast":
+            guard let fast = fastOption(for: row), let config = client.sessionConfig(chatId: chatId) else { return nil }
+            let device = hostDevice
+            let model = config.model
+            return fast.menu(values: config.modelOptions) { [weak self] enabled in
+                guard let self, self.hostDevice == device,
+                      let latest = self.client.sessionConfig(chatId: self.chatId),
+                      latest.harness == harness, latest.model == model else { return }
+                self.setConfig { $0.modelOptions = fast.applying(enabled, to: $0.modelOptions) }
+            }
         case "permissions", "plan":
             guard let config = client.sessionConfig(chatId: chatId) else { return nil }
             let caps = try? client.executionCapabilities(harness: harness, deviceId: hostDevice)
@@ -321,9 +334,14 @@ final class CoreSessionSource: SessionSource {
     func modelPicker() -> UIViewController? {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
+        let pickerDevice = hostDevice
         let rows: (String) async -> [ModelPickerRow] = { [weak self] id in
             guard let self else { return [] }
-            let models = (try? await self.client.listModels(deviceId: self.hostDevice, harness: id)) ?? fallbackModels(harness: id)
+            let models = (try? await self.client.listModels(deviceId: pickerDevice, harness: id)) ?? fallbackModels(harness: id)
+            await MainActor.run {
+                self.modelCatalogs["\(pickerDevice)|\(id)"] = models
+                self.refresh()
+            }
             return models.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
         }
         var tabs = [ModelPickerTab(harness: harness, label: row.harnessLabel ?? HarnessNames.label(harness)) { await rows(harness) }]
@@ -354,12 +372,17 @@ final class CoreSessionSource: SessionSource {
             // Re-checked at the pick: a turn may have started since the
             // sheet opened with other providers' tabs.
             if pickedHarness != (self.app?.row(self.chatId)?.harness ?? harness), !self.canSwitchProvider { return }
+            let previousRow = self.app?.row(self.chatId)
+            let previousFast = previousRow.flatMap { self.fastOption(for: $0) }?.id
+            let previousModel = previousRow?.model ?? previousRow.flatMap { self.defaultModel(for: $0)?.id }
             self.setConfig {
                 if pickedHarness != $0.harness {
                     $0.harness = pickedHarness
                     // The old provider's effort and options don't carry over.
                     $0.reasoning = nil
                     $0.modelOptions = [:]
+                } else if previousModel != model.id {
+                    $0.modelOptions = FastModeOption.afterModelChange($0.modelOptions, harness: $0.harness, previousOptionID: previousFast)
                 }
                 $0.model = model.id
             }
@@ -381,23 +404,31 @@ final class CoreSessionSource: SessionSource {
     /// The model a chat without one runs: the host's default for its
     /// provider. The built-in list answers at once; the host's (or Cloud's)
     /// own list replaces it when it arrives.
-    private func defaultModel(for row: SessionRow) -> ModelPickerRow? {
+    private func catalogModels(for row: SessionRow) -> [ModelInfo] {
         let harness = row.harness ?? "claude-code"
         let key = "\(hostDevice)|\(harness)"
-        if defaultModels[key] == nil, let first = fallbackModels(harness: harness).first {
-            defaultModels[key] = ModelPickerRow(id: first.id, label: first.label, detail: first.description)
-        }
+        if modelCatalogs[key] == nil { modelCatalogs[key] = fallbackModels(harness: harness) }
         if !hostDevice.isEmpty, defaultModelsLoading.insert(key).inserted {
             let device = hostDevice
             Task { @MainActor [weak self] in
-                guard let self, let first = await self.client.listModels(deviceId: device, harness: harness).first else { return }
-                let row = ModelPickerRow(id: first.id, label: first.label, detail: first.description)
-                guard self.defaultModels[key] != row else { return }
-                self.defaultModels[key] = row
+                guard let self else { return }
+                let models = await self.client.listModels(deviceId: device, harness: harness)
+                guard !models.isEmpty, self.modelCatalogs[key] != models else { return }
+                self.modelCatalogs[key] = models
                 self.refresh()
             }
         }
-        return defaultModels[key]
+        return modelCatalogs[key] ?? []
+    }
+
+    private func defaultModel(for row: SessionRow) -> ModelPickerRow? {
+        catalogModels(for: row).first.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
+    }
+
+    private func fastOption(for row: SessionRow) -> FastModeOption? {
+        let models = catalogModels(for: row)
+        let model = row.model == nil ? models.first : models.first { $0.id == row.model }
+        return FastModeOption.find(in: model?.options ?? [])
     }
 
     /// The providers a chat on this host can move to: Cloud runs Claude

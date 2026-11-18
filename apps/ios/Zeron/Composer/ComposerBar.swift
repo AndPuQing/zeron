@@ -27,6 +27,8 @@ struct ComposerChip: Equatable {
     var tint: UIColor? = nil
     /// Brand mark / custom glyph (takes precedence over `symbol`).
     var icon: UIImage? = nil
+    /// Spoken label for controls whose visible content is only an icon.
+    var accessibilityLabel: String? = nil
 }
 
 /// The composer. One glass surface with two states that morph into each
@@ -643,13 +645,13 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
         chipStrip.arrangedSubviews.forEach { $0.removeFromSuperview() }
         for chip in chips {
             var config = UIButton.Configuration.filled()
-            config.title = chip.title
+            config.title = chip.title.isEmpty ? nil : chip.title
             if let icon = chip.icon {
                 config.image = icon
             } else if let symbol = chip.symbol {
                 config.image = UIImage(systemName: symbol, withConfiguration: UIImage.SymbolConfiguration(pointSize: 11.5, weight: .semibold))
             }
-            config.imagePadding = chip.id == "pr" ? 5 : 6
+            config.imagePadding = chip.title.isEmpty ? 0 : (chip.id == "pr" ? 5 : 6)
             // Tinted chips (the PR badge) use the desktop's tone wash: fill
             // @ 0.08, ink @ 0.85.
             config.baseForegroundColor = chip.tint.map { $0.withAlphaComponent(0.85) } ?? Palette.text
@@ -666,6 +668,11 @@ final class ComposerBar: UIView, UITextViewDelegate, UIGestureRecognizerDelegate
             }
             let b = UIButton(configuration: config)
             b.accessibilityIdentifier = "composer-chip-\(chip.id)"
+            b.accessibilityLabel = chip.accessibilityLabel ?? chip.title
+            if chip.title.isEmpty {
+                b.widthAnchor.constraint(equalToConstant: 34).isActive = true
+                b.heightAnchor.constraint(equalToConstant: 34).isActive = true
+            }
             b.setContentHuggingPriority(.required, for: .horizontal)
             b.setContentCompressionResistancePriority(.required, for: .horizontal)
             b.addAction(UIAction { [weak self, weak b] _ in

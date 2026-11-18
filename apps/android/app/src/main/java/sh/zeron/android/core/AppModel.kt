@@ -197,6 +197,7 @@ class AppModel(private val app: Application) {
                     .putString("draft.harness", value.harness)
                     .putString("draft.model", value.model)
                     .putString("draft.effort", value.effort)
+                    .putString("draft.modelOptions", org.json.JSONObject(value.modelOptions).toString())
                     .putString("draft.access", value.accessMode)
                     .putBoolean("draft.plan", value.plan)
                     .putBoolean("draft.cloud", value.cloud)
@@ -212,6 +213,10 @@ class AppModel(private val app: Application) {
         harness = settings.getString("draft.harness", null) ?: "claude-code",
         model = settings.getString("draft.model", null),
         effort = settings.getString("draft.effort", null),
+        modelOptions = runCatching {
+            val saved = org.json.JSONObject(settings.getString("draft.modelOptions", "{}") ?: "{}")
+            saved.keys().asSequence().associateWith { saved.getString(it) }
+        }.getOrDefault(emptyMap()),
         cloud = settings.getBoolean("draft.cloud", false),
     )
 
@@ -729,7 +734,7 @@ class AppModel(private val app: Application) {
     suspend fun createCloudSession(draft: NewSessionDraft, text: String, attachments: List<uniffi.zeron_core.OutgoingAttachment>): String {
         val client = _client.value ?: throw uniffi.zeron_core.CoreException.Closed()
         val spaceId = draft.projectId ?: throw uniffi.zeron_core.CoreException.InvalidArgument("Choose a project")
-        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, draft.modelOptions, SandboxLevel.WORKSPACE_WRITE)
         // A retry after a failed first send reuses that chat (and machine), while nothing it was made with changed.
         val key = "$spaceId|${draft.branch.orEmpty()}|${draft.harness}|${draft.model.orEmpty()}"
         val chatId = unsentCloudChat?.takeIf { it.first == key && client.sessionRow(it.second) != null }?.second
@@ -754,7 +759,7 @@ class AppModel(private val app: Application) {
             draft.hostId != null -> SessionTarget.Projectless(draft.hostId)
             else -> return null
         }
-        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, emptyMap(), SandboxLevel.WORKSPACE_WRITE)
+        val config = ChatConfig(draft.accessMode, draft.plan, draft.harness, draft.model, draft.effort, draft.modelOptions, SandboxLevel.WORKSPACE_WRITE)
         return try {
             val chatId = client.createSession(NewSession(target, config, if (draft.worktree) null else draft.branch, null, null))
             val handle = client.openSession(chatId)
@@ -810,6 +815,7 @@ data class NewSessionDraft(
     val harness: String = "claude-code",
     val model: String? = null,
     val effort: String? = null,
+    val modelOptions: Map<String, String> = emptyMap(),
     val branch: String? = null,
     val worktree: Boolean = false,
     /** Run on its own Cloud machine (a project whose repository Cloud reaches). */
