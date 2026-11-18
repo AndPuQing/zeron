@@ -31,7 +31,9 @@ final class CoreSessionSource: SessionSource {
     /// catalog's first model), by "device|harness". Seeded from the built-in
     /// list so the chip never shows a bare provider name, then the host's.
     private var modelCatalogs: [String: [ModelInfo]] = [:]
-    private var defaultModelsLoading: Set<String> = []
+    // A request stays current until the picker supersedes it or the host reconnects.
+    private var catalogRequests: [String: UUID] = [:]
+    private var catalogReachable = false
     private weak var engine: TranscriptView?
 
     init(app: AppModel, client: CoreClient, handle: SessionHandle, chatId: String) {
@@ -68,6 +70,12 @@ final class CoreSessionSource: SessionSource {
     private func refresh() {
         let c = handle.composer()
         let row = app?.row(chatId)
+        let network = app?.connectivity?.state
+        let reachable = (c.host.online || row?.isCloud == true) && (network == .connected || network == .disabled)
+        if hostDevice != c.host.deviceId || catalogReachable != reachable {
+            catalogRequests.removeAll()
+            catalogReachable = reachable
+        }
         hostDevice = c.host.deviceId
         hostSwitchesProviders = c.host.capabilities.providerSwitch
         turnRunning = c.live.turnRunning
@@ -335,14 +343,17 @@ final class CoreSessionSource: SessionSource {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
         let pickerDevice = hostDevice
-        let rows: (String) async -> [ModelPickerRow] = { [weak self] id in
-            guard let self else { return [] }
-            let models = (try? await self.client.listModels(deviceId: pickerDevice, harness: id)) ?? fallbackModels(harness: id)
-            await MainActor.run {
-                self.modelCatalogs["\(pickerDevice)|\(id)"] = models
+        let rows: @MainActor (String) async -> [ModelPickerRow] = { [weak self] id in
+            guard let self, self.hostDevice == pickerDevice else { return [] }
+            let key = "\(pickerDevice)|\(id)"
+            let request = UUID()
+            self.catalogRequests[key] = request
+            let models = await self.client.listModels(deviceId: pickerDevice, harness: id)
+            if self.catalogRequests[key] == request {
+                self.modelCatalogs[key] = models
                 self.refresh()
             }
-            return models.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
+            return (self.modelCatalogs[key] ?? []).map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
         }
         var tabs = [ModelPickerTab(harness: harness, label: row.harnessLabel ?? HarnessNames.label(harness)) { await rows(harness) }]
         if canSwitchProvider {
@@ -408,12 +419,14 @@ final class CoreSessionSource: SessionSource {
         let harness = row.harness ?? "claude-code"
         let key = "\(hostDevice)|\(harness)"
         if modelCatalogs[key] == nil { modelCatalogs[key] = fallbackModels(harness: harness) }
-        if !hostDevice.isEmpty, defaultModelsLoading.insert(key).inserted {
+        if !hostDevice.isEmpty, catalogRequests[key] == nil {
+            let request = UUID()
+            catalogRequests[key] = request
             let device = hostDevice
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 let models = await self.client.listModels(deviceId: device, harness: harness)
-                guard !models.isEmpty, self.modelCatalogs[key] != models else { return }
+                guard self.catalogRequests[key] == request, !models.isEmpty, self.modelCatalogs[key] != models else { return }
                 self.modelCatalogs[key] = models
                 self.refresh()
             }

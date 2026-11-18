@@ -79,18 +79,26 @@ fn unchanged(harness: &dyn Harness, context: &ModelContext) -> bool {
         .is_some_and(|now| now.hash == context.hash)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refresh {
+    Background,
+    // Wait for the harness result, including its short-lived in-memory cache.
+    Wait,
+    Force,
+}
+
 // Both the request and any background refresh retain the execution lease so
 // cancellation or an early disk-cache response cannot race a binary update.
 pub(crate) async fn list_with_lease(
     root: &Path,
     harness: Arc<dyn Harness>,
-    force: bool,
+    refresh: Refresh,
     lease: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
 ) -> Result<Vec<Model>, HarnessError> {
     let root = root.to_path_buf();
     tokio::spawn(async move {
         let _lease = lease.clone();
-        list_inner(&root, harness, force, lease).await
+        list_inner(&root, harness, refresh, lease).await
     })
     .await
     .map_err(|error| HarnessError::Protocol(format!("model discovery task failed: {error}")))?
@@ -102,13 +110,23 @@ async fn list(
     harness: Arc<dyn Harness>,
     force: bool,
 ) -> Result<Vec<Model>, HarnessError> {
-    list_with_lease(root, harness, force, None).await
+    list_with_lease(
+        root,
+        harness,
+        if force {
+            Refresh::Force
+        } else {
+            Refresh::Background
+        },
+        None,
+    )
+    .await
 }
 
 async fn list_inner(
     root: &Path,
     harness: Arc<dyn Harness>,
-    force: bool,
+    refresh: Refresh,
     lease: Option<Arc<tokio::sync::OwnedRwLockReadGuard<()>>>,
 ) -> Result<Vec<Model>, HarnessError> {
     // Applied to what is served, never to what is saved: the disk copy stays
@@ -128,20 +146,20 @@ async fn list_inner(
         HarnessError::from(failure)
     })? else {
         return harness
-            .model_catalog(force)
+            .model_catalog(refresh == Refresh::Force)
             .await
             .map(|catalog| overlay(catalog, None));
     };
     let path = location(root, harness.as_ref(), &context);
     let disk = read(&path, &context);
     // The refresh owns its lifetime; returning disk early must not cancel it.
-    let mut refresh = tokio::spawn({
+    let mut task = tokio::spawn({
         let harness = harness.clone();
         let context = context.clone();
         let path = path.clone();
         async move {
             let _lease = lease;
-            let result = harness.model_catalog(force).await;
+            let result = harness.model_catalog(refresh == Refresh::Force).await;
             if !unchanged(harness.as_ref(), &context) {
                 return Err(HarnessError::Protocol(
                     "model discovery context changed; retry".into(),
@@ -170,12 +188,12 @@ async fn list_inner(
             result
         }
     });
-    let result = if disk.is_some() {
-        tokio::time::timeout(Duration::from_millis(100), &mut refresh)
+    let result = if disk.is_some() && refresh == Refresh::Background {
+        tokio::time::timeout(Duration::from_millis(100), &mut task)
             .await
             .ok()
     } else {
-        Some(refresh.await)
+        Some(task.await)
     };
     if !unchanged(harness.as_ref(), &context) {
         return Err(HarnessError::Protocol(
@@ -198,7 +216,9 @@ async fn list_inner(
             }
         }
         result => {
-            tracing::warn!(error = ?result, binary_path = %context.binary_path.display(), binary_version = ?context.binary_version, "Model discovery unavailable");
+            if result.is_some() {
+                tracing::warn!(error = ?result, binary_path = %context.binary_path.display(), binary_version = ?context.binary_version, "Model discovery unavailable");
+            }
             match disk {
                 Some(models) => ModelCatalog {
                     models,
@@ -359,7 +379,7 @@ mod tests {
         probe.delay.store(true, SeqCst);
         let gate = Arc::new(tokio::sync::RwLock::new(()));
         let lease = Arc::new(gate.clone().read_owned().await);
-        list_with_lease(dir.path(), probe, true, Some(lease))
+        list_with_lease(dir.path(), probe, Refresh::Background, Some(lease))
             .await
             .unwrap();
         assert!(
@@ -381,7 +401,7 @@ mod tests {
         let lease = Arc::new(gate.clone().read_owned().await);
         let task = tokio::spawn({
             let probe = probe.clone();
-            async move { list_with_lease(&root, probe, true, Some(lease)).await }
+            async move { list_with_lease(&root, probe, Refresh::Force, Some(lease)).await }
         });
         tokio::time::timeout(Duration::from_secs(2), async {
             while !probe.forced.load(SeqCst) {
@@ -479,6 +499,28 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(250)).await;
         assert_eq!(read(&path, &context), Some(models()));
     }
+    #[tokio::test]
+    async fn foreground_refresh_waits_for_the_new_catalog() {
+        let dir = tempfile::tempdir().unwrap();
+        let probe = Probe::new();
+        let mut old = models();
+        old[0].id = "retired".into();
+        *probe.rows.lock().unwrap() = Some(old);
+        list(dir.path(), probe.clone(), false).await.unwrap();
+        *probe.rows.lock().unwrap() = None;
+        probe.delay.store(true, SeqCst);
+        let fresh = list_with_lease(dir.path(), probe.clone(), Refresh::Wait, None)
+            .await
+            .unwrap();
+        assert_eq!(fresh, models());
+        assert!(!probe.forced.load(SeqCst));
+        assert_eq!(
+            list(dir.path(), probe.clone(), true).await.unwrap(),
+            models()
+        );
+        assert!(probe.forced.load(SeqCst));
+    }
+
     #[tokio::test]
     async fn account_swap_during_probe_never_publishes_or_persists_old_account() {
         let dir = tempfile::tempdir().unwrap();

@@ -1658,7 +1658,7 @@ impl Client {
                     .call(
                         device_id,
                         zeron_rpc::methods::LIST_MODELS,
-                        serde_json::json!({ "harness": harness }),
+                        serde_json::json!({ "harness": harness, "waitForRefresh": true }),
                     )
                     .await
                     .and_then(|v| {

@@ -113,6 +113,8 @@ struct ListModelsParams {
     harness: HarnessId,
     #[serde(default)]
     force: bool,
+    #[serde(default)]
+    wait_for_refresh: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -3638,7 +3640,13 @@ impl RpcService for EngineRpc {
                 let models = crate::model_catalogs::list_with_lease(
                     self.repos.data_dir(),
                     harness,
-                    p.force,
+                    if p.force {
+                        crate::model_catalogs::Refresh::Force
+                    } else if p.wait_for_refresh {
+                        crate::model_catalogs::Refresh::Wait
+                    } else {
+                        crate::model_catalogs::Refresh::Background
+                    },
                     Some(lease),
                 )
                 .await
@@ -6985,7 +6993,10 @@ mod tests {
     fn list_models_force_is_optional_and_backward_compatible() {
         let old: ListModelsParams =
             serde_json::from_value(serde_json::json!({"harness":"codex"})).unwrap();
-        assert!(!old.force);
+        assert!(!old.force && !old.wait_for_refresh);
+        let foreground: ListModelsParams =
+            serde_json::from_value(serde_json::json!({"harness":"codex","waitForRefresh":true})).unwrap();
+        assert!(foreground.wait_for_refresh && !foreground.force);
         let forced: ListModelsParams =
             serde_json::from_value(serde_json::json!({"harness":"codex","force":true})).unwrap();
         assert!(forced.force);
