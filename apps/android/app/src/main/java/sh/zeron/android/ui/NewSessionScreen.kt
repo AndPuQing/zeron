@@ -1,5 +1,7 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.fastOptionsAfterModelChange
+import uniffi.zeron_core.findFastMode
 import uniffi.zeron_core.MobileComposerAction
 import uniffi.zeron_core.MobileComposerContext
 import androidx.compose.foundation.layout.Arrangement
@@ -338,7 +340,7 @@ fun NewSessionScreen(
                         draft = draft.copy(accessMode = access ?: draft.accessMode, plan = plan ?: draft.plan)
                     }
                 }
-                FastModeOption.find(choice?.model?.options.orEmpty())?.let { fast ->
+                findFastMode(choice?.model?.options.orEmpty())?.let { fast ->
                     FastModeChip(fast, draft.modelOptions) { enabled ->
                         draft = draft.copy(modelOptions = fast.applying(enabled, draft.modelOptions))
                     }
@@ -696,7 +698,7 @@ private fun ModelChip(
                 onPick(draft.copy(harness = harness, model = row.id, effort = if (harness != draft.harness) null else draft.effort,
                     modelOptions = when {
                         harness != draft.harness -> emptyMap()
-                        row.id != (draft.model ?: choice?.model?.id) -> FastModeOption.afterModelChange(draft.modelOptions, harness, FastModeOption.find(choice?.model?.options.orEmpty())?.id)
+                        row.id != (draft.model ?: choice?.model?.id) -> fastOptionsAfterModelChange(draft.modelOptions, harness, findFastMode(choice?.model?.options.orEmpty())?.id)
                         else -> draft.modelOptions
                     }))
             },

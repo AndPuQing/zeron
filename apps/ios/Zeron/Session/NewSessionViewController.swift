@@ -339,7 +339,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
         if let efforts = model?.efforts, !efforts.isEmpty {
             chips.append(ComposerChip(id: "effort", title: (draft.effort ?? efforts[efforts.count / 2]).capitalized, symbol: "gauge.with.dots.needle.67percent"))
         }
-        if let fast = FastModeOption.find(in: model?.options ?? []) {
+        if let fast = findFastMode(options: model?.options ?? []) {
             chips.append(fast.chip(values: draft.modelOptions ?? [:]))
         }
         chips.append(ComposerChip(id: "permissions", title: accessModeLabel(draft.accessMode ?? "full-access"), symbol: "lock.shield"))
@@ -526,8 +526,8 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
             if harness != self.draft.harness {
                 self.draft.effort = nil
                 self.draft.modelOptions = nil
-            } else if (self.draft.model ?? self.draftModel?.id) != model.id, let fast = FastModeOption.find(in: self.draftModel?.options ?? []) {
-                self.draft.modelOptions = FastModeOption.afterModelChange(self.draft.modelOptions ?? [:], harness: harness, previousOptionID: fast.id)
+            } else if (self.draft.model ?? self.draftModel?.id) != model.id, let fast = findFastMode(options: self.draftModel?.options ?? []) {
+                self.draft.modelOptions = fastOptionsAfterModelChange(values: self.draft.modelOptions ?? [:], harness: harness, previousOptionId: fast.id)
             }
             self.draft.harness = harness
             self.draft.model = model.id
@@ -558,7 +558,7 @@ final class NewSessionViewController: UIViewController, UIGestureRecognizerDeleg
     }
 
     private func fastMenu() -> UIMenu? {
-        guard let fast = FastModeOption.find(in: draftModel?.options ?? []) else { return nil }
+        guard let fast = findFastMode(options: draftModel?.options ?? []) else { return nil }
         let harness = draft.harness
         let model = draft.model
         return fast.menu(values: draft.modelOptions ?? [:]) { [weak self] enabled in

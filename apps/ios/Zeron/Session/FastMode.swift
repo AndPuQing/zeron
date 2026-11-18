@@ -1,46 +1,6 @@
 import UIKit
 
-/// The model catalog owns the wire values; Fast is not a Codex-only setting.
-struct FastModeOption: Equatable {
-    let id: String
-    let on: String
-    let off: String
-
-    init?(_ option: ModelOption) {
-        let choices = option.choices.map(\.id)
-        let on: String
-        if ["fastMode", "fast_mode"].contains(option.id), choices.contains("on") {
-            on = "on"
-        } else if option.id == "fast", choices.contains("true") {
-            on = "true"
-        } else if choices.contains("fast") {
-            on = "fast"
-        } else { return nil }
-        guard let other = choices.first(where: { $0 != on }) else { return nil }
-        id = option.id
-        self.on = on
-        off = option.defaultChoice != on && choices.contains(option.defaultChoice) ? option.defaultChoice : other
-    }
-
-    static func find(in options: [ModelOption]) -> Self? { options.compactMap(Self.init).first }
-
-    /// Called only for a model change within the same provider. Codex's
-    /// explicit Standard tier resets native/global Fast and must not become
-    /// inheritance, even when the new model has no speed choices.
-    static func afterModelChange(_ values: [String: String], harness: String, previousOptionID: String?) -> [String: String] {
-        guard let id = previousOptionID else { return values }
-        if harness == "codex", id == "serviceTier", values[id] == "default" { return values }
-        var next = values
-        next.removeValue(forKey: id)
-        return next
-    }
-
-    func enabled(in values: [String: String]) -> Bool? {
-        guard let value = values[id] else { return nil }
-        // FFI also reads native booleans and legacy Codex tier values as strings.
-        return value == on || (on == "on" && value == "true") || (id == "serviceTier" && value == "priority")
-    }
-
+extension FastModeControl {
     func title(in values: [String: String]) -> String {
         enabled(in: values).map { $0 ? "Fast on" : "Fast off" } ?? "Fast: Default"
     }
@@ -51,10 +11,12 @@ struct FastModeOption: Equatable {
                      accessibilityLabel: title(in: values))
     }
 
+    func enabled(in values: [String: String]) -> Bool? {
+        fastModeEnabled(control: self, value: values[id])
+    }
+
     func applying(_ enabled: Bool?, to values: [String: String]) -> [String: String] {
-        var next = values
-        next[id] = enabled.map { $0 ? on : off }
-        return next
+        setFastMode(control: self, enabled: enabled, values: values)
     }
 
     func menu(values: [String: String], onPick: @escaping (Bool?) -> Void) -> UIMenu {

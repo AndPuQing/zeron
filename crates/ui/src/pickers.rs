@@ -309,8 +309,11 @@ fn offered_run_options(
     model: &Model,
     selections: serde_json::Map<String, serde_json::Value>,
 ) -> serde_json::Map<String, serde_json::Value> {
-    let standard = harness == HarnessId::Codex
-        && selections.get("serviceTier").and_then(|v| v.as_str()) == Some("default");
+    let standard = zeron_proto::fast_mode::preserves_standard(
+        harness == HarnessId::Codex,
+        "serviceTier",
+        selections.get("serviceTier").and_then(|v| v.as_str()),
+    );
     let mut options = offered_options(model, selections);
     if standard {
         options.insert("serviceTier".into(), "default".into());
@@ -2699,8 +2702,9 @@ impl Pickers {
         // Standard (`default`). Persist either toggle choice even when it
         // matches the catalog default, for drafts and existing chats alike.
         let default = default
-            && !(self.effective_harness(cx) == Some(HarnessId::Codex)
-                && option_id == "serviceTier");
+            && !zeron_proto::fast_mode::requires_explicit_tier(
+                self.effective_harness(cx) == Some(HarnessId::Codex), &option_id,
+            );
         if self.state.read(cx).selected_chat.is_some() {
             self.update_chat_config(cx, move |config| {
                 if default {
@@ -7039,26 +7043,20 @@ fn resizing_chip_text(
 /// when fast isn't, else the other choice — Cursor runs some models fast by
 /// default. Every model then gets the same fast-mode UI.
 fn fast_mode_values(option: &zeron_proto::ModelOption) -> Option<(&str, &str)> {
-    let has = |id: &str| option.choices.iter().any(|choice| choice.id == id);
-    let on = if matches!(option.id.as_str(), "fastMode" | "fast_mode") && has("on") {
-        "on"
-    } else if option.id == "fast" && has("true") {
-        "true"
-    } else if has("fast") {
-        "fast"
-    } else {
-        return None;
+    zeron_proto::fast_mode::choices(
+        &option.id,
+        &option.default_choice,
+        option.choices.iter().map(|choice| choice.id.as_str()),
+    )
+}
+
+fn fast_selection_enabled(option: &zeron_proto::ModelOption, on: &str, value: Option<&serde_json::Value>) -> bool {
+    let value = match value {
+        Some(serde_json::Value::Bool(true)) => "true",
+        Some(serde_json::Value::Bool(false)) => "false",
+        value => value.and_then(|v| v.as_str()).unwrap_or(&option.default_choice),
     };
-    let off = if option.default_choice != on && has(&option.default_choice) {
-        option.default_choice.as_str()
-    } else {
-        option
-            .choices
-            .iter()
-            .map(|choice| choice.id.as_str())
-            .find(|id| *id != on)?
-    };
-    Some((on, off))
+    zeron_proto::fast_mode::enabled(&option.id, on, value)
 }
 
 /// Attach the (single) open popover above a selector trigger.
@@ -7289,12 +7287,7 @@ impl Render for Pickers {
         let fast = self.selected_model(cx).is_some_and(|model| {
             model.options.iter().any(|option| {
                 fast_mode_values(option).is_some_and(|(on, _)| {
-                    self.resolved(cx)
-                        .model_options
-                        .get(&option.id)
-                        .and_then(|value| value.as_str())
-                        .unwrap_or(&option.default_choice)
-                        == on
+                    fast_selection_enabled(option, on, self.resolved(cx).model_options.get(&option.id))
                 })
             })
         });

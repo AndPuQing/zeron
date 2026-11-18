@@ -1,5 +1,6 @@
 package sh.zeron.android.ui
 
+import uniffi.zeron_core.findFastMode
 import uniffi.zeron_core.MobileComposerAction
 import uniffi.zeron_core.MobileComposerContext
 
@@ -393,7 +394,7 @@ private fun SessionChips(client: CoreClient, c: ComposerState, row: SessionRow?,
     }
     val catalog = models ?: fallbackModels(harness)
     val selectedModel = if (row?.model == null) catalog.firstOrNull() else catalog.firstOrNull { it.id == row.model }
-    FastModeOption.find(selectedModel?.options.orEmpty())?.let { fast ->
+    findFastMode(selectedModel?.options.orEmpty())?.let { fast ->
         FastModeChip(fast, execution?.modelOptions.orEmpty()) { enabled ->
             setConfig { current ->
                 check(current.harness == harness && current.model == row?.model) { "The model changed. Reopen Fast mode." }

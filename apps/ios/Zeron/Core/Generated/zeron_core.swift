@@ -10413,6 +10413,64 @@ public func FfiConverterTypeFade_lower(_ value: Fade) -> RustBuffer {
 }
 
 
+public struct FastModeControl: Equatable, Hashable {
+    public var id: String
+    public var on: String
+    public var off: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, on: String, off: String) {
+        self.id = id
+        self.on = on
+        self.off = off
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension FastModeControl: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFastModeControl: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FastModeControl {
+        return
+            try FastModeControl(
+                id: FfiConverterString.read(from: &buf), 
+                on: FfiConverterString.read(from: &buf), 
+                off: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FastModeControl, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.on, into: &buf)
+        FfiConverterString.write(value.off, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFastModeControl_lift(_ buf: RustBuffer) throws -> FastModeControl {
+    return try FfiConverterTypeFastModeControl.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFastModeControl_lower(_ value: FastModeControl) -> RustBuffer {
+    return FfiConverterTypeFastModeControl.lower(value)
+}
+
+
 /**
  * A workspace file or folder for `@` mentions.
  */
@@ -22105,6 +22163,30 @@ fileprivate struct FfiConverterOptionTypeContextUsage: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterOptionTypeFastModeControl: FfiConverterRustBuffer {
+    typealias SwiftType = FastModeControl?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterTypeFastModeControl.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterTypeFastModeControl.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterOptionTypeFrameImage: FfiConverterRustBuffer {
     typealias SwiftType = FrameImage?
 
@@ -24303,6 +24385,43 @@ public func documentLinkPath(url: String, basePath: String?) -> String?  {
     )
 })
 }
+public func fastModeEnabled(control: FastModeControl, value: String?) -> Bool?  {
+    return try!  FfiConverterOptionBool.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_fast_mode_enabled(
+        FfiConverterTypeFastModeControl_lower(control),
+        FfiConverterOptionString.lower(value),uniffiCallStatus
+    )
+})
+}
+public func fastOptionsAfterModelChange(values: [String: String], harness: String, previousOptionId: String?) -> [String: String]  {
+    return try!  FfiConverterDictionaryStringString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_fast_options_after_model_change(
+        FfiConverterDictionaryStringString.lower(values),
+        FfiConverterString.lower(harness),
+        FfiConverterOptionString.lower(previousOptionId),uniffiCallStatus
+    )
+})
+}
+public func findFastMode(options: [ModelOption]) -> FastModeControl?  {
+    return try!  FfiConverterOptionTypeFastModeControl.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_find_fast_mode(
+        FfiConverterSequenceTypeModelOption.lower(options),uniffiCallStatus
+    )
+})
+}
+public func setFastMode(control: FastModeControl, enabled: Bool?, values: [String: String]) -> [String: String]  {
+    return try!  FfiConverterDictionaryStringString.lift(try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_func_set_fast_mode(
+        FfiConverterTypeFastModeControl_lower(control),
+        FfiConverterOptionBool.lower(enabled),
+        FfiConverterDictionaryStringString.lower(values),uniffiCallStatus
+    )
+})
+}
 /**
  * [`AgentLoginRules`] for `harness` (`claude-code`, `codex`, …).
  */
@@ -24578,6 +24697,18 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_document_link_path() != 2899) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_fast_mode_enabled() != 18810) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_fast_options_after_model_change() != 15446) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_find_fast_mode() != 50155) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_func_set_fast_mode() != 49726) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_func_agent_login_rules() != 18451) {
