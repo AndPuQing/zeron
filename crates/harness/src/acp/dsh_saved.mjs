@@ -29,6 +29,7 @@ const root = await realpath(request.root);
 // read-only discovery; a failed copy must never create a second destination.
 async function discover() {
   const errors = [];
+  let empty = false;
   for (const compression of ['zstd', 'none']) {
     const ctx = new Context();
     try {
@@ -44,13 +45,21 @@ async function discover() {
       const snapshots = request.action === 'list'
         ? await persistence.list()
         : [await persistence.stat(request.session.native_id)].filter(Boolean);
-      if (snapshots.length || !errors.length && compression === 'none') return { ctx, persistence, snapshots };
+      if (snapshots.length) return { ctx, persistence, snapshots };
+      empty = true;
     } catch (error) {
-      errors.push(compression + ': ' + error.message);
+      errors.push({ compression, message: String(error.message ?? error) });
     }
     await ctx.fiber.dispose();
   }
-  throw new Error('Could not read native dsh history. ' + errors.join('; '));
+  // Some backends return no matches for the other encoding, others reject
+  // it. Only the native encoding mismatch may accompany a successful miss.
+  // Preserve corruption, permission and other errors even after an empty read.
+  if (empty && errors.every(({ compression, message }) =>
+    message.includes('but this backend is configured for compression ' + JSON.stringify(compression)))) {
+    return { snapshots: [] };
+  }
+  throw new Error('Could not read native dsh history. ' + errors.map(e => e.compression + ': ' + e.message).join('; '));
 }
 const restored = (handle, events) => Session.fromRestore(handle.id, events, handle.header, handle.inheritedEventCount, 'shared-frozen', projections.currentSessionMessageProjections);
 const text = content => typeof content === 'string' ? content : Array.isArray(content) ? content.map(p => p.text ?? '').filter(Boolean).join('\n') : '';
@@ -80,7 +89,8 @@ function metadata(handle, events) {
   };
 }
 async function open(persistence, snapshot) {
-  if (!snapshot || snapshot.sizeBytes > MAX_SOURCE) throw new Error('dsh session is missing or exceeds the import limit.');
+  if (!snapshot) throw new Error('The dsh session no longer exists. Scan again.');
+  if (snapshot.sizeBytes > MAX_SOURCE) throw new Error('dsh session exceeds the import limit.');
   const handle = await persistence.open(snapshot.header.id, 'read');
   try {
     const { events } = await handle.read();
@@ -156,4 +166,4 @@ try {
     } finally { await handle.close(); }
   }
   process.stdout.write(JSON.stringify(result));
-} finally { await ctx.fiber.dispose(); }
+} finally { await ctx?.fiber.dispose(); }
