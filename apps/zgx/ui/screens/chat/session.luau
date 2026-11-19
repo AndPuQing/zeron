@@ -138,10 +138,16 @@ local function Session(id: Id?): Node
 	-- sessions do, and a page made again by a reload stays where it was.)
 	-- The transcript stays; its rows' list is made anew for it (its
 	-- `session`, `shown`, below), which puts the view there.
+	-- Read the outgoing list before switching its rows. A scroll may still
+	-- be inside the transcript's debounce window when the reader leaves.
+	local reader: { save: (() -> ())? } = {}
 	local entering: { id: string, at_end: boolean }? = nil
 	ui.effect(function()
 		local s = which()
 		local left = shared.shown:peek()
+		if s ~= left and reader.save then
+			reader.save()
+		end
 		if s and s ~= left then
 			ui.batch(function()
 				local places = table.clone(shared.places:peek())
@@ -279,6 +285,7 @@ local function Session(id: Id?): Node
 						-- Made again (a reload, a template saved), it comes
 						-- back where it was.
 						keep = shared.anchor,
+						reader = reader,
 						-- The session shown: another one swaps its rows.
 						session = shared.shown,
 						-- (A chat switched back to: whether it was left at its end.)

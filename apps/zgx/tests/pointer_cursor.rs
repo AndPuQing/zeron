@@ -1,6 +1,6 @@
 //! The pointer's cursor is the one under it: the sidebar's edge shows the
-//! column-resize cursor, a sidebar row the pointing hand. zgx gives the
-//! cursor of the front-most node at the pointer (`Scene::cursor_at`); a
+//! column-resize cursor, a sidebar row the pointing hand. the desktop window
+//! resolves cursors through its input router, honoring pointer-event policy; a
 //! layer the window's size in front of the shell, even one that lets the
 //! pointer through (the session hover card's, until it was made an anchor of
 //! no size), took every cursor away.
@@ -21,7 +21,7 @@ fn the_sidebar_edge_shows_the_resize_cursor_and_a_row_the_hand() {
     let b = scene.visible_bounds(edge).expect("the sidebar shows");
     // Its edge: its last few points, down its whole height.
     for y in [b.y + 120., b.y + b.height / 2., b.y + b.height - 120.] {
-        assert_eq!(scene.cursor_at(b.x + b.width - 3., y), Some(Cursor::ColResize), "at its edge, y {y}");
+        assert_eq!(app.ui.input.cursor_at(&scene, b.x + b.width - 3., y), Some(Cursor::ColResize), "at its edge, y {y}");
     }
     // A row: the hand, as a button.
     let row = scene
@@ -30,7 +30,7 @@ fn the_sidebar_edge_shows_the_resize_cursor_and_a_row_the_hand() {
         .find_map(|id| scene.cursor_for(id))
         .expect("a sidebar row under the pointer");
     assert_eq!(row, Cursor::Pointer);
-    assert_eq!(scene.cursor_at(100., 290.), Some(Cursor::Pointer));
+    assert_eq!(app.ui.input.cursor_at(&scene, 100., 290.), Some(Cursor::Pointer));
 }
 
 /// Every resize handle Zerun v3 has shows its cursor under the pointer, a
@@ -57,11 +57,11 @@ fn every_resize_edge_shows_its_cursor_alone_and_in_a_split() {
         let scene = app.ui.scene.borrow();
         let b = scene.visible_bounds(sidebar).expect("the sidebar shows");
         for y in [b.y + 120., b.y + b.height / 2., b.y + b.height - 120.] {
-            assert_eq!(scene.cursor_at(b.x + b.width - 3., y), Some(Cursor::ColResize), "{when}: the sidebar's edge, y {y}");
+            assert_eq!(app.ui.input.cursor_at(&scene, b.x + b.width - 3., y), Some(Cursor::ColResize), "{when}: the sidebar's edge, y {y}");
         }
         let e = scene.visible_bounds(panel).expect("the panel's edge shows");
         for y in [e.y + 120., e.y + e.height / 2., e.y + e.height - 120.] {
-            assert_eq!(scene.cursor_at(e.x + e.width / 2., y), Some(Cursor::ColResize), "{when}: the panel's edge, y {y}");
+            assert_eq!(app.ui.input.cursor_at(&scene, e.x + e.width / 2., y), Some(Cursor::ColResize), "{when}: the panel's edge, y {y}");
         }
     };
     check(&mut app, "a chat alone");
@@ -81,7 +81,9 @@ fn every_resize_edge_shows_its_cursor_alone_and_in_a_split() {
     app.ui.dispatch_with_modifiers(InputEvent::PointerUp { x, y, button }, m);
     app.ui.input.forget_clicks();
     app.frames(40);
-    assert_eq!(app.tree().matches("\"Close pane\"").count(), 2, "split in two");
+    for pane in ["#split-pane-a1", "#split-pane-a3"] {
+        assert!(app.find(pane).is_some(), "{pane} should be visible after the drop");
+    }
     assert!(app.error().is_none(), "{:?}", app.error());
     check(&mut app, "in a split");
     // A panel tab, in the title bar's band: the hand. (The bar is a strip
@@ -92,5 +94,5 @@ fn every_resize_edge_shows_its_cursor_alone_and_in_a_split() {
     let tab = app.target("#panel-strip >> role:tab").expect("a panel tab");
     let scene = app.ui.scene.borrow();
     let r = scene.visible_bounds(tab).expect("the tab shows");
-    assert_eq!(scene.cursor_at(r.x + r.width / 2., r.y + r.height / 2.), Some(Cursor::Pointer), "a panel tab under the title bar's band");
+    assert_eq!(app.ui.input.cursor_at(&scene, r.x + r.width / 2., r.y + r.height / 2.), Some(Cursor::Pointer), "a panel tab under the title bar's band");
 }

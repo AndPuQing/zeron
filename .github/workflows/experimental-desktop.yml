@@ -22,7 +22,7 @@ permissions:
 jobs:
   experimental-desktop:
     runs-on: ${{ inputs.macos_runner || 'macos-15' }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       CARGO_PROFILE_DEV_DEBUG: 0
@@ -49,11 +49,28 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/dev' }}
       - name: Build matching engine
         run: cargo build --locked -p zeron --bin zerun-engine --no-default-features
-      - name: Check experimental desktop and run host and interface regressions
+      - name: Check experimental desktop
+        id: check-desktop
         working-directory: apps/zgx
         run: |
           cargo check --locked --all-targets
-          cargo test --locked
+      - name: Verify transcript paint cases in separate processes
+        working-directory: apps/zgx
+        shell: bash
+        run: |
+          # Libtest shares one process across cases. Metal can exhaust device
+          # resources even when the long frame comparisons run under a mutex.
+          listing=$(cargo test --locked --bin zerun-experimental -- --list transcript_paint_tests::)
+          cases=$(sed -n 's/^\(transcript_paint_tests::[^ ]*\): test$/\1/p' <<< "$listing")
+          [[ -n "$cases" ]] || { echo "No transcript paint tests discovered" >&2; exit 1; }
+          while IFS= read -r name; do
+            cargo test --locked --bin zerun-experimental "$name" -- --exact
+          done <<< "$cases"
+      - name: Run remaining host and interface regressions
+        if: ${{ !cancelled() && steps.check-desktop.outcome == 'success' }}
+        working-directory: apps/zgx
+        run: |
+          cargo test --locked --no-fail-fast -- --skip transcript_paint_tests::
       - name: Check build helper
         run: bash -n scripts/experimental-desktop.sh
       - name: Check packaged Beta profile and account configuration
