@@ -67,7 +67,7 @@ fn the_engine_s_subcommands_run_in_the_helper_beside_the_app() {
     let dir = scratch("helper");
     let zeron = zeron_in(&dir);
     let heard = dir.join("heard");
-    let helper = dir.join(if cfg!(target_os = "macos") { "Zerun Engine" } else { "zerun-engine" });
+    let helper = dir.join(zeron_launch::ENGINE_EXECUTABLES[0]);
     std::fs::write(&helper, format!("#!/bin/sh\necho \"$@\" > '{}'\nexit 7\n", heard.display())).unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let status = Command::new(&zeron).args(["plugin", "list"]).env("ZERUN_DATA_DIR", &dir).status().unwrap();
@@ -133,7 +133,7 @@ fn packaged_beta_commands_keep_the_installed_profile_and_ignore_preview_override
     use std::os::unix::fs::PermissionsExt as _;
     let dir = scratch("beta-profile");
     let app = zeron_in(&dir);
-    let helper = dir.join(if cfg!(target_os = "macos") { "Zerun Engine" } else { "zerun-engine" });
+    let helper = dir.join(zeron_launch::ENGINE_EXECUTABLES[0]);
     std::fs::write(&helper, "#!/bin/sh\nprintf '%s\\n' \"$*\" \"$ZERUN_DATA_DIR\" \"$ZERUN_IPC_PORT\"\nexit 7\n").unwrap();
     std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
     let profile = dir.join("installed");

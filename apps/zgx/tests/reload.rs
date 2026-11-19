@@ -50,6 +50,8 @@ const CALLS: &[&str] = &[
     "account.revoke_invite",
     "account.resend_invite",
     "account.rename_org",
+    "account.keeps_chats_local",
+    "account.keep_chats_local",
     "agents.complete",
     "agents.install",
     "agents.remove",

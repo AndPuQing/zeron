@@ -6,7 +6,7 @@
 use futures::{SinkExt, StreamExt};
 use std::{sync::Arc, time::Duration};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
     sync::{Mutex, mpsc},
 };
@@ -128,14 +128,22 @@ async fn a_remote_sign_in_reaches_the_running_devices_callback() {
         let callback = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let callback_port = callback.local_addr().unwrap().port();
         let cli = tokio::spawn(async move {
-            let (mut socket, _) = callback.accept().await.unwrap();
-            let mut request = vec![0u8; 256];
-            let n = socket.read(&mut request).await.unwrap();
-            socket
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-                .await
-                .unwrap();
-            String::from_utf8_lossy(&request[..n]).into_owned()
+            loop {
+                let (socket, _) = callback.accept().await.unwrap();
+                let mut socket = BufReader::new(socket);
+                let mut request = String::new();
+                socket.read_line(&mut request).await.unwrap();
+                // A local preview probe may connect before the browser's redirect.
+                if !request.starts_with("GET /callback?") {
+                    continue;
+                }
+                socket
+                    .get_mut()
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+                    .await
+                    .unwrap();
+                return request;
+            }
         });
         host.callback_routes().register(
             "login-1",
