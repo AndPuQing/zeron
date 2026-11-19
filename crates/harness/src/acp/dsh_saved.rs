@@ -298,6 +298,15 @@ mod tests {
                 std::os::unix::fs::symlink(profiles, home.path().join("profiles")).unwrap();
             }
             fixture(home.path(), "create", compression, "", &packages).await;
+            // An unrelated log in the opposite encoding is not a native generation.
+            let extra = home.path().join("sessions/diagnostics/logs");
+            fs::create_dir_all(&extra).unwrap();
+            let filename = if compression == "none" {
+                "trace.jsonl.zstd"
+            } else {
+                "trace.jsonl"
+            };
+            fs::write(extra.join(filename), b"diagnostics").unwrap();
             let mut originals = vec![];
             snapshot(&home.path().join("sessions"), &mut originals);
             let harness = AcpHarness::dsh().with_saved_session_home(home.path());
@@ -335,6 +344,25 @@ mod tests {
             for (path, bytes) in originals {
                 assert_eq!(fs::read(path).unwrap(), bytes, "source bytes changed");
             }
+            // The source disappeared after discovery; other sessions still
+            // tie this root to one encoding, so the opposite probe rejects it.
+            let session_dir = fs::read_dir(home.path().join("sessions"))
+                .unwrap()
+                .map(|project| project.unwrap().path().join(&source.native_id))
+                .find(|dir| dir.is_dir())
+                .unwrap();
+            fs::rename(session_dir, home.path().join("removed")).unwrap();
+            for error in [
+                harness.saved_session_history(source).await.unwrap_err(),
+                harness.copy_saved_session(source).await.unwrap_err(),
+            ] {
+                assert!(error.to_string().contains("no longer exists"), "{error}");
+            }
+            // A broken native store must still fail discovery. A session
+            // stored in the retired flat layout is a native backend error.
+            fs::write(extra.parent().unwrap().join("legacy.jsonl"), b"{}").unwrap();
+            let error = harness.saved_sessions(None).await.unwrap_err();
+            assert!(error.to_string().contains("flat-file layout"), "{error}");
         }
     }
 }
