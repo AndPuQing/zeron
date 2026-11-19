@@ -40,6 +40,7 @@ jobs:
         with:
           path: ~/Library/Caches/zgx-ghostty
           key: experimental-ghostty-${{ hashFiles('apps/zgx/Cargo.lock') }}
+          restore-keys: experimental-ghostty-
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: experimental-desktop
