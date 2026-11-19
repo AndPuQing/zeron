@@ -85,6 +85,8 @@ pub struct SessionRow {
     /// Native host status (45s staleness-gated). Stop/busy logic keys off
     /// this; terminal reports and outgoing sends are not native run evidence.
     pub host_indicator: ChatIndicator,
+    /// Live descendant activity alone, independent of the parent’s display status.
+    pub descendant_indicator: ChatIndicator,
     /// Run start of the live turn while Working/AwaitingInput.
     pub working_since_ms: Option<i64>,
     /// `last_message_at`, falling back to `created_at` (the sort key).
@@ -442,6 +444,7 @@ fn hash_row(row: &SessionRow) -> u64 {
     row.cwd.hash(&mut h);
     attention_rank(row.indicator).hash(&mut h);
     attention_rank(row.host_indicator).hash(&mut h);
+    attention_rank(row.descendant_indicator).hash(&mut h);
     row.working_since_ms.hash(&mut h);
     row.last_activity_ms.hash(&mut h);
     row.time_label.hash(&mut h);
@@ -480,9 +483,10 @@ fn build_row(chat: &Chat, rc: &RowContext<'_>, cx: &DeriveContext<'_>) -> Arc<Se
     let session = rc.sessions.get(chat.id.as_str()).copied();
     let send_state = cx.send_states.get(&chat.id).copied();
     let host_indicator = zeron_proto::view::native_display_status(chat, session, cx.now);
+    let descendant = rc.descendant_activity.get(chat.id.as_str()).copied();
     let indicator = zeron_proto::view::with_descendant_activity(
         display_status(chat, session, cx.now),
-        rc.descendant_activity.get(chat.id.as_str()).copied(),
+        descendant,
     );
     let (sleep_until_ms, woke_at_ms) = match chat.sleep_state(cx.now) {
         SleepState::Awake => (None, None),
@@ -563,6 +567,7 @@ fn build_row(chat: &Chat, rc: &RowContext<'_>, cx: &DeriveContext<'_>) -> Arc<Se
         cwd: chat.cwd.clone(),
         indicator,
         host_indicator,
+        descendant_indicator: zeron_proto::view::with_descendant_activity(ChatIndicator::Idle, descendant),
         working_since_ms,
         last_activity_ms: sort_key(chat).timestamp_millis(),
         time_label: relative_time_label(sort_key(chat).timestamp_millis(), now_ms),
@@ -906,10 +911,16 @@ mod tests {
         let parent = &first.sessions["main"];
         assert_eq!(parent.indicator, ChatIndicator::Working);
         assert_eq!(parent.host_indicator, ChatIndicator::Idle);
+        assert_eq!(parent.descendant_indicator, ChatIndicator::Working);
+        assert_eq!(first.sessions["side"].descendant_indicator, ChatIndicator::Idle);
         assert_eq!(parent.working_since_ms, None);
         cx.previous = Some(&first);
         let unchanged = derive(&state, None, &cx);
         assert!(Arc::ptr_eq(parent, &unchanged.sessions["main"]));
+        state.sessions[0].status = zeron_proto::SessionStatus::AwaitingInput;
+        let waiting = derive(&state, None, &cx);
+        assert_eq!(waiting.sessions["main"].descendant_indicator, ChatIndicator::AwaitingInput);
+        assert_eq!(waiting.sessions["main"].host_indicator, ChatIndicator::Idle);
         state.sessions[0].status = zeron_proto::SessionStatus::Idle;
         let completed = derive(&state, None, &cx);
         assert_eq!(completed.sessions["main"].indicator, ChatIndicator::Idle);

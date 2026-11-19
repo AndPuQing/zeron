@@ -1178,6 +1178,9 @@ final class StatusPill: UIControl {
             }
             render()
             timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in render() }
+        case .sideChatNeedsInput:
+            grid.kind = .dot(StatusTone.input)
+            label.text = "Side chat needs input"
         case .sending:
             grid.kind = .trailer
             label.text = "Sending to host…"
