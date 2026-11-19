@@ -19,6 +19,7 @@ pub struct ComposerCommand {
 #[derive(Debug, Clone, Default)]
 pub struct ComposerCatalog {
     pub commands: Vec<ComposerCommand>,
+    pub skill_labels: std::collections::HashMap<String, String>,
     pub warning: Option<String>,
 }
 
@@ -74,12 +75,22 @@ pub(crate) fn from_replies(
     }));
     // A unique display suffix disambiguates skills with the same name but different paths.
     let mut used = std::collections::HashSet::new();
+    let mut skill_labels = std::collections::HashMap::new();
     for row in &mut rows {
         let base = row.token.clone();
         let mut n = 2;
         while !used.insert(row.token.clone()) {
             row.token = format!("{base}:{n}");
             n += 1;
+        }
+        if let Some(name) = base.strip_prefix('$') {
+            let label = zeron_proto::invocation::skill_display_name(name);
+            let label = if row.token == base {
+                label
+            } else {
+                format!("{label} · {}", n - 1)
+            };
+            skill_labels.insert(row.token.clone(), label);
         }
     }
     rows.sort_by(|a, b| {
@@ -90,6 +101,7 @@ pub(crate) fn from_replies(
     });
     ComposerCatalog {
         commands: rows,
+        skill_labels,
         warning: (!warnings.is_empty()).then(|| warnings.join("\n")),
     }
 }
@@ -336,12 +348,29 @@ mod tests {
         assert_eq!(c.commands.len(), 2);
         assert_eq!(c.commands[0].token, "$review");
         assert_eq!(c.commands[1].token, "$review:2");
+        assert_eq!(c.skill_labels["$review"], "Review");
+        assert_eq!(c.skill_labels["$review:2"], "Review · 2");
         assert_eq!(c.commands[0].description, "A");
         assert_eq!(c.commands[1].description, "B");
         let encoded = encode_selections("$review:2 do this", &c.commands);
         let links = zeron_proto::invocation::invocation_links(&encoded);
         assert!(matches!(&links[0].1, Invocation::Skill { path, .. } if path == "/b/SKILL.md"));
     }
+    #[test]
+    fn numeric_skill_names_are_distinct_from_catalog_suffixes() {
+        let catalog = from_replies(
+            Ok(json!([])),
+            Ok(json!([
+                {"name":"plugin:2","path":"/one","description":"","enabled":true},
+                {"name":"plugin:2","path":"/two","description":"","enabled":true},
+                {"name":"plugin:review_agent","path":"/three","description":"","enabled":true}
+            ])),
+        );
+        assert_eq!(catalog.skill_labels["$plugin:2"], "2");
+        assert_eq!(catalog.skill_labels["$plugin:2:2"], "2 · 2");
+        assert_eq!(catalog.skill_labels["$plugin:review_agent"], "Review Agent");
+    }
+
     #[test]
     fn saved_and_queued_drafts_preserve_skill_identity_and_arguments() {
         let invocation = Invocation::Skill {

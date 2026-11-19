@@ -66,7 +66,7 @@ class ComposerCommandTest {
             "\$model", "Skill", null,
             "[\$model](zeron-invoke:7b226b696e64223a22736b696c6c222c226e616d65223a226d6f64656c222c2270617468223a222f70726f6a6563742f534b494c4c2e6d64227d)", null,
         )
-        val catalog = uniffi.zeron_core.ComposerCatalog(listOf(goal, skill), null)
+        val catalog = uniffi.zeron_core.ComposerCatalog(listOf(goal, skill), null, emptyMap())
         val slash = model.completionQuery()!!
         assertEquals(listOf(goal), model.completionRows(catalog, slash))
         model.setText("\$")

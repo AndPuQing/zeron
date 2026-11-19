@@ -46,21 +46,9 @@ final class MobileCommandTests: XCTestCase {
     }
 
     @MainActor
-    func testSkillDisplayNameMatchesDesktopCompletion() {
-        XCTAssertEqual(CommandSuggestions.displayName(for: skill("$imagegen", name: "imagegen", path: "/Users/dev/.agents/skills/imagegen/SKILL.md")), "Imagegen")
-        XCTAssertEqual(CommandSuggestions.displayName(for: skill("$skill_creator", name: "skill_creator", path: "/skills/skill_creator/SKILL.md")), "Skill Creator")
-        XCTAssertEqual(CommandSuggestions.displayName(for: skill("$plugin:review-agent", name: "plugin:review-agent", path: "/skills/review-agent/SKILL.md")), "Review Agent")
-        XCTAssertEqual(CommandSuggestions.displayName(for: skill("$review2", name: "review2", path: "/skills/review2/SKILL.md")), "Review2")
-        XCTAssertEqual(CommandSuggestions.displayName(for: skill("$2fa", name: "2fa", path: "/skills/2fa/SKILL.md")), "2fa")
-        XCTAssertEqual(CommandSuggestions.displayName(for: modelCommand), "/model")
-    }
-
-    @MainActor
     func testSameNameSkillDisambiguationKeepsNameAndEncodedPath() {
         let first = skill("$review", name: "review", path: "/a/SKILL.md")
         let second = skill("$review:2", name: "review", path: "/b/SKILL.md")
-        XCTAssertEqual(CommandSuggestions.displayName(for: first), "Review")
-        XCTAssertEqual(CommandSuggestions.displayName(for: second), "Review · 2")
         XCTAssertNotEqual(first.insertion, second.insertion)
 
         let restored = restoreComposerDraft(text: second.insertion)
@@ -174,7 +162,7 @@ final class MobileCommandTests: XCTestCase {
         suggestions.onPick = { _ in picked = true }
         var command = modelCommand
         command.unavailableReason = nil
-        suggestions.show(ComposerCatalog(commands: [command], warning: nil), query: "")
+        suggestions.show(ComposerCatalog(commands: [command], warning: nil, skillLabels: [:]), query: "")
         func commandList(_ view: UIView) -> UITableView? {
             if let table = view as? UITableView { return table }
             return view.subviews.compactMap(commandList).first

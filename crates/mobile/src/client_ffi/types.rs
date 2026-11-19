@@ -1165,6 +1165,7 @@ impl From<ComposerCommand> for zc::composer::ComposerCommand {
 pub struct ComposerCatalog {
     pub commands: Vec<ComposerCommand>,
     pub warning: Option<String>,
+    pub skill_labels: HashMap<String, String>,
 }
 
 /// A / command or $ skill query; offsets match Swift NSRange and Kotlin String (UTF-16).
@@ -1230,6 +1231,7 @@ impl From<zc::composer::ComposerCatalog> for ComposerCatalog {
         Self {
             commands: c.commands.into_iter().map(Into::into).collect(),
             warning: c.warning,
+            skill_labels: c.skill_labels,
         }
     }
 }

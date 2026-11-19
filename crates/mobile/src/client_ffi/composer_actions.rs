@@ -314,6 +314,7 @@ mod tests {
             let original = vec![native, unavailable, skill];
             let catalog = with_mobile_actions(
                 ComposerCatalog {
+                    skill_labels: Default::default(),
                     commands: original.clone(),
                     warning: Some("Skills discovery failed".into()),
                 },
@@ -344,6 +345,7 @@ mod tests {
         for harness in ["cursor", "dsh", "claude-code"] {
             let catalog = with_mobile_actions(
                 ComposerCatalog {
+                    skill_labels: Default::default(),
                     commands: vec![],
                     warning: Some("Host offline".into()),
                 },
@@ -361,6 +363,7 @@ mod tests {
         for harness in ["codex", "unknown-agent"] {
             let catalog = with_mobile_actions(
                 ComposerCatalog {
+                    skill_labels: Default::default(),
                     commands: vec![command("goal")],
                     warning: None,
                 },
