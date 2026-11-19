@@ -99,10 +99,11 @@ fn main() -> anyhow::Result<()> {
     };
     let first_port = port();
     let vite_child = start(first_port)?;
+    let api_port = port();
     let api = Child(
         std::process::Command::new("node")
             .arg("api.js")
-            .arg(port().to_string())
+            .arg(api_port.to_string())
             .current_dir(&project)
             .env(zeron_proto::ORIGIN_ENV, zeron_proto::chat_origin("preview-fixture"))
             .spawn()?,
@@ -136,6 +137,8 @@ fn main() -> anyhow::Result<()> {
     runtime.block_on(core.previews.start(
         Arc::new(move || zeron_engine::PreviewScope {
             chats: vec![("preview-fixture".into(), root.clone())],
+            // This fixture simulates an active chat with running development servers.
+            live: true,
             ..Default::default()
         }),
         None,
@@ -206,8 +209,21 @@ fn main() -> anyhow::Result<()> {
                 for _ in 0..150 { if browser.read_with(cx,|b,_|b.page.title=="Fieldnotes · Live update") {break;} pause(cx,100).await; }
                 anyhow::ensure!(browser.read_with(cx,|b,_|b.page.title=="Fieldnotes · Live update"),"Vite HMR did not reload through the stable proxy: {:?}", browser.read_with(cx,|b,_|b.page.clone()));
                 capture(&output,"preview-live-update")?;
-                drop(vite_child.take()); pause(cx,2600).await;
-                anyhow::ensure!(browser.read_with(cx,|b,_|b.fixture_previews().services.len()==1),"stopped Vite remained in discovery");
+                drop(vite_child.take());
+                let only_port = |snapshot: &zeron_proto::PreviewSnapshot, port| {
+                    matches!(snapshot.services.as_slice(), [service] if service.port == port)
+                };
+                for _ in 0..80 {
+                    if browser.read_with(cx, |b, _| only_port(&b.fixture_previews(), api_port)) {
+                        break;
+                    }
+                    pause(cx, 100).await;
+                }
+                let snapshot = browser.read_with(cx, |b, _| b.fixture_previews());
+                anyhow::ensure!(
+                    only_port(&snapshot, api_port),
+                    "expected only the API after stopping Vite: {snapshot:?}"
+                );
                 std::fs::write(project.join("index.html"),html.replace("Fieldnotes</title>","Fieldnotes · Restarted</title>"))?;
                 vite_child = Some(Child(std::process::Command::new("node").arg(vite_restart).args(["--host","127.0.0.1","--strictPort","--port",&second_port.to_string()]).current_dir(restart_root).env(zeron_proto::ORIGIN_ENV,zeron_proto::chat_origin("preview-fixture")).stdout(std::process::Stdio::null()).spawn()?));
                 for _ in 0..150 { if browser.read_with(cx,|b,_|b.fixture_previews().services.iter().any(|s|s.port==second_port)) {break;} pause(cx,100).await; }
@@ -216,10 +232,20 @@ fn main() -> anyhow::Result<()> {
                 for _ in 0..150 { if browser.read_with(cx,|b,_|b.page.title=="Fieldnotes · Restarted" && !b.page.loading) { break; } pause(cx,100).await; }
                 anyhow::ensure!(browser.read_with(cx,|b,_|b.page.title=="Fieldnotes · Restarted" && b.page.error.is_none()),"restarted server did not load through its stable URL: {:?}",browser.read_with(cx,|b,_|b.page.clone()));
                 capture(&output,"preview-restarted-stable-url")?;
-                drop(api.take()); pause(cx,2600).await;
+                drop(api.take());
                 let (_,empty) = window.update(cx,|shell,w,cx|shell.fixture_open_browser(None,w,cx))?;
-                empty.update(cx,|b,cx|b.watch_previews(handle.clone(),"preview-fixture".into(),cx)); pause(cx,800).await;
-                anyhow::ensure!(empty.read_with(cx,|b,_|b.fixture_previews().services.len()==1),"stopped API remained in new tab");
+                empty.update(cx,|b,cx|b.watch_previews(handle.clone(),"preview-fixture".into(),cx));
+                for _ in 0..80 {
+                    if empty.read_with(cx, |b, _| only_port(&b.fixture_previews(), second_port)) {
+                        break;
+                    }
+                    pause(cx, 100).await;
+                }
+                let snapshot = empty.read_with(cx, |b, _| b.fixture_previews());
+                anyhow::ensure!(
+                    only_port(&snapshot, second_port),
+                    "expected only the restarted Vite in the new tab: {snapshot:?}"
+                );
                 capture(&output,"preview-restarted-server-list")?;
                 cx.update(|cx|appearance::set_mode(appearance::AppearanceMode::Light,cx)); pause(cx,700).await; capture(&output,"preview-servers-light")?;
                 std::fs::write(output.join("result.txt"),format!("PASS: live process discovery, native Open click, stable HTTP URL, Vite HMR, disappearance, restart {first_port} → {second_port}, persistent identity, new-tab scoping\n{stable}\n"))?;
