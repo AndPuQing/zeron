@@ -16,6 +16,7 @@ pub(crate) mod documents;
 pub use documents::*;
 pub(crate) mod companions;
 mod composer_actions;
+mod fast_mode;
 mod providers;
 pub use providers::UsageWindowInfo;
 mod session;

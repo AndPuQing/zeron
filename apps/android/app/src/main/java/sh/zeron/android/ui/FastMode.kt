@@ -12,45 +12,23 @@ import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material3.Icon
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import uniffi.zeron_core.ModelOption
+import uniffi.zeron_core.FastModeControl
+import uniffi.zeron_core.fastModeEnabled
+import uniffi.zeron_core.setFastMode
 
-/** Catalog wire values, shared by existing chats and new-session drafts. */
-internal data class FastModeOption(val id: String, val on: String, val off: String) {
-    fun enabled(values: Map<String, String>): Boolean? = values[id]?.let {
-        it == on || (on == "on" && it == "true") || (id == "serviceTier" && it == "priority")
-    }
-    fun title(values: Map<String, String>): String = when (enabled(values)) {
-        true -> "Fast on"
-        false -> "Fast off"
-        null -> "Fast: Default"
-    }
-    fun applying(enabled: Boolean?, values: Map<String, String>): Map<String, String> =
-        if (enabled == null) values - id else values + (id to if (enabled) on else off)
+internal fun FastModeControl.enabled(values: Map<String, String>) = fastModeEnabled(this, values[id])
 
-    companion object {
-        /** Same-provider model changes must keep Codex's explicit reset of native/global Fast. */
-        fun afterModelChange(values: Map<String, String>, harness: String, previousOptionId: String?): Map<String, String> {
-            val id = previousOptionId ?: return values
-            if (harness == "codex" && id == "serviceTier" && values[id] == "default") return values
-            return values - id
-        }
-
-        fun find(options: List<ModelOption>): FastModeOption? = options.firstNotNullOfOrNull { option ->
-            val choices = option.choices.map { it.id }
-            val on = when {
-                option.id in listOf("fastMode", "fast_mode") && "on" in choices -> "on"
-                option.id == "fast" && "true" in choices -> "true"
-                "fast" in choices -> "fast"
-                else -> return@firstNotNullOfOrNull null
-            }
-            val other = choices.firstOrNull { it != on } ?: return@firstNotNullOfOrNull null
-            FastModeOption(option.id, on, option.defaultChoice.takeIf { it != on && it in choices } ?: other)
-        }
-    }
+internal fun FastModeControl.title(values: Map<String, String>): String = when (enabled(values)) {
+    true -> "Fast on"
+    false -> "Fast off"
+    null -> "Fast: Default"
 }
 
+internal fun FastModeControl.applying(enabled: Boolean?, values: Map<String, String>) =
+    setFastMode(this, enabled, values)
+
 @Composable
-internal fun FastModeChip(option: FastModeOption, values: Map<String, String>, onPick: (Boolean?) -> Unit) {
+internal fun FastModeChip(option: FastModeControl, values: Map<String, String>, onPick: (Boolean?) -> Unit) {
     var open by remember(option.id) { mutableStateOf(false) }
     val selected = option.enabled(values)
     Box {

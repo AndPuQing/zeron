@@ -382,7 +382,7 @@ final class CoreSessionSource: SessionSource {
                     $0.reasoning = nil
                     $0.modelOptions = [:]
                 } else if previousModel != model.id {
-                    $0.modelOptions = FastModeOption.afterModelChange($0.modelOptions, harness: $0.harness, previousOptionID: previousFast)
+                    $0.modelOptions = fastOptionsAfterModelChange(values: $0.modelOptions, harness: $0.harness, previousOptionId: previousFast)
                 }
                 $0.model = model.id
             }
@@ -425,10 +425,10 @@ final class CoreSessionSource: SessionSource {
         catalogModels(for: row).first.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
     }
 
-    private func fastOption(for row: SessionRow) -> FastModeOption? {
+    private func fastOption(for row: SessionRow) -> FastModeControl? {
         let models = catalogModels(for: row)
         let model = row.model == nil ? models.first : models.first { $0.id == row.model }
-        return FastModeOption.find(in: model?.options ?? [])
+        return findFastMode(options: model?.options ?? [])
     }
 
     /// The providers a chat on this host can move to: Cloud runs Claude

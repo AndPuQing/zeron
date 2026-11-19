@@ -1951,6 +1951,26 @@ RustBuffer uniffi_zeron_mobile_fn_func_mobile_composer_action_error(RustBuffer a
 RustBuffer uniffi_zeron_mobile_fn_func_document_link_path(RustBuffer url, RustBuffer base_path, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FAST_MODE_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FAST_MODE_ENABLED
+RustBuffer uniffi_zeron_mobile_fn_func_fast_mode_enabled(RustBuffer control, RustBuffer value, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FAST_OPTIONS_AFTER_MODEL_CHANGE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FAST_OPTIONS_AFTER_MODEL_CHANGE
+RustBuffer uniffi_zeron_mobile_fn_func_fast_options_after_model_change(RustBuffer values, RustBuffer harness, RustBuffer previous_option_id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FIND_FAST_MODE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_FIND_FAST_MODE
+RustBuffer uniffi_zeron_mobile_fn_func_find_fast_mode(RustBuffer options, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_SET_FAST_MODE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_SET_FAST_MODE
+RustBuffer uniffi_zeron_mobile_fn_func_set_fast_mode(RustBuffer control, RustBuffer enabled, RustBuffer values, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_AGENT_LOGIN_RULES
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_FUNC_AGENT_LOGIN_RULES
 RustBuffer uniffi_zeron_mobile_fn_func_agent_login_rules(RustBuffer harness, RustCallStatus *_Nonnull out_status
@@ -2430,6 +2450,30 @@ uint16_t uniffi_zeron_mobile_checksum_func_mobile_composer_action_error(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_DOCUMENT_LINK_PATH
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_DOCUMENT_LINK_PATH
 uint16_t uniffi_zeron_mobile_checksum_func_document_link_path(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FAST_MODE_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FAST_MODE_ENABLED
+uint16_t uniffi_zeron_mobile_checksum_func_fast_mode_enabled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FAST_OPTIONS_AFTER_MODEL_CHANGE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FAST_OPTIONS_AFTER_MODEL_CHANGE
+uint16_t uniffi_zeron_mobile_checksum_func_fast_options_after_model_change(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FIND_FAST_MODE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_FIND_FAST_MODE
+uint16_t uniffi_zeron_mobile_checksum_func_find_fast_mode(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_SET_FAST_MODE
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_FUNC_SET_FAST_MODE
+uint16_t uniffi_zeron_mobile_checksum_func_set_fast_mode(void
     
 );
 #endif

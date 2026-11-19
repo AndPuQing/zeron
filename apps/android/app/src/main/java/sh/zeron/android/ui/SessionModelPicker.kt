@@ -10,7 +10,7 @@ internal fun canSwitchAgent(c: ComposerState) = c.host.capabilities.providerSwit
 /** Preserve the current provider's settings, but never carry them into a different provider. */
 internal fun modelSelection(config: ChatConfig, harness: String, model: String, previousFastOptionId: String? = null, previousModelId: String? = config.model): ChatConfig =
     if (harness == config.harness) config.copy(model = model,
-        modelOptions = if (model != previousModelId) FastModeOption.afterModelChange(config.modelOptions, harness, previousFastOptionId) else config.modelOptions)
+        modelOptions = if (model != previousModelId) fastOptionsAfterModelChange(config.modelOptions, harness, previousFastOptionId) else config.modelOptions)
     else config.copy(harness = harness, model = model, reasoning = null, modelOptions = emptyMap())
 
 @Composable
@@ -61,7 +61,7 @@ internal fun SessionModelPicker(client: CoreClient, c: ComposerState, row: Sessi
             check(harness == config.harness || canSwitchAgent(latest)) { "Wait for the pending turn or message before switching agent." }
             val previousModels = catalogs[config.harness].orEmpty()
             val previousModel = if (config.model == null) previousModels.firstOrNull() else previousModels.firstOrNull { it.id == config.model }
-            val previousFast = FastModeOption.find(previousModel?.options.orEmpty())?.id
+            val previousFast = findFastMode(previousModel?.options.orEmpty())?.id
             client.setSessionConfig(c.chatId, modelSelection(config, harness, picked.id, previousFast, previousModel?.id ?: config.model))
         })
 }

@@ -1933,6 +1933,32 @@ impl Chats {
             .is_some_and(|h| h["supportsSteering"].as_bool() == Some(true))
     }
 
+    /// Read the advertised control from the catalog belonging to this chat.
+    /// A chat can open before its device has supplied a catalog.
+    fn fast_for_chat(&self, chat: &Json) -> bool {
+        let config = &chat["config"];
+        let options = &config["modelOptions"];
+        let harness = config["harness"].as_str().unwrap_or("claude-code");
+        let model = config["model"].as_str();
+        let lookup = |by: &HashMap<String, Vec<Json>>| {
+            let models = by.get(harness)?;
+            let row = match model {
+                Some(id) => models.iter().find(|m| m["id"].as_str() == Some(id)),
+                None => models.first(),
+            }?;
+            Some(fast_option(row).is_some_and(|(id, on, _)| {
+                options.get(id.as_str()).is_some_and(|value| zeron_proto::fast_mode::enabled_json(&id, &on, value))
+            }))
+        };
+        let selected = if let Some(device) = self.target(chat) {
+            self.remote.borrow().as_ref().filter(|r| r.device == device).and_then(|r| lookup(&r.models))
+                .or_else(|| self.known_remotes.borrow().get(&device).and_then(|r| lookup(&r.models)))
+        } else {
+            lookup(&self.models.borrow())
+        };
+        selected.unwrap_or_else(|| fast_in(options))
+    }
+
     /// The device to name for a call routed to the chat's host, when that
     /// isn't this one.
     fn target(&self, chat: &Json) -> Option<String> {
@@ -2100,30 +2126,20 @@ fn model_value(harness: &str, m: &Json) -> Value {
 fn fast_option(m: &Json) -> Option<(String, String, String)> {
     m["options"].as_array()?.iter().find_map(|o| {
         let id = o["id"].as_str()?;
-        let choices: Vec<&str> = o["choices"].as_array()?.iter().filter_map(|c| c["id"].as_str()).collect();
-        let has = |c: &str| choices.contains(&c);
-        let on = if matches!(id, "fastMode" | "fast_mode") && has("on") {
-            "on"
-        } else if id == "fast" && has("true") {
-            "true"
-        } else if has("fast") {
-            "fast"
-        } else {
-            return None;
-        };
-        let default = o["defaultChoice"].as_str().filter(|d| *d != on && has(d));
-        let off = default.or_else(|| choices.iter().copied().find(|c| *c != on))?;
+        let choices = o["choices"].as_array()?.iter().filter_map(|choice| choice["id"].as_str());
+        let (on, off) = zeron_proto::fast_mode::choices(id, o["defaultChoice"].as_str().unwrap_or(""), choices)?;
         Some((id.to_owned(), on.to_owned(), off.to_owned()))
     })
 }
 
 /// Whether a chat's model options have Fast on.
 fn fast_in(options: &Json) -> bool {
-    options["fastMode"].as_str() == Some("on")
-        || options["fast_mode"].as_str() == Some("on")
-        || options["fast"].as_str() == Some("true")
-        || options["serviceTier"].as_str() == Some("fast")
-        || options["speed"].as_str() == Some("fast")
+    // A saved chat can be shown before its host's catalog arrives.
+    [("fastMode", "on"), ("fast_mode", "on"), ("fast", "true"), ("serviceTier", "fast"), ("speed", "fast")]
+        .iter()
+        .any(|&(id, on)| {
+            options.get(id).is_some_and(|value| zeron_proto::fast_mode::enabled_json(id, on, value))
+        })
 }
 
 /// A chat's model options as the composer's picks: each option's chosen
@@ -6292,7 +6308,7 @@ fn session_value(chats: &Chats, open: &Open, offline: bool) -> Value {
         Some("auto") => "auto",
         _ => "full",
     };
-    let fast = fast_in(&config["modelOptions"]);
+    let fast = chats.fast_for_chat(&chat);
     let options = options_value(&config["modelOptions"]);
     let answered = if open.answering.is_some() { open.answers.len() } else { 0 };
     let ask = asked(open.entries.iter().rev().filter_map(|e| e.json.as_ref())).and_then(|p| ask_value(p, answered)).unwrap_or(Value::Nil);
@@ -8033,6 +8049,36 @@ mod tests {
         assert_eq!(picked["modelOptions"], json!({ "lead": "b" }));
         let none = merged_config(&chat, &Value::record([("options", Value::record::<&str>([]))]));
         assert_eq!(none["modelOptions"], json!({}));
+    }
+
+    #[test]
+    fn saved_fast_aliases_and_catalog_choices_reach_the_composer() {
+        let chats = Chats::default();
+        let chat = json!({"config":{"harness":"codex","model":"a","modelOptions":{"serviceTier":"priority"}}});
+        assert!(chats.fast_for_chat(&chat));
+        chats.models.borrow_mut().insert("codex".into(), vec![json!({
+            "id":"a", "options":[{"id":"serviceTier","defaultChoice":"default",
+                                  "choices":[{"id":"default"},{"id":"fast"}]}]
+        })]);
+        assert!(chats.fast_for_chat(&chat));
+
+        // Consult the selected model's actual option key, even for a custom catalog.
+        let mut custom = chat.clone();
+        custom["config"]["model"] = json!("b");
+        custom["config"]["modelOptions"] = json!({"latency":"fast"});
+        chats.models.borrow_mut().get_mut("codex").unwrap().push(json!({
+            "id":"b", "options":[{"id":"latency","defaultChoice":"normal",
+                                  "choices":[{"id":"normal"},{"id":"fast"}]}]
+        }));
+        assert!(chats.fast_for_chat(&custom));
+        custom["config"]["modelOptions"] = json!({"serviceTier":"priority"});
+        assert!(!chats.fast_for_chat(&custom));
+        assert!(fast_in(&json!({"fastMode":true})));
+        assert!(fast_in(&json!({"fast_mode":"true"})));
+        assert!(fast_in(&json!({"fast":true})));
+        assert!(!fast_in(&json!({"serviceTier":"default", "fastMode":false})));
+        assert!(!fast_in(&json!({"other":true, "speed":"priority"})));
+        assert!(!fast_in(&json!({})));
     }
 
     #[test]

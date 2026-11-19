@@ -16,7 +16,7 @@ final class FastModeTests: XCTestCase {
             ("speed", ["normal", "fast"], "normal", "fast", "normal"),
         ]
         for (id, choices, fallback, on, off) in cases {
-            let fast = try XCTUnwrap(FastModeOption(option(id, choices, fallback)))
+            let fast = try XCTUnwrap(findFastMode(options: [option(id, choices, fallback)]))
             let initial = ["contextWindow": "1m"]
             XCTAssertEqual(fast.title(in: initial), "Fast: Default")
             let enabled = fast.applying(true, to: initial)
@@ -31,14 +31,14 @@ final class FastModeTests: XCTestCase {
     }
 
     func testLegacyValuesAndUnsupportedCatalogs() throws {
-        let claude = try XCTUnwrap(FastModeOption(option("fastMode", ["off", "on"], "off")))
+        let claude = try XCTUnwrap(findFastMode(options: [option("fastMode", ["off", "on"], "off")]))
         XCTAssertEqual(claude.enabled(in: ["fastMode": "true"]), true)
         XCTAssertEqual(claude.enabled(in: ["fastMode": "false"]), false)
-        let codex = try XCTUnwrap(FastModeOption(option("serviceTier", ["default", "fast"], "default")))
+        let codex = try XCTUnwrap(findFastMode(options: [option("serviceTier", ["default", "fast"], "default")]))
         XCTAssertEqual(codex.enabled(in: ["serviceTier": "priority"]), true)
-        XCTAssertNil(FastModeOption.find(in: []))
-        XCTAssertNil(FastModeOption(option("speed", ["fast"], "fast")))
-        XCTAssertNil(FastModeOption(option("contextWindow", ["200k", "1m"], "200k")))
+        XCTAssertNil(findFastMode(options: []))
+        XCTAssertNil(findFastMode(options: [option("speed", ["fast"], "fast")]))
+        XCTAssertNil(findFastMode(options: [option("contextWindow", ["200k", "1m"], "200k")]))
     }
 
     func testDraftRetainsFastAndReadsOlderSavedDrafts() throws {
@@ -52,13 +52,13 @@ final class FastModeTests: XCTestCase {
 
     func testExplicitCodexOffSurvivesModelChangesAndDraftRestore() throws {
         // A Fast default must not win again after On -> Off -> another model.
-        let fast = try XCTUnwrap(FastModeOption(option("serviceTier", ["default", "fast"], "fast")))
+        let fast = try XCTUnwrap(findFastMode(options: [option("serviceTier", ["default", "fast"], "fast")]))
         let other = ["contextWindow": "1m"]
         let off = fast.applying(false, to: fast.applying(true, to: other))
-        let changed = FastModeOption.afterModelChange(off, harness: "codex", previousOptionID: fast.id)
+        let changed = fastOptionsAfterModelChange(values: off, harness: "codex", previousOptionId: fast.id)
         XCTAssertEqual(changed, ["serviceTier": "default", "contextWindow": "1m"])
         // Switching onward from a model/catalog without speed choices also keeps the reset.
-        XCTAssertEqual(FastModeOption.afterModelChange(changed, harness: "codex", previousOptionID: nil), changed)
+        XCTAssertEqual(fastOptionsAfterModelChange(values: changed, harness: "codex", previousOptionId: nil), changed)
         var draft = NewSessionDraft()
         draft.harness = "codex"
         draft.model = "another-model"
@@ -72,12 +72,12 @@ final class FastModeTests: XCTestCase {
     func testModelChangeStillPrunesFastOnAndDoesNotCreateAnOffOverride() {
         let other = ["contextWindow": "1m"]
         for value in ["fast", "priority"] {
-            XCTAssertEqual(FastModeOption.afterModelChange(["serviceTier": value, "contextWindow": "1m"], harness: "codex", previousOptionID: "serviceTier"), other)
+            XCTAssertEqual(fastOptionsAfterModelChange(values: ["serviceTier": value, "contextWindow": "1m"], harness: "codex", previousOptionId: "serviceTier"), other)
         }
-        XCTAssertEqual(FastModeOption.afterModelChange(other, harness: "codex", previousOptionID: "serviceTier"), other)
-        XCTAssertEqual(FastModeOption.afterModelChange([:], harness: "codex", previousOptionID: "serviceTier"), [:])
+        XCTAssertEqual(fastOptionsAfterModelChange(values: other, harness: "codex", previousOptionId: "serviceTier"), other)
+        XCTAssertEqual(fastOptionsAfterModelChange(values: [:], harness: "codex", previousOptionId: "serviceTier"), [:])
         // The exception belongs only to Codex; other providers retain their pruning behavior.
-        XCTAssertEqual(FastModeOption.afterModelChange(["serviceTier": "default"], harness: "other", previousOptionID: "serviceTier"), [:])
-        XCTAssertEqual(FastModeOption.afterModelChange(["fastMode": "off", "contextWindow": "1m"], harness: "claude-code", previousOptionID: "fastMode"), other)
+        XCTAssertEqual(fastOptionsAfterModelChange(values: ["serviceTier": "default"], harness: "other", previousOptionId: "serviceTier"), [:])
+        XCTAssertEqual(fastOptionsAfterModelChange(values: ["fastMode": "off", "contextWindow": "1m"], harness: "claude-code", previousOptionId: "fastMode"), other)
     }
 }

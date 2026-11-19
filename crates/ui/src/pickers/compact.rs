@@ -548,12 +548,8 @@ impl Pickers {
             .iter()
             .find_map(|o| fast_mode_values(o).map(|(on, off)| (o, on, off)))?;
         let options = self.explicit_options(cx);
-        let fast = options
-            .get(&option.id)
-            .and_then(|v| v.as_str())
-            .unwrap_or(&option.default_choice)
-            == on;
-        let next = if fast { off } else { on };
+        let fast = fast_selection_enabled(option, on, options.get(&option.id));
+        let next = zeron_proto::fast_mode::choice(on, off, !fast);
         Some((
             option.id.clone(),
             next.to_owned(),
