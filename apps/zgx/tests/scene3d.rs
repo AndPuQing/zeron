@@ -1,5 +1,5 @@
 use zgx::scene::{NodeId, NodeKind};
-use zgx_script::{Plugin, ScriptHost, testing::TestApp};
+use zgx_script::{Capability, Plugin, ScriptHost, testing::TestApp};
 
 fn frame_id(app: &mut TestApp) -> Option<u64> {
     let root = app.find("mesh-scene")?;
@@ -13,7 +13,7 @@ fn frame_id(app: &mut TestApp) -> Option<u64> {
 }
 
 #[test]
-fn a_plugin_draws_and_picks_custom_triangles_without_extra_grants() {
+fn a_plugin_with_the_scene_grant_draws_and_picks_custom_triangles() {
     let dir = std::env::temp_dir().join(format!("zerun-plugin-mesh-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let entry = dir.join("init.luau");
@@ -52,7 +52,7 @@ ui.contribute { target = "#slot", after = ui.column {
         host.set_plugins(vec![Plugin {
             name: "mesh-viewer".into(),
             entry,
-            grants: vec![],
+            grants: vec![Capability::Scene3d],
         }]);
         host
     });

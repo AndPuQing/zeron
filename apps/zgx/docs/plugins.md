@@ -57,6 +57,7 @@ Your own plugins are signed as yours, and re-signed and reloaded each time you s
 | `github`, `github.write` | read (and write) GitHub through Zerun's engine (older calls; prefer `commands` with `gh`) |
 | `network` | the internet: `ui.fetch`, and remote images (`ui.image { src = "https://…" }`). See [Reaching the network](#reaching-the-network) |
 | `clipboard`, `files`, `web`, `windows` | zgx's clipboard, file dialogs, web views, windows |
+| `scene3d` | draw [3D scenes](#3d-scenes) with `ui.scene3d` |
 | `tools` | tools for agents (the manifest's `tools`) |
 | `devices` | send data to itself on your other devices |
 | `native` | run a program of its own (the manifest's `mcp`) |
@@ -212,8 +213,10 @@ Zerun draws that row on your settings page: "Use as wallpaper", and while it's o
 ## 3D scenes
 
 Plugin pages and placed views can return `ui.scene3d` with meshes, lights and
-groups. Drawing a scene needs no extra permission; placing it in the app still
-requires the usual UI permission. A scene redraws when its inputs change.
+groups. Add `scene3d` to the manifest's `permissions` alongside the permission
+for placing the view. Existing plugins that draw scenes need to request this
+permission and receive approval before their scenes can draw. A scene redraws
+when its inputs change.
 
 `ui.mesh` accepts built-in shapes or your own triangle geometry. Positions are
 flat x/y/z coordinates, and indices are **1-based**, three per triangle:
