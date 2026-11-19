@@ -1,6 +1,17 @@
 import UIKit
 import ImageIO
 
+/// Host presence and registry state can outlive a brief loss of the phone's route.
+struct SessionCatalogConnection: Equatable {
+    let device: String
+    let reachable: Bool
+
+    init(device: String, hostAvailable: Bool, network: ConnectivityState?, pathOnline: Bool) {
+        self.device = device
+        reachable = hostAvailable && pathOnline && (network == .connected || network == .disabled)
+    }
+}
+
 /// A live session backed by the Rust core. The transcript flows Rust→Rust
 /// (`TranscriptView.attach`); this maps the composer-facing state.
 final class CoreSessionSource: SessionSource {
@@ -31,7 +42,10 @@ final class CoreSessionSource: SessionSource {
     /// catalog's first model), by "device|harness". Seeded from the built-in
     /// list so the chip never shows a bare provider name, then the host's.
     private var modelCatalogs: [String: [ModelInfo]] = [:]
-    private var defaultModelsLoading: Set<String> = []
+    // A request stays current until the picker supersedes it or the host reconnects.
+    private var catalogRequests: [String: UUID] = [:]
+    private var catalogConnection: SessionCatalogConnection?
+    private weak var openModelPicker: ModelPickerViewController?
     private weak var engine: TranscriptView?
 
     init(app: AppModel, client: CoreClient, handle: SessionHandle, chatId: String) {
@@ -68,6 +82,21 @@ final class CoreSessionSource: SessionSource {
     private func refresh() {
         let c = handle.composer()
         let row = app?.row(chatId)
+        let connection = SessionCatalogConnection(
+            device: c.host.deviceId, hostAvailable: c.host.online || row?.isCloud == true,
+            network: app?.connectivity?.state, pathOnline: app?.networkPathOnline ?? true
+        )
+        if catalogConnection != connection {
+            let deviceChanged = hostDevice != connection.device
+            catalogConnection = connection
+            catalogRequests.removeAll()
+            if deviceChanged {
+                openModelPicker?.dismiss(animated: true)
+                openModelPicker = nil
+            } else if connection.reachable {
+                openModelPicker?.reloadCatalogs()
+            }
+        }
         hostDevice = c.host.deviceId
         hostSwitchesProviders = c.host.capabilities.providerSwitch
         turnRunning = c.live.turnRunning
@@ -305,7 +334,7 @@ final class CoreSessionSource: SessionSource {
             return UIMenu(title: "Reasoning effort", children: [UIDeferredMenuElement { [weak self] done in
                 guard let self else { return done([]) }
                 Task { @MainActor in
-                    let models = (try? await self.client.listModels(deviceId: self.hostDevice, harness: harness)) ?? fallbackModels(harness: harness)
+                    let models = await self.client.refreshModels(deviceId: self.hostDevice, harness: harness)
                     let levels = models.first { $0.id == row.model }?.reasoningLevels ?? models.first?.reasoningLevels ?? []
                     done(levels.map { l in
                         UIAction(title: reasoningLabel(level: l), state: l == row.reasoning ? .on : .off) { [weak self] _ in
@@ -329,14 +358,17 @@ final class CoreSessionSource: SessionSource {
         guard let row = app?.row(chatId) else { return nil }
         let harness = row.harness ?? "claude-code"
         let pickerDevice = hostDevice
-        let rows: (String) async -> [ModelPickerRow] = { [weak self] id in
-            guard let self else { return [] }
-            let models = (try? await self.client.listModels(deviceId: pickerDevice, harness: id)) ?? fallbackModels(harness: id)
-            await MainActor.run {
-                self.modelCatalogs["\(pickerDevice)|\(id)"] = models
+        let rows: @MainActor (String) async -> [ModelPickerRow] = { [weak self] id in
+            guard let self, self.hostDevice == pickerDevice else { return [] }
+            let key = "\(pickerDevice)|\(id)"
+            let request = UUID()
+            self.catalogRequests[key] = request
+            let models = await self.client.refreshModels(deviceId: pickerDevice, harness: id)
+            if self.catalogRequests[key] == request {
+                self.modelCatalogs[key] = models
                 self.refresh()
             }
-            return models.map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
+            return (self.modelCatalogs[key] ?? []).map { ModelPickerRow(id: $0.id, label: $0.label, detail: $0.description) }
         }
         var tabs = [ModelPickerTab(harness: harness, label: row.harnessLabel ?? HarnessNames.label(harness)) { await rows(harness) }]
         if canSwitchProvider {
@@ -359,10 +391,10 @@ final class CoreSessionSource: SessionSource {
         let host = row.isCloud ? (name: "Cloud", symbol: "cloud") : (name: app?.deviceName(hostDevice) ?? "This computer", symbol: "desktopcomputer")
         // No model of its own: it runs the default, so that's the one ticked.
         let current = row.model ?? defaultModel(for: row)?.id
-        return ModelPickerViewController.sheet(tabs: tabs, harness: harness, model: current, host: host, note: note, settingsMenu: { [weak self] in
+        let picker = ModelPickerViewController.sheet(tabs: tabs, harness: harness, model: current, host: host, note: note, settingsMenu: { [weak self] in
             UIMenu(children: [self?.chipMenu("permissions"), self?.chipMenu("plan")].compactMap { $0 })
         }) { [weak self] pickedHarness, model in
-            guard let self else { return }
+            guard let self, self.hostDevice == pickerDevice else { return }
             // Re-checked at the pick: a turn may have started since the
             // sheet opened with other providers' tabs.
             if pickedHarness != (self.app?.row(self.chatId)?.harness ?? harness), !self.canSwitchProvider { return }
@@ -381,6 +413,8 @@ final class CoreSessionSource: SessionSource {
                 $0.model = model.id
             }
         }
+        openModelPicker = picker
+        return picker
     }
 
     /// The chat's provider, where it runs: Cloud's account for a Cloud chat,
@@ -402,12 +436,14 @@ final class CoreSessionSource: SessionSource {
         let harness = row.harness ?? "claude-code"
         let key = "\(hostDevice)|\(harness)"
         if modelCatalogs[key] == nil { modelCatalogs[key] = fallbackModels(harness: harness) }
-        if !hostDevice.isEmpty, defaultModelsLoading.insert(key).inserted {
+        if !hostDevice.isEmpty, catalogRequests[key] == nil {
+            let request = UUID()
+            catalogRequests[key] = request
             let device = hostDevice
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                let models = await self.client.listModels(deviceId: device, harness: harness)
-                guard !models.isEmpty, self.modelCatalogs[key] != models else { return }
+                let models = await self.client.refreshModels(deviceId: device, harness: harness)
+                guard self.catalogRequests[key] == request, !models.isEmpty, self.modelCatalogs[key] != models else { return }
                 self.modelCatalogs[key] = models
                 self.refresh()
             }

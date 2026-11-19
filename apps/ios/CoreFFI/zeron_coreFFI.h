@@ -719,6 +719,11 @@ uint64_t uniffi_zeron_mobile_fn_method_coreclient_read_attachment(uint64_t ptr, 
 uint64_t uniffi_zeron_mobile_fn_method_coreclient_read_chat_image(uint64_t ptr, RustBuffer device_id, RustBuffer chat_id, RustBuffer path
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_REFRESH_MODELS
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_REFRESH_MODELS
+uint64_t uniffi_zeron_mobile_fn_method_coreclient_refresh_models(uint64_t ptr, RustBuffer device_id, RustBuffer harness
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_REGISTER_PUSH_TARGET
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_FN_METHOD_CORECLIENT_REGISTER_PUSH_TARGET
 uint64_t uniffi_zeron_mobile_fn_method_coreclient_register_push_target(uint64_t ptr, RustBuffer token, RustBuffer environment, RustBuffer prefs
@@ -2870,6 +2875,12 @@ uint16_t uniffi_zeron_mobile_checksum_method_coreclient_read_attachment(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_READ_CHAT_IMAGE
 #define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_READ_CHAT_IMAGE
 uint16_t uniffi_zeron_mobile_checksum_method_coreclient_read_chat_image(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_REFRESH_MODELS
+#define UNIFFI_FFIDEF_UNIFFI_ZERON_MOBILE_CHECKSUM_METHOD_CORECLIENT_REFRESH_MODELS
+uint16_t uniffi_zeron_mobile_checksum_method_coreclient_refresh_models(void
     
 );
 #endif

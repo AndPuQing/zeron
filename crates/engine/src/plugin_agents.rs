@@ -58,9 +58,14 @@ impl AgentHost for EngineAgentHost {
         Box::pin(async move {
             let lease = Arc::new(registry.execution_lease(harness).await);
             let resolved = registry.resolve(harness).map_err(|e| e.to_string())?;
-            crate::model_catalogs::list_with_lease(&data_dir, resolved, false, Some(lease))
-                .await
-                .map_err(|e| e.to_string())
+            crate::model_catalogs::list_with_lease(
+                &data_dir,
+                resolved,
+                crate::model_catalogs::Refresh::Background,
+                Some(lease),
+            )
+            .await
+            .map_err(|e| e.to_string())
         })
     }
 
