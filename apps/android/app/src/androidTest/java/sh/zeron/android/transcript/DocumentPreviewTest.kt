@@ -6,9 +6,27 @@ import kotlin.math.roundToInt
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
+import sh.zeron.android.ui.openFileLink
 import uniffi.zeron_core.DocumentPreview
 
 class DocumentPreviewTest {
+    @Test
+    fun localImageLinksUseTheChatImageReader() {
+        val images = mutableListOf<TranscriptImageRef>()
+        val documents = mutableListOf<String>()
+        fun tap(url: String, base: String? = null) =
+            openFileLink(url, base, "chat", { images.add(it) }, { documents.add(it) })
+
+        assertTrue(tap("/repo/dist/zeron.png"))
+        assertTrue(tap("images/figure%201.JPG", "docs/guide.md"))
+        assertTrue(tap("notes.md", "docs/guide.md"))
+        assertFalse(tap("https://example.com/remote.png"))
+        assertFalse(tap("../../outside.png", "docs/guide.md"))
+        assertEquals(listOf(TranscriptImageRef.Chat("chat", "/repo/dist/zeron.png"),
+            TranscriptImageRef.Chat("chat", "docs/images/figure 1.JPG")), images)
+        assertEquals(listOf("docs/notes.md"), documents)
+    }
+
     @Test
     fun firstDocumentFrameStartsAtTopWhileChatStartsAtTail() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

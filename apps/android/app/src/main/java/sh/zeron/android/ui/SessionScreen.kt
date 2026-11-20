@@ -83,7 +83,6 @@ import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
 import sh.zeron.android.transcript.TranscriptImageRef
-import sh.zeron.android.transcript.cachedTranscriptImage
 import uniffi.zeron_core.ComposerState
 import uniffi.zeron_core.ChatIndicator
 import uniffi.zeron_core.ConnectivityState
@@ -179,23 +178,16 @@ fun SessionScreen(
     var documentPath by remember(core, chatId) { mutableStateOf<String?>(null) }
     var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
     val imageDevice = handle.composer().host.deviceId
+    val imageCacheScope = "$imageDevice:$chatId"
+    suspend fun load(ref: TranscriptImageRef) = loadTranscriptImage(core, handle.composer().host.deviceId, ref)
+    val open = rememberOpenTranscriptImage(imageCacheScope, ::load) { viewing = it }
     val actions = remember(chatId, imageDevice, core) {
-        suspend fun load(ref: TranscriptImageRef): ImageBitmap? {
-            val device = handle.composer().host.deviceId
-            return loadTranscriptImage(core, device, ref)
-        }
-        val imageCacheScope = "$imageDevice:$chatId"
-        // A thumbnail already on screen opens at once instead of reading the host again.
-        val open: (TranscriptImageRef) -> Unit = { ref ->
-            val shown = cachedTranscriptImage(imageCacheScope, ref)
-            if (shown != null) viewing = shown else scope.launch { load(ref)?.let { viewing = it } }
-        }
         TranscriptActions(
             imageCacheScope = imageCacheScope,
-            openUrl = { url ->
+            openUrl = link@{ url ->
+                if (openFileLink(url, null, chatId, open, { documentPath = it })) return@link
                 val uri = Uri.parse(url)
-                val file = uniffi.zeron_core.documentLinkPath(url, null)
-                if (file != null) documentPath = file else when (uri.scheme) {
+                when (uri.scheme) {
                     "zerun" -> if (uri.host == "chat") uri.pathSegments.singleOrNull()?.let(onOpen)
                     "http", "https" -> CustomTabsIntent.Builder().build().launchUrl(context, uri)
                     // An image chip opens its upload full size, as its thumbnail did.

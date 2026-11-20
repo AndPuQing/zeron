@@ -616,6 +616,14 @@ enum TranscriptImageRef: Hashable, Sendable {
     case attachment(String)
     case chat(chatId: String, path: String)
 
+    /// A path already resolved by the shared document-link grammar.
+    static func fileLink(chatId: String, path: String) -> Self? {
+        switch (path as NSString).pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "webp", "gif": return .chat(chatId: chatId, path: path)
+        default: return nil
+        }
+    }
+
     /// Identity for caches, retries and stale-load checks; never parsed.
     var id: String {
         switch self {

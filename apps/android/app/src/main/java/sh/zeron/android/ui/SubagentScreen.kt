@@ -35,8 +35,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +55,6 @@ import sh.zeron.android.transcript.Transcript
 import sh.zeron.android.transcript.TranscriptActions
 import sh.zeron.android.transcript.TranscriptState
 import sh.zeron.android.transcript.TranscriptImageRef
-import sh.zeron.android.transcript.cachedTranscriptImage
 import sh.zeron.android.transcript.elapsed
 import uniffi.zeron_core.SubagentRow
 import uniffi.zeron_core.SubagentState
@@ -137,21 +134,17 @@ fun SubagentScreen(
         MaterialTheme.motionScheme.defaultEffectsSpec(),
         label = "header",
     )
-    val imageScope = rememberCoroutineScope()
     var viewing by remember(docId) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
     val imageHost = model.row(rootChatId)?.deviceId
+    val imageCacheScope = "$imageHost:$rootChatId"
+    suspend fun load(ref: TranscriptImageRef) = imageHost?.let { loadTranscriptImage(core, it, ref) }
+    val open = rememberOpenTranscriptImage(imageCacheScope, ::load) { viewing = it }
     val actions = remember(docId, imageHost, core) {
-        suspend fun load(ref: TranscriptImageRef) = imageHost?.let { loadTranscriptImage(core, it, ref) }
-        val imageCacheScope = "$imageHost:$rootChatId"
-
         TranscriptActions(
             imageCacheScope = imageCacheScope,
-            openUrl = {},
+            openUrl = { url -> openFileLink(url, null, rootChatId, open) },
             loadImage = ::load,
-            openImage = { ref ->
-                val shown = cachedTranscriptImage(imageCacheScope, ref)
-                if (shown != null) viewing = shown else imageScope.launch { load(ref)?.let { viewing = it } }
-            },
+            openImage = open,
             showText = { _, _, _ -> },
             openSubagent = { doc, t, r -> onOpenSubagent(docId, doc, t, r) },
         )

@@ -43,7 +43,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,7 +57,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
 import sh.zeron.android.design.ZIcon
 import sh.zeron.android.design.ZIcons
 import sh.zeron.android.design.GeistMono
@@ -69,7 +67,6 @@ import sh.zeron.android.transcript.TranscriptState
 import uniffi.zeron_core.CoreClient
 import uniffi.zeron_core.DocumentPreview
 import uniffi.zeron_core.DocumentRead
-import uniffi.zeron_core.documentLinkPath
 
 /**
  * Characters Copy puts on the clipboard. The clip crosses Binder, whose
@@ -206,15 +203,14 @@ internal fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEn
                     entry.rendered = markdown
                     transcript.showDocument(chatId, doc, markdown)
                 }
-                val scope = rememberCoroutineScope()
                 var viewing by remember { mutableStateOf<ImageBitmap?>(null) }
+                val imageCacheScope = "${doc.deviceId}:$chatId:${entry.path}"
+                val openImage = rememberOpenTranscriptImage(imageCacheScope, { loadTranscriptImage(core, doc.deviceId, it) }) { viewing = it }
                 val actions = remember(transcript) {
                     TranscriptActions(
-                        imageCacheScope = "${doc.deviceId}:$chatId:${entry.path}",
+                        imageCacheScope = imageCacheScope,
                         openUrl = { url ->
-                            val target = documentLinkPath(url, entry.path)
-                            if (target != null) open(target)
-                            else {
+                            if (!openFileLink(url, entry.path, chatId, openImage, open)) {
                                 val uri = Uri.parse(url)
                                 when (uri.scheme) {
                                     "https", "http" -> runCatching { CustomTabsIntent.Builder().build().launchUrl(context, uri) }
@@ -224,7 +220,7 @@ internal fun DocumentContent(core: CoreClient, chatId: String, entry: DocumentEn
                             }
                         },
                         loadImage = { loadTranscriptImage(core, doc.deviceId, it) },
-                        openImage = { ref -> scope.launch { viewing = loadTranscriptImage(core, doc.deviceId, ref) } },
+                        openImage = openImage,
                         showText = { title, text, mono -> sheet = TextSheet(title, text, mono) },
                     )
                 }

@@ -2136,20 +2136,30 @@ impl Client {
     /// older host lacks that RPC, and its cache entries are kept apart from
     /// attachment reads of the same path, so neither serves the other.
     pub async fn read_chat_image(&self, device_id: &str, chat_id: &str, path: &str) -> Result<Arc<Vec<u8>>> {
-        let image = zeron_proto::chat_images::ChatImage { chat_id: chat_id.to_owned(), path: path.to_owned() };
-        if image.chat_id.is_empty() || zeron_proto::chat_images::markdown_image(path, None).is_none() {
+        use zeron_proto::chat_images::{ChatImage, markdown_image};
+
+        if chat_id.is_empty() {
             return Err(ClientError::HostError("Unsupported reply image".into()));
         }
+        // File links may be relative to the conversation on its host. Resolve
+        // them before looking in the cache or sending the host an image read.
+        let workspace = self.workspace();
+        let cwd = workspace.session(chat_id)
+            .filter(|row| row.device_id == device_id)
+            .and_then(|row| row.cwd.as_deref());
+        let (path, _) = markdown_image(path, cwd)
+            .ok_or_else(|| ClientError::HostError("Unsupported reply image".into()))?;
+        let image = ChatImage { chat_id: chat_id.to_owned(), path };
         // Device ids never contain NUL: a key no attachment read can produce.
         let scope = format!("{device_id}\0{chat_id}");
-        if let Some(hit) = self.inner.attachment_cache.get(&scope, path) {
+        if let Some(hit) = self.inner.attachment_cache.get(&scope, &image.path) {
             return Ok(hit);
         }
         let bytes = match self.inner.backend() {
             Backend::Live(live) => Arc::new(live.relay.read_chat_image(device_id, &image).await?),
             Backend::Demo(_) => return Err(ClientError::HostError("Reply image unavailable in demo".into())),
         };
-        self.inner.attachment_cache.put(&scope, path, bytes.clone());
+        self.inner.attachment_cache.put(&scope, &image.path, bytes.clone());
         Ok(bytes)
     }
 
@@ -2441,6 +2451,24 @@ mod tests {
             b"reply"
         );
         assert!(client.inner.attachment_cache.get("host", "/repo/b.png").is_none());
+    }
+
+    #[tokio::test]
+    async fn relative_image_links_use_the_owning_chats_host_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ClientConfig::new("https://edge.invalid", dir.path());
+        config.device_id = "phone".into();
+        let client = Client::new(config, Credentials::Demo(Default::default()), Arc::new(crate::events::NullListener)).unwrap();
+        let workspace = client.workspace();
+        let row = workspace.session("chat-deploy").unwrap();
+        let relative = "dist/example.PNG";
+        let absolute = format!("{}/{relative}", row.cwd.as_deref().unwrap());
+        let scope = format!("{}\0{}", row.device_id, row.id);
+        client.inner.attachment_cache.put(&scope, &absolute, Arc::new(b"image".to_vec()));
+
+        assert_eq!(client.read_chat_image(&row.device_id, &row.id, relative).await.unwrap().as_slice(), b"image");
+        assert!(client.read_chat_image("other-host", &row.id, relative).await.is_err());
+        assert!(client.read_chat_image(&row.device_id, &row.id, "https://example.com/a.png").await.is_err());
     }
 
     #[test]
