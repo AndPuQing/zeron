@@ -22,6 +22,7 @@ name: release
 # recover publication from a matching tag whose platform builds all passed).
 # If macOS was cancelled before acquiring a runner, rebuild_macos supplements
 # that run's artifacts from the same tag using the selected Apple Silicon pool.
+# A failed Linux ARM64 package can be rebuilt from that tag with rebuild_linux_arm.
 
 on:
   push:
@@ -38,6 +39,10 @@ on:
         default: ''
       rebuild_macos:
         description: Rebuild a macOS job cancelled before runner acquisition; requires publish_run_id and publish_tag
+        type: boolean
+        default: false
+      rebuild_linux_arm:
+        description: Rebuild a failed Linux ARM64 package; requires publish_run_id and publish_tag
         type: boolean
         default: false
       macos_runner:
@@ -67,16 +72,21 @@ jobs:
       ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
   linux:
-    if: inputs.publish_run_id == ''
+    if: inputs.publish_run_id == '' || (inputs.rebuild_linux_arm && github.ref == 'refs/heads/dev' && inputs.publish_tag != '')
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-24.04 # x86_64
-          - runner: ubuntu-24.04-arm # aarch64
+        runner: ${{ fromJSON(inputs.rebuild_linux_arm && inputs.publish_run_id != '' && '["ubuntu-24.04-arm"]' || '["ubuntu-24.04", "ubuntu-24.04-arm"]') }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.publish_tag || github.ref }}
+      - name: Use the publication workflow's Linux packaging script
+        if: inputs.rebuild_linux_arm && inputs.publish_run_id != ''
+        run: |
+          git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
+          git show "$GITHUB_SHA:scripts/package-linux.sh" > scripts/package-linux.sh
       - name: gpui system deps
         run: |
           sudo apt-get update -qq
@@ -226,6 +236,8 @@ jobs:
       RELEASE_TAG: ${{ inputs.publish_tag || github.ref_name }}
       REBUILD_MACOS: ${{ inputs.rebuild_macos || false }}
       MACOS_RESULT: ${{ needs.macos.result }}
+      REBUILD_LINUX_ARM: ${{ inputs.rebuild_linux_arm || false }}
+      LINUX_RESULT: ${{ needs.linux.result }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -255,6 +267,14 @@ jobs:
               macos = next(job for job in builds if job['name'] == 'macos')
               assert macos['conclusion'] == 'cancelled' and not macos.get('runner_name') and not macos['steps'], 'Source macOS job was not cancelled before acquiring a runner'
               builds = [job for job in builds if job['name'] != 'macos']
+          if os.environ['REBUILD_LINUX_ARM'] == 'true':
+              assert os.environ['LINUX_RESULT'] == 'success', 'Replacement Linux ARM64 build did not pass'
+              arm = next(job for job in builds if job['name'] == 'linux (ubuntu-24.04-arm)')
+              assert arm['conclusion'] == 'failure' and any(
+                  step['name'] == 'package' and step['conclusion'] == 'failure'
+                  for step in arm['steps']
+              ), 'Source Linux ARM64 job did not fail while packaging'
+              builds.remove(arm)
           assert all(job['conclusion'] == 'success' for job in builds), 'Source builds did not all pass'
           print('Required builds passed and match the release tag')
           PY
@@ -269,6 +289,14 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: macos-ARM64
+          path: ${{ runner.temp }}/zerun-release-assets
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Download replacement Linux ARM64 artifact
+        if: inputs.rebuild_linux_arm
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: linux-ARM64
           path: ${{ runner.temp }}/zerun-release-assets
           run-id: ${{ github.run_id }}
           github-token: ${{ github.token }}

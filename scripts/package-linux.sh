@@ -59,8 +59,11 @@ if [[ -n "$BETA_VERSION" ]]; then
   [[ "$("$BIN" --version)" == "zerun $BETA_VERSION" ]] ||
     { echo "$BIN isn't the $BETA_VERSION beta (it says '$("$BIN" --version)')" >&2; exit 1; }
 elif [[ "$PROFILE" == "release" ]]; then
-  CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 LUAU_CXXFLAGS=-DNDEBUG \
-    cargo build --release --locked -p zeron
+  # ARM64 uses the workspace's thin LTO profile to limit linker memory.
+  if [[ "$ARCH" == "x86_64" ]]; then
+    export CARGO_PROFILE_RELEASE_LTO=fat CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+  fi
+  LUAU_CXXFLAGS=-DNDEBUG cargo build --release --locked -p zeron
   BIN="$ROOT/target/release/zerun"
 else
   cargo build --locked -p zeron
