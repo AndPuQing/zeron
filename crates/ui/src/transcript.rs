@@ -13749,6 +13749,7 @@ mod tests {
                 id: "r1".into(),
                 request_id: "r1".into(),
                 questions: vec![zeron_proto::UserInputQuestion {
+                    note: None,
                     id: "q".into(),
                     header: "Recherche".into(),
                     question: "How deep should the research go?".into(),

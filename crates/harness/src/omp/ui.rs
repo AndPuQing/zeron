@@ -44,6 +44,7 @@ impl Dialogs {
                     Some((
                         string(question, "id").to_owned(),
                         UserInputQuestion {
+                            note: None,
                             id: bridge_id,
                             header: question["header"]
                                 .as_str()
@@ -77,6 +78,7 @@ impl Dialogs {
             vec![(
                 String::new(),
                 UserInputQuestion {
+                    note: None,
                     id: uuid::Uuid::new_v4().to_string(),
                     header: "OMP".into(),
                     question: if message.is_empty() {

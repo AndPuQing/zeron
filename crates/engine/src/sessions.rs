@@ -9177,6 +9177,7 @@ mod agent_environment_tests {
         }
         let input = if owner == "input" {
             Some((first.controls.request_input)(vec![UserInputQuestion {
+                note: None,
                 id: "choice".into(),
                 header: "Choice".into(),
                 question: "Continue?".into(),

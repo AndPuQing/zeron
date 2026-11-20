@@ -59,7 +59,7 @@ fn methods(id: HarnessId, platform: Platform) -> Vec<Method> {
         Fx => vec![Shell("curl -fsSL https://fx.sh/setup.sh | bash", "bash")],
         Antigravity => vec![Archive],
         Muse if windows => vec![PowerShell("irm https://dev.meta.ai/install.ps1 | iex")],
-        Muse => vec![Shell("curl -fsSL https://dev.meta.ai/install.sh | sh", "sh")],
+        Muse => vec![Shell("curl -fsSL https://dev.meta.ai/install.sh | bash", "bash")],
         ClaudeCode if windows => vec![PowerShell("irm https://claude.ai/install.ps1 | iex")],
         ClaudeCode => vec![Shell(
             "curl -fsSL https://claude.ai/install.sh | bash",
@@ -179,7 +179,7 @@ pub fn manual_command(id: HarnessId) -> Option<&'static str> {
         Hermes => "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
         Devin => "curl -fsSL https://cli.devin.ai/install.sh | bash",
         Dsh => "npm install -g @deepseek-ai/dsh",
-        Muse => "curl -fsSL https://dev.meta.ai/install.sh | sh",
+        Muse => "curl -fsSL https://dev.meta.ai/install.sh | bash",
         Fx => "curl -fsSL https://fx.sh/setup.sh | bash",
         Antigravity | Mock | Registry(_) => return None,
     })

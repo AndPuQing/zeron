@@ -87,6 +87,7 @@ fn question(
     multi: bool,
 ) -> UserInputQuestion {
     UserInputQuestion {
+        note: None,
         id: id.into(),
         header: header.into(),
         question: text.into(),
