@@ -74,7 +74,8 @@ pub(crate) use crate::process::owned as child;
 use crate::process::{Command, Stdio};
 use crate::scratch::ScratchDir;
 use crate::{
-    CancellationToken, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
+    CancellationToken, Harness, HarnessError, RunControls, Signal, TurnControl, send_signal,
+    shutdown_child,
 };
 use child::Child;
 use normalize::{Normalizer, parse_commands, preferred_allow_option};
@@ -214,7 +215,7 @@ fn default_effort_values(
         ReasoningLevel::Low => vec!["low", "minimal"],
         ReasoningLevel::Medium => vec!["medium"],
         ReasoningLevel::High => vec!["high"],
-        ReasoningLevel::XHigh => vec!["xhigh", "x-high", "high"],
+        ReasoningLevel::XHigh => vec!["xhigh", "extra_high", "x-high", "high"],
         ReasoningLevel::Max => vec!["max", "xhigh", "high"],
         ReasoningLevel::Ultra | ReasoningLevel::Ultracode | ReasoningLevel::Ultrathink => {
             vec!["ultra", "max", "high"]
@@ -665,12 +666,32 @@ fn antigravity_legacy_archive() -> Option<crate::archive_install::ArchivePin> {
 const ANTIGRAVITY_ARCHIVE_NAME: &str = "antigravity-acp";
 
 /// the acp registry's manifest for google's server, the source of releases
-/// newer than the pin compiled into this build.
+/// installed and updated dynamically across platforms.
 pub const ANTIGRAVITY_REGISTRY_URL: &str = "https://raw.githubusercontent.com/agentclientprotocol/registry/main/antigravity-acp/agent.json";
 
 /// install marker for a release proven by google's code signature, which has
 /// no digest in zeron's source to record instead.
 const ANTIGRAVITY_SIGNED_MARKER: &str = "google-code-signature";
+
+/// install marker prefix for a Google-hosted release verified by the ACP
+/// registry's SHA-256 digest on platforms without OS code-signature verification.
+const ANTIGRAVITY_SHA256_MARKER_PREFIX: &str = "registry-sha256:";
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn is_trusted_sha256_marker(marker: &str) -> bool {
+    !crate::code_signature::SUPPORTED
+        && marker
+            .strip_prefix(ANTIGRAVITY_SHA256_MARKER_PREFIX)
+            .is_some_and(|digest| {
+                digest.len() == 64
+                    && digest
+                        .bytes()
+                        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+            })
+}
 
 fn antigravity_entry() -> &'static str {
     if cfg!(windows) {
@@ -699,7 +720,8 @@ fn antigravity_registry_platform() -> Option<&'static str> {
 }
 
 /// completed installs whose marker proves their origin: a digest pinned by
-/// this or an earlier build, or google's verified code signature.
+/// this or an earlier build, google's verified code signature (macOS/Windows),
+/// or the ACP registry's verified SHA-256 digest (Linux).
 fn trusted_antigravity_installs() -> Vec<(semver::Version, PathBuf)> {
     let pins: Vec<_> = [antigravity_archive(), antigravity_legacy_archive()]
         .into_iter()
@@ -712,7 +734,8 @@ fn trusted_antigravity_installs() -> Vec<(semver::Version, PathBuf)> {
             let trusted = pins
                 .iter()
                 .any(|pin| pin.version == version && pin.sha512 == marker)
-                || (crate::code_signature::SUPPORTED && marker == ANTIGRAVITY_SIGNED_MARKER);
+                || (crate::code_signature::SUPPORTED && marker == ANTIGRAVITY_SIGNED_MARKER)
+                || is_trusted_sha256_marker(&marker);
             if !trusted {
                 return None;
             }
@@ -744,13 +767,16 @@ pub struct AntigravityRelease {
     pub version: String,
     /// `None` when the manifest has no usable google-hosted archive here.
     archive_url: Option<String>,
+    /// lowercase hex SHA-256 published by the ACP registry for `archive_url`.
+    sha256: Option<String>,
 }
 
 impl AntigravityRelease {
     /// whether zeron can prove this release's origin before installing it.
     pub fn installable(&self) -> bool {
         antigravity_archive().is_some_and(|pin| pin.version == self.version)
-            || (crate::code_signature::SUPPORTED && self.archive_url.is_some())
+            || (self.archive_url.is_some()
+                && (crate::code_signature::SUPPORTED || self.sha256.is_some()))
     }
 }
 
@@ -760,21 +786,49 @@ pub fn antigravity_release(manifest: &Value) -> Option<AntigravityRelease> {
     }
     let version = manifest.get("version")?.as_str()?;
     semver::Version::parse(version).ok()?;
-    let archive_url = antigravity_registry_platform()
+    let binary = antigravity_registry_platform()
         .and_then(|platform| manifest.get("distribution")?.get("binary")?.get(platform))
         .filter(|binary| {
             binary
                 .get("cmd")
                 .and_then(Value::as_str)
                 .is_some_and(|cmd| cmd.strip_prefix("./").unwrap_or(cmd) == antigravity_entry())
-        })
+        });
+    let archive_url = binary
         .and_then(|binary| binary.get("archive")?.as_str())
         .filter(|url| is_google_release_url(url))
         .map(str::to_owned);
+    let sha256 = archive_url.as_ref().and_then(|_| {
+        binary
+            .and_then(|binary| binary.get("sha256")?.as_str())
+            .map(str::trim)
+            .filter(|digest| is_sha256_hex(digest))
+            .map(str::to_ascii_lowercase)
+    });
     Some(AntigravityRelease {
         version: version.to_owned(),
         archive_url,
+        sha256,
     })
+}
+
+/// fetch the current Antigravity ACP release manifest from the ACP registry.
+pub async fn fetch_antigravity_release(
+    client: &reqwest::Client,
+) -> Result<AntigravityRelease, String> {
+    let response = client
+        .get(ANTIGRAVITY_REGISTRY_URL)
+        .send()
+        .await
+        .map_err(|error| format!("Antigravity ACP release check failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Antigravity ACP release check failed: {error}"))?;
+    let json: Value = response
+        .json()
+        .await
+        .map_err(|error| format!("Antigravity ACP release response was invalid: {error}"))?;
+    antigravity_release(&json)
+        .ok_or_else(|| "Antigravity ACP release response contained no valid version".into())
 }
 
 fn is_google_release_url(url: &str) -> bool {
@@ -795,31 +849,39 @@ pub async fn install_antigravity_release(
     if let Some(pin) = antigravity_archive().filter(|pin| pin.version == release.version) {
         return crate::archive_install::ensure_installed(pin, "Antigravity").await;
     }
-    if !crate::code_signature::SUPPORTED {
-        return Err(HarnessError::Install(format!(
-            "Antigravity {} is not pinned by this build of Zeron; update Zeron to install it",
-            release.version
-        )));
-    }
     let url = release.archive_url.as_deref().ok_or_else(|| {
         HarnessError::Install(format!(
             "the ACP registry lists no Google-hosted Antigravity {} archive for this platform",
             release.version
         ))
     })?;
+    let marker = if crate::code_signature::SUPPORTED {
+        ANTIGRAVITY_SIGNED_MARKER.to_owned()
+    } else {
+        let Some(sha256) = release.sha256.as_deref() else {
+            return Err(HarnessError::Install(format!(
+                "the ACP registry lists no SHA-256 checksum for Antigravity {} on this platform",
+                release.version
+            )));
+        };
+        format!("{ANTIGRAVITY_SHA256_MARKER_PREFIX}{sha256}")
+    };
     let verified = crate::archive_install::VerifiedRelease {
         name: ANTIGRAVITY_ARCHIVE_NAME,
         version: &release.version,
         url,
         entry: antigravity_entry(),
-        marker: ANTIGRAVITY_SIGNED_MARKER,
+        sha256: release.sha256.as_deref(),
+        marker: &marker,
     };
     let expected = release.version.clone();
     crate::archive_install::install_verified(&verified, "Antigravity", |dir| async move {
-        crate::code_signature::verify_google_signed(&dir).await?;
-        // a signature proves google built the server, not that it is the
-        // release the registry named; the install directory, and so launch
-        // order, is keyed by that name.
+        if crate::code_signature::SUPPORTED {
+            crate::code_signature::verify_google_signed(&dir).await?;
+        }
+        // a signature or registry digest proves what was fetched, not that it
+        // is the release the registry named; the install directory, and so
+        // launch order, is keyed by that name.
         confirm_reported_version(&dir.join(antigravity_entry()), &expected).await
     })
     .await
@@ -1005,23 +1067,81 @@ fn comparable_path(path: &str) -> String {
     }
 }
 
-/// Whether the listing device has a pinned, explicitly installable archive.
+#[derive(Debug, PartialEq, Eq)]
+enum AntigravityInstallTarget {
+    Registry(AntigravityRelease),
+    Fallback(crate::archive_install::ArchivePin),
+}
+
+fn select_antigravity_install_target(
+    registry_release: Option<AntigravityRelease>,
+    fallback: Option<crate::archive_install::ArchivePin>,
+) -> Option<AntigravityInstallTarget> {
+    if let Some(release) = registry_release.filter(AntigravityRelease::installable) {
+        let newer_or_equal = fallback.as_ref().is_none_or(|pin| {
+            match (
+                semver::Version::parse(&release.version),
+                semver::Version::parse(pin.version),
+            ) {
+                (Ok(reg), Ok(pinned)) => reg >= pinned,
+                _ => false,
+            }
+        });
+        if newer_or_equal {
+            return Some(AntigravityInstallTarget::Registry(release));
+        }
+    }
+    fallback.map(AntigravityInstallTarget::Fallback)
+}
+
+/// Whether the listing device supports Zeron's managed Antigravity archive install.
 pub fn can_install(harness: HarnessId) -> bool {
-    harness == HarnessId::Antigravity && antigravity_archive().is_some()
+    harness == HarnessId::Antigravity && antigravity_registry_platform().is_some()
 }
 
 /// Only an explicit Settings action may call this installer.
 pub async fn install_harness(harness: HarnessId) -> Result<(), HarnessError> {
-    let pin = (harness == HarnessId::Antigravity)
-        .then(antigravity_archive)
-        .flatten()
-        .ok_or_else(|| {
-            HarnessError::NotInstalled(
-                "Set ANTIGRAVITY_ACP_EXECUTABLE to an installed ACP server".into(),
-            )
-        })?;
-    crate::archive_install::ensure_installed(pin, "Antigravity").await?;
-    Ok(())
+    if harness != HarnessId::Antigravity || antigravity_registry_platform().is_none() {
+        return Err(HarnessError::NotInstalled(
+            "Set ANTIGRAVITY_ACP_EXECUTABLE to an installed ACP server".into(),
+        ));
+    }
+    let registry_release = match reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(20))
+        .build()
+    {
+        Ok(client) => match fetch_antigravity_release(&client).await {
+            Ok(release) => Some(release),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "Antigravity ACP registry lookup failed during install; falling back to bundled release"
+                );
+                None
+            }
+        },
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "could not build HTTP client for Antigravity registry lookup; falling back to bundled release"
+            );
+            None
+        }
+    };
+    match select_antigravity_install_target(registry_release, antigravity_archive()) {
+        Some(AntigravityInstallTarget::Registry(release)) => {
+            install_antigravity_release(&release).await?;
+            Ok(())
+        }
+        Some(AntigravityInstallTarget::Fallback(pin)) => {
+            crate::archive_install::ensure_installed(pin, "Antigravity").await?;
+            Ok(())
+        }
+        None => Err(HarnessError::NotInstalled(
+            "Set ANTIGRAVITY_ACP_EXECUTABLE to an installed ACP server".into(),
+        )),
+    }
 }
 
 /// User-global skill folders the server loads (`resolve_skills_paths`).
@@ -1262,17 +1382,19 @@ fn antigravity_spec() -> AcpAgentSpec {
                 },
             ]
         },
-        // No preemption: agy_acp_server 1.1.1 never answers a prompt (or any
-        // later one) when a cancel lands as it starts replying after a tool
-        // (verified on the wire). Steers wait for the turn end instead.
-        steering_mode: SteeringMode::TurnBoundary,
+        // Step-boundary preemption verified on agy_acp_server 1.5.0: cancelling
+        // mid-text, mid-tool, immediately on tool completion, and before any
+        // output settles `cancelled` and answers the follow-up cleanly.
+        steering_mode: SteeringMode::StepBoundary,
         reasoning_levels: &[],
         prompt_transform: identity_transform,
         effort_values: default_effort_values,
         ladder_extras: &[],
         prompt_complete_extension: false,
-        prompt_stall: None,
-        stall_hint: "The agent process is likely wedged.",
+        // Generous bound (30s past CCPA's own 300s HTTP timeout) so silent
+        // xhigh thinking never false-positives while wedged turns still settle.
+        prompt_stall: Some(Duration::from_secs(330)),
+        stall_hint: "Antigravity stopped responding. Send your message again to resume.",
         effort_in_model_id: true,
         // the personal oauth method is only the first-run default; sign-in
         // preserves any method already selected in antigravity's settings.
@@ -1947,7 +2069,7 @@ struct WarmAgent {
     spawned: Spawned,
 }
 
-/// What `spawn_agent` hands a run.
+/// The child and its per-process resources.
 type Spawned = (Option<ScratchDir>, Child, crate::StderrTail, CancellationToken);
 
 fn lock_warm<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -2959,15 +3081,7 @@ impl AcpHarness {
         _mcp: Option<&zeron_proto::McpServer>,
         run_env: &std::collections::BTreeMap<String, String>,
         discovery: bool,
-    ) -> Result<
-        (
-            Option<ScratchDir>,
-            Child,
-            crate::StderrTail,
-            CancellationToken,
-        ),
-        HarnessError,
-    > {
+    ) -> Result<Spawned, HarnessError> {
         let (exe, args) = self.resolve_program(block_on_install).await?;
         let mut cmd = Command::new(&exe);
         cmd.args(args);
@@ -3268,7 +3382,7 @@ fn reasoning_from_value(value: &str) -> Option<ReasoningLevel> {
         "low" => Some(ReasoningLevel::Low),
         "medium" => Some(ReasoningLevel::Medium),
         "high" => Some(ReasoningLevel::High),
-        "xhigh" => Some(ReasoningLevel::XHigh),
+        "xhigh" | "extrahigh" => Some(ReasoningLevel::XHigh),
         "max" => Some(ReasoningLevel::Max),
         "ultra" => Some(ReasoningLevel::Ultra),
         "ultracode" => Some(ReasoningLevel::Ultracode),
@@ -3381,6 +3495,36 @@ fn models_from_session_wire(session_response: &Value, catalog: &[Model]) -> Vec<
         .iter()
         .filter_map(trait_from_config_option)
         .collect();
+    // agy_acp_server 1.5+ exposes grouped model families in `configOptions[model]`
+    // alongside only the *current* model's `thought_level` options (e.g. flash's
+    // low/medium/high), while `models.availableModels` still lists every concrete
+    // `<family>-<level>` variant. Recover each family's exact ladder from those
+    // variants so models with extra levels (Neon/Hydrogen XHigh) keep them in the
+    // picker instead of inheriting the default model's narrower ladder.
+    let wire_variant_levels: std::collections::HashMap<String, Vec<ReasoningLevel>> =
+        session_response
+            .get("models")
+            .and_then(|m| m.get("availableModels"))
+            .and_then(Value::as_array)
+            .map(|available| {
+                let choices = available.iter().filter_map(|m| {
+                    let id = m.get("modelId").and_then(Value::as_str)?;
+                    let name = m.get("name").and_then(Value::as_str).unwrap_or(id);
+                    Some((id, name))
+                });
+                effort_groups(choices)
+                    .into_iter()
+                    .filter(|group| !group.variants.is_empty())
+                    .map(|group| {
+                        let mut levels: Vec<ReasoningLevel> =
+                            group.variants.into_iter().map(|(level, _)| level).collect();
+                        levels.sort_unstable();
+                        levels.dedup();
+                        (group.id, levels)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
     let exact = |id: &str| catalog.iter().find(|m| norm_id(&m.id) == norm_id(id));
     // Family-alias catalog row: the claude adapter advertises bare aliases
@@ -3418,10 +3562,15 @@ fn models_from_session_wire(session_response: &Value, catalog: &[Model]) -> Vec<
                 .and_then(|m| m.description.clone())
                 .or_else(|| description.map(str::to_owned))
                 .or_else(|| known.and_then(|m| m.description.clone())),
-            reasoning_levels: match known.filter(|m| !m.reasoning_levels.is_empty()) {
-                Some(m) => m.reasoning_levels.clone(),
-                None => ladder.clone(),
-            },
+            reasoning_levels: wire_variant_levels
+                .get(id)
+                .cloned()
+                .or_else(|| {
+                    known
+                        .filter(|m| !m.reasoning_levels.is_empty())
+                        .map(|m| m.reasoning_levels.clone())
+                })
+                .unwrap_or_else(|| ladder.clone()),
             options,
         }
     };
@@ -4813,6 +4962,11 @@ impl PendingQuestions {
         }
     }
 
+    /// Whether no user question or permission dialog is awaiting an answer.
+    fn is_empty(&self) -> bool {
+        self.lock().is_empty()
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Value>> {
         self.unanswered
             .lock()
@@ -5366,16 +5520,48 @@ fn restore_method(init: &Value, harness: HarnessId) -> &'static str {
     }
 }
 
-/// Whether a failed restore means the agent no longer has the session, so
+/// Corrupted SQLite trajectory/checkpoint errors returned by Antigravity's
+/// `localharness_external` when a session DB was torn mid-write (e.g. a kill
+/// mid-turn). Narrow to explicit trajectory/SQLite corruption phrases so
+/// transient network/auth/MCP errors remain retryable.
+fn antigravity_session_corrupt(message: &str) -> bool {
+    [
+        "failed to setup trajectory",
+        "failed to load/create db trajectory",
+        "load trajectory",
+        "donech for checkpoint",
+        "file is not a database",
+        "database disk image is malformed",
+        "malformed database schema",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+/// `agy_acp_server` catches `AntigravityCancelledError` on `session/cancel`
+/// and emits its exception message as an `agent_message_chunk` right before
+/// settling `stopReason: "cancelled"`. Suppress that synthetic chunk whenever
+/// a stop, steer-preempt, or interrupt is in flight so it never pollutes the
+/// assistant's transcript.
+fn is_synthetic_cancel_chunk(harness: HarnessId, event: &AgentEvent) -> bool {
+    harness == HarnessId::Antigravity
+        && matches!(
+            event,
+            AgentEvent::TextDelta { text }
+                if text.trim() == "The request was cancelled by the client."
+        )
+}
+
+/// Whether a failed restore means the agent no longer has a usable session, so
 /// starting fresh loses nothing a retry would recover: ACP's
-/// resource-not-found code, no restore method at all, or a message that
-/// names the session as missing ("Session not found" from Devin). A bare
-/// "not found" is not enough: a missing MCP server command or model fails
-/// a load in the same words while the session is fine. Grok is the one
-/// exception: for an unknown session its only answer is a generic
-/// "Path not found." (FS_NOT_FOUND, verified on 1.0.46), and a missing
-/// working directory cannot be the cause there — the agent was started in
-/// it. Anything else — the load timing out, the agent exiting or its pipe
+/// resource-not-found code, no restore method at all, a message that names the
+/// session as missing ("Session not found" from Devin), or a corrupted
+/// Antigravity trajectory database. A bare "not found" is not enough: a missing
+/// MCP server command or model fails a load in the same words while the session
+/// is fine. Grok is the one exception: for an unknown session its only answer
+/// is a generic "Path not found." (FS_NOT_FOUND, verified on 1.0.46), and a
+/// missing working directory cannot be the cause there — the agent was started
+/// in it. Anything else — the load timing out, the agent exiting or its pipe
 /// closing before an answer, any other refusal — keeps the session for the
 /// next message.
 fn session_unrestorable(harness: HarnessId, error: &HarnessError) -> bool {
@@ -5389,6 +5575,7 @@ fn session_unrestorable(harness: HarnessId, error: &HarnessError) -> bool {
         || (harness == HarnessId::Grok
             && message.contains("path not found")
             && message.contains("fs_not_found"))
+        || (harness == HarnessId::Antigravity && antigravity_session_corrupt(&message))
 }
 
 /// Setup can block after initialize too (history replay, MCP startup or
@@ -5433,7 +5620,9 @@ impl SetupProgress {
 /// fallback to a fresh session when the agent no longer has it (see
 /// [`session_unrestorable`]); any other restore failure errors the run and
 /// keeps the session. auth_required propagates so setup can sign in and
-/// retry.
+/// retry. Returns `(session_id, response, recovered_prompt)` where
+/// `recovered_prompt` is populated from `turn_control` when falling back to a
+/// fresh session so the agent receives the prior conversation history.
 #[allow(clippy::too_many_arguments)]
 async fn open_session(
     client: &RpcClient,
@@ -5444,9 +5633,10 @@ async fn open_session(
     access: AccessMode,
     agent_name: &str,
     load_timeout: Duration,
+    turn_control: &TurnControl,
     event_tx: &mpsc::Sender<Result<AgentEvent, HarnessError>>,
     progress: &SetupProgress,
-) -> Result<(String, Value), HarnessError> {
+) -> Result<(String, Value, Option<String>), HarnessError> {
     let params = with_permission_meta(
         harness,
         access,
@@ -5459,6 +5649,7 @@ async fn open_session(
             ),
         }),
     );
+    let mut fallback: Option<(String, HarnessError)> = None;
     if let Some(resume) = &request.resume {
         let method = restore_method(init, harness);
         progress.enter(method);
@@ -5480,7 +5671,7 @@ async fn open_session(
             request_draining(client, incoming, access, method, restore).await
         };
         match restored {
-            Ok(response) => return Ok((resume.clone(), response)),
+            Ok(response) => return Ok((resume.clone(), response, None)),
             Err(e) if request.require_native_resume => {
                 return Err(HarnessError::Protocol(format!(
                     "{agent_name} could not restore required session {resume}: {e}"
@@ -5494,15 +5685,13 @@ async fn open_session(
                     "{agent_name} could not restore session {resume}; the next message tries again: {e}"
                 )));
             }
-            // A missing/foreign session falls back to a fresh one.
+            // A missing/corrupted session falls back to a fresh one.
             Err(e) => {
                 tracing::debug!(
                     target: "zeron_harness::acp",
                     "{method} failed (starting fresh): {e}"
                 );
-                let _ = send(event_tx, AgentEvent::Error {
-                    message: format!("{agent_name} could not restore session {resume}; starting a new session without the previous context: {e}"),
-                }).await;
+                fallback = Some((resume.clone(), e));
             }
         }
     }
@@ -5513,7 +5702,23 @@ async fn open_session(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_owned();
-    Ok((session_id, new))
+    let recovered_prompt = if let Some((resume, e)) = fallback {
+        let recovery = turn_control.take_recovery_prompt();
+        let message = if recovery.is_some() {
+            format!(
+                "{agent_name} could not restore session {resume}; started a new session with prior conversation history: {e}"
+            )
+        } else {
+            format!(
+                "{agent_name} could not restore session {resume}; starting a new session without the previous context: {e}"
+            )
+        };
+        let _ = send(event_tx, AgentEvent::Error { message }).await;
+        recovery
+    } else {
+        None
+    };
+    Ok((session_id, new, recovered_prompt))
 }
 
 /// The sign-in a run may perform on its own after auth_required: the method
@@ -5578,10 +5783,15 @@ fn is_auth_required(error: &HarnessError) -> bool {
     matches!(error, HarnessError::Protocol(message) if message.contains("(code -32000)"))
 }
 
-const EFFORT_SUFFIXES: [(&str, &str, ReasoningLevel); 3] = [
+const EFFORT_SUFFIXES: [(&str, &str, ReasoningLevel); 6] = [
+    ("-minimal", " (Minimal)", ReasoningLevel::Minimal),
     ("-low", " (Low)", ReasoningLevel::Low),
     ("-medium", " (Medium)", ReasoningLevel::Medium),
     ("-high", " (High)", ReasoningLevel::High),
+    // Gemini 4 Neon and Hydrogen: agy_acp_server 1.2 labeled "(XHigh)",
+    // 1.5+ labels "(Extra High)" with the same `-xhigh` variant id suffix.
+    ("-xhigh", " (Extra High)", ReasoningLevel::XHigh),
+    ("-xhigh", " (XHigh)", ReasoningLevel::XHigh),
 ];
 
 /// one picker row: either a single advertised model, or the effort variants
@@ -5668,14 +5878,22 @@ fn group_effort_variants(models: Vec<Model>) -> Vec<Model> {
         .collect()
 }
 
-/// the advertised variant id for a grouped model: the picked level when the
-/// model offers it, else its strongest level. Ids the agent already
-/// advertises (chats saved with a full variant id) pass through untouched.
-fn effort_variant_id(
+/// Resolve `(model, reasoning)` against an effort-variant agent's advertised
+/// `configOptions[model]`:
+/// - Direct hit on an advertised choice passes through untouched.
+/// - On 1.2.x servers (suffixed choices like `gemini-4-neon-xhigh`), maps a
+///   grouped family id (`gemini-4-neon` + `XHigh`) to the matching advertised
+///   variant id (or the family's strongest level).
+/// - On 1.5+ servers (grouped choices like `gemini-4-neon` + a separate
+///   `thought_level` option), maps a saved legacy variant id
+///   (`gemini-4-neon-xhigh`, or an alias listed in `models.availableModels`
+///   such as `gemini-pro-agent`) back to its advertised family id and infers
+///   its effort level when `reasoning` is unset.
+fn resolve_effort_model(
     session_response: &Value,
     model: &str,
     reasoning: Option<ReasoningLevel>,
-) -> String {
+) -> (String, Option<ReasoningLevel>) {
     let choices: Vec<(&str, &str)> = session_response
         .get("configOptions")
         .and_then(Value::as_array)
@@ -5694,31 +5912,71 @@ fn effort_variant_id(
         })
         .collect();
     if choices.iter().any(|(id, _)| *id == model) {
-        return model.to_owned();
+        return (model.to_owned(), reasoning);
     }
-    let groups = effort_groups(choices);
-    let Some(group) = groups.iter().find(|group| group.id == model) else {
-        return model.to_owned();
-    };
-    let offered = |level: ReasoningLevel| {
-        group
-            .variants
-            .iter()
-            .find(|(variant_level, _)| *variant_level == level)
-            .map(|(_, id)| (*id).to_owned())
-    };
-    reasoning
-        .and_then(offered)
-        .or_else(|| {
-            [
-                ReasoningLevel::High,
-                ReasoningLevel::Medium,
-                ReasoningLevel::Low,
-            ]
-            .into_iter()
-            .find_map(offered)
-        })
-        .unwrap_or_else(|| model.to_owned())
+    let groups = effort_groups(choices.iter().copied());
+    if let Some(group) = groups.iter().find(|group| group.id == model) {
+        let offered = |level: ReasoningLevel| {
+            group
+                .variants
+                .iter()
+                .find(|(variant_level, _)| *variant_level == level)
+                .map(|(_, id)| (*id).to_owned())
+        };
+        let resolved = reasoning
+            .and_then(offered)
+            .or_else(|| {
+                [
+                    ReasoningLevel::High,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::Low,
+                ]
+                .into_iter()
+                .find_map(offered)
+            })
+            .unwrap_or_else(|| model.to_owned());
+        return (resolved, reasoning);
+    }
+    // Legacy saved variant id against a 1.5+ grouped `configOptions[model]`.
+    if let Some((base, level)) = EFFORT_SUFFIXES.iter().find_map(|(id_suffix, _, level)| {
+        model
+            .strip_suffix(id_suffix)
+            .filter(|base| choices.iter().any(|(id, _)| id == base))
+            .map(|base| (base, *level))
+    }) {
+        return (base.to_owned(), reasoning.or(Some(level)));
+    }
+    if let Some(available) = session_response
+        .get("models")
+        .and_then(|m| m.get("availableModels"))
+        .and_then(Value::as_array)
+    {
+        let wire_choices = available.iter().filter_map(|m| {
+            let id = m.get("modelId").and_then(Value::as_str)?;
+            let name = m.get("name").and_then(Value::as_str).unwrap_or(id);
+            Some((id, name))
+        });
+        for group in effort_groups(wire_choices) {
+            if choices.iter().any(|(id, _)| *id == group.id)
+                && let Some((level, _)) = group.variants.iter().find(|(_, id)| *id == model)
+            {
+                return (group.id, reasoning.or(Some(*level)));
+            }
+        }
+    }
+    (model.to_owned(), reasoning)
+}
+
+/// the advertised variant id for a grouped model: the picked level when the
+/// model offers it, else its strongest level. Ids the agent already
+/// advertises (chats saved with a full variant id) pass through untouched.
+#[cfg(test)]
+fn effort_variant_id(
+    session_response: &Value,
+    model: &str,
+    reasoning: Option<ReasoningLevel>,
+) -> String {
+    resolve_effort_model(session_response, model, reasoning).0
 }
 
 /// Await a setup request while draining incoming messages, so a `session/load`
@@ -6019,11 +6277,12 @@ async fn select_session_config(
     // an explicit model switch is strict: prompting with a different
     // model than the picker shows is worse than surfacing the RPC error.
     let requested_model: Option<String> = match request.model.as_deref() {
-        Some(model) if rules.effort_in_model_id => Some(effort_variant_id(
-            &session_response,
-            model,
-            request.reasoning,
-        )),
+        Some(model) if rules.effort_in_model_id => {
+            let (resolved, inferred_reasoning) =
+                resolve_effort_model(&session_response, model, request.reasoning);
+            request.reasoning = inferred_reasoning;
+            Some(resolved)
+        }
         None if rules.harness == HarnessId::Hermes => {
             let active = hermes_names::active_provider().await;
             hermes_names::chosen_for_none(&session_response, active.as_deref())
@@ -6070,13 +6329,23 @@ async fn select_session_config(
         &request.model_options,
         rules.access,
     );
-    // Devin's effort and speed choices depend on the selected model:
-    // switch the model first, then choose them from what it offers.
-    let deferred = rules.harness == HarnessId::Devin
+    // Devin's and Antigravity 1.5+'s effort/speed choices depend on the
+    // selected model: switch the model first, then choose them from the
+    // updated `configOptions` it returns (e.g. flash lacks `xhigh`, which
+    // only appears after switching to Neon or Hydrogen). Keep any mode switch
+    // computed from the initial session state so a model-switch response that
+    // omits or resets `mode.currentValue` can never skip leaving YOLO.
+    let deferred = matches!(rules.harness, HarnessId::Devin | HarnessId::Antigravity)
         && sets
             .iter()
             .any(|(id, _)| is_model_config_option(&options_snapshot, id));
+    let mut initial_mode_sets = Vec::new();
     if deferred {
+        initial_mode_sets = sets
+            .iter()
+            .filter(|(id, _)| config_option_category(&options_snapshot, id) == Some("mode"))
+            .cloned()
+            .collect();
         sets.retain(|(id, _)| is_model_config_option(&options_snapshot, id));
     }
     let mut pass = 0;
@@ -6155,6 +6424,11 @@ async fn select_session_config(
             rules.access,
         );
         sets.retain(|(id, _)| !is_model_config_option(&options_snapshot, id));
+        for mode_set in std::mem::take(&mut initial_mode_sets) {
+            if !sets.iter().any(|(id, _)| id == &mode_set.0) {
+                sets.push(mode_set);
+            }
+        }
     }
     Ok(options_snapshot)
 }
@@ -6224,7 +6498,7 @@ async fn run_session(session: Session) {
         // auth_required gets one sign-in and retry; agents that sign in
         // from Settings never start a sign-in mid-chat and point there.
         let mut authenticated = false;
-        let (session_id, session_response) = loop {
+        let (session_id, session_response, recovered_prompt) = loop {
             match open_session(
                 &client,
                 &mut incoming,
@@ -6234,6 +6508,7 @@ async fn run_session(session: Session) {
                 access,
                 agent_name,
                 session_load_timeout,
+                &turn_control,
                 &event_tx,
                 &progress,
             )
@@ -6272,12 +6547,13 @@ async fn run_session(session: Session) {
             devin_selection.clone(),
         )
         .await?;
-        Ok::<(String, bool, bool, Vec<SlashCommand>, Value), HarnessError>((
+        Ok::<(String, bool, bool, Vec<SlashCommand>, Value, Option<String>), HarnessError>((
             session_id,
             steer_ext,
             inline_images,
             init_commands,
             session_options,
+            recovered_prompt,
         ))
     };
     let mut setup_exit = None;
@@ -6334,7 +6610,14 @@ async fn run_session(session: Session) {
             }
         }
     };
-    let (session_id, steer_ext, inline_images, init_commands, mut session_options) = match res {
+    let (
+        session_id,
+        steer_ext,
+        inline_images,
+        init_commands,
+        mut session_options,
+        recovered_prompt,
+    ) = match res {
         Ok(v) => v,
         Err(e) => {
             // A child that dies before the handshake used to surface only
@@ -6449,9 +6732,11 @@ async fn run_session(session: Session) {
     let mut prompt_stall_deadline: Option<tokio::time::Instant> =
         prompt_stall.map(|d| tokio::time::Instant::now() + d);
     // The prompt in flight (re-sent by a preempt when the agent drops an
-    // unstarted cancelled prompt).
+    // unstarted cancelled prompt). When an unrestorable resumed session fell
+    // back to a fresh one, send the host's transcript-wrapped recovery prompt.
+    let initial_prompt = recovered_prompt.as_deref().unwrap_or(&request.prompt);
     let mut current_prompt = PromptInput::new(
-        prompt_transform(request.reasoning, &request.prompt),
+        prompt_transform(request.reasoning, initial_prompt),
         &request.attachments,
         inline_images,
     )
@@ -6483,6 +6768,8 @@ async fn run_session(session: Session) {
     // steer's prompt in the same session, the way Codex `turn/steer` behaves.
     let mut preempt_pending = false;
     let mut preempt_sent = false;
+    // When a steer-preempt cancel goes unanswered (bound by `stop_timeout`).
+    let mut preempt_deadline: Option<tokio::time::Instant> = None;
     // The prompt (`prompt_seq`) that last showed progress (text, thought,
     // tool or plan). Pi and Devin keep a prompt cancelled before that in
     // their history; Grok drops it, so its preempt re-sends the text.
@@ -6589,6 +6876,7 @@ async fn run_session(session: Session) {
             res = async { turn.as_mut().expect("guarded by if").await }, if turn.is_some() => {
                 turn = None;
                 stop_deadline = None;
+                preempt_deadline = None;
                 if res.is_err() && client.is_closed() {
                     break 'main;
                 }
@@ -6613,7 +6901,7 @@ async fn run_session(session: Session) {
                 // tail and the Done (a Steered AFTER Done re-armed the
                 // consumer with no next turn — the stranded-Working bug); a
                 // rejected/unsettled call redelivers as the next turn. The
-                // timeout guards the flooded-incoming edge (reader blocked on
+                // timeout scratch the flooded-incoming edge (reader blocked on
                 // a full channel never parses the response): past it the call
                 // is abandoned and the steer redelivered.
                 if let Some((text, mut fut)) = steering_call.take() {
@@ -6664,6 +6952,14 @@ async fn run_session(session: Session) {
                             let events =
                                 session_update_events(&method, &params, &session_id, &mut subagents);
                             for ev in events {
+                                if (preempt_sent
+                                    || stopping
+                                    || interrupted
+                                    || cancel_flush_deadline.is_some())
+                                    && is_synthetic_cancel_chunk(harness, &ev)
+                                {
+                                    continue;
+                                }
                                 if !send(&event_tx, ev).await {
                                     consumer_gone = true;
                                     break;
@@ -6817,7 +7113,7 @@ async fn run_session(session: Session) {
                                 | Some("config_option_update")
                                 | Some("current_mode_update")
                         );
-                    if !boilerplate {
+                    if !boilerplate && harness != HarnessId::Antigravity {
                         prompt_stall_deadline = None;
                     }
                     if method == "session/update" {
@@ -6881,9 +7177,28 @@ async fn run_session(session: Session) {
                         session_update_events(&method, &params, &session_id, &mut subagents);
                     for ev in events {
                         track_open_tools(&ev, &mut open_tools);
+                        if (preempt_sent
+                            || stopping
+                            || interrupted
+                            || cancel_flush_deadline.is_some())
+                            && is_synthetic_cancel_chunk(harness, &ev)
+                        {
+                            continue;
+                        }
                         if !send(&event_tx, ev).await {
                             break 'main;
                         }
+                    }
+                    // Antigravity keeps a sliding stall watchdog across the whole
+                    // turn whenever no local tool or user question is open, so a
+                    // post-tool wedge cannot spin Working forever while long tool
+                    // executions and permission prompts remain unpenalized.
+                    if harness == HarnessId::Antigravity && !boilerplate && turn.is_some() {
+                        prompt_stall_deadline = if open_tools.is_empty() && questions.is_empty() {
+                            prompt_stall.map(|d| tokio::time::Instant::now() + d)
+                        } else {
+                            None
+                        };
                     }
                     // A waiting steer preempts once no tool is open and the
                     // agent is generating again.
@@ -6894,6 +7209,7 @@ async fn run_session(session: Session) {
                     {
                         client.notify("session/cancel", Some(cancel_params(harness, &session_id)));
                         preempt_sent = true;
+                        preempt_deadline = Some(tokio::time::Instant::now() + stop_timeout);
                     }
                 }
                 Some(Incoming::Request { id, method, params }) => {
@@ -7002,6 +7318,14 @@ async fn run_session(session: Session) {
                                     let events =
                                         session_update_events(&method, &params, &session_id, &mut subagents);
                                     for ev in events {
+                                        if (preempt_sent
+                                            || stopping
+                                            || interrupted
+                                            || cancel_flush_deadline.is_some())
+                                            && is_synthetic_cancel_chunk(harness, &ev)
+                                        {
+                                            continue;
+                                        }
                                         if !send(&event_tx, ev).await {
                                             consumer_gone = true;
                                             break;
@@ -7411,6 +7735,7 @@ async fn run_session(session: Session) {
                         {
                             client.notify("session/cancel", Some(cancel_params(harness, &session_id)));
                             preempt_sent = true;
+                            preempt_deadline = Some(tokio::time::Instant::now() + stop_timeout);
                         }
                     }
                 }
@@ -7436,6 +7761,7 @@ async fn run_session(session: Session) {
                 deferred.clear();
                 released = None;
                 preempt_pending = false;
+                preempt_deadline = None;
                 if turn.is_some() {
                     stopping = true;
                     stop_deadline = Some(tokio::time::Instant::now() + stop_timeout);
@@ -7505,27 +7831,73 @@ async fn run_session(session: Session) {
                 }
             },
 
+            // A steer's preempt cancel went unanswered: retire the wedged
+            // process with Done { Errored } (NOT Interrupted!) so the engine
+            // re-dispatches the unconfirmed steer in a fresh process once
+            // `child.shutdown` finishes reaping this one.
+            _ = tokio::time::sleep_until(preempt_deadline.unwrap_or_else(tokio::time::Instant::now)),
+                if preempt_deadline.is_some() && !interrupted && !stopping =>
+            {
+                preempt_deadline = None;
+                if turn.is_some() && preempt_sent {
+                    tracing::warn!(
+                        target: "zeron_harness::acp",
+                        "{agent_name} did not settle a steer-preempt cancel within {}s; retiring the process",
+                        stop_timeout.as_secs()
+                    );
+                    let (prev, _next) = rotate(&mut assistant_message_id);
+                    let _ = send(
+                        &event_tx,
+                        AgentEvent::AssistantMessageCompleted { assistant_message_id: prev },
+                    )
+                    .await;
+                    done_current = true;
+                    let _ = send(
+                        &event_tx,
+                        AgentEvent::Done {
+                            status: DoneStatus::Errored,
+                            result: None,
+                            error: Some(format!(
+                                "{agent_name} did not cancel the current turn in time to apply the steer; retiring the process."
+                            )),
+                            session_id: Some(session_id.clone()),
+                        },
+                    )
+                    .await;
+                    break 'main;
+                }
+            },
+
             // Prompt-stall watchdog: a prompt was sent and NOTHING has come
-            // back on the wire at all — no queue bookkeeping, no updates, no
-            // requests. Healthy grok acknowledges within milliseconds; total
-            // silence past the bound is a wedged agent (stale shared leader,
-            // launch-time update check). Surface a visible error instead of
-            // indefinite Working.
+            // back on the wire at all (or for Antigravity, total silence past
+            // the bound with no open tools or user questions). Surface a
+            // visible error instead of indefinite Working.
             _ = tokio::time::sleep_until(
                 prompt_stall_deadline.unwrap_or_else(tokio::time::Instant::now),
-            ), if prompt_stall_deadline.is_some() && turn.is_some() && !interrupted => {
-                let _ = send(
-                    &event_tx,
-                    AgentEvent::Error {
-                        message: format!(
-                            "{agent_name} did not respond to the prompt at all \
-                             (no wire activity for {}s). {}",
-                            prompt_stall.map(|d| d.as_secs()).unwrap_or(0),
-                            stall_hint,
-                        ),
-                    },
-                )
-                .await;
+            ), if prompt_stall_deadline.is_some()
+                && turn.is_some()
+                && open_tools.is_empty()
+                && questions.is_empty()
+                && !interrupted
+                && !stopping
+                && !preempt_sent =>
+            {
+                let message = if progress_seq == prompt_seq {
+                    format!(
+                        "{agent_name} stopped responding mid-turn \
+                         (no wire activity for {}s). {}",
+                        prompt_stall.map(|d| d.as_secs()).unwrap_or(0),
+                        stall_hint,
+                    )
+                } else {
+                    format!(
+                        "{agent_name} did not respond to the prompt at all \
+                         (no wire activity for {}s). {}",
+                        prompt_stall.map(|d| d.as_secs()).unwrap_or(0),
+                        stall_hint,
+                    )
+                };
+                let _ = send(&event_tx, AgentEvent::Error { message }).await;
                 done_current = true;
                 let _ = send(
                     &event_tx,
@@ -8053,15 +8425,18 @@ mod tests {
 
         let current_server = install(current.version, current.sha512);
         install("9.0.0", "tampered");
+        install("9.1.0", "registry-sha256:not-a-valid-hex-digest");
         install("not-a-version", ANTIGRAVITY_SIGNED_MARKER);
         assert_eq!(harness.executable_path(), Some(current_server.clone()));
         assert!(!is_managed_antigravity_server(&legacy_server));
 
         let signed_server = install("99.0.0", ANTIGRAVITY_SIGNED_MARKER);
+        let sha256_marker = format!("{ANTIGRAVITY_SHA256_MARKER_PREFIX}{}", "a".repeat(64));
+        let sha256_server = install("98.0.0", &sha256_marker);
         let newest = if crate::code_signature::SUPPORTED {
             signed_server
         } else {
-            current_server.clone()
+            sha256_server
         };
         assert_eq!(harness.executable_path(), Some(newest.clone()));
         assert!(is_managed_antigravity_server(&newest));
@@ -8099,6 +8474,10 @@ mod tests {
             root.join("9.0.0").is_dir(),
             "untrusted installs are left alone"
         );
+        assert!(
+            root.join("9.1.0").is_dir(),
+            "malformed sha256 markers are left alone"
+        );
         assert!(root.join("not-a-version").is_dir());
 
         running.kill().unwrap();
@@ -8133,8 +8512,12 @@ mod tests {
         let release = AntigravityRelease {
             version: "9.9.9".into(),
             archive_url: Some(pin.url.to_owned()),
+            sha256: None,
         };
-        assert!(release.installable());
+        assert_eq!(release.installable(), crate::code_signature::SUPPORTED);
+        if !release.installable() {
+            return;
+        }
         let error = install_antigravity_release(&release).await.unwrap_err();
         assert!(
             error
@@ -8157,19 +8540,45 @@ mod tests {
         let Some(platform) = antigravity_registry_platform() else {
             return;
         };
-        let manifest = |version: &str, archive: &str, cmd: &str| {
+        let manifest = |version: &str, archive: &str, cmd: &str, sha256: Option<&str>| {
+            let mut binary = json!({"archive": archive, "cmd": cmd});
+            if let Some(sha256) = sha256 {
+                binary["sha256"] = json!(sha256);
+            }
             json!({
                 "id": "antigravity-acp",
                 "version": version,
-                "distribution": {"binary": {platform: {"archive": archive, "cmd": cmd}}}
+                "distribution": {"binary": {platform: binary}}
             })
         };
-        let url = "https://dl.google.com/agy-extensions/releases/x/agy-acp-server-1.3.0.zip";
+        let url = "https://dl.google.com/agy-extensions/releases/x/agy-acp-server-1.6.0.zip";
         let cmd = format!("./{}", antigravity_entry());
-        let release = antigravity_release(&manifest("1.3.0", url, &cmd)).unwrap();
-        assert_eq!(release.version, "1.3.0");
-        assert_eq!(release.archive_url.as_deref(), Some(url));
-        assert_eq!(release.installable(), crate::code_signature::SUPPORTED);
+        let release_without_sha =
+            antigravity_release(&manifest("1.6.0", url, &cmd, None)).unwrap();
+        assert_eq!(release_without_sha.version, "1.6.0");
+        assert_eq!(release_without_sha.archive_url.as_deref(), Some(url));
+        assert_eq!(release_without_sha.sha256, None);
+        assert_eq!(
+            release_without_sha.installable(),
+            crate::code_signature::SUPPORTED
+        );
+
+        let upper_digest = "A1B2C3D4".repeat(8);
+        let release_with_sha =
+            antigravity_release(&manifest("1.6.0", url, &cmd, Some(&upper_digest))).unwrap();
+        assert_eq!(
+            release_with_sha.sha256.as_deref(),
+            Some(upper_digest.to_ascii_lowercase().as_str())
+        );
+        assert!(
+            release_with_sha.installable(),
+            "a Google-hosted archive with a valid SHA-256 is installable on every platform"
+        );
+
+        let bad_sha =
+            antigravity_release(&manifest("1.6.0", url, &cmd, Some("not-a-sha256"))).unwrap();
+        assert_eq!(bad_sha.sha256, None);
+        assert_eq!(bad_sha.installable(), crate::code_signature::SUPPORTED);
 
         for rejected in [
             "http://dl.google.com/agy-extensions/releases/x.zip",
@@ -8179,16 +8588,22 @@ mod tests {
             "https://dl.google.com/other/x.zip",
             "https://example.com/agy-extensions/releases/x.zip",
         ] {
-            let release = antigravity_release(&manifest("1.3.0", rejected, &cmd)).unwrap();
+            let release =
+                antigravity_release(&manifest("1.6.0", rejected, &cmd, Some(&upper_digest)))
+                    .unwrap();
             assert_eq!(release.archive_url, None, "{rejected}");
+            assert_eq!(release.sha256, None, "{rejected}");
             assert!(!release.installable(), "{rejected}");
         }
-        let renamed = antigravity_release(&manifest("1.3.0", url, "./other_server")).unwrap();
+        let renamed =
+            antigravity_release(&manifest("1.6.0", url, "./other_server", Some(&upper_digest)))
+                .unwrap();
         assert_eq!(renamed.archive_url, None);
+        assert_eq!(renamed.sha256, None);
 
-        assert!(antigravity_release(&manifest("latest", url, &cmd)).is_none());
-        assert!(antigravity_release(&manifest("../1.3.0", url, &cmd)).is_none());
-        assert!(antigravity_release(&json!({"id": "other", "version": "1.3.0"})).is_none());
+        assert!(antigravity_release(&manifest("latest", url, &cmd, None)).is_none());
+        assert!(antigravity_release(&manifest("../1.6.0", url, &cmd, None)).is_none());
+        assert!(antigravity_release(&json!({"id": "other", "version": "1.6.0"})).is_none());
 
         if let Some(pin) = antigravity_archive() {
             let pinned =
@@ -8199,6 +8614,49 @@ mod tests {
                 "the pinned digest needs no registry archive"
             );
         }
+    }
+
+    #[test]
+    fn antigravity_install_target_prefers_newer_registry_release_and_falls_back_cleanly() {
+        let Some(pin) = antigravity_archive() else {
+            return;
+        };
+        let url = "https://dl.google.com/agy-extensions/releases/x/agy-acp-server-9.9.9.zip";
+        let newer = AntigravityRelease {
+            version: "9.9.9".into(),
+            archive_url: Some(url.into()),
+            sha256: Some("a".repeat(64)),
+        };
+        assert_eq!(
+            select_antigravity_install_target(Some(newer.clone()), Some(pin)),
+            Some(AntigravityInstallTarget::Registry(newer))
+        );
+
+        let older = AntigravityRelease {
+            version: "1.0.0".into(),
+            archive_url: Some(url.into()),
+            sha256: Some("a".repeat(64)),
+        };
+        assert_eq!(
+            select_antigravity_install_target(Some(older), Some(pin)),
+            Some(AntigravityInstallTarget::Fallback(pin))
+        );
+
+        let uninstallable = AntigravityRelease {
+            version: "9.9.9".into(),
+            archive_url: None,
+            sha256: None,
+        };
+        assert_eq!(
+            select_antigravity_install_target(Some(uninstallable), Some(pin)),
+            Some(AntigravityInstallTarget::Fallback(pin))
+        );
+
+        assert_eq!(
+            select_antigravity_install_target(None, Some(pin)),
+            Some(AntigravityInstallTarget::Fallback(pin))
+        );
+        assert_eq!(select_antigravity_install_target(None, None), None);
     }
 
     #[test]
@@ -9693,6 +10151,199 @@ mod tests {
         assert_eq!(commands.len(), 1);
         assert_eq!(commands[0].name, "compact");
         assert!(scan_available_commands(&json!({ "protocolVersion": 1 })).is_empty());
+    }
+
+    fn antigravity_1_5_session_response() -> Value {
+        json!({
+            "sessionId": "agy-150",
+            "configOptions": [
+                {
+                    "id": "model",
+                    "name": "Model",
+                    "category": "model",
+                    "type": "select",
+                    "currentValue": "gemini-3.8-flash",
+                    "options": [
+                        { "value": "gemini-3.8-flash", "name": "Gemini 3.8 Flash" },
+                        { "value": "gemini-4-neon", "name": "Gemini 4 Neon" },
+                        { "value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen" },
+                        { "value": "gemini-4-carbon", "name": "Gemini 4 Carbon" },
+                        { "value": "gemini-4-argon", "name": "Gemini 4 Argon" },
+                        { "value": "gemini-3.1-pro", "name": "Gemini 3.1 Pro" }
+                    ]
+                },
+                {
+                    "id": "thinking_level",
+                    "name": "Thinking Level",
+                    "category": "thought_level",
+                    "type": "select",
+                    "currentValue": "high",
+                    "options": [
+                        { "value": "low", "name": "Low" },
+                        { "value": "medium", "name": "Medium" },
+                        { "value": "high", "name": "High" }
+                    ]
+                },
+                {
+                    "id": "mode",
+                    "name": "Session Mode",
+                    "category": "mode",
+                    "type": "select",
+                    "currentValue": "default",
+                    "options": [
+                        { "value": "default", "name": "Default" },
+                        { "value": "auto_edit", "name": "Auto Edit" },
+                        { "value": "yolo", "name": "YOLO" }
+                    ]
+                }
+            ],
+            "models": {
+                "currentModelId": "gemini-3.8-flash-high",
+                "availableModels": [
+                    { "modelId": "gemini-3.8-flash-low", "name": "Gemini 3.8 Flash (Low)" },
+                    { "modelId": "gemini-3.8-flash-medium", "name": "Gemini 3.8 Flash (Medium)" },
+                    { "modelId": "gemini-3.8-flash-high", "name": "Gemini 3.8 Flash (High)" },
+                    { "modelId": "gemini-4-neon-low", "name": "Gemini 4 Neon (Low)" },
+                    { "modelId": "gemini-4-neon-medium", "name": "Gemini 4 Neon (Medium)" },
+                    { "modelId": "gemini-4-neon-high", "name": "Gemini 4 Neon (High)" },
+                    { "modelId": "gemini-4-neon-xhigh", "name": "Gemini 4 Neon (Extra High)" },
+                    { "modelId": "gemini-4-hydrogen-low", "name": "Gemini 4 Hydrogen (Low)" },
+                    { "modelId": "gemini-4-hydrogen-medium", "name": "Gemini 4 Hydrogen (Medium)" },
+                    { "modelId": "gemini-4-hydrogen-high", "name": "Gemini 4 Hydrogen (High)" },
+                    { "modelId": "gemini-4-hydrogen-xhigh", "name": "Gemini 4 Hydrogen (Extra High)" },
+                    { "modelId": "gemini-4-carbon-low", "name": "Gemini 4 Carbon (Low)" },
+                    { "modelId": "gemini-4-carbon-medium", "name": "Gemini 4 Carbon (Medium)" },
+                    { "modelId": "gemini-4-carbon-high", "name": "Gemini 4 Carbon (High)" },
+                    { "modelId": "gemini-4-argon-low", "name": "Gemini 4 Argon (Low)" },
+                    { "modelId": "gemini-4-argon-medium", "name": "Gemini 4 Argon (Medium)" },
+                    { "modelId": "gemini-4-argon-high", "name": "Gemini 4 Argon (High)" },
+                    { "modelId": "gemini-pro-agent", "name": "Gemini 3.1 Pro (High)" },
+                    { "modelId": "gemini-3.1-pro-low", "name": "Gemini 3.1 Pro (Low)" }
+                ]
+            }
+        })
+    }
+
+    #[test]
+    fn antigravity_1_5_discovers_per_model_effort_levels_from_available_models() {
+        let models = models_from_session_wire(&antigravity_1_5_session_response(), &[]);
+        let levels = |id: &str| {
+            models
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap_or_else(|| panic!("missing model {id}: {models:?}"))
+                .reasoning_levels
+                .clone()
+        };
+        assert_eq!(
+            levels("gemini-4-neon"),
+            vec![
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+            ]
+        );
+        assert_eq!(
+            levels("gemini-4-hydrogen"),
+            vec![
+                ReasoningLevel::Low,
+                ReasoningLevel::Medium,
+                ReasoningLevel::High,
+                ReasoningLevel::XHigh,
+            ]
+        );
+        for id in ["gemini-3.8-flash", "gemini-4-carbon", "gemini-4-argon"] {
+            assert_eq!(
+                levels(id),
+                vec![
+                    ReasoningLevel::Low,
+                    ReasoningLevel::Medium,
+                    ReasoningLevel::High,
+                ],
+                "unexpected levels for {id}"
+            );
+        }
+        assert_eq!(
+            levels("gemini-3.1-pro"),
+            vec![ReasoningLevel::Low, ReasoningLevel::High]
+        );
+    }
+
+    #[test]
+    fn antigravity_1_5_maps_legacy_variant_ids_and_infers_effort() {
+        let session = antigravity_1_5_session_response();
+        assert_eq!(
+            resolve_effort_model(&session, "gemini-4-neon-xhigh", None),
+            ("gemini-4-neon".into(), Some(ReasoningLevel::XHigh))
+        );
+        assert_eq!(
+            resolve_effort_model(&session, "gemini-4-neon-xhigh", Some(ReasoningLevel::Low)),
+            ("gemini-4-neon".into(), Some(ReasoningLevel::Low))
+        );
+        assert_eq!(
+            resolve_effort_model(&session, "gemini-pro-agent", None),
+            ("gemini-3.1-pro".into(), Some(ReasoningLevel::High))
+        );
+        assert_eq!(
+            resolve_effort_model(&session, "gemini-4-neon", Some(ReasoningLevel::XHigh)),
+            ("gemini-4-neon".into(), Some(ReasoningLevel::XHigh))
+        );
+        let (unknown, level) = resolve_effort_model(&session, "unknown-model", None);
+        assert_eq!(unknown, "unknown-model");
+        assert_eq!(level, None);
+        assert!(
+            validate_config_model_selection(&session, Some(&unknown), &Default::default()).is_err()
+        );
+    }
+
+    #[test]
+    fn antigravity_session_unrestorable_matches_corrupt_trajectory_db_but_keeps_transient_errors() {
+        for corrupt in [
+            "session/resume failed (code -32603): failed to setup trajectory: file is not a database",
+            "session/resume failed (code -32603): failed to load/create db trajectory",
+            "session/load failed (code -32603): doneCh for checkpoint never closed",
+            "session/resume failed (code -32603): sqlite3: database disk image is malformed",
+            "session/resume failed (code -32603): malformed database schema (steps)",
+            "session/resume failed (code -32603): failed to load trajectory from store",
+        ] {
+            assert!(
+                session_unrestorable(HarnessId::Antigravity, &HarnessError::Protocol(corrupt.into())),
+                "expected unrestorable: {corrupt}"
+            );
+        }
+        for retryable in [
+            "session/resume failed (code -32000): Authentication required",
+            "session/resume timed out after 30s",
+            "session/resume failed (code -32603): connection reset by peer",
+            "session/resume failed (code -32603): MCP server failed to start",
+        ] {
+            assert!(
+                !session_unrestorable(
+                    HarnessId::Antigravity,
+                    &HarnessError::Protocol(retryable.into())
+                ),
+                "expected retryable: {retryable}"
+            );
+        }
+        assert!(!session_unrestorable(
+            HarnessId::Antigravity,
+            &HarnessError::Io(std::io::Error::other("broken pipe"))
+        ));
+    }
+
+    #[test]
+    fn antigravity_synthetic_cancel_chunk_detection() {
+        let cancel = AgentEvent::TextDelta {
+            text: "The request was cancelled by the client.\n".into(),
+        };
+        let real = AgentEvent::TextDelta {
+            text: "Here is the answer.".into(),
+        };
+        assert!(is_synthetic_cancel_chunk(HarnessId::Antigravity, &cancel));
+        assert!(!is_synthetic_cancel_chunk(HarnessId::Antigravity, &real));
+        assert!(!is_synthetic_cancel_chunk(HarnessId::Grok, &cancel));
+        assert!(!is_synthetic_cancel_chunk(HarnessId::Devin, &cancel));
     }
 }
 

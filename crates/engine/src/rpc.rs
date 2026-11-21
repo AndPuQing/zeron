@@ -201,6 +201,10 @@ struct QueueMessageParams {
     /// chat's row waits until they're in the edge's store.
     #[serde(default)]
     transfers: Vec<crate::uploads::AttachmentTransfer>,
+    /// Chat config picked when this message was queued (e.g. a provider or
+    /// model switch made while the previous turn was still running).
+    #[serde(default)]
+    config: Option<ChatConfig>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2842,6 +2846,8 @@ fn forwardable(method: &str) -> bool {
             | methods::SET_COMMIT_CREDIT
             | methods::GET_NATIVE_SUBAGENTS
             | methods::SET_NATIVE_SUBAGENTS
+            | methods::GET_CODE_MODE
+            | methods::SET_CODE_MODE
             | methods::SET_HARNESS_ENABLED
             | methods::LIST_HARNESS_CONFIG_FILES
             | methods::GET_HARNESS_ENVIRONMENT
@@ -3893,6 +3899,14 @@ impl RpcService for EngineRpc {
                     .map_err(RpcError::Failed)?;
                 RpcReply::value(&self.registry.native_subagent_settings())
             }
+            methods::GET_CODE_MODE => RpcReply::value(&self.registry.code_mode_settings()),
+            methods::SET_CODE_MODE => {
+                let p: SetHarnessEnabledParams = parse_params(params)?;
+                self.registry
+                    .set_code_mode(p.harness, p.enabled)
+                    .map_err(RpcError::Failed)?;
+                RpcReply::value(&self.registry.code_mode_settings())
+            }
             methods::SET_HARNESS_ENABLED => {
                 let include = include_registry(&params);
                 let p: SetHarnessEnabledParams = parse_params(params)?;
@@ -4412,16 +4426,37 @@ impl RpcService for EngineRpc {
             }
             methods::QUEUE_MESSAGE => {
                 let p: QueueMessageParams = parse_params(params)?;
-                self.validate_execution_command(&p.chat_id, p.execution, None)?;
+                if let Some(cfg) = &p.config {
+                    let switching = self
+                        .workspace
+                        .chat(&p.chat_id)
+                        .map_err(|e| RpcError::Failed(e.to_string()))?
+                        .and_then(|chat| chat.config)
+                        .is_some_and(|current| current.harness != cfg.harness);
+                    if switching && !self.host_switches_providers(&p.chat_id) {
+                        return Err(RpcError::Failed(
+                            "This chat's computer needs a newer Zeron to switch provider".into(),
+                        ));
+                    }
+                }
+                let execution = p.config.as_ref().map_or(p.execution, |cfg| {
+                    p.execution.restricted_by(cfg.execution_policy())
+                });
+                self.validate_execution_command(
+                    &p.chat_id,
+                    execution,
+                    p.config.as_ref().map(|cfg| cfg.harness),
+                )?;
                 let id = self
                     .doc_host
-                    .queue_message_with_transfers_and_execution(
+                    .queue_message_with_config(
                         &p.chat_id,
                         &p.text,
                         p.attachments,
                         p.hold_for_turn_end,
-                        p.execution,
+                        execution,
                         p.transfers,
+                        p.config,
                     )
                     .map_err(|e| RpcError::Failed(e.to_string()))?;
                 RpcReply::value(&serde_json::json!({ "id": id }))

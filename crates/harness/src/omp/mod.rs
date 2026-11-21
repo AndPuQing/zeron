@@ -981,6 +981,7 @@ mod tests {
         RunRequest {
             access: Default::default(),
             plan: false,
+            code_mode: false,
             prompt: "p".into(),
             harness: None,
             model: None,
@@ -1053,6 +1054,7 @@ mod tests {
         let mut request = RunRequest {
             access: Default::default(),
             plan: false,
+            code_mode: false,
             prompt: "p".into(),
             harness: None,
             model: None,

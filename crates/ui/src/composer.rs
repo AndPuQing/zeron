@@ -10222,6 +10222,7 @@ impl Composer {
                         auto_approve: false,
                         access: resolved.access,
                         plan: resolved.plan,
+                        code_mode: false,
                         resume: None,
                         attachments: attachment_paths,
                         worktree: run_worktree,

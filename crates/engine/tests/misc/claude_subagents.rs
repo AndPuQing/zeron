@@ -31,6 +31,7 @@ fn request(dir: &Path, scenario: &str) -> RunRequest {
         auto_approve: false,
         access: Default::default(),
         plan: false,
+        code_mode: false,
         attachments: vec![],
         worktree: None,
         resume: None,

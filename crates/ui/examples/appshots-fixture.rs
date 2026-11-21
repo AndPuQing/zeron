@@ -149,6 +149,7 @@ fn main() -> anyhow::Result<()> {
             issued_at: 1788900000000,
             edited_at: None,
             delivery_gate: None,
+            config: None,
         },
         zeron_doc::QueuedMessage {
             execution: Default::default(),
@@ -160,6 +161,7 @@ fn main() -> anyhow::Result<()> {
             issued_at: 1788900000001,
             edited_at: None,
             delivery_gate: None,
+            config: None,
         },
     ];
     let failure = Arc::new(std::sync::Mutex::new(None));

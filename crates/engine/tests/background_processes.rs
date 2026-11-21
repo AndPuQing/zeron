@@ -54,6 +54,7 @@ async fn controls_list_read_and_stop_only_the_addressed_runtime_task() {
     let client = zeron_rpc::memory_client(core.rpc_service());
     core.workspace.create_chat("background", None, Some(&core.device_id), None, None).unwrap();
     core.sessions.dispatch("background", HarnessId::Mock, RunRequest {
+        code_mode: false,
         prompt: "start".into(), harness: Some(HarnessId::Mock), model: None, reasoning: None,
         model_options: Default::default(), cwd: directory.path().to_string_lossy().into(),
         sandbox: SandboxLevel::WorkspaceWrite, auto_approve: false, access: Default::default(), plan: false,

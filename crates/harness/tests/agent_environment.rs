@@ -49,6 +49,7 @@ async fn observe(harness: AcpHarness, value: &str) {
     let req = RunRequest {
         access: Default::default(),
         plan: false,
+        code_mode: false,
         prompt: "observe".into(),
         harness: None,
         model: None,
@@ -138,6 +139,7 @@ async fn native_runs_and_model_probes_receive_their_provider_binding() {
         let request = RunRequest {
             access: Default::default(),
             plan: false,
+            code_mode: false,
             prompt: prompt.into(),
             cwd: root.display().to_string(),
             harness: None,

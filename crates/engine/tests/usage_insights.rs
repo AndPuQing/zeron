@@ -52,6 +52,7 @@ async fn run_turn(client: &RpcClient, chat: &str, prompt: &str) {
         request: RunRequest {
             access: Default::default(),
             plan: false,
+            code_mode: false,
             require_native_resume: false,
             prompt: prompt.into(),
             harness: None,

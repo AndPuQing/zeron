@@ -8334,6 +8334,7 @@ mod tests {
             issued_at: 0,
             edited_at: None,
             delivery_gate: None,
+            config: None,
         };
         state.push_echo("c1", echo("held"));
         state.push_echo("c1", echo("sent"));

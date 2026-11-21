@@ -85,6 +85,10 @@ pub mod methods {
     /// (`{switchable, off}`; set with `{harness, enabled}`).
     pub const GET_NATIVE_SUBAGENTS: &str = "GetNativeSubagents";
     pub const SET_NATIVE_SUBAGENTS: &str = "SetNativeSubagents";
+    /// Which providers on this device have Code Mode enabled
+    /// (`{supported, enabled}`; set with `{harness, enabled}`).
+    pub const GET_CODE_MODE: &str = "GetCodeMode";
+    pub const SET_CODE_MODE: &str = "SetCodeMode";
     pub const SET_HARNESS_ENABLED: &str = "SetHarnessEnabled";
     pub const LIST_HARNESS_CONFIG_FILES: &str = "ListHarnessConfigFiles";
     pub const GET_HARNESS_ENVIRONMENT: &str = "GetHarnessEnvironment";

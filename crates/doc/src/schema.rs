@@ -2612,6 +2612,7 @@ mod tests {
             issued_at: 1,
             edited_at: None,
             delivery_gate: None,
+            config: None,
         };
         a.push_queued(&row("q1")).unwrap();
         a.set_queued_text("q1", "later, edited", 2).unwrap();

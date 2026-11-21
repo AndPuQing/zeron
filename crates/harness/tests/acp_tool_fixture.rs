@@ -88,6 +88,7 @@ fn request(prompt: &str, cwd: &Path, env: &[(&str, &str)]) -> RunRequest {
         auto_approve: true,
         access: Default::default(),
         plan: false,
+        code_mode: false,
         resume: None,
         require_native_resume: false,
         attachments: Vec::new(),

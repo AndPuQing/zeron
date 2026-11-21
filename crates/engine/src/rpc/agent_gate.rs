@@ -160,6 +160,10 @@ impl EngineRpc {
                 let target = params["chatId"].as_str().unwrap_or_default().to_owned();
                 let text = params["text"].as_str().unwrap_or_default();
                 params["text"] = json!(attributed(&target, text));
+                // Only the person can select a provider or model for a queued message.
+                if let Some(params) = params.as_object_mut() {
+                    params.remove("config");
+                }
                 Ok(params)
             }
             _ => {
@@ -587,6 +591,22 @@ mod tests {
         assert_eq!(request["extraMcp"], json!([]));
         let (sender, body) = agent_messages::agent_message_sender(request["prompt"].as_str().unwrap()).unwrap();
         assert_eq!((sender.chat_id.as_str(), body), ("careful", "go"));
+
+        let queued = json!({
+            "chatId": "other",
+            "text": "go",
+            "config": {"harness": "claude-code", "model": "opus"},
+        });
+        assert_eq!(
+            rpc.agent_gate(methods::QUEUE_MESSAGE, queued.clone()).unwrap(),
+            queued,
+        );
+        let gated = with_caller(agent("careful"), async {
+            rpc.agent_gate(methods::QUEUE_MESSAGE, queued)
+        })
+        .await
+        .unwrap();
+        assert!(gated.get("config").is_none());
         core.sessions.shutdown().await;
     }
 

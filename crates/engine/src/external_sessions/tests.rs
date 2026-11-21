@@ -202,6 +202,7 @@ fn request(cwd: &str) -> RunRequest {
     RunRequest {
         access: Default::default(),
         plan: false,
+        code_mode: false,
         prompt: "continue".into(),
         cwd: cwd.into(),
         harness: None,
