@@ -141,7 +141,6 @@ local function Session(id: Id?): Node
 	-- Read the outgoing list before switching its rows. A scroll may still
 	-- be inside the transcript's debounce window when the reader leaves.
 	local reader: { save: (() -> ())? } = {}
-	local entering: { id: string, at_end: boolean }? = nil
 	ui.effect(function()
 		local s = which()
 		local left = shared.shown:peek()
@@ -156,7 +155,6 @@ local function Session(id: Id?): Node
 				end
 				local back = places[s]
 				shared.places:set(places)
-				entering = { id = s, at_end = back == nil }
 				offset:set(T.PAST_END)
 				shared.anchor:set(back)
 				shared.shown:set(s)
@@ -288,9 +286,9 @@ local function Session(id: Id?): Node
 						reader = reader,
 						-- The session shown: another one swaps its rows.
 						session = shared.shown,
-						-- (A chat switched back to: whether it was left at its end.)
-						was_at_end = function(id: string): boolean?
-							return if entering and entering.id == id then entering.at_end else nil
+						-- The saved position also survives a new chat replacing the view.
+						was_at_end = function(): boolean
+							return shared.anchor:peek() == nil
 						end,
 						-- Under the docked composer: the conversation runs
 						-- behind it, its end held clear of it.
