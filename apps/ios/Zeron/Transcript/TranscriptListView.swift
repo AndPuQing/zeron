@@ -132,10 +132,12 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
     var imageFetcher: ((TranscriptImageRef) async -> UIImage?)?
     /// A sender caption or fork seam opens its chat through the shell.
     var onOpenChat: ((String) -> Void)?
-    /// Returns true when the session handled a host file link internally.
-    /// Gets the link's raw Markdown target, as Android does: URL parsing
-    /// would re-encode a literal `%` before the shared link grammar sees it.
-    var onOpenDocument: ((String) -> Bool)?
+    /// Local links belong to the originating chat. Inside a document,
+    /// relative links start beside that document.
+    var fileLinkChatId: String?
+    var documentPath: String?
+    var onOpenDocument: ((String) -> Void)?
+    private var imageLinkRequest: Task<Void, Never>?
 
     // MARK: Runway (desktop transcript.rs `OwnTurnAnchor`)
     //
@@ -689,7 +691,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         guard let row = visible.values.first(where: { !$0.isHidden && $0.frame.contains(point) }),
               let target = row.linkTarget(at: tap.location(in: row))
         else { return }
-        if onOpenDocument?(target) == true { return }
+        if openFileLink(target, from: row) { return }
         guard let url = URL(string: target) else { return }
         rowView(row, open: url)
     }
@@ -713,8 +715,35 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
         onSubagent?(docId, title, running)
     }
 
+    private func openFileLink(_ target: String, from row: RowView) -> Bool {
+        guard let chatId = fileLinkChatId,
+              let path = documentLinkPath(url: target, basePath: documentPath) else { return false }
+        if let ref = TranscriptImageRef.fileLink(chatId: chatId, path: path) {
+            openImageLink(ref, from: row)
+        } else if let onOpenDocument {
+            onOpenDocument(path)
+        } else {
+            return false
+        }
+        return true
+    }
+
+    private func openImageLink(_ ref: TranscriptImageRef, from row: RowView) {
+        imageLinkRequest?.cancel()
+        imageLinkRequest = Task { @MainActor [weak self, weak row] in
+            let image = await self?.imageFetcher?(ref)
+            guard !Task.isCancelled, let self, let window = self.window, let vc = self.findViewController(),
+                  vc.presentedViewController == nil else { return }
+            guard let image else {
+                Toast.show("Image unavailable", in: window)
+                return
+            }
+            vc.present(ImageViewer(image: image, source: row ?? self), animated: true)
+        }
+    }
+
     func rowView(_ view: RowView, open url: URL) {
-        if onOpenDocument?(url.absoluteString) == true { return }
+        if openFileLink(url.absoluteString, from: view) { return }
         // Chat links (the fork seam) route through the shell, not Safari.
         if url.scheme == "zerun", url.host == "chat" {
             let id = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -727,10 +756,7 @@ final class TranscriptListView: UIScrollView, RowViewDelegate, UIScrollViewDeleg
             guard let reference = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "ref" })?.value
             else { return }
-            Task { @MainActor [weak self, weak view, weak vc] in
-                guard let image = await self?.imageFetcher?(.attachment(reference)), let view, let vc else { return }
-                vc.present(ImageViewer(image: image, source: view), animated: true)
-            }
+            openImageLink(.attachment(reference), from: view)
             return
         }
         // A sender caption opens the chat that sent the message.

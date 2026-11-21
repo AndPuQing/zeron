@@ -33,6 +33,29 @@ final class DocumentPreviewTests: XCTestCase {
         XCTAssertGreaterThan(chat.contentOffset.y, 0)
     }
 
+    func testLocalImageLinksUseTheImageFetcherAndDocumentsUseTheReader() async {
+        let relay = FrameRelay {}
+        let engine = TranscriptView(text: TextEngine.shared, listener: relay)
+        defer { engine.close() }
+        let reader = TranscriptListView(engine: engine)
+        reader.fileLinkChatId = "chat"
+        let row = RowView(frame: .zero)
+        let requested = expectation(description: "fetch linked PNG from the chat")
+        reader.imageFetcher = { ref in
+            XCTAssertEqual(ref, .chat(chatId: "chat", path: "/repo/dist/example.PNG"))
+            requested.fulfill()
+            return nil
+        }
+        var documents: [String] = []
+        reader.onOpenDocument = { documents.append($0) }
+        reader.rowView(row, open: URL(fileURLWithPath: "/repo/dist/example.PNG"))
+        await fulfillment(of: [requested], timeout: 2)
+        XCTAssertTrue(documents.isEmpty)
+        reader.documentPath = "docs/guide.md"
+        reader.rowView(row, open: URL(string: "notes.md")!)
+        XCTAssertEqual(documents, ["docs/notes.md"])
+    }
+
     func testSharedLinkGrammarMatchesTheRawAndEncodedSpellings() {
         // Android hands over the raw Markdown target; URL(string:) encodes a literal `%`.
         XCTAssertEqual(documentLinkPath(url: "100%.md", basePath: nil), "100%.md")

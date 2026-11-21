@@ -3,6 +3,7 @@ package sh.zeron.android.ui
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
+import android.widget.Toast
 import androidx.compose.ui.graphics.asImageBitmap
 import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
@@ -18,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -44,6 +47,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import sh.zeron.android.design.ZIcons
+import sh.zeron.android.transcript.TranscriptImageRef
+import sh.zeron.android.transcript.cachedTranscriptImage
+import uniffi.zeron_core.documentLinkPath
 import java.io.File
 import kotlin.math.abs
 
@@ -148,6 +154,41 @@ private suspend fun share(context: Context, image: ImageBitmap) {
     context.startActivity(Intent.createChooser(send, null))
 }
 
+/** Resolve the raw target before inspecting its extension (escapes, file URLs and document-relative paths). */
+internal fun openFileLink(
+    url: String, basePath: String?, chatId: String,
+    openImage: (TranscriptImageRef) -> Unit, openDocument: ((String) -> Unit)? = null,
+): Boolean {
+    val path = documentLinkPath(url, basePath) ?: return false
+    when (path.substringAfterLast('.', "").lowercase()) {
+        "png", "jpg", "jpeg", "webp", "gif" -> openImage(TranscriptImageRef.Chat(chatId, path))
+        else -> {
+            if (openDocument == null) return false
+            openDocument(path)
+        }
+    }
+    return true
+}
+
+@Composable
+internal fun rememberOpenTranscriptImage(
+    cacheScope: String,
+    load: suspend (TranscriptImageRef) -> ImageBitmap?,
+    show: (ImageBitmap) -> Unit,
+): (TranscriptImageRef) -> Unit {
+    val context = LocalContext.current
+    val currentLoad by rememberUpdatedState(load)
+    val currentShow by rememberUpdatedState(show)
+    var requested by remember(cacheScope) { mutableStateOf<TranscriptImageRef?>(null) }
+    LaunchedEffect(cacheScope, requested) {
+        val ref = requested ?: return@LaunchedEffect
+        val image = cachedTranscriptImage(cacheScope, ref) ?: currentLoad(ref)
+        if (image != null) currentShow(image)
+        else Toast.makeText(context, "Image unavailable", Toast.LENGTH_SHORT).show()
+        requested = null
+    }
+    return remember(cacheScope) { { ref -> requested = ref } }
+}
 
 private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
 
@@ -155,12 +196,12 @@ private val imageReads = kotlinx.coroutines.sync.Semaphore(4)
 private const val MAX_DECODED_SIDE = 4096
 
 /** The same bounded host image reader for main and subagent transcripts. */
-internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, ref: sh.zeron.android.transcript.TranscriptImageRef): ImageBitmap? {
+internal suspend fun loadTranscriptImage(core: uniffi.zeron_core.CoreClient, device: String, ref: TranscriptImageRef): ImageBitmap? {
     imageReads.acquire()
     try {
         val bytes = when (ref) {
-            is sh.zeron.android.transcript.TranscriptImageRef.Attachment -> core.readAttachment(device, ref.reference)
-            is sh.zeron.android.transcript.TranscriptImageRef.Chat -> core.readChatImage(device, ref.chatId, ref.path)
+            is TranscriptImageRef.Attachment -> core.readAttachment(device, ref.reference)
+            is TranscriptImageRef.Chat -> core.readChatImage(device, ref.chatId, ref.path)
         }
         return kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
             // Existing attachments allow 24 MiB; reply images are capped at 10 MiB by the Rust reader.

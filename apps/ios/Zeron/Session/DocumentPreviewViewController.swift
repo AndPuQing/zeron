@@ -96,12 +96,13 @@ final class DocumentPreviewViewController: UIViewController {
         list.accessibilityIdentifier = "document-reader"
         list.contentInset.top = 12
         list.contentInset.bottom = 24
-        list.onOpenDocument = { [weak self] url in
-            guard let self, let target = documentLinkPath(url: url, basePath: self.path) else { return false }
+        list.fileLinkChatId = chatId
+        list.documentPath = path
+        list.onOpenDocument = { [weak self] target in
+            guard let self else { return }
             if target != self.path {
                 self.navigationController?.pushViewController(DocumentPreviewViewController(client: self.client, chatId: self.chatId, path: target), animated: true)
             }
-            return true
         }
         view.addSubview(list)
         setContentScrollView(list, for: .top)

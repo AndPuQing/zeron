@@ -54,6 +54,7 @@ final class SubagentViewController: UIViewController {
         list.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         list.accessibilityIdentifier = "subagent-transcript"
         list.onSubagent = { [weak self] doc, title, running in self?.openNested(doc, title: title, running: running) }
+        list.fileLinkChatId = rootChatId
         list.imageFetcher = { [weak self] ref in
             guard let self, let client = self.app.client, let host = self.app.row(self.rootChatId)?.deviceId else { return nil }
             return await TranscriptImages.image(client: client, device: host, ref: ref)
