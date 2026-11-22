@@ -77,7 +77,7 @@ NIGHTLY_FLAGS = (("ui", "browser"),)
 # Suites whose jobs are independent, so one can be skipped while another runs.
 SPLITTABLE = ("voice", "windows")
 
-CARGO = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"]
+CARGO = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".cargo/**"]
 CI_SELF = [
     ".github/workflows/ci.yml",
     "scripts/ci/plan.py",

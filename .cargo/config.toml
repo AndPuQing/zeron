@@ -1,0 +1,7 @@
+# The ONNX Runtime builds include a DirectML provider. Load it on demand
+# so the standalone app and CPU inference can start without DirectML.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+    "-C", "link-arg=/DELAYLOAD:DirectML.dll",
+    "-C", "link-arg=delayimp.lib",
+]

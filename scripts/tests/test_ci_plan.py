@@ -76,9 +76,11 @@ class PlanTests(unittest.TestCase):
         suites = plan.plan([{"filename": "crates/engine/src/huge.rs"}], "fast")
         self.assertTrue(suites["windows"] and suites["macos"])
 
-    def test_lockfile_runs_every_rust_suite(self):
-        suites = plan.plan(files("Cargo.lock"), "fast")
-        self.assertEqual(selected(suites), {"core", "ui", "cursor", "windows", "macos", "coretext", "ios", "android", "experimental"})
+    def test_cargo_inputs_run_every_rust_suite(self):
+        for path in ("Cargo.lock", ".cargo/config.toml"):
+            with self.subTest(path=path):
+                suites = plan.plan(files(path), "fast")
+                self.assertEqual(selected(suites), {"core", "ui", "cursor", "windows", "macos", "coretext", "ios", "android", "experimental"})
 
     def test_mobile_core_selects_ios_and_android(self):
         suites = plan.plan(files("crates/sync/src/lib.rs", patch="+let x = 1;"), "fast")
