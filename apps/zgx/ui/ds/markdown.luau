@@ -2107,6 +2107,12 @@ return function(props: Props): Node
 			min_w = 0,
 			visible_margin = OVERSCAN,
 			on_visible = function(visible: boolean)
+				-- A reinserted row can report visibility before its first
+				-- scroll offset settles. Keep the run built through that pass.
+				if seen == nil and not visible and near:peek() then
+					seen = false
+					return
+				end
 				seen = visible
 				judge()
 			end,
