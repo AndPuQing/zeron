@@ -140,7 +140,7 @@ local function Session(id: Id?): Node
 	-- `session`, `shown`, below), which puts the view there.
 	-- Read the outgoing list before switching its rows. A scroll may still
 	-- be inside the transcript's debounce window when the reader leaves.
-	local reader: { save: (() -> ())? } = {}
+	local reader: { current: () -> string?, save: (() -> ())? } = { current = which }
 	ui.effect(function()
 		local s = which()
 		local left = shared.shown:peek()

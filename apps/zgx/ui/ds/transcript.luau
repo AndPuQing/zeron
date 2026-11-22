@@ -146,8 +146,9 @@ export type Props = {
 	-- back where it was: the message at the view's top, and how far above
 	-- the top it started, written as the view goes; nil at the end.
 	keep: State<Anchor?>?,
-	-- Lets the session save a scroll immediately before replacing its list.
-	reader: { save: (() -> ())? }?,
+	-- Lets the session save a scroll before replacing its list, and tell
+	-- whether the list belongs to the session still being read.
+	reader: { current: () -> string?, save: (() -> ())? }?,
 	-- Replies laid out compact (each one's work folded into one group),
 	-- as the setting says.
 	compact: (() -> boolean)?,
@@ -2069,8 +2070,13 @@ local function Transcript(props: Props): Node
 		if not el or not el.y or not el.height or el.height <= 0 then
 			return
 		end
+		local at_bottom = at_end:peek()
+		-- A closing or emptied list can briefly report its end during layout.
+		if at_bottom and (count:peek() == 0 or (props.reader and props.reader.current() ~= showing)) then
+			return
+		end
 		local best: any = nil
-		if not at_end:peek() then
+		if not at_bottom then
 			for id, r in rows do
 				local row = r.outer:peek()
 				if row and row.y and row.height and row.y + row.height > el.y and (not best or row.y < best.y) then
@@ -2078,7 +2084,7 @@ local function Transcript(props: Props): Node
 				end
 			end
 		end
-		if not best and not at_end:peek() then
+		if not best and not at_bottom then
 			return
 		end
 		here = if best then { id = best.id, dy = best.y - el.y, index = best.index } else nil
