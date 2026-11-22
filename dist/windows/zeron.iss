@@ -77,8 +77,8 @@ Source: "{#PackageDir}\zerun-update.json"; DestDir: "{app}"; Flags: ignoreversio
 Source: "{#PackageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
-#ifdef Beta
-; The Beta's scripts, plugins and matching engine, by version.
+#ifdef Zgx
+; The desktop's scripts, plugins and matching engine, by version.
 Source: "{#PackageDir}\zerun-version"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PackageDir}\beta\*"; DestDir: "{app}\beta"; Flags: ignoreversion recursesubdirs createallsubdirs
 #endif
@@ -104,6 +104,6 @@ Type: files; Name: "{app}\.zerun-update-incoming.exe"
 Type: filesandordirs; Name: "{app}\.zerun-update-*"
 Type: files; Name: "{app}\.zerun-completing.lock"
 Type: files; Name: "{app}\zerun-version"
-#ifdef Beta
+#ifdef Zgx
 Type: filesandordirs; Name: "{app}\beta"
 #endif

@@ -172,6 +172,7 @@ async fn stage_package(
     base: &str,
     manifest: &super::Manifest,
     directory: &Path,
+    require_version_files: bool,
     progress: Option<&tokio::sync::watch::Sender<super::DownloadProgress>>,
 ) -> anyhow::Result<PathBuf> {
     let file = package(&manifest.version);
@@ -204,8 +205,9 @@ async fn stage_package(
     // The zgx app's package has its version's folder; the old app's (a
     // release going back to it) has no such folder at all.
     ensure!(
-        files_complete(&version_files(&unpacked, &manifest.version)) || !unpacked.join(BETA).exists(),
-        "the package has no {BETA}\\{}\\engine\\zerun-engine.exe",
+        files_complete(&version_files(&unpacked, &manifest.version))
+            || (!require_version_files && !unpacked.join(BETA).exists()),
+        "the package is missing the desktop files for {}",
         manifest.version
     );
     let staged = temporary.path().join("zerun.exe");
@@ -221,7 +223,7 @@ async fn stage_package(
 /// replaces nothing in use. (Left behind if the swap then fails; the next try
 /// replaces it, and the next launch removes it.) A version that's already
 /// whole there stays as it is: its engine may be running.
-fn install_version_files(staged: &Path, directory: &Path) -> anyhow::Result<()> {
+pub(super) fn install_version_files(staged: &Path, directory: &Path) -> anyhow::Result<()> {
     let incoming = staged.with_file_name(PACKAGE).join(BETA);
     if !incoming.is_dir() {
         return Ok(());
@@ -330,7 +332,7 @@ pub(super) async fn stage_with_progress(
         || version_files(directory, super::app_version()).is_dir()
     {
         let base = manifest.channel.base(&super::release_base(edge_url)?);
-        return stage_package(&base, manifest, directory, progress).await;
+        return stage_package(&base, manifest, directory, false, progress).await;
     }
     let file = artifact(&manifest.version);
     let expected = expected_checksum(manifest, &file)?;
@@ -413,7 +415,7 @@ pub async fn complete_install(
     // This version's own package first, wherever the feed keeps one release's
     // files: what `latest` says can be older (a release withdrawn) or newer.
     match pinned_release(edge_url, version).await {
-        Some((base, manifest)) => match stage_package(&base, &manifest, directory, None).await {
+        Some((base, manifest)) => match stage_package(&base, &manifest, directory, true, None).await {
             Ok(staged) => {
                 let result = install_version_files(&staged, directory);
                 if let Some(stage) = staged.parent() {
@@ -436,7 +438,7 @@ pub async fn complete_install(
         bail!("the release feed offers Zerun {latest}, which is older than this Zerun {version}");
     }
     let base = manifest.channel.base(&super::release_base(edge_url)?);
-    let staged = stage_package(&base, &manifest, directory, None).await?;
+    let staged = stage_package(&base, &manifest, directory, true, None).await?;
     // A trial (or anything not run as the installed `zerun.exe`) can't
     // replace the installation; it installs only its own version's files.
     let installed = directory.join("zerun.exe");
@@ -726,9 +728,9 @@ pub(super) fn installed_version(directory: &Path) -> Option<String> {
 /// process exits — this is that moment.
 pub fn wait_for_exit(pid: u32) -> anyhow::Result<()> {
     ensure!(pid != std::process::id(), "cannot wait for own process");
-    let result = wait_for_exit_impl(pid);
-    let _ = remove_own_backup();
-    result
+    wait_for_exit_impl(pid)?;
+    cleanup_previous_image();
+    Ok(())
 }
 
 fn wait_for_exit_impl(pid: u32) -> anyhow::Result<()> {

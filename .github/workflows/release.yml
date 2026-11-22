@@ -45,6 +45,10 @@ on:
         description: Rebuild a failed Linux ARM64 package; requires publish_run_id and publish_tag
         type: boolean
         default: false
+      desktop_only:
+        description: Build the desktop packages without the mobile and Cursor SDK jobs
+        type: boolean
+        default: false
       macos_runner:
         description: Apple Silicon runner pool
         type: choice
@@ -57,11 +61,11 @@ permissions:
 
 jobs:
   cursor-compatibility:
-    if: inputs.publish_run_id == ''
+    if: inputs.publish_run_id == '' && !inputs.desktop_only
     uses: ./.github/workflows/cursor-compatibility.yml
 
   android:
-    if: inputs.publish_run_id == ''
+    if: inputs.publish_run_id == '' && !inputs.desktop_only
     uses: ./.github/workflows/android.yml
     with:
       release: true
@@ -87,14 +91,15 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin "$GITHUB_SHA"
           git show "$GITHUB_SHA:scripts/package-linux.sh" > scripts/package-linux.sh
-      - name: gpui system deps
+      - name: Desktop system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
             libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-dev libxcb1-dev libx11-xcb-dev \
             libfontconfig1-dev libfreetype-dev libasound2-dev \
-            libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
+            libvulkan-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev \
+            libasound2-dev libdbus-1-dev rsync
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -103,8 +108,21 @@ jobs:
           # only evicts the default branch's caches PRs restore. A build-only
           # dispatch there still saves one that later tags restore.
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          workspaces: |
+            . -> target
+            apps/zgx -> target
       - name: package
-        run: scripts/package-linux.sh
+        run: |
+          if [[ -f scripts/package-zgx-macos.sh ]]; then
+            ZGX_STABLE=1 scripts/package-linux.sh
+          else
+            scripts/package-linux.sh
+          fi
+      - name: Verify updates from GPUI and Beta
+        if: inputs.desktop_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/tests/test_desktop_candidate.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ runner.arch }}
@@ -123,6 +141,7 @@ jobs:
   macos:
     if: inputs.publish_run_id == '' || (inputs.rebuild_macos && github.ref == 'refs/heads/dev' && inputs.publish_tag != '')
     runs-on: ${{ inputs.macos_runner || 'macos-15' }}
+    timeout-minutes: 150
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -139,12 +158,23 @@ jobs:
         run: echo "DEVELOPER_DIR=$(env -u DEVELOPER_DIR xcode-select -p)" >> "$GITHUB_ENV"
       - name: rust toolchain (rust-toolchain.toml)
         run: rustup show active-toolchain || rustup toolchain install
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/Library/Caches/zgx-ghostty
+          key: zgx-ghostty-${{ hashFiles('apps/zgx/Cargo.lock') }}
+          restore-keys: zgx-ghostty-
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A tag's cache is unreachable from every other tag, so saving it
           # only evicts the default branch's caches PRs restore. A build-only
           # dispatch there still saves one that later tags restore.
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          workspaces: |
+            . -> target
+            apps/zgx -> target
       - name: import Developer ID certificate
         if: env.MACOS_CERT_P12 != ''
         run: |
@@ -176,6 +206,11 @@ jobs:
           } >>"$GITHUB_ENV"
       - name: package desktop and headless CLI
         run: scripts/package-macos.sh
+      - name: Verify updates from GPUI and Beta
+        if: inputs.desktop_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/tests/test_desktop_candidate.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos-${{ runner.arch }}
@@ -194,20 +229,27 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/windows-ci-setup/toolchain
-      - name: Locate Windows SDK shader compiler
-        run: |
-          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/fxc.exe" |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          if (-not $fxc) { throw 'Windows SDK fxc.exe is required for GPUI release shaders' }
-          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           # A tag's cache is unreachable from every other tag, so saving it
           # only evicts the default branch's caches PRs restore. A build-only
           # dispatch there still saves one that later tags restore.
           save-if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+          workspaces: |
+            . -> target
+            apps/zgx -> target
       - name: package installer and portable app
-        run: ./scripts/package-windows.ps1 -ReleasesUrl "https://github.com/$env:GITHUB_REPOSITORY/releases/latest/download"
+        env:
+          LUAU_CXXFLAGS: -DNDEBUG
+        run: ./scripts/package-windows.ps1 -Zgx -ReleasesUrl https://edge.550w.host/releases
+      - name: Verify the per-user installer
+        if: inputs.desktop_only
+        run: ./scripts/test-windows-installer.ps1 -Zgx
+      - name: Verify updates from GPUI and Beta
+        if: inputs.desktop_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/tests/test_desktop_candidate.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-${{ runner.arch }}
@@ -319,6 +361,9 @@ jobs:
       - name: updater manifest
         run: |
           manifest=$(jq -n --arg version "$VERSION" '{version: $version, files: {}}')
+          if [[ -f scripts/package-zgx-macos.sh ]]; then
+            manifest=$(jq '.minimumMacOS = "13.0"' <<<"$manifest")
+          fi
           for f in "$RUNNER_TEMP/zerun-release-assets"/*; do
             test -f "$f" || { echo "Unexpected artifact directory: $f"; exit 1; }
             sha=$(sha256sum "$f" | cut -d' ' -f1)
@@ -396,13 +441,7 @@ jobs:
               npx wrangler@4 r2 object delete "zerun-releases/$stale" --remote || true
             done
           fi
-          # Only the artifacts a client fetches from the edge: install.sh
-          # resolves the headless tarball from manifest.json's version, the
-          # desktop updater (crates/update) does the same for its tarball /
-          # in-place Windows exe, and the Android updater for the APK. The
-          # dmg, portable zip, installer exe and standalone .sha256 are
-          # manual-download only — README points at GitHub Releases — and
-          # would add ~130 MB per release of dead weight.
+          # Stable installers and updaters fetch these assets from the edge.
           for name in \
             "zerun-$VERSION-linux-x86_64.tar.gz" \
             "zerun-$VERSION-linux-aarch64.tar.gz" \
@@ -414,6 +453,10 @@ jobs:
             test -f "$f" || { echo "missing artifact: $name"; exit 1; }
             put "$name" "$f"
           done
+          if [[ -f scripts/package-zgx-macos.sh ]]; then
+            name="zerun-$VERSION-windows-x86_64.zip"
+            put "$name" "$RUNNER_TEMP/zerun-release-assets/$name"
+          fi
           # manifest.json: version + per-artifact sha256 — install.sh and the
           # auto-updater (crates/update) verify downloads against it. Published before
           # latest.txt so no client ever sees a version without its checksums.

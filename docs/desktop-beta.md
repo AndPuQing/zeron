@@ -35,8 +35,7 @@ then publishes a GitHub prerelease. It uploads the Beta manifest after all
 Beta artifacts, without writing the stable manifest or latest-version pointer.
 
 The build scripts require the Beta interface and matching engine versions.
-Use `scripts/package-zgx-beta.sh` on macOS, `scripts/package-linux.sh` on Linux,
-or `scripts/package-windows.ps1` on Windows. Set `BETA_VERSION` and
-`ZGX_BETA_ENGINE` for the shell scripts; use `-BetaVersion` and `-BetaEngine`
-with PowerShell. Build engines with `ZERUN_ENGINE_VERSION=<beta version>`.
+Use `scripts/package-zgx-macos.sh` on macOS, `scripts/package-linux.sh` on Linux,
+or `scripts/package-windows.ps1` on Windows. Set `BETA_VERSION` and supply the engine via `ZGX_ENGINE` on macOS or
+`ZGX_BETA_ENGINE` on Linux. Use `-BetaVersion` and `-BetaEngine` with PowerShell. Build engines with `ZERUN_ENGINE_VERSION=<beta version>`.
 Development previews still use `scripts/experimental-desktop.sh`.

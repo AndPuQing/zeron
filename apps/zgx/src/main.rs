@@ -71,6 +71,8 @@ mod themes;
 mod transparency;
 mod visuals;
 mod updates;
+#[cfg(all(windows, feature = "beta"))]
+mod windows_install;
 #[cfg(test)]
 mod audit_shots;
 #[cfg(test)]
@@ -234,10 +236,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     zeron_update::set_app_version(about::APP_VERSION);
     #[cfg(feature = "beta")]
     zeron_update::set_app_follows_channels();
-    // The Windows package carries its matching engine in a versioned folder.
     #[cfg(all(windows, feature = "beta"))]
-    if let Some(dir) = std::env::current_exe().ok().as_deref().and_then(std::path::Path::parent) {
-        zeron_launch::set_engine_helper(dir.join("beta").join(about::APP_VERSION).join("engine").join("zerun-engine.exe"));
+    {
+        windows_install::complete_if_needed(&argv)?;
+        if let Some(files) = windows_install::version_files() {
+            zeron_launch::set_engine_helper(files.join("engine").join("zerun-engine.exe"));
+        }
     }
     if open_url.is_none() && !dev_launch(&argv[1..]) {
         let engines = engine_helper.as_deref().map_or(zeron_cli::Engines::Helper, zeron_cli::Engines::HelperAt);
@@ -1233,7 +1237,7 @@ fn bundled_ui() -> Option<PathBuf> {
             let ui = if cfg!(target_os = "macos") {
                 dir.parent()?.join("Resources").join("ui")
             } else if cfg!(windows) {
-                windows_version_files(dir)?.join("ui")
+                windows_version_files()?.join("ui")
             } else {
                 dir.join("ui")
             };
@@ -1243,14 +1247,11 @@ fn bundled_ui() -> Option<PathBuf> {
 }
 
 /// This version's own folder beside the executable on Windows.
-fn windows_version_files(dir: &std::path::Path) -> Option<PathBuf> {
-    #[cfg(windows)]
-    return Some(zeron_update::windows::version_files(dir, about::APP_VERSION));
-    #[cfg(not(windows))]
-    {
-        let _ = dir;
-        None
-    }
+fn windows_version_files() -> Option<PathBuf> {
+    #[cfg(all(windows, feature = "beta"))]
+    return windows_install::version_files();
+    #[cfg(not(all(windows, feature = "beta")))]
+    return None;
 }
 
 /// Geist (the iOS app's, copied into `fonts/` so this folder builds on its
