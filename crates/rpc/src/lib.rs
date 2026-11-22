@@ -1491,6 +1491,23 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelled_ipc_listener_releases_its_port_while_a_copy_is_open() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let listener = listener.into_std().unwrap();
+        let _inherited = listener.try_clone().unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        let tokens = ipc_auth::IpcTokens::generate().unwrap();
+
+        drop(serve_ws_listener_scoped(listener, Arc::new(WhoAsked), tokens));
+
+        tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("the port is reusable even while the inherited socket is open");
+    }
+
     /// R6/R16: the agent-scoped token (what `zeron mcp` holds) reaches its
     /// tools' methods as an agent, and nothing that decides, signs, updates
     /// or hands out credentials; the full token still reaches everything.

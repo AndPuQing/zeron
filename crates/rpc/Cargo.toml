@@ -21,6 +21,9 @@ uuid.workspace = true
 # OS CSPRNG for the localhost IPC bearer (already in the tree via uuid).
 getrandom = "0.4"
 
+[target.'cfg(target_os = "linux")'.dependencies]
+socket2 = "0.6"
+
 [dev-dependencies]
 zeron-doc.workspace = true
 tempfile.workspace = true

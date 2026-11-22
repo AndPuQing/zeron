@@ -209,21 +209,42 @@ pub async fn serve_ws_listener(listener: TcpListener, service: Arc<dyn RpcServic
     serve_ws_listener_scoped(listener, service, tokens).await
 }
 
+struct WsListener(TcpListener);
+
+#[cfg(target_os = "linux")]
+impl Drop for WsListener {
+    fn drop(&mut self) {
+        // A fork can retain this descriptor until exec. Stop listening even
+        // while that copy is open, so the port can be rebound immediately.
+        let _ = socket2::SockRef::from(&self.0).shutdown(std::net::Shutdown::Both);
+    }
+}
+
 /// [`serve_ws_listener`] answering two tokens: the full one, and the
 /// agent-scoped one, whose connections reach only
 /// [`crate::agent_allowed`] methods and are served as
 /// [`crate::Caller::Agent`].
-pub async fn serve_ws_listener_scoped(listener: TcpListener, service: Arc<dyn RpcService>, tokens: IpcTokens) {
-    let tokens = Arc::new(tokens);
-    loop {
-        match listener.accept().await {
-            Ok((stream, peer)) => {
-                tracing::debug!(%peer, "rpc: connection accepted");
-                tokio::spawn(serve_ws_socket(stream, service.clone(), tokens.clone()));
-            }
-            Err(err) => {
-                tracing::warn!(error = %err, "rpc: accept failed");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+pub fn serve_ws_listener_scoped(
+    listener: TcpListener,
+    service: Arc<dyn RpcService>,
+    tokens: IpcTokens,
+) -> impl Future<Output = ()> {
+    // Own the listener before the future's first poll so cancellation closes
+    // it even when the task never ran.
+    let listener = WsListener(listener);
+    async move {
+        let WsListener(socket) = &listener;
+        let tokens = Arc::new(tokens);
+        loop {
+            match socket.accept().await {
+                Ok((stream, peer)) => {
+                    tracing::debug!(%peer, "rpc: connection accepted");
+                    tokio::spawn(serve_ws_socket(stream, service.clone(), tokens.clone()));
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, "rpc: accept failed");
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
             }
         }
     }
