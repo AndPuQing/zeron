@@ -1236,6 +1236,50 @@ pub fn antigravity_saved_auth_method(home: &Path) -> Option<String> {
         .map(|method| method.canonical)
 }
 
+/// Antigravity can wait on a timer or background command without an open
+/// ACP tool call. Check its session database only when the watchdog expires.
+async fn antigravity_has_active_background_task(request: &RunRequest, session_id: &str) -> bool {
+    if session_id.is_empty()
+        || session_id.contains(['/', '\\', ':'])
+        || matches!(session_id, "." | "..")
+    {
+        return false;
+    }
+    let home = match request.env.get("GEMINI_HOME") {
+        Some(home) if home.is_empty() => return false,
+        Some(home) => Path::new(&request.cwd).join(home),
+        None => match antigravity_home() {
+            Ok(home) => home,
+            Err(_) => return false,
+        },
+    };
+    let db = home
+        .join("antigravity-acp")
+        .join("conversations")
+        .join(format!("{session_id}.db"));
+    tokio::task::spawn_blocking(move || {
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let Ok(connection) = rusqlite::Connection::open_with_flags(db, flags) else {
+            return false;
+        };
+        // Antigravity's pending and running background steps carry task_details.
+        connection
+            .busy_timeout(Duration::from_millis(200))
+            .and_then(|()| {
+                connection.query_row(
+                    "SELECT 1 FROM steps WHERE status IN (1, 2) \
+                     AND task_details IS NOT NULL AND length(task_details) > 0 LIMIT 1",
+                    [],
+                    |_| Ok(()),
+                )
+            })
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false)
+}
+
 fn sign_in_auth_method(
     initialized: &Value,
     default_method: &str,
@@ -7868,10 +7912,9 @@ async fn run_session(session: Session) {
                 }
             },
 
-            // Prompt-stall watchdog: a prompt was sent and NOTHING has come
-            // back on the wire at all (or for Antigravity, total silence past
-            // the bound with no open tools or user questions). Surface a
-            // visible error instead of indefinite Working.
+            // Surface a stall once a prompt has had no wire activity, open
+            // tools, or user questions for its watchdog period. Antigravity's
+            // background tasks can wait through that period without a frame.
             _ = tokio::time::sleep_until(
                 prompt_stall_deadline.unwrap_or_else(tokio::time::Instant::now),
             ), if prompt_stall_deadline.is_some()
@@ -7882,6 +7925,13 @@ async fn run_session(session: Session) {
                 && !stopping
                 && !preempt_sent =>
             {
+                if harness == HarnessId::Antigravity
+                    && antigravity_has_active_background_task(&request, &session_id).await
+                {
+                    prompt_stall_deadline =
+                        prompt_stall.map(|d| tokio::time::Instant::now() + d);
+                    continue;
+                }
                 let message = if progress_seq == prompt_seq {
                     format!(
                         "{agent_name} stopped responding mid-turn \
