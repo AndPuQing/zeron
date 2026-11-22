@@ -5410,11 +5410,10 @@ mod tests {
         };
 
         assert!(!format!("{error:#}").is_empty());
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await;
         assert!(
-            tokio::net::TcpStream::connect(("127.0.0.1", port))
-                .await
-                .is_err(),
-            "failed bootstrap must release the IPC listener"
+            listener.is_ok(),
+            "failed bootstrap must release the IPC port: {listener:?}"
         );
     }
 
