@@ -10,7 +10,7 @@ local snapshot = ui.shared("session_import.snapshot", nil)
 local providers = ui.shared("session_import.providers", {})
 
 local function t(key: string, fields: any?): Message
-	return ui.t("shell.session_import." .. key, fields)
+	return ui.t(`shell.session_import.{key}`, fields)
 end
 
 local function update(action: string, value: any?)
@@ -87,6 +87,7 @@ function M.Sheet(): Node
 	local device = ui.use_state("")
 	local provider = ui.use_state("")
 	local query = ui.use_state("")
+	local active = false
 	ui.effect(function()
 		local current = view()
 		device:set(current.device_id or "")
@@ -95,15 +96,19 @@ function M.Sheet(): Node
 	end)
 	ui.effect(function()
 		if open:get() then
+			active = true
 			sessions.devices:get()
 			update("hosts")
-		else
+		elseif active then
+			active = false
 			host.invoke("session_import.close")
 		end
 	end)
 	ui.on_cleanup(function()
-		host.invoke("session_import.close")
-		open:set(false)
+		if active then
+			host.invoke("session_import.close")
+			open:set(false)
+		end
 	end)
 
 	local function hosts(): { any }

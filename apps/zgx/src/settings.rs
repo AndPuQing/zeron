@@ -330,7 +330,7 @@ pub fn install(_cx: &mut WindowContext, host: &ScriptHost) {
         host.async_action(action, move |args| {
             let params = value_json(&args);
             async move {
-                crate::plugins::preview::refuse(action)?;
+                crate::plugins::preview::refuse("environment.")?;
                 let answer = engine::get().call(method, params.clone()).await?;
                 if action == "environment.save"
                     && let Some(harness) = params["harness"].as_str()

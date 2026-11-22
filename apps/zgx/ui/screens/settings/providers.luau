@@ -999,7 +999,7 @@ local function page_for(v: string): Node
 	return agents_page()
 end
 
-function M.view(): Node
+M.view = ui.component(function(): Node
 	local environment = ui.use_state(nil :: Environment.Target?)
 	-- (Once a visit: a hot reload doesn't ask again.) The page opens on the
 	-- agents; the registry is looked at too, for what it has to add.
@@ -1041,6 +1041,6 @@ function M.view(): Node
 			agents.load()
 		end),
 	}
-end
+end)
 
 return M

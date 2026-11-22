@@ -5,7 +5,7 @@ export type Target = { harness: string, device: string?, label: string, device_n
 type Change = { name: string, action: string, value: string? }
 
 local function t(key: string, fields: any?): Message
-	return ui.t("settings.environment." .. key, fields)
+	return ui.t(`settings.environment.{key}`, fields)
 end
 
 return function(target: Target, close: () -> ()): Node
