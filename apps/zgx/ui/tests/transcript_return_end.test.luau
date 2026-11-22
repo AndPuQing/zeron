@@ -154,6 +154,19 @@ for _, via in { "go_new", "go_home" } do
 	end
 end
 
+test("a chat left just after scrolling to the bottom follows a reply received while away", function()
+	local app = open()
+	app:scroll("#transcript", -1000)
+	app:frames(20)
+	settle(app)
+	expect(app:state("chat.transcript.anchor")).never.to_be_nil()
+	app:scroll("#transcript", 10000)
+	app:frames(1)
+	expect(app:state("transcript_at_end")).to_be(true)
+	away_and_back(app, { "reply_away" }, "go_new")
+	at_end(app, "Late reply 21, paragraph 12")
+end)
+
 -- As the host opens a chat it no longer holds: the transcript emptied and
 -- loading at once, the chat a moment later (and its newest rows first).
 for _, meanwhile in { { "slow_open" }, { "slow_open", "reply_away" }, { "slow_open", "tail_first", "reply_away" } } do

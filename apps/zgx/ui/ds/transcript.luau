@@ -2116,6 +2116,10 @@ local function Transcript(props: Props): Node
 		-- end a moment first, before the place it goes back to is laid out.)
 		if at_end:get() and not placing:get() then
 			end_held = true
+			-- Leaving before the offset debounce fires must still save the end.
+			if keep and keep:peek() ~= nil then
+				remember()
+			end
 		end
 	end)
 	-- When a person last scrolled the list (a wheel or trackpad over its
