@@ -91,6 +91,8 @@ pub const BLOCKED: &[&str] = &[
     "acp_registry.env_set",
     "home.run_action",
     "home.save_action",
+    "session_import.open",
+    "environment.",
     "sessions.delete",
     "sessions.remove_device",
     "projects.clone",

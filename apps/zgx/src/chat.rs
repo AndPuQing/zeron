@@ -1854,11 +1854,9 @@ impl Chats {
             || self.harnesses.borrow().iter().any(|h| h["id"].as_str() == Some(harness))
     }
 
-    /// `harness`'s logins on `device` ("" or this one: here) changed: its
-    /// models looked up again, as the agent now lists them (Pi signed in to
-    /// Claude lists Claude's models). Here, that agent's alone; another
-    /// device's, only while the composer runs on it.
-    fn accounts_changed(self: &Rc<Self>, device: &str, harness: &str) {
+    /// Look up models after an agent's accounts or environment change.
+    /// Refresh another device while the composer is using its catalog.
+    fn refresh_models(self: &Rc<Self>, device: &str, harness: &str) {
         let here = self.here.borrow().clone();
         if device.is_empty() || here.as_deref() == Some(device) {
             if !self.picks_from(harness) {
@@ -2210,8 +2208,8 @@ impl Chats {
 /// have it: `params` is its `createChat` (`chatId`, `deviceId`, `spaceId`,
 /// `config`, `cwd`, `branch`, `parentChatId`).
 /// An agent's logins on a device changed (src/agents.rs): its models again.
-pub(crate) fn accounts_changed(device: &str, harness: &str) {
-    CHATS.with(|c| c.clone().accounts_changed(device, harness));
+pub(crate) fn refresh_models(device: &str, harness: &str) {
+    CHATS.with(|c| c.clone().refresh_models(device, harness));
 }
 
 pub(crate) fn made(params: &Json) {

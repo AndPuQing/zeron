@@ -787,6 +787,60 @@ fn delete_action(host: &ScriptHost, a: Rc<Sessions>) {
     });
 }
 
+pub(crate) fn import_hosts(
+    local: &zeron_proto::EngineInfo,
+) -> Vec<zeron_client::session_import::ImportHost> {
+    SESSIONS.with(|sessions| import_hosts_from(&sessions.devices.borrow(), local, now_seconds()))
+}
+
+fn import_hosts_from(
+    devices: &Json,
+    local: &zeron_proto::EngineInfo,
+    now: i64,
+) -> Vec<zeron_client::session_import::ImportHost> {
+    use zeron_client::session_import::ImportHost;
+    use zeron_proto::capabilities::EXTERNAL_SESSION_IMPORT_V1;
+
+    let devices = devices.as_array().map(Vec::as_slice).unwrap_or_default();
+    let name = devices
+        .iter()
+        .find(|device| device["id"].as_str() == Some(local.device_id.as_str()))
+        .and_then(|device| device["name"].as_str())
+        .unwrap_or("This device");
+    let mut hosts = vec![ImportHost {
+        id: local.device_id.clone(),
+        name: name.to_owned(),
+        online: true,
+        supported: local.supports(EXTERNAL_SESSION_IMPORT_V1),
+    }];
+    hosts.extend(
+        devices
+            .iter()
+            .filter(|device| !is_cloud(device))
+            .filter_map(|device| {
+                let id = device["id"].as_str()?;
+                let platform = device["platform"].as_str().unwrap_or_default();
+                if id == local.device_id || matches!(platform, "ios" | "ipados" | "android" | "web") {
+                    return None;
+                }
+                let seen = device["lastSeenAt"].as_str().and_then(unix_seconds);
+                Some(ImportHost {
+                    id: id.to_owned(),
+                    name: device["name"].as_str().unwrap_or("Device").to_owned(),
+                    online: seen.is_some_and(|at| now - at <= ONLINE_SECS),
+                    supported: supports(device, EXTERNAL_SESSION_IMPORT_V1),
+                })
+            }),
+    );
+    hosts
+}
+
+fn supports(device: &Json, capability: &str) -> bool {
+    device["capabilities"]
+        .as_array()
+        .is_some_and(|capabilities| capabilities.iter().any(|value| value == capability))
+}
+
 pub fn install(cx: &mut WindowContext, host: &ScriptHost) {
     let s = SESSIONS.with(Rc::clone);
     let window = s.next_window.get();
@@ -1304,6 +1358,7 @@ impl Sessions {
                     ("cloud", Value::Bool(is_cloud(d))),
                     ("here", Value::Bool(here.as_deref() == Some(id))),
                     ("online", Value::Bool(online)),
+                    ("harness_environment", Value::Bool(supports(d, zeron_proto::capabilities::HARNESS_ENVIRONMENT_V1))),
                 ];
                 // When it was last seen, while it's away (Settings → Devices
                 // and the place picker say so). Online, its beat moves every

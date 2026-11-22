@@ -1103,7 +1103,7 @@ impl Agents {
         // An agent signed in, switched, given a key or signed out lists other
         // models (Pi signed in to Claude lists Claude's): its models again.
         for harness in changed {
-            crate::chat::accounts_changed(&key, &harness);
+            crate::chat::refresh_models(&key, &harness);
         }
     }
 

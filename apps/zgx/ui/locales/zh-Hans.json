@@ -1140,6 +1140,31 @@
     }
   },
   "settings": {
+    "environment": {
+      "title": "环境变量",
+      "target": "{device} 上的 {agent}",
+      "edit": "编辑",
+      "name": "变量名",
+      "value": "值",
+      "operation": "操作",
+      "action": {
+        "set": "设置变量值",
+        "unset": "取消设置变量",
+        "delete": "移除覆盖规则"
+      },
+      "show_value": "显示当前值",
+      "hide_value": "隐藏变量值",
+      "stage": "添加修改",
+      "undo": "撤销修改",
+      "save": "保存修改",
+      "reload": "重新加载",
+      "invalid_name": "请使用字母、数字和下划线，并以字母或下划线开头。",
+      "load_error": "无法加载环境变量。",
+      "save_error": "无法保存，请重新加载后重试。",
+      "reveal_error": "无法显示此变量值。",
+      "conflict": "设备上的环境变量已变更，请核对修改后重新保存。",
+      "previous_sessions": "有些会话还在使用更新前的环境变量。"
+    },
     "general": {
       "language": {
         "label": "语言",
@@ -2426,6 +2451,35 @@
     "edit": "编辑"
   },
   "shell": {
+    "session_import": {
+      "title": "导入会话",
+      "device": "来源设备",
+      "agent": "Agent",
+      "all_agents": "所有 Agent",
+      "search": "查找会话",
+      "select_visible": "切换当前列表全选",
+      "refresh": "刷新",
+      "selected": "已选 {count} 项",
+      "no_devices": "没有支持导入且在线的来源设备。",
+      "scanning": "正在查找已保存的会话…",
+      "empty": "没有符合条件的待导入会话。",
+      "more": "加载更多",
+      "import": "导入",
+      "stop": "停止导入",
+      "retry": "重试失败的会话",
+      "open_chat": "打开聊天",
+      "offline": "离线",
+      "outdated": "请更新这台设备上的 Zerun",
+      "unavailable": "无法导入会话",
+      "phase": {
+        "pending": "等待中",
+        "importing": "导入中",
+        "imported": "已导入",
+        "already_managed": "先前已导入",
+        "failed": "导入失败",
+        "cancelled": "已取消"
+      }
+    },
     "sidebar": {
       "unknown_device": "未知设备",
       "chats": "对话",
@@ -2559,6 +2613,7 @@
         "body": "修复后再次保存文件，即可在此恢复。"
       },
       "screen": {
+        "session_import": "会话导入",
         "update_notice": "更新通知",
         "session_page": "会话页面",
         "new_chat_page": "新建对话页面",

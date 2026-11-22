@@ -255,7 +255,7 @@ local model = {
 	here = "mac",
 	devices = {
 		{ id = "mac", name = "MacBook Pro", platform = "macos", here = true },
-		{ id = "box", name = "devbox", platform = "linux", here = false },
+		{ id = "box", name = "devbox", platform = "linux", here = false, harness_environment = true },
 	} :: { any },
 	projects = {
 		{ id = "atlas", name = "Atlas", device = "mac", path = "/work/atlas", git = true },

@@ -109,6 +109,7 @@ zeron-preview-label = { path = "../../crates/preview-label" }
 # with no engine and no GPUI in them.
 zeron-voice = { path = "../../crates/voice" }
 zeron-cli = { path = "../../crates/cli" }
+zeron-client = { path = "../../crates/client" }
 zeron-launch = { path = "../../crates/launch" }
 # `zerun-dev://` links: a chat's (src/sessions.rs, src/links.rs) and a clicked
 # banner's, the shipping app's formats.

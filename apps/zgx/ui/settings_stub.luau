@@ -144,7 +144,43 @@ local function find(list: { any }, id: string): number?
 	return nil
 end
 
+local environment_revision = "r1"
+local environment_value = "fixture-value"
+local function environment_metadata(): any
+	return { revision = environment_revision, entries = { { name = "AGENT_MODE", action = "set" } }, policy = { caseSensitive = true } }
+end
+
+local import_snapshot = ui.shared("session_import.snapshot", nil :: any)
+local import_cancelled = ui.state("fixture_import_cancelled", false)
 local answers: { [string]: (arg: any) -> any } = {
+	["environment.get"] = function(arg: any)
+		log(`environment.target:{arg.harness}:{arg.targetDeviceId or "local"}`)
+		return settled(environment_metadata())
+	end,
+	["environment.save"] = function(arg: any)
+		log(`environment.revision:{arg.expectedRevision}`)
+		local change = arg.changes[1]
+		log(`environment.change:{change.action}:{change.name}`)
+		if environment_revision == "r1" then
+			environment_revision = "r2"
+			return settled({ conflict = true, metadata = environment_metadata() })
+		end
+		environment_revision = "r3"
+		environment_value = change.value
+		return settled({ conflict = false, metadata = environment_metadata() })
+	end,
+	["environment.reveal"] = function(arg: any)
+		log(`environment.reveal_target:{arg.harness}:{arg.targetDeviceId or "local"}:{arg.expectedRevision}`)
+		return settled({ revision = environment_revision, value = environment_value })
+	end,
+	["session_import.open"] = function()
+		import_snapshot:set({
+			hosts = { { id = "mac", name = "MacBook Pro", online = true, supported = true } },
+			device_id = "mac",
+			rows = { { source_ref = "saved", title = "Saved session", provider = "codex", cwd = "/work/atlas", selected = false } },
+		})
+		return settled(nil)
+	end,
 	["account.me"] = function()
 		return settled(table.clone(me))
 	end,
@@ -401,8 +437,37 @@ stub.invoke = function(name: string, arg: any?)
 	log(if detail(arg) ~= "" then `{name}:{detail(arg)}` else name)
 	if name == "account.cancel_step_up" then
 		signed_in_again("cancelled")
+	elseif name == "session_import.close" then
+		local current = import_snapshot:peek()
+		if current and current.running then
+			import_cancelled:set(true)
+		end
+		import_snapshot:set(nil)
+	elseif name == "session_import.update" and (arg.action == "toggle" or arg.action == "start") then
+		local current = table.clone(import_snapshot:peek())
+		if arg.action == "toggle" then
+			local row = table.clone(current.rows[1])
+			row.selected = not row.selected
+			current.rows = { row }
+			current.selected_count = if row.selected then 1 else 0
+		else
+			current.running = true
+			current.results = { { source_ref = "saved", title = "Saved session", phase = "importing" } }
+		end
+		import_snapshot:set(current)
 	end
 end
+
+ui.command {
+	id = "fixture.finish_import",
+	title = "Finish the external session import",
+	run = function()
+		local current = table.clone(import_snapshot:peek())
+		current.running = false
+		current.results = { { source_ref = "saved", title = "Saved session", phase = "imported", chat_id = "a1" } }
+		import_snapshot:set(current)
+	end,
+}
 -- A photo picked: the app's own PNG, so a headless host can draw it.
 stub.open_files = function(_opts: any): any
 	log("open_files")

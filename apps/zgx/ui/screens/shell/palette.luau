@@ -405,6 +405,17 @@ local function root(): { Item }
 			end,
 		},
 		{
+			id = "a-import-sessions",
+			label = locale.s("shell.session_import.title"),
+			section = locale.s("shell.palette.actions"),
+			icon = "archive-minimalistic",
+			keywords = "external conversation history",
+			run = function()
+				local importer: any = boundary.load("@app/screens/shell/session_import")
+				if importer then importer.open() end
+			end,
+		},
+		{
 			id = "a-sidebar",
 			label = locale.s("shell.palette.toggle_sidebar"),
 			section = locale.s("shell.palette.actions"),

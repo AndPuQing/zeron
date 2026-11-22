@@ -713,6 +713,9 @@ return function(): Node
 			boundary.screen(boundary.named("shell.boundary.screen.search"), "@app/screens/shell/palette", function(Palette): Node
 				return Palette()
 			end),
+			boundary.screen(boundary.named("shell.boundary.screen.session_import"), "@app/screens/shell/session_import", function(importer): Node
+				return importer.Sheet()
+			end),
 			-- New project's (⌘⇧N, its "New project"s).
 			boundary.screen(boundary.named("shell.boundary.screen.new_project"), "@app/screens/shell/add_project", function(AddProject): Node
 				return AddProject()

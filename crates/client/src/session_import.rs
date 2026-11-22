@@ -3,8 +3,11 @@
 use crate::error::Result;
 use crate::{Client, ClientError, client::Backend, lock};
 use async_trait::async_trait;
+use serde::Serialize;
+use serde_json::{Value, json};
 use std::{
     collections::HashSet,
+    path::PathBuf,
     sync::{Arc, Mutex, Weak},
     time::Duration,
 };
@@ -17,14 +20,14 @@ use zeron_proto::{
 const LIMIT: usize = zeron_proto::MAX_EXTERNAL_SESSION_IMPORT_BATCH;
 type Events = mpsc::Receiver<Result<Event>>;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ImportHost {
     pub id: String,
     pub name: String,
     pub online: bool,
     pub supported: bool,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ImportRow {
     pub source_ref: String,
     pub title: String,
@@ -34,7 +37,8 @@ pub struct ImportRow {
     pub disabled_reason: Option<String>,
     pub selected: bool,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ImportPhase {
     Pending,
     Importing,
@@ -43,7 +47,7 @@ pub enum ImportPhase {
     Failed,
     Cancelled,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ImportResult {
     pub source_ref: String,
     pub title: String,
@@ -52,7 +56,7 @@ pub struct ImportResult {
     pub retryable: bool,
     pub chat_id: Option<String>,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ImportSnapshot {
     pub hosts: Vec<ImportHost>,
     pub device_id: Option<String>,
@@ -158,6 +162,90 @@ impl Transport for Client {
                 .await
                 .map(|_| ()),
         }
+    }
+}
+
+// Desktop views can use their running engine for local and forwarded requests.
+struct EngineTransport<F> {
+    port: u16,
+    data_dir: PathBuf,
+    hosts: F,
+}
+
+impl<F> EngineTransport<F> {
+    async fn connect(&self) -> Result<zeron_rpc::RpcClient> {
+        zeron_rpc::connect_ipc(self.port, Some(&self.data_dir))
+            .await
+            .map_err(|error| ClientError::HostError(error.to_string()))
+    }
+
+    async fn call(&self, method: &str, params: Value, seconds: u64) -> Result<Value> {
+        let rpc = self.connect().await?;
+        tokio::time::timeout(Duration::from_secs(seconds), rpc.call(method, params))
+            .await
+            .map_err(|_| ClientError::HostError("The import host did not respond in time".into()))?
+            .map_err(|error| ClientError::HostError(error.to_string()))
+    }
+}
+
+#[async_trait]
+impl<F: Fn() -> Vec<ImportHost> + Send + Sync> Transport for EngineTransport<F> {
+    fn hosts(&self) -> Vec<ImportHost> {
+        (self.hosts)()
+    }
+
+    async fn list(&self, device: &str, cursor: Option<String>) -> Result<ExternalSessionList> {
+        let value = self
+            .call(
+                zeron_rpc::methods::LIST_EXTERNAL_SESSIONS,
+                json!({ "targetDeviceId": device, "cursor": cursor }),
+                150,
+            )
+            .await?;
+        serde_json::from_value(value).map_err(|error| ClientError::HostError(error.to_string()))
+    }
+
+    async fn start(&self, device: &str, operation: &str, refs: Vec<String>) -> Result<Events> {
+        let rpc = self.connect().await?;
+        let mut stream = tokio::time::timeout(
+            Duration::from_secs(30),
+            rpc.subscribe_checked(
+                zeron_rpc::methods::IMPORT_EXTERNAL_SESSIONS,
+                json!({ "targetDeviceId": device, "operationId": operation, "sourceRefs": refs }),
+            ),
+        )
+        .await
+        .map_err(|_| ClientError::HostError("The import host did not acknowledge the request".into()))?
+        .map_err(|error| ClientError::HostError(error.to_string()))?;
+        let (tx, rx) = mpsc::channel(32);
+        tokio::spawn(async move {
+            let _connection = rpc;
+            loop {
+                let value = tokio::select! {
+                    _ = tx.closed() => break,
+                    item = stream.recv() => match item {
+                        Some(value) => value,
+                        None => break,
+                    },
+                };
+                let event = serde_json::from_value(value)
+                    .map_err(|error| ClientError::HostError(error.to_string()));
+                if tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(rx)
+    }
+
+    async fn cancel(&self, device: &str, operation: &str) -> Result<()> {
+        self.call(
+            zeron_rpc::methods::CANCEL_EXTERNAL_SESSION_IMPORT,
+            json!({ "targetDeviceId": device, "operationId": operation }),
+            30,
+        )
+        .await
+        .map(|_| ())
     }
 }
 
@@ -344,6 +432,17 @@ impl Client {
     }
 }
 impl ImportController {
+    pub fn over_ipc(
+        port: u16,
+        data_dir: PathBuf,
+        hosts: impl Fn() -> Vec<ImportHost> + Send + Sync + 'static,
+    ) -> Arc<Self> {
+        Self::new(
+            Arc::new(EngineTransport { port, data_dir, hosts }),
+            CancellationToken::new(),
+        )
+    }
+
     fn new(transport: Arc<dyn Transport>, closed: CancellationToken) -> Arc<Self> {
         let (changed, _) = watch::channel(0);
         let this = Arc::new(Self {

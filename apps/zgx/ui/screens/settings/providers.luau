@@ -23,6 +23,7 @@ local prefs = require("@app/screens/settings/prefs")
 local registry = require("@account/registry")
 local add_agent = require("@app/screens/settings/add_agent")
 local sign_in_terminal = require("@app/screens/settings/sign_in_terminal")
+local Environment = require("@app/screens/settings/environment")
 local cloud = require("@account/cloud")
 
 local M = {}
@@ -683,7 +684,7 @@ local function agent(): agents.Agent?
 	end
 	return nil
 end
-local function settings_dialog(): Node
+local function settings_dialog(open_environment: (target: Environment.Target) -> ()): Node
 	local open = ui.state("settings_agent_dialog", false)
 	ui.effect(function()
 		local want = dialog_open:get()
@@ -816,6 +817,35 @@ local function settings_dialog(): Node
 		cancel = false,
 		confirm = { label = ui.t("settings.providers.done") :: any },
 		ds.Settings.Group {
+			ui.show(function()
+				if not agent() or on_cloud() then
+					return false
+				end
+				local selected = now().target
+				if not selected then
+					return true
+				end
+				for _, device in computers() do
+					if device.id == selected then
+						return device.online == true and device.harness_environment == true
+					end
+				end
+				return false
+			end, function()
+				return ds.Settings.Row {
+					label = ui.t("settings.environment.title"),
+					control = ds.Button {
+						ui.t("settings.environment.edit"),
+						on_click = function()
+							local selected = agent()
+							if not selected then return end
+							local target = { harness = selected.id, label = selected.name, device = now().target, device_name = device_name() }
+							open_settings:set("")
+							open_environment(target)
+						end,
+					},
+				}
+			end),
 			ui.div {
 				w_full = true,
 				opacity = function()
@@ -970,6 +1000,7 @@ local function page_for(v: string): Node
 end
 
 function M.view(): Node
+	local environment = ui.use_state(nil :: Environment.Target?)
 	-- (Once a visit: a hot reload doesn't ask again.) The page opens on the
 	-- agents; the registry is looked at too, for what it has to add.
 	visits.once("providers", function()
@@ -993,7 +1024,16 @@ function M.view(): Node
 		end, function(v: string): Node
 			return ui.column { w_full = true, items = "center", page_for(v) }
 		end, { w_full = true, enter = { opacity = { 0, 1 }, y = { 6, 0 }, duration = 160 }, exit = { opacity = 0, duration = 80 }, mode = "wait" }),
-		settings_dialog(),
+		settings_dialog(function(target)
+			environment:set(target)
+		end),
+		ui.presence(function()
+			return if environment:get() then "environment" else nil
+		end, function(): Node
+			return Environment(environment:peek() :: Environment.Target, function()
+				environment:set(nil)
+			end)
+		end),
 		resets_dialog(),
 		-- (Done: the failed sign-in goes, and the card looks again.)
 		sign_in_terminal.Dialog(function(id: string)

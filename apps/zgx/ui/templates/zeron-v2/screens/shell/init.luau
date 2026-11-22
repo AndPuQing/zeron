@@ -681,6 +681,9 @@ return function(): Node
 			boundary.screen(boundary.named("shell.boundary.screen.new_project"), "@app/screens/shell/add_project", function(AddProject): Node
 				return AddProject()
 			end),
+			boundary.screen(boundary.named("shell.boundary.screen.session_import"), "@app/screens/shell/session_import", function(Import): Node
+				return Import.Sheet()
+			end),
 		},
 	}
 end
