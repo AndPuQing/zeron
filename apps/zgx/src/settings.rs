@@ -322,6 +322,28 @@ pub fn install(_cx: &mut WindowContext, host: &ScriptHost) {
         }
     });
     crate::quit_prompt::install(host);
+    for (action, method) in [
+        ("environment.get", "GetHarnessEnvironment"),
+        ("environment.save", "PatchHarnessEnvironment"),
+        ("environment.reveal", "RevealHarnessEnvironmentValue"),
+    ] {
+        host.async_action(action, move |args| {
+            let params = value_json(&args);
+            async move {
+                crate::plugins::preview::refuse("environment.")?;
+                let answer = engine::get().call(method, params.clone()).await?;
+                if action == "environment.save"
+                    && let Some(harness) = params["harness"].as_str()
+                {
+                    crate::chat::refresh_models(
+                        params["targetDeviceId"].as_str().unwrap_or_default(),
+                        harness,
+                    );
+                }
+                Ok(json_value(&answer))
+            }
+        });
+    }
     host.async_action("settings.engine", |args| {
         let method = args.field("method").map(text).unwrap_or_default();
         let params = args.field("params").map(value_json).unwrap_or(json!({}));

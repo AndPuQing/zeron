@@ -60,6 +60,7 @@ mod projects;
 mod quit_prompt;
 mod relaunch;
 mod session_home;
+mod session_import;
 mod sessions;
 mod settings;
 #[cfg(target_os = "macos")]
@@ -760,6 +761,7 @@ fn script_host_at(cx: &mut WindowContext, path: PathBuf, entry: &str) -> ScriptH
         cloud::install(cx, &host);
         // The sessions behind the main window (src/sessions.rs).
         sessions::install(cx, &host);
+        session_import::install(&host);
         // Agent and application updates across connected devices.
         updates::install(&host);
         // Adding a project, removing one (src/projects.rs).

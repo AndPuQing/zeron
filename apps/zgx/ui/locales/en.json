@@ -1140,6 +1140,31 @@
     }
   },
   "settings": {
+    "environment": {
+      "title": "Environment variables",
+      "target": "{agent} on {device}",
+      "edit": "Edit",
+      "name": "Variable name",
+      "value": "Value",
+      "operation": "Change",
+      "action": {
+        "set": "Set value",
+        "unset": "Unset variable",
+        "delete": "Remove override"
+      },
+      "show_value": "Show current value",
+      "hide_value": "Hide value",
+      "stage": "Add change",
+      "undo": "Undo change",
+      "save": "Save changes",
+      "reload": "Reload",
+      "invalid_name": "Use letters, digits, or underscores. Start with a letter or underscore.",
+      "load_error": "Could not load the environment.",
+      "save_error": "Could not save. Reload the environment before retrying.",
+      "reveal_error": "Could not show this value.",
+      "conflict": "The environment changed on the device. Review your changes and save again.",
+      "previous_sessions": "Some sessions still use an earlier environment."
+    },
     "general": {
       "language": {
         "label": "Language",
@@ -2426,6 +2451,35 @@
     "edit": "Edit"
   },
   "shell": {
+    "session_import": {
+      "title": "Import sessions",
+      "device": "Source device",
+      "agent": "Agent",
+      "all_agents": "All agents",
+      "search": "Find sessions",
+      "select_visible": "Toggle visible selection",
+      "refresh": "Refresh",
+      "selected": "{count} selected",
+      "no_devices": "No compatible source devices are online.",
+      "scanning": "Looking for saved sessions…",
+      "empty": "No matching sessions to import.",
+      "more": "Load more",
+      "import": "Import",
+      "stop": "Stop import",
+      "retry": "Retry failed sessions",
+      "open_chat": "Open chat",
+      "offline": "Offline",
+      "outdated": "Update Zerun on this device",
+      "unavailable": "Session import is unavailable",
+      "phase": {
+        "pending": "Waiting",
+        "importing": "Importing",
+        "imported": "Imported",
+        "already_managed": "Already imported",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      }
+    },
     "sidebar": {
       "unknown_device": "Unknown device",
       "chats": "Chats",
@@ -2559,6 +2613,7 @@
         "body": "Save the file again once it's fixed, and it comes back here."
       },
       "screen": {
+        "session_import": "Session import",
         "update_notice": "The update notice",
         "session_page": "The session page",
         "new_chat_page": "The new chat page",
