@@ -96,6 +96,7 @@ const ENGINE_METHODS: &[&str] = &[
     "SetNativeSubagents",
     "GetCodeMode",
     "SetCodeMode",
+    "ListHarnessConfigFiles",
     // "Keep Zerun running after you quit" (src/quit_prompt.rs).
     "GetBackgroundSettings",
     "SetBackgroundSettings",
@@ -344,6 +345,35 @@ pub fn install(_cx: &mut WindowContext, host: &ScriptHost) {
             }
         });
     }
+    host.async_action("provider_config.open", |args| {
+        let params = value_json(&args);
+        async move {
+            crate::plugins::preview::refuse("provider_config.open")?;
+            if !params["targetDeviceId"].is_null() {
+                return Err("remote".into());
+            }
+            let files = engine::get()
+                .call("ListHarnessConfigFiles", json!({ "harness": params["harness"] }))
+                .await?;
+            let files: zeron_proto::HarnessConfigFiles =
+                serde_json::from_value(files).map_err(|error| error.to_string())?;
+            let file = files
+                .files
+                .into_iter()
+                .find(|file| file.exists && params["path"].as_str() == Some(file.path.as_str()))
+                .ok_or("missing")?;
+            let path = std::path::PathBuf::from(file.path);
+            off_thread(move || {
+                if !path.is_absolute() || !path.is_file() {
+                    return Err("missing".into());
+                }
+                open::that_detached(&path).map_err(|error| error.to_string())
+            })
+            .await
+            .ok_or("failed")??;
+            Ok(Value::Nil)
+        }
+    });
     host.async_action("settings.engine", |args| {
         let method = args.field("method").map(text).unwrap_or_default();
         let params = args.field("params").map(value_json).unwrap_or(json!({}));

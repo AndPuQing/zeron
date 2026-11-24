@@ -9,6 +9,7 @@ ds.setup()
 local HARNESSES: { ds.Harness } = { { id = "claude", label = "Claude", mark = "claude" } }
 local MODELS: { ds.Model } = { { value = "sonnet", label = "Sonnet", harness = "claude" } }
 local access_auto = ui.shared("test_composer_auto", true)
+local execution_agent = ui.shared("test_execution_agent", nil :: ds.Harness?)
 local sent = ui.shared("test_composer_sent", "")
 local PROJECTS: { Composer.Project } = {
 	{ value = "atlas", label = "Atlas", hue = "violet" },
@@ -30,6 +31,10 @@ return ui.column {
 		access_auto = function(): boolean
 			return access_auto:get()
 		end,
+		execution_agent = function(): ds.Harness?
+			return execution_agent:get()
+		end,
+		plan = ui.state("test_composer_plan", false),
 		model = ui.state("test_composer_model", "sonnet" :: string?),
 		effort = ui.state("test_composer_effort", "medium" :: string?),
 		harnesses = HARNESSES,

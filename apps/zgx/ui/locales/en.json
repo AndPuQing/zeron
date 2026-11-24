@@ -597,6 +597,7 @@
         "auto_hint": "The agent's reviewer approves safe actions; risky ones ask.",
         "auto_unavailable": "Auto unavailable",
         "auto_unavailable_hint": "This agent doesn't support Auto. Choose another access mode or agent.",
+        "unavailable_hint": "Choose an access mode this agent supports.",
         "full": "Full access",
         "full_hint": "Run commands and edits without asking."
       },
@@ -641,6 +642,7 @@
       "queue_message": "Queue message",
       "send_message": "Send message",
       "send_auto_unavailable": "Auto isn't available for this agent. Choose another access mode to send.",
+      "send_access_unavailable": "Choose an access mode and Plan setting this agent supports to send.",
       "stop": "Stop",
       "back": "Back",
       "next": "Next",
@@ -1140,6 +1142,18 @@
     }
   },
   "settings": {
+    "config_files": {
+      "title": "Configuration files",
+      "target": "{agent} on {device}",
+      "view": "View files",
+      "loading": "Locating files…",
+      "refresh": "Refresh",
+      "copy": "Copy path",
+      "missing": "{label} (not created)",
+      "outdated": "Update Zerun on the selected device to find configuration files.",
+      "load_error": "Couldn't locate the configuration files.",
+      "open_error": "Couldn't open the file. Refresh to check its current path."
+    },
     "environment": {
       "title": "Environment variables",
       "target": "{agent} on {device}",
@@ -1566,8 +1580,14 @@
     },
     "providers": {
       "title": "Providers",
-      "terms": "harnesses agents cli claude code codex cursor devin grok hermes pi opencode antigravity muse install enable disable accounts sign in login",
+      "terms": "harnesses agents cli claude code codex cursor devin grok hermes pi opencode antigravity muse deepseek dsh fx oh my pi omp copilot install enable disable accounts sign in login",
       "agent_settings": "Agent settings",
+      "cli_login": {
+        "dsh": "Configure providers and sign in through DeepSeek Harness on the execution device.",
+        "fx": "Set up a provider with fx login or fx setup on the execution device.",
+        "omp": "Sign in with omp login on the execution device.",
+        "copilot": "Sign in with copilot login on the execution device."
+      },
       "agents": {
         "label": "Your agents",
         "terms": "accounts sign in usage plan switch remove"

@@ -597,6 +597,7 @@
         "auto_hint": "由智能体自己的审查判断：安全的操作直接执行，有风险的会询问你。",
         "auto_unavailable": "自动模式不可用",
         "auto_unavailable_hint": "此智能体不支持自动模式。请选择其他访问模式或智能体。",
+        "unavailable_hint": "请选择此智能体支持的访问模式。",
         "full": "完全访问",
         "full_hint": "运行命令和编辑时不询问。"
       },
@@ -641,6 +642,7 @@
       "queue_message": "将消息加入队列",
       "send_message": "发送消息",
       "send_auto_unavailable": "此智能体不支持自动模式。请选择其他访问模式后再发送。",
+      "send_access_unavailable": "请选择此智能体支持的访问模式和计划设置后再发送。",
       "stop": "停止",
       "back": "返回",
       "next": "下一步",
@@ -1140,6 +1142,18 @@
     }
   },
   "settings": {
+    "config_files": {
+      "title": "配置文件",
+      "target": "{device} 上的 {agent}",
+      "view": "查看文件",
+      "loading": "正在查找文件…",
+      "refresh": "刷新",
+      "copy": "复制路径",
+      "missing": "{label}（尚未创建）",
+      "outdated": "更新所选设备上的 Zerun 后即可查找配置文件。",
+      "load_error": "无法查找配置文件。",
+      "open_error": "无法打开文件。请刷新以确认当前路径。"
+    },
     "environment": {
       "title": "环境变量",
       "target": "{device} 上的 {agent}",
@@ -1566,8 +1580,14 @@
     },
     "providers": {
       "title": "提供方",
-      "terms": "提供方 智能体 命令行 安装 启用 停用 账户 登录 harnesses agents cli claude code codex cursor devin grok hermes pi opencode antigravity muse install enable disable accounts sign in login",
+      "terms": "提供方 智能体 命令行 安装 启用 停用 账户 登录 harnesses agents cli claude code codex cursor devin grok hermes pi opencode antigravity muse deepseek dsh fx oh my pi omp copilot install enable disable accounts sign in login",
       "agent_settings": "智能体设置",
+      "cli_login": {
+        "dsh": "在运行智能体的设备上，通过 DeepSeek Harness 配置提供方并登录。",
+        "fx": "在运行智能体的设备上，用 fx login 或 fx setup 配置提供方。",
+        "omp": "在运行智能体的设备上，用 omp login 登录。",
+        "copilot": "在运行智能体的设备上，用 copilot login 登录。"
+      },
       "agents": {
         "label": "你的智能体",
         "terms": "账户 登录 用量 套餐 切换 移除 accounts sign in usage plan switch remove"

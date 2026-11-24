@@ -294,6 +294,42 @@ test("environment edits target the chosen device and preserve the draft across a
 	expect(shows(app, dialog, "The environment changed on the device.")).to_be(false)
 end)
 
+test("Providers show agents without marks and open DSH configuration on the chosen device", function()
+	local app = open("Providers")
+	app:command("fixture.provider_agents")
+	app:frames(20)
+	expect(shows(app, PAGE, "DeepSeek Harness")).to_be(true)
+	expect(shows(app, PAGE, '"fx"')).to_be(true)
+	expect(shows(app, PAGE, "Connect DeepSeek Harness")).to_be(false)
+	expect(shows(app, PAGE, "through DeepSeek Harness")).to_be(true)
+
+	local dialog = 'role:dialog "Configuration files"'
+	local function config()
+		app:click(`{PAGE} >> role:button "DeepSeek Harness settings"`)
+		app:frames(20)
+		app:click('role:dialog "Agent settings" >> role:button "View files"')
+		app:frames(30)
+	end
+	config()
+	expect(asked(app, "config.list:dsh:local")).to_be(true)
+	app:click(`{dialog} >> role:button "Open"`)
+	app:frames(10)
+	expect(asked(app, "config.open:dsh:/fixture/local/cordis.patch.yml")).to_be(true)
+	app:click(`{dialog} >> role:button "Close"`)
+	app:frames(20)
+
+	app:command("fixture.box_online")
+	app:click(`{PAGE} >> role:button "Device"`)
+	app:frames(10)
+	app:click('role:menuitem "devbox"')
+	app:frames(20)
+	config()
+	expect(asked(app, "config.list:dsh:box")).to_be(true)
+	expect(app:has(`{dialog} >> role:button "Open"`)).to_be(false)
+	app:click(`{dialog} >> role:button "Copy path"`)
+	expect(app:clipboard()).to_be("/fixture/box/cordis.patch.yml")
+end)
+
 -- A node's box under `scope`: x, y, w, h.
 local function box(app: any, target: string): (number, number, number, number)
 	local tree: string = app:tree(target)

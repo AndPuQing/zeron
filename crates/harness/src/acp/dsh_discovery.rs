@@ -1,12 +1,11 @@
 //! Keep ACP discovery sessions and their indexes out of dsh's shared history.
 
 use crate::HarnessError;
-use crate::environment::{EnvironmentEntry, EnvironmentSnapshot};
 use crate::process::Command;
 use crate::scratch::ScratchDir;
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use zeron_proto::Model;
 
 /// Discovery needs `session/new` for models and commands. dsh persists that
@@ -40,24 +39,6 @@ pub(super) fn configure(command: &mut Command, scratch: &ScratchDir) -> Result<(
     std::fs::write(&overlay, bytes)?;
     command.arg("--patch").arg(overlay);
     Ok(())
-}
-
-/// The dsh data home this harness launches with: a `DSH_HOME` set through
-/// Zerun's provider environment wins over the process environment, matching
-/// the child that receives the snapshot.
-pub(super) fn data_home(environment: &EnvironmentSnapshot) -> PathBuf {
-    match environment
-        .entries
-        .iter()
-        .find(|(name, _)| crate::environment::normalized_name(name) == "DSH_HOME")
-        .map(|(_, entry)| entry)
-    {
-        Some(EnvironmentEntry::Set { value }) if !value.is_empty() => PathBuf::from(value),
-        Some(EnvironmentEntry::Unset | EnvironmentEntry::Set { .. }) => {
-            crate::executable::home_or_current_dir().join(".dsh")
-        }
-        _ => super::dsh_home(),
-    }
 }
 
 /// dsh's ACP adapter derives model names from its live provider catalog. When

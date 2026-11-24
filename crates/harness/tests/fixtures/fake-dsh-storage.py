@@ -51,6 +51,7 @@ for line in sys.stdin:
             log.write(json.dumps({
                 "scratch": str(overlay.parent) if overlay else None,
                 "home": str(home),
+                "profile": sys.argv[sys.argv.index("--profile") + 1],
                 "cwd": req["params"]["cwd"],
                 "roots": {key: str(value) for key, value in roots.items()},
                 "search": search,

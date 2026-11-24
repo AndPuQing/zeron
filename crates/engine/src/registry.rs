@@ -1192,7 +1192,7 @@ fn full_registry() -> HarnessRegistry {
             )
         }),
     );
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             icon: None,
             id: HarnessId::Fx,
@@ -1207,7 +1207,12 @@ fn full_registry() -> HarnessRegistry {
             supports_plan: false,
         },
         Box::new(|| zeron_harness::AcpHarness::fx().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::fx()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::fx().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     // Native Pi RPC. Thinking levels are discovered per model.
     registry.register_configured(
@@ -1321,7 +1326,7 @@ fn full_registry() -> HarnessRegistry {
     // advertises mid-turn `_session/steering`, and the effort ladder is
     // off/low/high/max on the wire (`off` == Minimal). No managed install:
     // can_install stays false and Zerun never updates the dsh install.
-    registry.register_lazy(
+    registry.register_configured(
         HarnessDescriptor {
             icon: None,
             access_modes: vec![zeron_proto::AccessMode::FullAccess],
@@ -1341,7 +1346,12 @@ fn full_registry() -> HarnessRegistry {
             enabled: None,
         },
         Box::new(|| zeron_harness::AcpHarness::dsh().installed()),
-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::dsh()) as Arc<dyn Harness>)),
+        Box::new(|environment| {
+            Ok(
+                Arc::new(zeron_harness::AcpHarness::dsh().with_environment(environment))
+                    as Arc<dyn Harness>,
+            )
+        }),
     );
     registry.register_configured(
         HarnessDescriptor {

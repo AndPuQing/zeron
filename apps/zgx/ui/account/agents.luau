@@ -80,6 +80,8 @@ export type Agent = {
 	id: string,
 	name: string,
 	mark: string?,
+	icon: string?,
+	registry: boolean?,
 	installed: boolean,
 	can_install: boolean,
 	enabled: boolean,
@@ -93,6 +95,18 @@ export type Agent = {
 export type Now = { state: string, list: { Agent }, target: string? }
 
 M.now = ui.shared("agents", { state = "looking", list = {} } :: Now)
+
+local CLI_LOGIN = {
+	dsh = "settings.providers.cli_login.dsh",
+	fx = "settings.providers.cli_login.fx",
+	omp = "settings.providers.cli_login.omp",
+	copilot = "settings.providers.cli_login.copilot",
+}
+
+function M.cli_login(id: string): Message?
+	local key = CLI_LOGIN[id]
+	return if key then ui.t(key) else nil
+end
 
 local function quietly(): (any) -> ()
 	return function() end

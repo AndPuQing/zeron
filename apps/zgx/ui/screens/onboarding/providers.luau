@@ -29,11 +29,11 @@ local function now(): agents.Now
 	return agents.now:get() :: agents.Now
 end
 
--- The agents shown: those with a mark (every one Zerun runs but a test rig).
+-- Setup offers the built-in agents. The registry is managed in Providers.
 local function shown(): { agents.Agent }
 	local out = {}
 	for _, a in now().list do
-		if a.mark then
+		if not a.registry then
 			table.insert(out, a)
 		end
 	end
@@ -91,7 +91,8 @@ local function card(row: State<agents.Agent>): Node
 		end
 	end)
 	return ds.ProviderCard.Card {
-		provider = { id = id, name = first.name, mark = first.mark :: string },
+		provider = { id = id, name = first.name, mark = first.mark, icon = first.icon },
+		cli_login = agents.cli_login(id),
 		version = function()
 			return row:get().version
 		end,
@@ -206,7 +207,7 @@ local function install(): Node
 					ui.show(function()
 						return top() ~= a.id
 					end, ds.Settings.Rule()),
-					ds.ProviderCard.InstallRow({ name = a.name, mark = a.mark :: string, manual = not a.can_install }, function()
+					ds.ProviderCard.InstallRow({ id = a.id, name = a.name, mark = a.mark, icon = a.icon, manual = not a.can_install }, function()
 						return row:get().installing
 					end, function()
 						agents.install(a.id)

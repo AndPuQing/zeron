@@ -1,5 +1,5 @@
 //! Known user-global settings paths. Discovery never reads or creates a file.
-use crate::environment::{EnvironmentEntry, EnvironmentSnapshot, normalized_name};
+use crate::environment::EnvironmentSnapshot;
 use std::path::{Path, PathBuf};
 use zeron_proto::{HarnessConfigFile, HarnessConfigFiles, HarnessId};
 
@@ -8,12 +8,8 @@ pub fn list(
     environment: &EnvironmentSnapshot,
 ) -> Result<HarnessConfigFiles, String> {
     let home = crate::executable::home_dir().ok_or("Cannot locate the host's home directory")?;
-    let var = |name: &str| match environment.entries.get(&normalized_name(name)) {
-        Some(EnvironmentEntry::Set { value }) => Some(value.clone()),
-        Some(EnvironmentEntry::Unset) => None,
-        None => std::env::var(name).ok(),
-    };
-    let paths = resolve(id, &home, &var, &crate::acp::dsh_profile())?;
+    let var = |name: &str| environment.var_os(name);
+    let paths = resolve(id, &home, &var)?;
     let note = match id {
         HarnessId::Cursor => Some(
             "Cursor CLI settings; Zerun's SDK sessions may override individual options.".into(),
@@ -42,8 +38,7 @@ pub fn list(
 fn resolve(
     id: HarnessId,
     home: &Path,
-    var: &impl Fn(&str) -> Option<String>,
-    dsh_profile: &str,
+    var: &impl Fn(&str) -> Option<std::ffi::OsString>,
 ) -> Result<Vec<(&'static str, PathBuf)>, String> {
     let root = |name: &str, fallback: PathBuf| -> Result<PathBuf, String> {
         match var(name).filter(|value| !value.is_empty()) {
@@ -125,12 +120,13 @@ fn resolve(
         }
         HarnessId::Dsh => {
             let root = root("DSH_HOME", home.join(".dsh"))?;
+            let profile = crate::acp::dsh_profile_from(var("DSH_PROFILE"), &root);
             vec![
                 ("Global settings", root.join("cordis.patch.yml")),
                 (
                     "ACP profile settings",
                     root.join("profiles")
-                        .join(dsh_profile)
+                        .join(profile)
                         .join("cordis.patch.yml"),
                 ),
             ]
@@ -165,15 +161,14 @@ mod tests {
             let paths = resolve(
                 id,
                 dir.path(),
-                &|name| (name == variable).then(|| override_root.to_string_lossy().into_owned()),
-                "acp",
+                &|name| (name == variable).then(|| override_root.as_os_str().to_owned()),
             )
             .unwrap();
             assert_eq!(paths[0].1, override_root.join(file));
             assert!(!override_root.exists());
         }
         for id in HarnessId::ALL {
-            let paths = resolve(id, dir.path(), &|_| None, "acp-plus").unwrap();
+            let paths = resolve(id, dir.path(), &|_| None).unwrap();
             assert!(
                 paths
                     .iter()
@@ -181,10 +176,14 @@ mod tests {
                         && path.file_name().unwrap() != "auth.json")
             );
         }
-        let dsh = resolve(HarnessId::Dsh, dir.path(), &|_| None, "acp-plus").unwrap();
+        std::fs::create_dir_all(override_root.join("profiles/acp-plus")).unwrap();
+        let dsh = resolve(HarnessId::Dsh, dir.path(), &|name| {
+            (name == "DSH_HOME").then(|| override_root.as_os_str().to_owned())
+        })
+        .unwrap();
         assert_eq!(
             dsh[1].1,
-            dir.path().join(".dsh/profiles/acp-plus/cordis.patch.yml")
+            override_root.join("profiles/acp-plus/cordis.patch.yml")
         );
     }
     #[test]
@@ -194,7 +193,6 @@ mod tests {
                 HarnessId::Codex,
                 Path::new("/home/test"),
                 &|_| Some("relative".into()),
-                "acp"
             )
             .is_err()
         );

@@ -93,6 +93,7 @@ pub const BLOCKED: &[&str] = &[
     "home.save_action",
     "session_import.open",
     "environment.",
+    "provider_config.open",
     "sessions.delete",
     "sessions.remove_device",
     "projects.clone",

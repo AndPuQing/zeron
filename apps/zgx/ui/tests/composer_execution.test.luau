@@ -1,0 +1,27 @@
+test("DSH's Full access requirement preserves the draft until explicitly selected", function()
+	local app = mount("auto_access_fixture.luau")
+	app:resize(1000, 800)
+	app:set_state("test_execution_agent", {
+		id = "dsh", label = "DeepSeek Harness", mark = "dsh",
+		access_modes = { "full-access" }, supports_plan = false,
+	})
+	app:set_state("test_composer_access", "supervised")
+	app:frames(20)
+	app:fill('role:textbox "Message"', "Keep this draft")
+	app:key("Enter")
+	app:frames(10)
+	expect(app:state("test_composer_sent")).to_be("")
+	expect(app:state("test_composer_draft")).to_be("Keep this draft")
+	expect(app:state("test_composer_access")).to_be("supervised")
+
+	app:click('role:button "Access"')
+	app:frames(20)
+	expect(app:has('"Auto-accept edits"')).to_be(false)
+	expect(app:has('"Plan mode"')).to_be(false)
+	app:click('"Full access"')
+	app:frames(20)
+	expect(app:state("test_composer_access")).to_be("full")
+	app:click('role:button "Send message"')
+	app:frames(10)
+	expect(app:state("test_composer_sent")).to_be("Keep this draft")
+end)

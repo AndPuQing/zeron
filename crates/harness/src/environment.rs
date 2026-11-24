@@ -121,6 +121,22 @@ pub fn validate_name(name: &str) -> Result<(), String> {
 }
 
 impl EnvironmentSnapshot {
+    pub(crate) fn var_os(&self, name: &str) -> Option<std::ffi::OsString> {
+        let key = normalized_name(name);
+        let entry = if cfg!(windows) {
+            self.entries.iter().find_map(|(name, entry)| {
+                (normalized_name(name) == key).then_some(entry)
+            })
+        } else {
+            self.entries.get(&key)
+        };
+        match entry {
+            Some(EnvironmentEntry::Set { value }) => Some(value.into()),
+            Some(EnvironmentEntry::Unset) => None,
+            None => std::env::var_os(name),
+        }
+    }
+
     pub fn metadata(&self) -> HarnessEnvironmentMetadata {
         HarnessEnvironmentMetadata {
             previous_environment_sessions: Vec::new(),

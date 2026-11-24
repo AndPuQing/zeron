@@ -24,6 +24,7 @@ local registry = require("@account/registry")
 local add_agent = require("@app/screens/settings/add_agent")
 local sign_in_terminal = require("@app/screens/settings/sign_in_terminal")
 local Environment = require("@app/screens/settings/environment")
+local ConfigFiles = require("@app/screens/settings/config_files")
 local cloud = require("@account/cloud")
 
 local M = {}
@@ -70,21 +71,9 @@ local function now(): agents.Now
 	return agents.now:get() :: agents.Now
 end
 
--- The agents shown: those with a mark (every one Zerun runs but a test rig),
--- and those added from the ACP registry.
-local function shown(): { agents.Agent }
-	local out = {}
-	for _, a in now().list do
-		if a.mark or (a :: any).registry then
-			table.insert(out, a)
-		end
-	end
-	return out
-end
-
 local function installed(): { agents.Agent }
 	local out = {}
-	for _, a in shown() do
+	for _, a in now().list do
 		if a.installed then
 			table.insert(out, a)
 		end
@@ -94,7 +83,7 @@ end
 
 local function missing(): { agents.Agent }
 	local out = {}
-	for _, a in shown() do
+	for _, a in now().list do
 		if not a.installed then
 			table.insert(out, a)
 		end
@@ -171,8 +160,8 @@ local function go(v: string)
 end
 local nav = { go = go, device = device_name }
 
-local function by_id(a: agents.Agent): string
-	return a.id
+local function by_device_and_id(a: agents.Agent): string
+	return `{now().target or ""}|{a.id}`
 end
 
 local function kind(): string
@@ -282,7 +271,7 @@ local function card(row: State<agents.Agent>): Node
 	-- An agent added from the ACP registry (or one of your own): it keeps
 	-- no accounts, and signs in its own way. (Its updates come as any
 	-- agent's: the engine's update coordinator, the registry its feed.)
-	local from_registry = (first :: any).registry == true
+	local from_registry = first.registry == true
 	-- Cloud's (made for it: the cards are keyed by the device shown): on
 	-- every Cloud machine, its accounts alone managed here.
 	local cloud_card = on_cloud()
@@ -302,7 +291,7 @@ local function card(row: State<agents.Agent>): Node
 		end
 	end)
 	return ds.ProviderCard.Card {
-		provider = { id = id, name = first.name, mark = first.mark, icon = (first :: any).icon },
+		provider = { id = id, name = first.name, mark = first.mark, icon = first.icon },
 		version = function()
 			return row:get().version
 		end,
@@ -313,6 +302,7 @@ local function card(row: State<agents.Agent>): Node
 			return (row:get() :: any).updating == true
 		end,
 		sign_in_only = from_registry,
+		cli_login = agents.cli_login(id),
 		fixed = cloud_card,
 		login_note = function(): string?
 			return (row:get() :: any).login_note
@@ -486,13 +476,7 @@ local function cards(): Node
 			gap = "$space.4",
 			ui.each(ui.computed(installed), function(_a: agents.Agent, _i: number, row: State<agents.Agent>): Node
 				return card(row)
-			end, {
-				-- (By the device shown too: a card is made for its device,
-				-- Cloud's unlike a computer's.)
-				key = function(a: agents.Agent): string
-					return `{now().target or ""}|{a.id}`
-				end,
-			}),
+			end, { key = by_device_and_id }),
 		}
 	)
 end
@@ -532,13 +516,13 @@ local function more(): Node
 							ui.show(function()
 								return top() ~= a.id
 							end, ds.Settings.Rule()),
-							ds.ProviderCard.InstallRow({ name = a.name, mark = a.mark :: string, manual = not a.can_install }, function()
+							ds.ProviderCard.InstallRow({ id = a.id, name = a.name, mark = a.mark, icon = a.icon, manual = not a.can_install }, function()
 								return row:get().installing
 							end, function()
 								agents.install(a.id)
 							end),
 						}
-					end, { key = by_id }),
+					end, { key = by_device_and_id }),
 					ui.show(function()
 						return #list:get() > 0
 					end, ds.Settings.Rule()),
@@ -684,7 +668,10 @@ local function agent(): agents.Agent?
 	end
 	return nil
 end
-local function settings_dialog(open_environment: (target: Environment.Target) -> ()): Node
+local function settings_dialog(
+	open_environment: (target: Environment.Target) -> (),
+	open_config_files: (target: ConfigFiles.Target) -> ()
+): Node
 	local open = ui.state("settings_agent_dialog", false)
 	ui.effect(function()
 		local want = dialog_open:get()
@@ -818,6 +805,21 @@ local function settings_dialog(open_environment: (target: Environment.Target) ->
 		confirm = { label = ui.t("settings.providers.done") :: any },
 		ds.Settings.Group {
 			ui.show(function()
+				local a = agent()
+				return a ~= nil and not on_cloud() and not a.registry and a.id ~= "muse"
+			end, ds.Settings.Row {
+				label = ui.t("settings.config_files.title"),
+				control = ds.Button {
+					ui.t("settings.config_files.view"),
+					on_click = function()
+						local a = agent()
+						if not a then return end
+						open_settings:set("")
+						open_config_files({ harness = a.id, label = a.name, device = now().target, device_name = device_name() })
+					end,
+				},
+			}),
+			ui.show(function()
 				if not agent() or on_cloud() then
 					return false
 				end
@@ -910,7 +912,8 @@ local function settings_dialog(open_environment: (target: Environment.Target) ->
 				control = ds.Switch { value = separate, label = ui.t("settings.providers.skills_separate.label"), on_change = completion("separate") },
 			},
 			ui.show(function()
-				return not own()
+				local a = agent()
+				return a ~= nil and a.id ~= "dsh" and not own()
 			end, ds.Settings.Row {
 				label = ui.t("settings.providers.updates"),
 				description = function()
@@ -1001,6 +1004,7 @@ end
 
 M.view = ui.component(function(): Node
 	local environment = ui.use_state(nil :: Environment.Target?)
+	local config_files = ui.use_state(nil :: ConfigFiles.Target?)
 	-- (Once a visit: a hot reload doesn't ask again.) The page opens on the
 	-- agents; the registry is looked at too, for what it has to add.
 	visits.once("providers", function()
@@ -1026,12 +1030,21 @@ M.view = ui.component(function(): Node
 		end, { w_full = true, enter = { opacity = { 0, 1 }, y = { 6, 0 }, duration = 160 }, exit = { opacity = 0, duration = 80 }, mode = "wait" }),
 		settings_dialog(function(target)
 			environment:set(target)
+		end, function(target)
+			config_files:set(target)
 		end),
 		ui.presence(function()
 			return if environment:get() then "environment" else nil
 		end, function(): Node
 			return Environment(environment:peek() :: Environment.Target, function()
 				environment:set(nil)
+			end)
+		end),
+		ui.presence(function()
+			return if config_files:get() then "config_files" else nil
+		end, function(): Node
+			return ConfigFiles(config_files:peek() :: ConfigFiles.Target, function()
+				config_files:set(nil)
 			end)
 		end),
 		resets_dialog(),

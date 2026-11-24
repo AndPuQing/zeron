@@ -2,7 +2,7 @@
 // publication. The installed dsh packages own decompression and format decoding.
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { realpath } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -14,7 +14,8 @@ const request = JSON.parse(input);
 let require;
 // Keep profile-local packages supported, then try the selected CLI installation.
 for (const base of [join(request.home, 'profiles', request.profile, 'package.json'), join(request.home, 'profiles', 'package.json'), request.packages].filter(Boolean)) {
-  const candidate = createRequire(base);
+  const directory = dirname(base);
+  const candidate = createRequire(join(await realpath(directory).catch(() => directory), 'package.json'));
   try { candidate.resolve('@deepseek-ai/dsh-session-persistence-jsonl'); require = candidate; break; } catch {}
 }
 if (!require) throw new Error('Could not find session packages in the selected dsh installation or profile.');

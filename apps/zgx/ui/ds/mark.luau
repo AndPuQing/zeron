@@ -16,7 +16,11 @@ export type Name =
 	| "opencode"
 	| "antigravity"
 	| "pi"
+	| "omp"
 	| "hermes"
+	| "fx"
+	| "dsh"
+	| "copilot"
 	| "muse"
 	-- Model providers (an agent's accounts per provider, their API keys):
 	-- one set, one ink each.
@@ -36,7 +40,11 @@ local FILES: { [Name]: string } = {
 	opencode = "opencode-mark-dark",
 	antigravity = "antigravity-mark.png",
 	pi = "pi-mark",
+	omp = "omp-mark",
 	hermes = "hermes-mark",
+	fx = "fx-mark",
+	dsh = "dsh-mark",
+	copilot = "copilot-mark",
 	muse = "muse-mark",
 	["provider-anthropic"] = "provider-anthropic",
 	["provider-openai"] = "provider-openai",
@@ -54,6 +62,10 @@ local MONO: { [Name]: boolean } = {
 	cursor = true,
 	devin = true,
 	hermes = true,
+	omp = true,
+	fx = true,
+	dsh = true,
+	copilot = true,
 	["provider-anthropic"] = true,
 	["provider-openai"] = true,
 	["provider-openrouter"] = true,

@@ -2236,6 +2236,10 @@ fn catalog_of(listed: &[Json], by: &HashMap<String, Vec<Json>>, done: bool, devi
         let Some(list) = by.get(id).filter(|l| !l.is_empty()) else {
             continue;
         };
+        let access_modes = h["accessModes"].as_array();
+        // Current descriptors omit a false supportsPlan. Leave it unknown
+        // only for older hosts that did not advertise execution modes.
+        let supports_plan = h["supportsPlan"].as_bool().or(access_modes.map(|_| false));
         harnesses.push(Value::record([
             ("id", Value::from(id)),
             ("label", Value::from(h["name"].as_str().unwrap_or(id))),
@@ -2245,8 +2249,10 @@ fn catalog_of(listed: &[Json], by: &HashMap<String, Vec<Json>>, done: bool, devi
             // It has an auto mode of its own: the access picker offers Auto.
             (
                 "auto",
-                Value::Bool(h["accessModes"].as_array().is_some_and(|m| m.iter().any(|x| x == "auto"))),
+                Value::Bool(access_modes.is_some_and(|m| m.iter().any(|x| x == "auto"))),
             ),
+            ("access_modes", json_value(h["accessModes"].clone())),
+            ("supports_plan", supports_plan.map_or(Value::Nil, Value::Bool)),
         ]));
         for m in list {
             models.push(model_value(id, m));
@@ -7731,6 +7737,18 @@ mod tests {
         chats.catalog_on("mac");
         assert!(chats.remote.borrow().is_none());
         assert!(chats.catalog_value().field("device").is_none());
+    }
+
+    #[test]
+    fn dsh_catalog_exposes_its_mark_and_execution_modes() {
+        let harnesses = [json!({ "id": "dsh", "name": "DeepSeek Harness", "accessModes": ["full-access"] })];
+        let models = HashMap::from([("dsh".into(), vec![json!({ "id": "model", "label": "Model" })])]);
+        let catalog = super::catalog_of(&harnesses, &models, true, None);
+        let Some(Value::List(agents)) = catalog.field("harnesses") else { panic!("missing harnesses") };
+        assert!(matches!(agents[0].field("mark"), Some(Value::Str(mark)) if mark.as_ref() == "dsh"));
+        assert!(matches!(agents[0].field("supports_plan"), Some(Value::Bool(false))));
+        let Some(Value::List(modes)) = agents[0].field("access_modes") else { panic!("missing access modes") };
+        assert!(matches!(modes.as_ref(), [Value::Str(mode)] if mode.as_ref() == "full-access"));
     }
 
     /// A new chat's warm start asks the engine for the very run its first

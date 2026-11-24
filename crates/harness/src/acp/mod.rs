@@ -1455,11 +1455,12 @@ fn antigravity_spec() -> AcpAgentSpec {
 
 /// dsh's data home (`$DSH_HOME`, default `~/.dsh`): profiles, credentials and
 /// session logs all live below it.
-pub(crate) fn dsh_home() -> PathBuf {
-    crate::model_context::root(
-        "DSH_HOME",
-        crate::executable::home_or_current_dir().join(".dsh"),
-    )
+fn dsh_home(environment: &crate::environment::EnvironmentSnapshot) -> PathBuf {
+    environment
+        .var_os("DSH_HOME")
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::executable::home_or_current_dir().join(".dsh"))
 }
 
 /// Relabel provider-scoped dsh model rows (`["local","group/…"]`) that came
@@ -1472,8 +1473,9 @@ pub fn relabel_dsh_models(
     models: &mut [Model],
     environment: &crate::environment::EnvironmentSnapshot,
 ) {
-    let home = dsh_discovery::data_home(environment);
-    dsh_discovery::enrich_model_labels(models, &home, &dsh_profile());
+    let home = dsh_home(environment);
+    let profile = dsh_profile_from(environment.var_os("DSH_PROFILE"), &home);
+    dsh_discovery::enrich_model_labels(models, &home, &profile);
 }
 
 /// Which profile to boot. `acp` ships with dsh and auto-initializes on first
@@ -1481,16 +1483,8 @@ pub fn relabel_dsh_models(
 /// additionalDirectories, elicitation, steering) the user installs with
 /// `dsh plugin --profile acp-plus add github:AndPuQing/dsh-acp-plus`. Prefer
 /// acp-plus once its profile exists; `DSH_PROFILE` pins an explicit choice.
-pub(crate) fn dsh_profile() -> String {
-    dsh_profile_from(
-        std::env::var_os("DSH_PROFILE").filter(|p| !p.is_empty()),
-        &dsh_home(),
-    )
-}
-
-/// [`dsh_profile`]'s decision, pure so tests don't mutate process env.
-fn dsh_profile_from(explicit: Option<std::ffi::OsString>, home: &Path) -> String {
-    if let Some(profile) = explicit {
+pub(crate) fn dsh_profile_from(explicit: Option<std::ffi::OsString>, home: &Path) -> String {
+    if let Some(profile) = explicit.filter(|profile| !profile.is_empty()) {
         return profile.to_string_lossy().into_owned();
     }
     if home.join("profiles").join("acp-plus").is_dir() {
@@ -1498,10 +1492,6 @@ fn dsh_profile_from(explicit: Option<std::ffi::OsString>, home: &Path) -> String
     } else {
         "acp".into()
     }
-}
-
-fn dsh_args() -> Vec<String> {
-    args(&["--profile", &dsh_profile()])
 }
 
 fn dsh_install_paths() -> Vec<PathBuf> {
@@ -1530,12 +1520,12 @@ fn dsh_effort_values(reasoning: Option<ReasoningLevel>, model: Option<&str>) -> 
 /// plus the shared agent skills home (`$DSH_AGENTS_HOME`, default
 /// `~/.agents`). Project-side `.dsh/skills` and `.agents/skills` come from
 /// the shared discovery in [`crate::skills`].
-pub(crate) fn dsh_skill_dirs() -> Vec<PathBuf> {
-    let agents = std::env::var_os("DSH_AGENTS_HOME")
+pub(crate) fn dsh_skill_dirs(environment: &crate::environment::EnvironmentSnapshot) -> Vec<PathBuf> {
+    let agents = environment.var_os("DSH_AGENTS_HOME")
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| crate::executable::home_or_current_dir().join(".agents"));
-    vec![dsh_home().join("skills"), agents.join("skills")]
+    vec![dsh_home(environment).join("skills"), agents.join("skills")]
 }
 
 fn dsh_spec() -> AcpAgentSpec {
@@ -1547,7 +1537,7 @@ fn dsh_spec() -> AcpAgentSpec {
         env_override: "DSH_EXECUTABLE",
         // `dsh <name>` abbreviates `--profile <name>`; the profile is chosen
         // at launch time (acp-plus when installed, else the shipped acp).
-        args: dsh_args,
+        args: Vec::new,
         // Not managed: Zerun never installs or updates dsh (user decision) —
         // the install hint and manual command are guidance only.
         npm_package: None,
@@ -1589,7 +1579,7 @@ fn dsh_spec() -> AcpAgentSpec {
         effort_in_model_id: false,
         // No ACP sign-in: credentials live in $DSH_HOME/.credentials.yaml.
         auth_method: None,
-        skill_dirs: dsh_skill_dirs,
+        skill_dirs: Vec::new,
         hidden_commands: &[],
         drops_unstarted_cancelled_prompt: false,
     }
@@ -2971,8 +2961,18 @@ impl AcpHarness {
         crate::archive_install::installed_entry(self.spec.archive.as_ref()?)
     }
 
+    fn launch_args(&self) -> Vec<String> {
+        if self.spec.id == HarnessId::Dsh {
+            let home = dsh_home(&self.environment);
+            let profile = dsh_profile_from(self.environment.var_os("DSH_PROFILE"), &home);
+            args(&["--profile", &profile])
+        } else {
+            (self.spec.args)()
+        }
+    }
+
     fn resolve_launch(&self) -> Result<Launch, HarnessError> {
-        let spec_args = (self.spec.args)();
+        let spec_args = self.launch_args();
         if let (HarnessId::Registry(agent), None) = (self.spec.id, &self.executable) {
             let (program, args, _env) = crate::acp_registry::launch(agent)?;
             return Ok(Launch::Program(program, args));
@@ -3079,7 +3079,7 @@ impl AcpHarness {
     /// (Grok, Devin, Hermes); Pi's server is a separate adapter.
     pub async fn cli_command(&self, args: &[&str]) -> Result<Command, HarnessError> {
         let (exe, mut launch_args) = self.resolve_program(false).await?;
-        let prefix = launch_args.len().saturating_sub((self.spec.args)().len());
+        let prefix = launch_args.len().saturating_sub(self.launch_args().len());
         launch_args.truncate(prefix);
         let mut cmd = Command::new(&exe);
         cmd.args(launch_args).args(args);
@@ -3927,17 +3927,29 @@ impl Harness for AcpHarness {
             }
             Launch::Archive { entry, .. } => entry,
         };
-        let extra = if self.id() == HarnessId::Antigravity {
-            let root = antigravity_paths::home()?.join("antigravity-acp");
-            vec![
-                root.join("settings.json"),
-                root.join("oauth_creds.json"),
-                root.join("google_accounts.json"),
-                root.join("credentials.json"),
-                root.join("auth.json"),
-            ]
-        } else {
-            vec![]
+        let extra = match self.id() {
+            HarnessId::Antigravity => {
+                let root = antigravity_paths::home()?.join("antigravity-acp");
+                vec![
+                    root.join("settings.json"),
+                    root.join("oauth_creds.json"),
+                    root.join("google_accounts.json"),
+                    root.join("credentials.json"),
+                    root.join("auth.json"),
+                ]
+            }
+            HarnessId::Dsh => {
+                let root = dsh_home(&self.environment);
+                let name = dsh_profile_from(self.environment.var_os("DSH_PROFILE"), &root);
+                let profile = root.join("profiles").join(name);
+                vec![
+                    root.join(".credentials.yaml"),
+                    root.join("cordis.patch.yml"),
+                    profile.join("package.json"),
+                    profile.join("cordis.patch.yml"),
+                ]
+            }
+            _ => vec![],
         };
         crate::model_context::context(self.id(), &binary, &extra)
             .map(|context| Some(self.environment.partition_context(context)))
@@ -3994,7 +4006,7 @@ impl Harness for AcpHarness {
             return crate::skills::discover(self.id(), cwd).await.map(Some);
         }
         let (mut skills, commands) = tokio::try_join!(
-            crate::skills::discover(self.id(), cwd),
+            crate::skills::discover_with_environment(self.id(), cwd, self.environment.clone()),
             self.workspace_commands
                 .get(cwd, self.discover_commands(Some(cwd))),
         )?;
@@ -4008,7 +4020,7 @@ impl Harness for AcpHarness {
             .get_or_try_init(|| self.discover_commands(None))
             .await
             .cloned();
-        let skills = skill_commands(&(self.spec.skill_dirs)());
+        let skills = skill_commands(&self.skill_dirs());
         let mut commands = match discovered {
             Ok(commands) => commands,
             Err(_) if !skills.is_empty() => Vec::new(),
@@ -4028,7 +4040,7 @@ impl Harness for AcpHarness {
             .workspace_commands
             .get(cwd, self.discover_commands(Some(cwd)))
             .await;
-        let skills = skill_commands(&(self.spec.skill_dirs)());
+        let skills = skill_commands(&self.skill_dirs());
         let mut commands = match discovered {
             Ok(commands) => commands,
             Err(_) if !skills.is_empty() => Vec::new(),
@@ -4110,6 +4122,14 @@ impl Harness for AcpHarness {
 }
 
 impl AcpHarness {
+    fn skill_dirs(&self) -> Vec<PathBuf> {
+        if self.spec.id == HarnessId::Dsh {
+            dsh_skill_dirs(&self.environment)
+        } else {
+            (self.spec.skill_dirs)()
+        }
+    }
+
     async fn run_spawned(
         &self,
         request: RunRequest,
@@ -9287,13 +9307,9 @@ mod tests {
         std::fs::create_dir_all(home.join("profiles").join("acp-plus")).unwrap();
         assert_eq!(dsh_profile_from(None, home), "acp-plus");
         assert_eq!(
-            dsh_profile_from(
-                Some(std::ffi::OsString::from("custom")),
-                &home.to_path_buf()
-            ),
+            dsh_profile_from(Some("custom".into()), home),
             "custom"
         );
-        assert_eq!((dsh_spec().args)(), args(&["--profile", &dsh_profile()]));
         assert_eq!(
             dsh_effort_values(Some(ReasoningLevel::Minimal), None),
             vec!["off", "low"]

@@ -1099,12 +1099,20 @@ fn dsh_storage_fixture() -> (tempfile::TempDir, AcpHarness) {
     std::fs::create_dir(&home).unwrap();
     std::fs::write(home.join(".credentials.yaml"), "fixture credentials").unwrap();
     let environment = EnvironmentSnapshot {
-        entries: std::collections::BTreeMap::from([(
-            "DSH_HOME".into(),
-            EnvironmentEntry::Set {
-                value: home.to_str().unwrap().into(),
-            },
-        )]),
+        entries: std::collections::BTreeMap::from([
+            (
+                "DSH_HOME".into(),
+                EnvironmentEntry::Set {
+                    value: home.to_str().unwrap().into(),
+                },
+            ),
+            (
+                "DSH_PROFILE".into(),
+                EnvironmentEntry::Set {
+                    value: "fixture-profile".into(),
+                },
+            ),
+        ]),
         ..Default::default()
     };
     let harness = AcpHarness::dsh()
@@ -1130,6 +1138,7 @@ fn assert_dsh_probes_cleaned(dir: &std::path::Path, expected: usize) {
             launch["home"].as_str().unwrap(),
             dir.join("home").to_str().unwrap()
         );
+        assert_eq!(launch["profile"], "fixture-profile");
         assert_eq!(launch["search"], ":memory:");
         for name in ["sessions", "storages"] {
             let root = std::path::Path::new(launch["roots"][name].as_str().unwrap());
@@ -1211,6 +1220,7 @@ async fn dsh_real_runs_keep_persistent_session_storage() {
     )
     .unwrap();
     assert!(launch["scratch"].is_null());
+    assert_eq!(launch["profile"], "fixture-profile");
     assert!(dir.path().join("home/sessions").is_dir());
     assert!(dir.path().join("home/storages").is_dir());
     assert!(dir.path().join("home/session-index.sqlite").is_file());

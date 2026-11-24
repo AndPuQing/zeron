@@ -247,6 +247,7 @@ export type CardProps = {
 	-- list (one from the ACP registry): its foot is a sign-in, not "Connect
 	-- an account".
 	sign_in_only: boolean?,
+	cli_login: Message?,
 	-- What a sign-in under way says to do (a device code to type in), or
 	-- why one failed, in the agent's own words: in the row's line, in place
 	-- of the usual one.
@@ -1536,6 +1537,12 @@ function M.Card(c: CardProps): Node
 			ui.column { w_full = true, head, grouped(c, kind) },
 		}
 	end
+	if c.cli_login then
+		return Settings.Group {
+			ui.column { w_full = true, head, list },
+			Settings.Row { label = c.cli_login },
+		}
+	end
 	return Settings.Group {
 		ui.column { w_full = true, head, list },
 		ui.presence(kind, foot, { w_full = true }),
@@ -1545,7 +1552,7 @@ end
 -- An agent not on the device: its mark and name, and Install (Zerun's
 -- own installer), or, while `installing` says so, the install under way in
 -- the button's place; one Zerun can't install (`manual`) says so instead.
-function M.InstallRow(p: { name: string, mark: string, manual: boolean? }, installing: (() -> boolean)?, on_install: (() -> ())?): Node
+function M.InstallRow(p: { id: string?, name: string, mark: string?, icon: string?, manual: boolean? }, installing: (() -> boolean)?, on_install: (() -> ())?): Node
 	local function busy(): boolean
 		return installing ~= nil and installing()
 	end
@@ -1568,7 +1575,7 @@ function M.InstallRow(p: { name: string, mark: string, manual: boolean? }, insta
 	return Settings.Row {
 		label = p.name,
 		description = if p.manual then locale.t("ds.provider_card.manual", { name = p.name }) else nil,
-		lead = Mark { name = p.mark :: any, size = 32 },
+		lead = AgentMark { label = p.name, seed = p.id, mark = p.mark, icon = p.icon, size = 32 },
 		control = control,
 	}
 end

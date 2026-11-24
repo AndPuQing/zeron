@@ -732,8 +732,9 @@ local function composer(chat: string, view: any, name: string, focus: State<numb
 		placeholder = locale.s(if split then "chat.composer.placeholder" else "chat.lane_tab.placeholder"),
 		running = running,
 		access = access,
-		access_auto = function(): boolean
-			return store.offers_auto(model:get())
+		execution_agent = function(): ds.Harness?
+			local current = session:get()
+			return store.execution_agent(model:get(), if current then current.agent else nil)
 		end,
 		plan = plan,
 		model = model,

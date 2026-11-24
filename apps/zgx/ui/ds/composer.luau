@@ -143,6 +143,7 @@ export type Props = {
 	-- The chat's agent has an auto mode of its own (Claude Code's, Codex's
 	-- auto-review): the picker offers Auto.
 	access_auto: (() -> boolean)?,
+	execution_agent: (() -> ModelPicker.Harness?)?,
 	plan: State<boolean>?,
 	-- The model (a ModelPicker: its agents' tabs, its models, its reasoning,
 	-- Fast mode and its other options' picks).
@@ -389,30 +390,29 @@ end
 -- centralicons.com, round outlined, radius 2, stroke 1.5) say what each
 -- does: it waits for you (a raised hand), edits go through (a pencil with
 -- sparkles), the agent's reviewer vets each action (a shield), nothing is
--- held back (an open padlock). Auto only where the agent has one (`auto`),
--- or while it's the mode chosen. (Made as they're read, in the locale's
--- words.)
-local function ACCESS(auto: boolean, chosen: string?): { Dropdown.Item }
-	local items = {
-		worded({ value = "supervised", icon = "access-supervised" }, {
-			label = "ds.composer.access.supervised",
-			description = "ds.composer.access.supervised_hint",
-		}),
-		worded({ value = "edits", icon = "access-edits" }, {
-			label = "ds.composer.access.edits",
-			description = "ds.composer.access.edits_hint",
-		}),
-	}
-	if auto or chosen == "auto" then
-		table.insert(items, worded({ value = "auto", icon = "shield-check", disabled = not auto }, {
-			label = if auto then "ds.composer.access.auto" else "ds.composer.access.auto_unavailable",
-			description = if auto then "ds.composer.access.auto_hint" else "ds.composer.access.auto_unavailable_hint",
-		}))
+-- held back (an open padlock). Keep a saved selection visible until the
+-- user picks a supported mode.
+local ACCESS_MODES = {
+	{ value = "supervised", icon = "access-supervised" },
+	{ value = "edits", icon = "access-edits" },
+	{ value = "auto", icon = "shield-check" },
+	{ value = "full", icon = "access-full" },
+}
+
+local function ACCESS(supported: (string) -> boolean, chosen: string?): { Dropdown.Item }
+	local items = {}
+	for _, mode in ACCESS_MODES do
+		local value = mode.value
+		local enabled = supported(value)
+		if enabled or value == chosen then
+			local key = `ds.composer.access.{value}`
+			local item = worded({ value = value, icon = mode.icon, disabled = not enabled }, {
+				label = if not enabled and value == "auto" then "ds.composer.access.auto_unavailable" else key,
+				description = if enabled then key .. "_hint" else "ds.composer.access.unavailable_hint",
+			})
+			table.insert(items, item)
+		end
 	end
-	table.insert(items, worded({ value = "full", icon = "access-full" }, {
-		label = "ds.composer.access.full",
-		description = "ds.composer.access.full_hint",
-	}))
 	return items
 end
 
@@ -1197,14 +1197,25 @@ return ui.component(function(props: Props): Node
 	local function disabled(): boolean
 		return read(props.disabled) == true
 	end
-	-- Auto is chosen on an agent without it ("Auto unavailable"): nothing is
-	-- sent until another mode or agent is picked (the engine would refuse
-	-- the run).
+	local function access_supported(mode: string): boolean
+		if mode == "full" then return true end
+		local agent = if props.execution_agent then props.execution_agent() else nil
+		if agent and agent.access_modes then
+			return table.find(agent.access_modes, if mode == "edits" then "auto-accept-edits" else mode) ~= nil
+		end
+		if mode ~= "auto" then return true end
+		if agent then return agent.auto == true end
+		return if props.access_auto then props.access_auto() else props.execution_agent ~= nil
+	end
+	local function plan_supported(): boolean
+		local agent = if props.execution_agent then props.execution_agent() else nil
+		return agent == nil or agent.supports_plan ~= false
+	end
 	local function access_blocked(): boolean
-		return props.access ~= nil
-			and props.access_auto ~= nil
-			and props.access:get() == "auto"
-			and not props.access_auto()
+		local chosen = if props.access then props.access:get() else nil
+		local known = props.execution_agent ~= nil or props.access_auto ~= nil
+		return (known and chosen ~= nil and not access_supported(chosen))
+			or (props.plan ~= nil and props.plan:get() and not plan_supported())
 	end
 	local function dictating(): boolean
 		return props.dictating ~= nil and props.dictating:get()
@@ -1578,7 +1589,7 @@ return ui.component(function(props: Props): Node
 			value = props.access,
 			items = function(): { Dropdown.Item }
 				local chosen = props.access and props.access:get()
-				return ACCESS(props.access_auto ~= nil and props.access_auto(), chosen)
+				return ACCESS(access_supported, chosen)
 			end,
 			tone = "chip",
 			label = locale.t("ds.composer.access.label") :: any,
@@ -1590,6 +1601,7 @@ return ui.component(function(props: Props): Node
 				end
 				else nil,
 			extra = if plan then plan_row(plan) else nil,
+			extra_when = if plan then function() return plan:get() or plan_supported() end else nil,
 			placement = { side = "bottom", align = "start", offset = 6 },
 		}
 	end
@@ -1627,7 +1639,7 @@ return ui.component(function(props: Props): Node
 			Icon { name = "arrow-up", size = 14 },
 		}
 	end
-	-- Held by an unavailable Auto, it says why when rested on. (A tooltip is
+	-- Held by an unavailable mode, it says why when rested on. (A tooltip is
 	-- set once, not followed, and a disabled button hears no pointer: the
 	-- held one is a button of its own under a box that carries the words.)
 	local send_button = ui.show(
@@ -1641,7 +1653,7 @@ return ui.component(function(props: Props): Node
 				right = 0,
 				top = 0,
 				bottom = 0,
-				tooltip = Tooltip { locale.t("ds.composer.send_auto_unavailable") },
+				tooltip = Tooltip { locale.t("ds.composer.send_access_unavailable") },
 			},
 		},
 		send_control()

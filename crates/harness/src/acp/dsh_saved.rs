@@ -25,26 +25,7 @@ impl AcpHarness {
         Ok(self
             .saved_home
             .clone()
-            .unwrap_or_else(|| {
-                match self
-                    .environment
-                    .entries
-                    .iter()
-                    .find(|(name, _)| crate::environment::normalized_name(name) == "DSH_HOME")
-                    .map(|(_, entry)| entry)
-                {
-                    Some(crate::environment::EnvironmentEntry::Set { value })
-                        if !value.is_empty() =>
-                    {
-                        PathBuf::from(value)
-                    }
-                    Some(
-                        crate::environment::EnvironmentEntry::Unset
-                        | crate::environment::EnvironmentEntry::Set { .. },
-                    ) => crate::executable::home_or_current_dir().join(".dsh"),
-                    _ => super::dsh_home(),
-                }
-            })
+            .unwrap_or_else(|| super::dsh_home(&self.environment))
             .canonicalize()?)
     }
     fn dsh_saved_root(&self) -> Result<PathBuf, HarnessError> {
@@ -77,7 +58,7 @@ impl AcpHarness {
             return Err(error("The dsh history location changed. Scan again."));
         }
         let home = self.dsh_saved_home()?;
-        let profile = super::dsh_profile();
+        let profile = super::dsh_profile_from(self.environment.var_os("DSH_PROFILE"), &home);
         let packages = self.dsh_saved_packages();
         let input = serde_json::to_vec(&json!({"action": action, "home": home, "root": self.dsh_saved_root()?, "profile": profile, "identity": identity, "cursor": cursor, "session": session, "packages": packages})).map_err(|e| error(e.to_string()))?;
         let node = crate::executable::find_on_paths("node", vec![])

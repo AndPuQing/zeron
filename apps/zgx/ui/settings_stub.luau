@@ -173,6 +173,10 @@ local answers: { [string]: (arg: any) -> any } = {
 		log(`environment.reveal_target:{arg.harness}:{arg.targetDeviceId or "local"}:{arg.expectedRevision}`)
 		return settled({ revision = environment_revision, value = environment_value })
 	end,
+	["provider_config.open"] = function(arg: any)
+		log(`config.open:{arg.harness}:{arg.path}`)
+		return settled(nil)
+	end,
 	["session_import.open"] = function()
 		import_snapshot:set({
 			hosts = { { id = "mac", name = "MacBook Pro", online = true, supported = true } },
@@ -327,6 +331,13 @@ local answers: { [string]: (arg: any) -> any } = {
 	end,
 	["settings.engine"] = function(arg: any)
 		local m = arg.method
+		if m == "ListHarnessConfigFiles" then
+			local device = arg.params.targetDeviceId or "local"
+			log(`config.list:{arg.params.harness}:{device}`)
+			return settled({ files = {
+				{ label = "Global settings", path = `/fixture/{device}/cordis.patch.yml`, exists = true },
+			} })
+		end
 		if string.sub(m, 1, 3) == "Set" then
 			local r = change(nil)
 			if r.error then
@@ -514,6 +525,7 @@ end
 -- This Mac's agents and another device's (account/agents): one each, so
 -- a switch of device shows whose.
 local agents = require("@account/agents")
+local extra_agents = false
 local function agents_of(target: string?): any
 	-- Cloud (the engine answers for it from the vault): Claude Code and
 	-- Codex, always installed; Codex with an account, so on.
@@ -532,7 +544,7 @@ local function agents_of(target: string?): any
 	end
 	local name = if target then "Codex" else "Claude Code"
 	local id = if target then "codex" else "claude-code"
-	return {
+	local result = {
 		state = "ready",
 		target = target,
 		list = {
@@ -550,6 +562,17 @@ local function agents_of(target: string?): any
 			},
 		},
 	}
+	if extra_agents then
+		table.insert(result.list, {
+			id = "dsh", name = "DeepSeek Harness", installed = true, enabled = true, can_install = false,
+			installing = false, login = "idle", accounts = {},
+		})
+		table.insert(result.list, {
+			id = "fx", name = "fx", installed = false, enabled = true, can_install = true,
+			installing = false, login = "idle", accounts = {},
+		})
+	end
+	return result
 end
 local agent_stub = agents :: any
 agent_stub.load = function()
@@ -560,6 +583,14 @@ agent_stub.target = function(device: string?)
 	log(`agents.target:{device or ""}`)
 	agents.now:set(agents_of(device))
 end
+ui.command {
+	id = "fixture.provider_agents",
+	title = "Show the extra providers",
+	run = function()
+		extra_agents = true
+		agents.load()
+	end,
+}
 -- A sign-in here is Claude's that asks for a code pasted back (no loopback
 -- port free); the code finishes it with an account, or Cancel gives it up.
 local function set_login(id: string, login: string, account: any?)
