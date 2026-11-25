@@ -4,6 +4,8 @@
 -- left mid-scroll comes back to the same message at the same height. On the
 -- chat fixture's s7 (tall replies) and s2.
 
+local wait_for_anchor = require("./transcript_anchor")
+
 -- The view's top and height.
 local function view(app: any): (number, number)
 	for line in app:tree("#transcript"):gmatch("[^\n]+") do
@@ -158,8 +160,7 @@ test("a chat left just after scrolling to the bottom follows a reply received wh
 	local app = open()
 	app:scroll("#transcript", -1000)
 	app:frames(20)
-	settle(app)
-	expect(app:state("chat.transcript.anchor")).never.to_be_nil()
+	wait_for_anchor(app)
 	app:scroll("#transcript", 10000)
 	app:frames(1)
 	expect(app:state("transcript_at_end")).to_be(true)

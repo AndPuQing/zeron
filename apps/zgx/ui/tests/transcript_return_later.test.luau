@@ -4,6 +4,8 @@
 -- landing or a turn running meanwhile, and across a relaunch. On the chat
 -- fixture's s7 (replies far taller than the list's row estimate).
 
+local wait_for_anchor = require("./transcript_anchor")
+
 local function view(app: any): (number, number)
 	for line in app:tree("#transcript"):gmatch("[^\n]+") do
 		local y, h = line:match("#transcript scroll .-%-?%d+,(%-?%d+) %d+x(%d+)")
@@ -51,7 +53,7 @@ local function open_mid(): (any, string)
 		app:frames(1)
 	end
 	app:frames(20)
-	settle(app)
+	wait_for_anchor(app)
 	local here = place(app)
 	expect(here).never.to_be("nothing")
 	expect(app:has('role:button ~"Jump to latest"')).to_be(true)
@@ -79,7 +81,6 @@ end)
 
 test("mid-scroll, back from a new chat", function()
 	local app, here = open_mid()
-	expect(app:state("chat.transcript.anchor")).never.to_be_nil()
 	go(app, "go_new")
 	-- Reopening can start with the list's at-end flag set before layout.
 	expect(app:state("chat.transcript.anchor")).never.to_be_nil()
@@ -91,7 +92,6 @@ end)
 test("mid-scroll, a temporarily empty transcript retains the reading position", function()
 	local app, here = open_mid()
 	local anchor = app:state("chat.transcript.anchor")
-	expect(anchor).never.to_be_nil()
 	app:set_state("chat.messages", {})
 	settle(app)
 	local saved = app:state("chat.transcript.anchor")
