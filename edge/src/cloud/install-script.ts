@@ -58,6 +58,15 @@ export const REPAIR_ENGINE_SCRIPT = `#!/bin/sh
 # Zerun Cloud: put back a missing zerun-engine (edge/src/cloud/install-script.ts).
 home="\${ZERON_CLOUD_HOME:-$HOME}"
 cur="$home/.zerun/app/current"
+# A \`current\` naming no installed version (a machine restored from a snapshot
+# got back the link from before an update that had removed its version):
+# pointed at the newest version installed, or the unit can't start at all.
+if [ ! -x "$cur/zerun" ]; then
+  best="$(ls -1 "$home/.zerun/app" 2>/dev/null | grep -E '^[0-9]+[.][0-9]+[.][0-9]+' | sort -V |
+    while read -r v; do [ -x "$home/.zerun/app/$v/zerun" ] && echo "$v"; done | tail -n 1)"
+  [ -n "$best" ] && ln -sfn "$home/.zerun/app/$best" "$cur" &&
+    echo "zerun cloud: current named a missing version; now $best"
+fi
 [ -x "$cur/zerun" ] || exit 0
 [ -f "$cur/zerun-engine" ] && exit 0
 dest="$(readlink -f "$cur")" || exit 0

@@ -1345,7 +1345,8 @@ export class CloudAccount extends DurableObject<Env> {
     parentChatId: string,
     edgeUrl: string,
     branch?: string,
-    config?: Record<string, unknown>
+    config?: Record<string, unknown>,
+    childKind?: "side" | "subagent"
   ): Promise<CloudResult<CloudSessionView>> {
     const off = this.accountOf(caller);
     if (off) return off;
@@ -1385,7 +1386,9 @@ export class CloudAccount extends DurableObject<Env> {
         );
     if (!started.ok) return started;
     const s = this.sessions.get(chatId);
-    if (s) await this.writeChildChatRow(s, config, branch ?? parent.baseBranch);
+    // A runner-created child is always spawned by an agent (never a user's manual
+    // side chat); default to "subagent" when an older runner omits childKind.
+    if (s) await this.writeChildChatRow(s, config, branch ?? parent.baseBranch, childKind ?? "subagent");
     return started;
   }
 
@@ -1410,7 +1413,12 @@ export class CloudAccount extends DurableObject<Env> {
    * in the parent's project — only the fields known now (no nulls), so the
    * host's own later writes win field by field. Idempotent: an existing row
    * on this machine is left alone. */
-  private async writeChildChatRow(s: SessionRecord, config: Record<string, unknown> | undefined, branch: string | undefined): Promise<void> {
+  private async writeChildChatRow(
+    s: SessionRecord,
+    config: Record<string, unknown> | undefined,
+    branch: string | undefined,
+    childKind: "side" | "subagent"
+  ): Promise<void> {
     const { orgId, userId } = this.acct;
     if (!orgId || !userId || !s.parentChatId) return;
     const room = this.env.REGISTRY_ROOMS.get(this.env.REGISTRY_ROOMS.idFromName(`reg1/${orgId}/${userId}`));
@@ -1436,6 +1444,7 @@ export class CloudAccount extends DurableObject<Env> {
       createdAt: Date.now(),
       spaceId: s.spaceId,
       parentChatId: s.parentChatId,
+      childKind,
       roomGen: 2,
       ...(config ? { config } : {}),
       ...(branch ? { branch } : {})
