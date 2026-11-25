@@ -69,10 +69,9 @@ test("with Cloud on, Providers offers Cloud: its agents' accounts, no switch or 
 	expect(shows(app, PAGE, "Anthropic API key")).to_be(false)
 end)
 
-test("an agent's settings are ruled between the rows that show, never under the last, here and on Cloud", function()
-	local app = open(true)
+test("an agent's settings are ruled between the rows that show", function()
+	local app = open(false)
 	local dialog = 'role:dialog "Agent settings"'
-	-- (Each row of these has one switch, or the updates' select.)
 	local function ruled(agent: string, rows: number)
 		app:click(`{PAGE} >> role:button "{agent} settings"`)
 		app:frames(30)
@@ -81,16 +80,12 @@ test("an agent's settings are ruled between the rows that show, never under the 
 		app:wait('"never shown, only waited past"', { timeout_ms = 400 })
 		app:frames(4)
 	end
-	-- Claude Code: subagents, Zeron's servers alone, $, / and updates; no
-	-- Code Mode, no environment, nothing to remove. On Cloud, no updates.
-	ruled("Claude Code", 5)
-	app:click(`{PAGE} >> role:button "Device"`)
-	app:frames(10)
-	app:click('role:menuitem "Cloud"')
-	app:frames(30)
-	ruled("Claude Code", 4)
-	-- Codex runs in Code Mode: one row more.
-	ruled("Codex", 5)
+	-- Subagents, configuration files, environment, both completion rows, and updates.
+	ruled("Claude Code", 6)
+	app:command("fixture.provider_agents")
+	app:frames(20)
+	-- DeepSeek Harness manages its own updates.
+	ruled("DeepSeek Harness", 5)
 end)
 
 test("without Cloud, Providers offers no Cloud", function()

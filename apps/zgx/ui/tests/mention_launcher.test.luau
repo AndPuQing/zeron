@@ -108,7 +108,7 @@ test("Tab and Shift+Tab go through the scopes, each listing its own kind; the ar
 	app:key("ArrowDown")
 	app:key("Enter")
 	settle(app)
-	expect(app:text(BOX)).to_contain("@photo.heic")
+	expect(app:text(BOX)).to_be("photo.heic ")
 end)
 
 test("an `@` before what's written, the caret back past it, lists the other chats too; a draft with none lists them once one is typed", function()
@@ -306,7 +306,7 @@ test("a click on the launcher's blank room keeps it; a click on a row inserts it
 	end
 	app:click('role:option "Long chat"')
 	settle(app)
-	expect(app:text(BOX)).to_contain("@Long-chat")
+	expect(app:text(BOX)).to_be("Long chat ")
 	expect(field_has_keys(app)).to_be(true)
 end)
 

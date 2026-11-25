@@ -808,50 +808,6 @@ local function settings_dialog(
 		cancel = false,
 		confirm = { label = ui.t("settings.providers.done") :: any },
 		ds.Settings.Group {
-			ui.show(function()
-				local a = agent()
-				return a ~= nil and not on_cloud() and not a.registry and a.id ~= "muse"
-			end, ds.Settings.Row {
-				label = ui.t("settings.config_files.title"),
-				control = ds.Button {
-					ui.t("settings.config_files.view"),
-					on_click = function()
-						local a = agent()
-						if not a then return end
-						open_settings:set("")
-						open_config_files({ harness = a.id, label = a.name, device = now().target, device_name = device_name() })
-					end,
-				},
-			}),
-			ui.show(function()
-				if not agent() or on_cloud() then
-					return false
-				end
-				local selected = now().target
-				if not selected then
-					return true
-				end
-				for _, device in computers() do
-					if device.id == selected then
-						return device.online == true and device.harness_environment == true
-					end
-				end
-				return false
-			end, function()
-				return ds.Settings.Row {
-					label = ui.t("settings.environment.title"),
-					control = ds.Button {
-						ui.t("settings.environment.edit"),
-						on_click = function()
-							local selected = agent()
-							if not selected then return end
-							local target = { harness = selected.id, label = selected.name, device = now().target, device_name = device_name() }
-							open_settings:set("")
-							open_environment(target)
-						end,
-					},
-				}
-			end),
 			ui.column {
 				w_full = true,
 				ui.div {
@@ -904,6 +860,48 @@ local function settings_dialog(
 								code_mode:set(not on)
 								toast.show { title = ui.t("settings.engine.couldnt_save"):get(), tone = "danger" }
 							end)
+						end,
+					},
+				}),
+				ds.Settings.Later(function()
+					local a = agent()
+					return a ~= nil and not on_cloud() and not a.registry and a.id ~= "muse"
+				end, ds.Settings.Row {
+					label = ui.t("settings.config_files.title"),
+					control = ds.Button {
+						ui.t("settings.config_files.view"),
+						on_click = function()
+							local a = agent()
+							if not a then return end
+							open_settings:set("")
+							open_config_files({ harness = a.id, label = a.name, device = now().target, device_name = device_name() })
+						end,
+					},
+				}),
+				ds.Settings.Later(function()
+					if not agent() or on_cloud() then
+						return false
+					end
+					local selected = now().target
+					if not selected then
+						return true
+					end
+					for _, device in computers() do
+						if device.id == selected then
+							return device.online == true and device.harness_environment == true
+						end
+					end
+					return false
+				end, ds.Settings.Row {
+					label = ui.t("settings.environment.title"),
+					control = ds.Button {
+						ui.t("settings.environment.edit"),
+						on_click = function()
+							local selected = agent()
+							if not selected then return end
+							local target = { harness = selected.id, label = selected.name, device = now().target, device_name = device_name() }
+							open_settings:set("")
+							open_environment(target)
 						end,
 					},
 				}),
