@@ -2,7 +2,7 @@ name: Desktop Beta
 
 # Zerun's beta channel: the zgx interface (apps/zgx, its `beta` feature) as the
 # Zerun app itself, with the engine built from this same commit inside, on
-# macOS (scripts/package-zgx-beta.sh), Linux (scripts/package-linux.sh) and
+# macOS (scripts/package-zgx-macos.sh), Linux (scripts/package-linux.sh) and
 # Windows (scripts/package-windows.ps1). The point of a beta is to test what's
 # next, the engine too. Testers keep their data and device; the app updates
 # itself from the beta channel and goes back to
@@ -166,7 +166,7 @@ jobs:
         env:
           BETA_VERSION: ${{ needs.version.outputs.version }}
           CARGO_FLAGS: --locked
-        run: ZGX_BETA_ENGINE="$GITHUB_WORKSPACE/target/release/zerun-engine" scripts/package-zgx-beta.sh
+        run: ZGX_ENGINE="$GITHUB_WORKSPACE/target/release/zerun-engine" scripts/package-zgx-macos.sh
       - name: inspect the bundle
         env:
           BETA_VERSION: ${{ needs.version.outputs.version }}

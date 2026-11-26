@@ -20,7 +20,7 @@ name = "zerun-experimental"
 path = "src/main.rs"
 
 [features]
-# Packaged Betas share the installed Zerun profile; development builds stay isolated.
+# Installed desktop packages (stable and Beta) share the Zerun profile.
 beta = []
 # Optional layout instrumentation used by performance regressions.
 layout_probe = []

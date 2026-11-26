@@ -43,6 +43,9 @@ use tokio::sync::watch;
 #[cfg(windows)]
 pub mod windows;
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos", windows)))]
+mod desktop_candidate_tests;
+
 pub mod channel;
 pub mod desktop;
 pub mod transaction;
@@ -632,14 +635,16 @@ impl InstallKind {
         }
     }
 
-    /// Whether this install's updater follows `update-channel.json`: a macOS
-    /// app always; on Windows and the Linux desktop a beta build alone, so
-    /// stable builds and headless services keep following stable.
+    /// Whether this install's desktop updater follows `update-channel.json`.
     pub fn follows_channels(&self) -> bool {
         match self {
             Self::MacApp { .. } => true,
             Self::Unmanaged => false,
-            _ => self.supports_desktop_update() && Channel::of_version(app_version()) == Channel::Beta,
+            _ => {
+                self.supports_desktop_update()
+                    && (APP_FOLLOWS_CHANNELS.load(Ordering::SeqCst)
+                        || Channel::of_version(app_version()) == Channel::Beta)
+            }
         }
     }
 

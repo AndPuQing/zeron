@@ -4,7 +4,8 @@
 # -Force is given.
 param(
     [string]$Setup,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$Zgx
 )
 $ErrorActionPreference = 'Stop'
 if (-not $env:CI -and -not $Force) {
@@ -19,7 +20,7 @@ $Setup = (Resolve-Path -LiteralPath $Setup).Path
 $match = [regex]::Match((Split-Path $Setup -Leaf), '\Azerun-(\d+\.\d+\.\d+(?:-beta\.\d+)?)-windows-[a-z0-9_]+-setup\.exe\z')
 if (-not $match.Success) { throw "Unexpected installer name: $Setup" }
 $version = $match.Groups[1].Value
-$beta = $version.Contains('-beta.')
+$packaged = $Zgx -or $version.Contains('-beta.')
 $uninstallKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\{94F099C7-A9D5-5A32-B951-50AE16E29A01}_is1'
 $protocolKey = 'HKCU:\Software\Classes\zerun-dev'
 $shortcut = Join-Path ([Environment]::GetFolderPath('Programs')) 'Zerun.lnk'
@@ -63,14 +64,14 @@ try {
     Assert-OtherRegistration
     $exe = Join-Path $dir 'zerun.exe'
     $required = @('zerun.exe', 'zerun-update.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'licenses/fonts', 'unins000.exe')
-    if ($beta) {
+    if ($packaged) {
         $required += @('zerun-version', "beta/$version/ui/app.luau", "beta/$version/plugins-builtin", "beta/$version/engine/zerun-engine.exe")
     }
     foreach ($file in $required) {
         if (-not (Test-Path -LiteralPath (Join-Path $dir $file))) { throw "Installed file missing: $file" }
     }
-    if ($beta -and (Get-Content -Raw -LiteralPath (Join-Path $dir 'zerun-version')).Trim() -ne $version) {
-        throw 'Installed Beta version marker does not match the package'
+    if ($packaged -and (Get-Content -Raw -LiteralPath (Join-Path $dir 'zerun-version')).Trim() -ne $version) {
+        throw 'Installed version marker does not match the package'
     }
     Write-Output 'PASS: installed files'
 
@@ -119,7 +120,7 @@ try {
     Wait-Until { -not (Test-Path -LiteralPath $uninstallKey) } 'the uninstall entry to disappear'
     Wait-Until { -not (Test-Path -LiteralPath $exe) } 'zerun.exe to be removed'
     $leftovers = @('zerun.exe.old', '.zerun-update-test', 'zerun-update.json', 'licenses')
-    if ($beta) { $leftovers += @('beta', 'zerun-version') }
+    if ($packaged) { $leftovers += @('beta', 'zerun-version') }
     foreach ($leftover in $leftovers) {
         Wait-Until { -not (Test-Path -LiteralPath (Join-Path $dir $leftover)) } "$leftover to be removed"
     }

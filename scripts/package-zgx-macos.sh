@@ -1,31 +1,11 @@
 #!/usr/bin/env bash
-# Zerun.app's beta: the zgx interface (apps/zgx, built with its `beta`
-# feature) as the Zerun app itself — the same bundle id, name, signing,
-# entitlements and `zerun-dev://` scheme as scripts/package-macos.sh's — with
-# the engine it's given inside, built from the same commit, so a tester keeps
-# Zerun.app's data and device:
-#
-#   target/package-beta/Zerun.app
-#     Contents/MacOS/zerun           the zgx interface and `zerun`'s command
-#                                    line (crates/cli; the engine's commands
-#                                    run in the helper beside it)
-#     Contents/MacOS/Zerun Engine    the engine, signed here
-#     Contents/Resources/ui, plugins-builtin, zerun.icns, licenses
-#   target/package-beta/zerun-<beta>-macos-<arch>.dmg
-#   target/package-beta/zerun-<beta>-macos-<arch>-app.tar.gz  (the updater's)
-#
-# Usage: BETA_VERSION=0.3.30-beta.1 ZGX_BETA_ENGINE=<engine> scripts/package-zgx-beta.sh
-#   BETA_VERSION        `<workspace version>-beta.<n>`; the workspace version
-#                       is the next release's; both binaries must match it
-#   ZGX_BETA_ENGINE     the engine: a built binary, a Zerun.app, its app tarball, or
-#                       its `Zerun Engine` binary
-#   ZGX_BETA_ZGX_BIN    the interface, built already (with --features beta and
-#                       ZERUN_BETA_VERSION); otherwise built here
-#   ZGX_TARGET_DIR      where to build it (apps/zgx/target)
-#   ZGX_BETA_DMG=0      no dmg
-#   CARGO_FLAGS         extra cargo flags (CI: --locked)
-# Signing and notarization are scripts/package-macos.sh's: CODESIGN_IDENTITY,
-# NOTARY_KEY_PATH + NOTARY_KEY_ID + NOTARY_ISSUER_ID.
+# Package the ZGX desktop with the matching engine as Zerun.app.
+# Usage: ZGX_ENGINE=<engine> scripts/package-zgx-macos.sh
+# With BETA_VERSION=<workspace version>-beta.<n>, produce a Beta.
+# ZGX_BIN optionally supplies a prebuilt --features beta interface.
+# ZGX_TARGET_DIR and CARGO_FLAGS configure the interface build.
+# ZGX_DMG=0 builds only the updater's app tarball.
+# CODESIGN_IDENTITY and NOTARY_KEY_* enable signing and notarization.
 
 set -euo pipefail
 
@@ -35,22 +15,27 @@ die() { echo "$*" >&2; exit 1; }
 
 WORKSPACE="$(grep -m1 '^version' "$ROOT/Cargo.toml" | sed 's/.*"\(.*\)".*/\1/')"
 BETA_VERSION="${BETA_VERSION:-}"
-[[ "$BETA_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.([0-9]+)$ ]] ||
-  die "BETA_VERSION must be <x.y.z>-beta.<n>, not '$BETA_VERSION'"
-CORE="${BASH_REMATCH[1]}"
-[[ "$CORE" == "$WORKSPACE" ]] || die "BETA_VERSION $BETA_VERSION isn't a beta of the workspace's $WORKSPACE"
+VERSION="$WORKSPACE"
+OUT_DIR="$ROOT/target/package"
+VOLUME_NAME=Zerun
+if [[ -n "$BETA_VERSION" ]]; then
+  [[ "$BETA_VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+)-beta\.([0-9]+)$ && "$BETA_VERSION" == "$WORKSPACE"-beta.* ]] ||
+    die "BETA_VERSION must be a beta of $WORKSPACE"
+  VERSION="$BETA_VERSION"
+  OUT_DIR="$ROOT/target/package-beta"
+  VOLUME_NAME="Zerun Beta"
+fi
 ARCH="$(uname -m)"
-OUT_DIR="$ROOT/target/package-beta"
 APP="$OUT_DIR/Zerun.app"
-DMG="$OUT_DIR/zerun-$BETA_VERSION-macos-$ARCH.dmg"
-APP_TARBALL="$OUT_DIR/zerun-$BETA_VERSION-macos-$ARCH-app.tar.gz"
+DMG="$OUT_DIR/zerun-$VERSION-macos-$ARCH.dmg"
+APP_TARBALL="$OUT_DIR/zerun-$VERSION-macos-$ARCH-app.tar.gz"
 ENTITLEMENTS="$ROOT/dist/macos/Zerun.entitlements"
 read -r -a CARGO_EXTRA <<<"${CARGO_FLAGS:-}"
 mkdir -p "$OUT_DIR"
 
 # The engine: the binary given, or the one in a bundle or tarball.
-ENGINE_SRC="${ZGX_BETA_ENGINE:-}"
-[[ -n "$ENGINE_SRC" ]] || die "ZGX_BETA_ENGINE: a built engine, a Zerun.app, its app tarball or its Zerun Engine"
+ENGINE_SRC="${ZGX_ENGINE:-}"
+[[ -n "$ENGINE_SRC" ]] || die "ZGX_ENGINE: a built engine, a Zerun.app, its app tarball or its Zerun Engine"
 ENGINE_BIN="$ENGINE_SRC"
 if [[ "$ENGINE_SRC" == *.tar.gz ]]; then
   UNPACK="$OUT_DIR/.stable"
@@ -60,6 +45,9 @@ if [[ "$ENGINE_SRC" == *.tar.gz ]]; then
 fi
 [[ -d "$ENGINE_SRC" ]] && ENGINE_BIN="$ENGINE_SRC/Contents/MacOS/Zerun Engine"
 [[ -x "$ENGINE_BIN" ]] || die "no engine at $ENGINE_BIN"
+if LC_ALL=C grep -aqE 'VM[\\/]src[\\/]l[a-z]+\.cpp' "$ENGINE_BIN"; then
+  die "build the bundled engine with LUAU_CXXFLAGS=-DNDEBUG"
+fi
 ENGINE_VERSION="$("$ENGINE_BIN" --version | sed -n 's/^zerun-engine //p')"
 [[ "$ENGINE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]] || die "$ENGINE_BIN didn't say its version"
 # The interface hands `zerun headless`, `zerun login` and the engine's other
@@ -67,38 +55,34 @@ ENGINE_VERSION="$("$ENGINE_BIN" --version | sed -n 's/^zerun-engine //p')"
 # line (crates/cli). An engine from before that runs the background engine
 # for any argument instead. (Read, not run: running an old one starts it.)
 LC_ALL=C grep -aq "Multi-device controller for coding agents" "$ENGINE_BIN" ||
-  die "the $ENGINE_VERSION engine predates the shared command line: the beta needs the shared command line"
+  die "the $ENGINE_VERSION engine predates the shared command line: the desktop requires the shared command line"
 
-[[ "$ENGINE_VERSION" == "$BETA_VERSION" ]] || die "The Beta requires a matching $BETA_VERSION engine"
+[[ "$ENGINE_VERSION" == "$VERSION" ]] || die "The desktop package requires a matching $VERSION engine"
 
 # The interface: apps/zgx is a workspace of its own (its own lock, patches).
-ZGX_BIN="${ZGX_BETA_ZGX_BIN:-}"
+ZGX_BIN="${ZGX_BIN:-}"
 if [[ -z "$ZGX_BIN" ]]; then
   target_dir="${ZGX_TARGET_DIR:-$ROOT/apps/zgx/target}"
   [[ "$target_dir" == /* ]] || target_dir="$PWD/$target_dir"
   # (From its folder: cargo reads .cargo/config.toml by where it runs, not by
   # the manifest, and the build's flags are there.)
-  (cd "$ROOT/apps/zgx" && ZERUN_BETA_VERSION="$BETA_VERSION" ZERUN_ENGINE_VERSION="$BETA_VERSION" cargo build --release ${CARGO_EXTRA[@]+"${CARGO_EXTRA[@]}"} \
+  (cd "$ROOT/apps/zgx" && ZERUN_BETA_VERSION="$BETA_VERSION" ZERUN_ENGINE_VERSION="$VERSION" MACOSX_DEPLOYMENT_TARGET=13.0 cargo build --release ${CARGO_EXTRA[@]+"${CARGO_EXTRA[@]}"} \
     --features beta --target-dir "$target_dir")
   ZGX_BIN="$target_dir/release/zerun-experimental"
 fi
-# Only a beta build of this version may go in: the updater stages it by
-# `zerun --version`, and a development build is staging's.
-[[ "$("$ZGX_BIN" --version)" == "zerun $BETA_VERSION" ]] ||
-  die "$ZGX_BIN isn't the $BETA_VERSION beta (it says '$("$ZGX_BIN" --version)')"
+# The updater probes the installed executable with --version.
+[[ "$("$ZGX_BIN" --version)" == "zerun $VERSION" ]] ||
+  die "$ZGX_BIN isn't Zerun $VERSION (it says '$("$ZGX_BIN" --version)')"
 
 rm -rf "$APP" "$DMG" "$APP_TARBALL"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 install -m 755 "$ZGX_BIN" "$APP/Contents/MacOS/zerun"
 install -m 755 "$ENGINE_BIN" "$APP/Contents/MacOS/Zerun Engine"
-# Zerun.app's Info.plist, as the stable app's, with the beta's versions: the
-# system versions stay numeric (the next release's), the full Beta version
-# is kept separately, the engine its own (`bundle_engine_version`), and
-# zgx's floor macOS 13 (Ghostty's).
+# Keep the system version numeric and record the full update version separately.
 PLIST="$APP/Contents/Info.plist"
-sed "s/__VERSION__/$CORE/" "$ROOT/dist/macos/Info.plist" >"$PLIST"
+sed "s/__VERSION__/$WORKSPACE/" "$ROOT/dist/macos/Info.plist" >"$PLIST"
 plutil -replace ZeronEngineVersion -string "$ENGINE_VERSION" "$PLIST"
-plutil -insert ZeronVersion -string "$BETA_VERSION" "$PLIST"
+plutil -insert ZeronVersion -string "$VERSION" "$PLIST"
 plutil -replace LSMinimumSystemVersion -string "13.0" "$PLIST"
 plutil -convert xml1 "$PLIST"
 plutil -lint "$PLIST" >/dev/null
@@ -132,8 +116,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/zerun.icns"
 rm -rf "$ICONSET"
 
 
-# Signed as scripts/package-macos.sh signs Zerun.app: the engine (its
-# identifier), then the bundle.
+# Sign the helper before signing its enclosing bundle.
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then
   codesign --entitlements "$ENTITLEMENTS" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" --identifier work.puqing.zerun.engine "$APP/Contents/MacOS/Zerun Engine"
   codesign --entitlements "$ENTITLEMENTS" --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
@@ -164,7 +147,7 @@ tar -czf "$APP_TARBALL" -C "$OUT_DIR" Zerun.app
 echo "packaged: $APP_TARBALL"
 echo "size: $(du -sh "$APP" | cut -f1) ($(du -sk "$APP" | cut -f1) KB) · interface $(du -h "$APP/Contents/MacOS/zerun" | cut -f1) · engine $(du -h "$APP/Contents/MacOS/Zerun Engine" | cut -f1)"
 
-if [[ "${ZGX_BETA_DMG:-1}" == "0" ]]; then
+if [[ "${ZGX_DMG:-1}" == "0" ]]; then
   exit 0
 fi
 
@@ -176,14 +159,14 @@ BG_TIFF="$OUT_DIR/dmg-background.tiff"
 tiffutil -cathidpicheck "$ROOT/dist/macos/dmg-background.png" \
   "$ROOT/dist/macos/dmg-background@2x.png" -out "$BG_TIFF" >/dev/null 2>&1
 
-APP="$APP" DMG="$DMG" BG_TIFF="$BG_TIFF" python3 - <<'PY'
+APP="$APP" DMG="$DMG" BG_TIFF="$BG_TIFF" VOLUME_NAME="$VOLUME_NAME" python3 - <<'PY'
 import os
 import dmgbuild
 
 app = os.environ["APP"]
 dmgbuild.build_dmg(
     filename=os.environ["DMG"],
-    volume_name="Zerun Beta",
+    volume_name=os.environ["VOLUME_NAME"],
     settings={
         "format": "UDZO",
         "files": [app],
