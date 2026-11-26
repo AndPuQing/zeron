@@ -15,8 +15,9 @@ final class DelegationFlowTests: XCTestCase {
         let list = app.collectionViews["companions"]
         XCTAssertTrue(list.waitForExistence(timeout: 10))
         XCTAssertTrue(list.cells["companion-delegated-chat-release-audit"].waitForExistence(timeout: 10))
-        // All four, as subagents: none under Side chats.
-        for chat in ["chat-release-notes", "chat-release-bench", "chat-release-branch"] {
+        // Check the remaining subagents in display order. The branch
+        // question sits above the work that doesn't need an answer.
+        for chat in ["chat-release-branch", "chat-release-notes", "chat-release-bench"] {
             XCTAssertTrue(delegatedRow(list, chat).exists, chat)
         }
         XCTAssertEqual(list.cells.matching(identifier: "companion-side-chat").count, 0)
