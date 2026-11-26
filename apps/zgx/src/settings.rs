@@ -97,6 +97,9 @@ const ENGINE_METHODS: &[&str] = &[
     "GetCodeMode",
     "SetCodeMode",
     "ListHarnessConfigFiles",
+    // Whether this device's agents delegate in the background.
+    "GetAsyncDelegation",
+    "SetAsyncDelegation",
     // "Keep Zerun running after you quit" (src/quit_prompt.rs).
     "GetBackgroundSettings",
     "SetBackgroundSettings",

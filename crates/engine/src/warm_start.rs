@@ -114,6 +114,8 @@ pub(super) struct Parked {
     /// Whether it launched with Code Mode enabled (the setting may change
     /// before its run: `code_mode_changed`).
     pub(super) code_mode: bool,
+    /// How it was told to delegate (a chat not made yet has no parent).
+    pub(super) delegation: zeron_mcp::Delegation,
     /// The projectless folder its launch made, removed if it ends unused
     /// and still empty.
     made_folder: Option<std::path::PathBuf>,
@@ -337,6 +339,7 @@ impl SessionsEngine {
             // Zerun server with a token for this chat alone, the plugins'
             // servers, the chat's origin and the host's credentials.
             let side_chats_only = self.inner.side_chats_only(chat_id, harness_id);
+            let delegation = self.inner.delegation(chat_id);
             let (mcp, grant) = match self.inner.zeron_mcp(
                 chat_id,
                 side_chats_only,
@@ -391,6 +394,7 @@ impl SessionsEngine {
                 binary,
                 side_chats_only,
                 code_mode,
+                delegation,
                 made_folder: made_folder.clone(),
             }))
         };

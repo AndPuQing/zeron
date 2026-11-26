@@ -13845,6 +13845,7 @@ mod tests {
         let state = cx.new(|cx| {
             let mut state = AppState::new();
             state.sessions = vec![zeron_proto::Session {
+                blocked_on_wait: false,
                 last_completed_turn: None,
                 chat_id: "c".into(),
                 device_id: "remote".into(),

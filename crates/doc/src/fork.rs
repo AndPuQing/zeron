@@ -185,6 +185,7 @@ mod tests {
             subagent_ref: Some(format!("parent--sub--{id}")),
             subagent_status: Some(status),
             subagent_tail: None,
+            chats: Vec::new(),
             preview_paths: Vec::new(),
         };
         let source = vec![entry("a1", MessageRole::Assistant, vec![

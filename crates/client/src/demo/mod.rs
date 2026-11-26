@@ -544,6 +544,7 @@ impl DemoHost {
                 },
                 updated_at: now,
                 waiting: None,
+                blocked_on_wait: false,
             })
         });
     }

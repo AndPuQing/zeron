@@ -567,6 +567,7 @@ impl ExternalSessionImporter {
                             subagent_ref: None,
                             subagent_status: None,
                             subagent_tail: None,
+                            chats: Vec::new(),
                             preview_paths: Vec::new(),
                         },
                     }

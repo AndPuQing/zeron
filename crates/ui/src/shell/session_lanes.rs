@@ -745,6 +745,7 @@ mod tests {
             subagent_ref: doc.map(str::to_owned),
             subagent_status: status,
             subagent_tail: None,
+            chats: Vec::new(),
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,

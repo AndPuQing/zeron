@@ -7800,6 +7800,7 @@ mod tests {
 
     fn running_session(chat_id: &str) -> zeron_proto::Session {
         zeron_proto::Session {
+            blocked_on_wait: false,
             last_completed_turn: None,
             chat_id: chat_id.into(),
             device_id: "local".into(),

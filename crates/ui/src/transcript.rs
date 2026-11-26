@@ -1399,6 +1399,9 @@ pub fn rows_for_entry(
             })
             .collect::<Vec<_>>()
             .join("\n\n");
+        if zeron_proto::delegation::wake_notice(&raw).is_some() {
+            return rows;
+        }
         // Attachment refs ride the plain text (the `withAttachments`
         // transport); split them back out for the thumbnail strip.
         let parsed = crate::attachments::parse_user_message_images(&raw);
@@ -13850,6 +13853,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            chats: Vec::new(),
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
@@ -15200,6 +15204,7 @@ mod tests {
             subagent_ref: None,
             subagent_status: None,
             subagent_tail: None,
+            chats: Vec::new(),
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
@@ -15327,6 +15332,7 @@ mod tests {
             subagent_ref: Some(format!("chat--sub--{id}")),
             subagent_status: Some(SubagentStatus::Running),
             subagent_tail: None,
+            chats: Vec::new(),
             preview_paths: Vec::new(),
             exit_code: None,
             output_truncated: false,
@@ -16304,6 +16310,7 @@ mod tests {
                     this.rail_enabled = false;
                     this.state.update(cx, |state, _| {
                         state.sessions.push(zeron_proto::Session {
+                            blocked_on_wait: false,
                             last_completed_turn: None,
                             last_turn_outcome: None,
                             terminal_activity: None,

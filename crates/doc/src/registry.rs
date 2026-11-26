@@ -1962,6 +1962,7 @@ impl RegistryDoc {
                 serde_json::to_value(&session.background_tasks)?,
             ),
             ("waiting", serde_json::to_value(&session.waiting)?),
+            ("blockedOnWait", json!(session.blocked_on_wait)),
         ]);
         self.write(KIND_SESSIONS, &session.chat_id.clone(), OpKind::Upsert, set);
         Ok(())

@@ -1051,6 +1051,7 @@ mod tests {
                 },
             }];
             state.sessions = vec![zeron_proto::Session {
+                blocked_on_wait: false,
                 last_completed_turn: None,
                 chat_id: chat_id.into(),
                 device_id: "host".into(),

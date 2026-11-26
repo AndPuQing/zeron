@@ -4528,8 +4528,9 @@ public func FfiConverterTypePlatformMeasurer_lower(_ value: PlatformMeasurer) ->
 public protocol SessionHandleProtocol: AnyObject, Sendable {
     
     /**
-     * The subagents this session's agent spawned, in transcript order
-     * (pull after `SessionChanged`).
+     * This session's subagents: those its agent spawned, in transcript
+     * order, then the chats it delegated to, oldest first (pull after
+     * `SessionChanged` or `WorkspaceChanged`).
      */
     func subagents()  -> [SubagentRow]
     
@@ -4689,8 +4690,9 @@ open class SessionHandle: SessionHandleProtocol, @unchecked Sendable {
 
     
     /**
-     * The subagents this session's agent spawned, in transcript order
-     * (pull after `SessionChanged`).
+     * This session's subagents: those its agent spawned, in transcript
+     * order, then the chats it delegated to, oldest first (pull after
+     * `SessionChanged` or `WorkspaceChanged`).
      */
 open func subagents() -> [SubagentRow]  {
     return try!  FfiConverterSequenceTypeSubagentRow.lift(try! rustCall() {
@@ -6147,6 +6149,14 @@ public protocol TranscriptViewProtocol: AnyObject, Sendable {
      */
     func visual(id: String)  -> VisualSession?
     
+    /**
+     * The workspace changed (`WorkspaceChanged`): the followed session's
+     * rows that name other chats read them again. A delegated chat's start
+     * line says how that chat stands, which changes with the chat, not with
+     * this session. Rows whose chats didn't change are kept.
+     */
+    func workspaceChanged() 
+    
 }
 /**
  * One transcript's layout engine.
@@ -6372,6 +6382,20 @@ open func visual(id: String) -> VisualSession?  {
         FfiConverterString.lower(id),uniffiCallStatus
     )
 })
+}
+    
+    /**
+     * The workspace changed (`WorkspaceChanged`): the followed session's
+     * rows that name other chats read them again. A delegated chat's start
+     * line says how that chat stands, which changes with the chat, not with
+     * this session. Rows whose chats didn't change are kept.
+     */
+open func workspaceChanged()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_zeron_mobile_fn_method_transcriptview_workspace_changed(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
 }
     
 
@@ -11378,13 +11402,23 @@ public struct InputRequest: Equatable, Hashable {
     public var entryId: String
     public var requestId: String
     public var questions: [UserInputQuestion]
+    /**
+     * An approval (a command or an edit to allow): answered "Yes" (allow
+     * once) or "No" (deny) on its one question.
+     */
+    public var isApproval: Bool
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(entryId: String, requestId: String, questions: [UserInputQuestion]) {
+    public init(entryId: String, requestId: String, questions: [UserInputQuestion], 
+        /**
+         * An approval (a command or an edit to allow): answered "Yes" (allow
+         * once) or "No" (deny) on its one question.
+         */isApproval: Bool) {
         self.entryId = entryId
         self.requestId = requestId
         self.questions = questions
+        self.isApproval = isApproval
     }
 
     
@@ -11405,7 +11439,8 @@ public struct FfiConverterTypeInputRequest: FfiConverterRustBuffer {
             try InputRequest(
                 entryId: FfiConverterString.read(from: &buf), 
                 requestId: FfiConverterString.read(from: &buf), 
-                questions: FfiConverterSequenceTypeUserInputQuestion.read(from: &buf)
+                questions: FfiConverterSequenceTypeUserInputQuestion.read(from: &buf), 
+                isApproval: FfiConverterBool.read(from: &buf)
         )
     }
 
@@ -11413,6 +11448,7 @@ public struct FfiConverterTypeInputRequest: FfiConverterRustBuffer {
         FfiConverterString.write(value.entryId, into: &buf)
         FfiConverterString.write(value.requestId, into: &buf)
         FfiConverterSequenceTypeUserInputQuestion.write(value.questions, into: &buf)
+        FfiConverterBool.write(value.isApproval, into: &buf)
     }
 }
 
@@ -14089,6 +14125,24 @@ public struct SessionRow: Equatable, Hashable {
     public var sendState: SendState?
     public var parentChatId: String?
     /**
+     * A child its parent's agent delegated to (listed among the parent's
+     * subagents, not its side chats).
+     */
+    public var delegated: Bool
+    /**
+     * What it waits on while `Waiting`, a line each ("Codex · Mac mini ·
+     * Fix the parser"), first things first.
+     */
+    public var waitingOn: [String]
+    /**
+     * Waiting since (ms).
+     */
+    public var waitingSinceMs: Int64?
+    /**
+     * A child chat asks the person for approval or an answer.
+     */
+    public var childAsks: Bool
+    /**
      * 2 = chat2; 1 = legacy (not dialable).
      */
     public var roomGen: UInt32
@@ -14145,6 +14199,20 @@ public struct SessionRow: Equatable, Hashable {
          * Oldest unadopted send from this device (open sessions only).
          */sendState: SendState?, parentChatId: String?, 
         /**
+         * A child its parent's agent delegated to (listed among the parent's
+         * subagents, not its side chats).
+         */delegated: Bool, 
+        /**
+         * What it waits on while `Waiting`, a line each ("Codex · Mac mini ·
+         * Fix the parser"), first things first.
+         */waitingOn: [String], 
+        /**
+         * Waiting since (ms).
+         */waitingSinceMs: Int64?, 
+        /**
+         * A child chat asks the person for approval or an answer.
+         */childAsks: Bool, 
+        /**
          * 2 = chat2; 1 = legacy (not dialable).
          */roomGen: UInt32, 
         /**
@@ -14188,6 +14256,10 @@ public struct SessionRow: Equatable, Hashable {
         self.pullRequest = pullRequest
         self.sendState = sendState
         self.parentChatId = parentChatId
+        self.delegated = delegated
+        self.waitingOn = waitingOn
+        self.waitingSinceMs = waitingSinceMs
+        self.childAsks = childAsks
         self.roomGen = roomGen
         self.sleepUntilMs = sleepUntilMs
         self.wokeAtMs = wokeAtMs
@@ -14241,6 +14313,10 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
                 pullRequest: FfiConverterOptionTypePullRequest.read(from: &buf), 
                 sendState: FfiConverterOptionTypeSendState.read(from: &buf), 
                 parentChatId: FfiConverterOptionString.read(from: &buf), 
+                delegated: FfiConverterBool.read(from: &buf), 
+                waitingOn: FfiConverterSequenceString.read(from: &buf), 
+                waitingSinceMs: FfiConverterOptionInt64.read(from: &buf), 
+                childAsks: FfiConverterBool.read(from: &buf), 
                 roomGen: FfiConverterUInt32.read(from: &buf), 
                 sleepUntilMs: FfiConverterOptionInt64.read(from: &buf), 
                 wokeAtMs: FfiConverterOptionInt64.read(from: &buf), 
@@ -14280,6 +14356,10 @@ public struct FfiConverterTypeSessionRow: FfiConverterRustBuffer {
         FfiConverterOptionTypePullRequest.write(value.pullRequest, into: &buf)
         FfiConverterOptionTypeSendState.write(value.sendState, into: &buf)
         FfiConverterOptionString.write(value.parentChatId, into: &buf)
+        FfiConverterBool.write(value.delegated, into: &buf)
+        FfiConverterSequenceString.write(value.waitingOn, into: &buf)
+        FfiConverterOptionInt64.write(value.waitingSinceMs, into: &buf)
+        FfiConverterBool.write(value.childAsks, into: &buf)
         FfiConverterUInt32.write(value.roomGen, into: &buf)
         FfiConverterOptionInt64.write(value.sleepUntilMs, into: &buf)
         FfiConverterOptionInt64.write(value.wokeAtMs, into: &buf)
@@ -14370,13 +14450,33 @@ public func FfiConverterTypeStyleDesc_lower(_ value: StyleDesc) -> RustBuffer {
 
 
 /**
- * One subagent a session's agent spawned.
+ * One subagent of a session: one its agent spawned in its own runtime, or a
+ * chat it delegated to (`chat_id`), on any device and provider, opened,
+ * stopped and answered as any chat is.
  */
 public struct SubagentRow: Equatable, Hashable {
     /**
-     * The spawn's tool part id.
+     * The spawn's tool part id; a delegated chat's id.
      */
     public var id: String
+    /**
+     * A delegated chat: its id (open it with `open_session`; it stops and
+     * answers through its own handle).
+     */
+    public var chatId: String?
+    /**
+     * A delegated chat's device, when it isn't the parent's.
+     */
+    public var deviceName: String?
+    /**
+     * A delegated chat's wire harness (`codex`), for its mark.
+     */
+    public var harness: String?
+    /**
+     * A delegated chat asks the person something (its own handle's
+     * `open_input`).
+     */
+    public var asks: Bool
     /**
      * The child's transcript doc (`None` until the host binds one).
      */
@@ -14395,8 +14495,22 @@ public struct SubagentRow: Equatable, Hashable {
     // declare one manually.
     public init(
         /**
-         * The spawn's tool part id.
+         * The spawn's tool part id; a delegated chat's id.
          */id: String, 
+        /**
+         * A delegated chat: its id (open it with `open_session`; it stops and
+         * answers through its own handle).
+         */chatId: String?, 
+        /**
+         * A delegated chat's device, when it isn't the parent's.
+         */deviceName: String?, 
+        /**
+         * A delegated chat's wire harness (`codex`), for its mark.
+         */harness: String?, 
+        /**
+         * A delegated chat asks the person something (its own handle's
+         * `open_input`).
+         */asks: Bool, 
         /**
          * The child's transcript doc (`None` until the host binds one).
          */docId: String?, title: String, model: String?, kind: String?, state: SubagentState, 
@@ -14404,6 +14518,10 @@ public struct SubagentRow: Equatable, Hashable {
          * Its latest output line while it works.
          */tail: String?, startedAtMs: Int64) {
         self.id = id
+        self.chatId = chatId
+        self.deviceName = deviceName
+        self.harness = harness
+        self.asks = asks
         self.docId = docId
         self.title = title
         self.model = model
@@ -14430,6 +14548,10 @@ public struct FfiConverterTypeSubagentRow: FfiConverterRustBuffer {
         return
             try SubagentRow(
                 id: FfiConverterString.read(from: &buf), 
+                chatId: FfiConverterOptionString.read(from: &buf), 
+                deviceName: FfiConverterOptionString.read(from: &buf), 
+                harness: FfiConverterOptionString.read(from: &buf), 
+                asks: FfiConverterBool.read(from: &buf), 
                 docId: FfiConverterOptionString.read(from: &buf), 
                 title: FfiConverterString.read(from: &buf), 
                 model: FfiConverterOptionString.read(from: &buf), 
@@ -14442,6 +14564,10 @@ public struct FfiConverterTypeSubagentRow: FfiConverterRustBuffer {
 
     public static func write(_ value: SubagentRow, into buf: inout [UInt8]) {
         FfiConverterString.write(value.id, into: &buf)
+        FfiConverterOptionString.write(value.chatId, into: &buf)
+        FfiConverterOptionString.write(value.deviceName, into: &buf)
+        FfiConverterOptionString.write(value.harness, into: &buf)
+        FfiConverterBool.write(value.asks, into: &buf)
         FfiConverterOptionString.write(value.docId, into: &buf)
         FfiConverterString.write(value.title, into: &buf)
         FfiConverterOptionString.write(value.model, into: &buf)
@@ -25140,7 +25266,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_zeron_mobile_checksum_method_uploadprogress_on_progress() != 40458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_zeron_mobile_checksum_method_sessionhandle_subagents() != 16247) {
+    if (uniffi_zeron_mobile_checksum_method_sessionhandle_subagents() != 29129) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_sessionhandle_begin_queued_edit() != 9014) {
@@ -25363,6 +25489,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_transcriptview_visual() != 55147) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zeron_mobile_checksum_method_transcriptview_workspace_changed() != 65214) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zeron_mobile_checksum_method_orbrenderer_next_frame() != 6064) {

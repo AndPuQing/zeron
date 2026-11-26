@@ -2225,6 +2225,7 @@ impl AppState {
                     subagent_ref: None,
                     subagent_status: None,
                     subagent_tail: None,
+                    chats: Vec::new(),
                     preview_paths: Vec::new(),
                     exit_code: None,
                     output_truncated: false,
@@ -5917,6 +5918,7 @@ mod tests {
         now: DateTime<Utc>,
     ) -> Session {
         Session {
+            blocked_on_wait: false,
             last_completed_turn: None,
             last_turn_outcome: None,
             terminal_activity: None,
@@ -6190,6 +6192,7 @@ mod tests {
         let mut state = AppState::new();
         let now = Utc::now();
         let mut row = Session {
+            blocked_on_wait: false,
             last_completed_turn: None,
             last_turn_outcome: None,
             terminal_activity: None,
@@ -6226,6 +6229,7 @@ mod tests {
         let mut state = AppState::new();
         let now = Utc::now();
         state.sessions = vec![Session {
+            blocked_on_wait: false,
             last_completed_turn: None,
             last_turn_outcome: None,
             terminal_activity: None,
@@ -6412,6 +6416,7 @@ mod tests {
 
     fn outcome(status: DoneStatus, finished_at: DateTime<Utc>) -> zeron_proto::NativeTurnOutcome {
         zeron_proto::NativeTurnOutcome {
+            resumes: false,
             status,
             finished_at,
         }

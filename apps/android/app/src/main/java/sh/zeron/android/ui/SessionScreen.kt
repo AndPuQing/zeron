@@ -163,6 +163,8 @@ fun SessionScreen(
         canFork = handle.canFork()
         model.sessionEvents.collect { if (it == chatId) { composer = handle.composer(); canFork = handle.canFork() } }
     }
+    // A delegated chat's start line says how that chat stands: it reads the workspace again as it changes.
+    LaunchedEffect(chatId) { model.workspace.collect { runCatching { transcript.engine.workspaceChanged() } } }
     LaunchedEffect(chatId) {
         val text = sendOnOpen ?: return@LaunchedEffect
         runCatching { handle.send(uniffi.zeron_core.SendRequest(text, emptyList(), null, uniffi.zeron_core.BusyPolicy.QUEUE)) }
@@ -257,7 +259,8 @@ fun SessionScreen(
             which.startsWith("subagent:") -> {
                 val tool = which.removePrefix("subagent:")
                 model.sessionSubagents(chatId).firstOrNull { it.id == tool || it.docId?.endsWith(tool) == true }?.let { a ->
-                    a.docId?.let { onOpenSubagent(chatId, it, a.title, a.state == uniffi.zeron_core.SubagentState.RUNNING) }
+                    // A delegated one is a chat of its own.
+                    a.chatId?.let(onOpenSideChat) ?: a.docId?.let { onOpenSubagent(chatId, it, a.title, a.state == uniffi.zeron_core.SubagentState.RUNNING) }
                 }
             }
         }
@@ -265,8 +268,8 @@ fun SessionScreen(
 
     val project = row?.project?.name ?: "No project"
     val parentTitle = remember(workspace, parentId) { parentId?.let { model.row(it)?.title } }
-    // A side chat heads itself as one, under its parent's title.
-    val headerTitle = if (parentId != null) "Side chat" else composer.title
+    // A side chat (or a chat its parent delegated to) heads itself as one, under its parent's title.
+    val headerTitle = if (parentId != null) childHeading(row) else composer.title
     val subtitle = parentTitle ?: composer.host.name?.let { "$project @ $it" } ?: project
     var overflow by remember { mutableStateOf(false) }
     val clipboard = LocalClipboardManager.current
@@ -299,10 +302,12 @@ fun SessionScreen(
                     sh.zeron.android.voice.VoiceHeaderButton(model.voice, onOpenStage = onOpenVoice, onOpenSettings = onVoiceSettings)
                     androidx.compose.foundation.layout.Spacer(Modifier.size(8.dp))
                 }
-                // Agents, side chats and terminals; a badge while agents work.
+                // Agents, side chats and terminals; a badge while agents work, toned while one needs you.
                 androidx.compose.material3.BadgedBox(
                     badge = {
-                        if (companions.runningAgents > 0) {
+                        if (companions.askingAgents > 0) {
+                            androidx.compose.material3.Badge(containerColor = warningColor(), contentColor = MaterialTheme.colorScheme.surface) { Text("${companions.askingAgents}") }
+                        } else if (companions.runningAgents > 0) {
                             androidx.compose.material3.Badge(containerColor = MaterialTheme.colorScheme.primary) { Text("${companions.runningAgents}") }
                         }
                     },
@@ -416,7 +421,7 @@ fun SessionScreen(
         CompanionsSheet(
             model,
             chatId,
-            title = if (parentId != null) "Side chat" else composer.title,
+            title = if (parentId != null) childHeading(row) else composer.title,
             initialSection = companionsSheet,
             onDismiss = {
                 showCompanions = false
@@ -457,6 +462,9 @@ fun SessionScreen(
     }
     sheet?.let { s -> TextSheetHost(s) { sheet = null } }
 }
+
+/** A child chat's heading: a subagent when its parent's agent delegated to it, else a side chat. */
+internal fun childHeading(row: uniffi.zeron_core.SessionRow?): String = if (row?.delegated == true) "Subagent" else "Side chat"
 
 /** How far above the chips and composer the transcript starts to fade. */
 private val FADE = 44.dp

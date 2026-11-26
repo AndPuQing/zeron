@@ -31,14 +31,20 @@ pub struct AttributedMessage<'a> {
     pub body: &'a str,
 }
 
-const PREFIX: &str = "[Message from Zeron chat ";
-const REPLY_INSTRUCTION: &str = ". Reply to it with the Zeron `send_message` tool, chat ";
+pub(crate) const PREFIX: &str = "[Message from Zeron chat ";
+pub(crate) const REPLY: &str = ". Reply to it with the Zeron `send_message` tool, chat ";
+pub(crate) const DELEGATED: &str = ". Your final reply goes back to it by itself: don't message it to report. Chat ";
 
 /// Parse the complete `send_message` attribution wrapper.
 pub fn attributed_message(text: &str) -> Option<AttributedMessage<'_>> {
+    let (name, _, body) = routing_message(text)?;
+    Some(AttributedMessage { name, body })
+}
+
+pub(crate) fn routing_message(text: &str) -> Option<(&str, &str, &str)> {
     let rest = text.strip_prefix(PREFIX)?;
     let (header, body) = rest.split_once("]\n\n")?;
-    let (label, id) = header.rsplit_once(REPLY_INSTRUCTION)?;
+    let (label, id) = header.rsplit_once(REPLY).or_else(|| header.rsplit_once(DELEGATED))?;
     let id = id.strip_suffix('.')?;
     // A routing id is a plain opaque token. Whitespace or brackets mean this
     // was never the header we emit, so leave the text alone.
@@ -47,9 +53,6 @@ pub fn attributed_message(text: &str) -> Option<AttributedMessage<'_>> {
             .chars()
             .any(|c| c.is_whitespace() || c == '[' || c == ']')
     {
-        return None;
-    }
-    if label.is_empty() {
         return None;
     }
     // Older headers carried the full id inside the label; newer ones end with
@@ -61,7 +64,7 @@ pub fn attributed_message(text: &str) -> Option<AttributedMessage<'_>> {
     if name.is_empty() {
         return None;
     }
-    Some(AttributedMessage { name, body })
+    Some((name, id, body))
 }
 
 /// `Message from <name>\n\n<body>` for an attributed message, `None` otherwise.

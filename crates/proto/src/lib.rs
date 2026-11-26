@@ -9,6 +9,7 @@ pub mod agent_environment;
 pub mod agent_messages;
 pub mod annotation;
 pub mod attachment_mentions;
+pub mod delegation;
 pub mod change_request_assessment;
 pub mod chat_attribution;
 pub mod chat_images;
@@ -42,6 +43,10 @@ pub mod workspace;
 pub use agent::*;
 pub use agent_environment::*;
 pub use cloud::*;
+pub use delegation::{
+    CohortDisposition, CompletionWake, DelegatedInput, DelegatedStatus, DelegatedTask, DelegatedTaskView,
+    DelegationBaseline, DelegationMode, DeliveryState, WakeItem, WakeKind, WakeNotice,
+};
 pub use entities::*;
 pub use execution::*;
 pub use external_sessions::*;
