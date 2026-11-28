@@ -40,6 +40,12 @@ final class SessionFlowTests: XCTestCase {
         return panel
     }
 
+    private func sessionMenuButton(in app: XCUIApplication) -> XCUIElement {
+        // The vertical bar on iPhone Duo puts session actions in UIKit's overflow menu.
+        let identifiers = NSPredicate(format: "identifier IN {'session-menu', 'BottomOverflowBarButtonItem'}")
+        return app.buttons.matching(identifiers).firstMatch
+    }
+
     private func reveal(_ row: XCUIElement, in panel: XCUIElement) {
         for _ in 0..<6 where !row.isHittable { panel.swipeUp() }
         XCTAssertTrue(row.waitForExistence(timeout: 5))
@@ -460,7 +466,9 @@ final class SessionFlowTests: XCTestCase {
     func testNewSideChatKeepsDraftThroughCompanions() {
         let app = launch(["-route", "chat:chat-deploy"])
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
-        app.buttons["session-menu"].tap()
+        let menu = sessionMenuButton(in: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.tap()
         snapshot(app, "session-menu")
         app.buttons["New Side Chat"].tap()
         let input = app.textViews["composer-input"]
@@ -522,7 +530,9 @@ final class SessionFlowTests: XCTestCase {
     func testForkIntoSideChatFromMenu() {
         let app = launch(["-route", "chat:chat-deploy"])
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
-        app.buttons["session-menu"].tap()
+        let menu = sessionMenuButton(in: app)
+        XCTAssertTrue(menu.waitForExistence(timeout: 5))
+        menu.tap()
         snapshot(app, "session-menu")
         let fork = app.buttons["Fork Into Side Chat"]
         XCTAssertTrue(fork.waitForExistence(timeout: 5))
@@ -785,8 +795,7 @@ final class SessionFlowTests: XCTestCase {
 
         cell.tap()
         XCTAssertTrue(app.scrollViews["transcript"].waitForExistence(timeout: 10))
-        // On iPhone Duo's vertical bar the session menu is the system ⋯.
-        let menu = app.buttons.matching(NSPredicate(format: "identifier IN {'session-menu', 'BottomOverflowBarButtonItem'}")).firstMatch
+        let menu = sessionMenuButton(in: app)
         XCTAssertTrue(menu.waitForExistence(timeout: 5))
         snapshot(app, "session-bar")
         menu.tap()
