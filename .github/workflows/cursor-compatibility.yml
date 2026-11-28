@@ -57,5 +57,7 @@ jobs:
       - uses: ./.github/actions/linux-ci
         with:
           rust-cache: core # saved by core-tests in ui-tests.yml
+          apt-cache: dictation
+          apt-packages: libasound2-dev cmake pkg-config
       - name: Harness, engine, sync, update, doc and preview tests
         run: scripts/ci/test-core.sh

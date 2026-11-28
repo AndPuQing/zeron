@@ -26,6 +26,8 @@ jobs:
       - uses: ./.github/actions/linux-ci
         with:
           rust-cache: release-profile-core
+          apt-cache: dictation
+          apt-packages: libasound2-dev cmake pkg-config
       - name: Harness, engine, sync, update, doc and preview tests (release)
         run: scripts/ci/test-core.sh --release
 

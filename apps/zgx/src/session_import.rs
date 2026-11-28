@@ -42,8 +42,9 @@ pub fn install(host: &ScriptHost) {
     let shared = snapshot.clone();
     host.async_action("session_import.open", move |_| {
         let (picker, snapshot) = (state.clone(), shared.clone());
+        let allowed = preview::refuse("session_import.open");
         async move {
-            preview::refuse("session_import.open")?;
+            allowed?;
             let info = engine::get()
                 .call("EngineInfo", serde_json::json!({}))
                 .await?;

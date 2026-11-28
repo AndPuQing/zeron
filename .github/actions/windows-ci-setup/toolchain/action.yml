@@ -6,8 +6,6 @@ runs:
   steps:
     - name: Install Rust
       shell: pwsh
-      # ort-sys 2.0.0-rc.13 assumes the build-script directory layout from
-      # Cargo 1.99. Cargo 1.100 places its DLLs in the wrong output directory.
       run: |
         rustup toolchain install 1.99.1 --profile minimal --no-self-update
         if ($LASTEXITCODE -ne 0) { throw 'Installing the Windows Rust toolchain failed' }

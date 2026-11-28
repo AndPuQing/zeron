@@ -60,7 +60,7 @@ for var in ZERON_EDGE_URL ZERON_WORKOS_CLIENT_ID ZERUN_CALLBACK_PORT ZERUN_DATA_
 done
 
 mkdir -p "$CONTENTS/Resources/licenses"
-cp "$ROOT/crates/voice/NOTICE.md" "$CONTENTS/Resources/licenses"/parakeet-v3.txt
+cp "$ROOT/crates/voice/NOTICE.md" "$CONTENTS/Resources/licenses"/speech-models.txt
 
 if [[ ! -f "$CONTENTS/Resources/zerun.icns" ]]; then
   ICONSET="$DEV_ROOT/zerun-dev.iconset"

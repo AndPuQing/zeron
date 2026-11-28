@@ -30,6 +30,9 @@ export type Name =
 	| "provider-gemini"
 	| "provider-xai"
 	| "provider-deepseek"
+	| "nvidia"
+	| "moondream"
+	| "cohere"
 
 local FILES: { [Name]: string } = {
 	claude = "claude-mark",
@@ -52,6 +55,10 @@ local FILES: { [Name]: string } = {
 	["provider-gemini"] = "provider-gemini",
 	["provider-xai"] = "provider-xai",
 	["provider-deepseek"] = "provider-deepseek",
+	-- Speech models' makers (Settings → Voice).
+	nvidia = "nvidia-mark",
+	moondream = "moondream-mark",
+	cohere = "cohere-mark",
 }
 
 -- Marks drawn in one ink (black, for the white tile): bare, they take the

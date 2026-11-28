@@ -339,6 +339,7 @@ jobs:
             -only-testing:ZeronTests \
             -only-testing:ZeronUITests/ActivityFlowTests \
             -only-testing:ZeronUITests/DelegationFlowTests \
+            -only-testing:ZeronUITests/DuoBarTests \
             -only-testing:ZeronUITests/SessionFlowTests/testCompanionsSideChatAndForkSeam \
             -only-testing:ZeronUITests/SessionFlowTests/testSearchFindsSideChats \
             -only-testing:ZeronUITests/SessionFlowTests/testNewSideChatKeepsDraftThroughCompanions \

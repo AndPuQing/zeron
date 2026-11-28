@@ -15,13 +15,6 @@ if ($BetaVersion -and -not (Test-Path -LiteralPath $BetaEngine -PathType Leaf)) 
 }
 $root = Split-Path $PSScriptRoot -Parent
 
-# ort-sys copies DLLs here even for a build with no examples.
-function Initialize-NativeOutput {
-    $target = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).target_directory
-    if ($LASTEXITCODE -ne 0) { throw 'Cargo metadata failed' }
-    New-Item -ItemType Directory -Force -Path (Join-Path $target 'release/examples') | Out-Null
-}
-
 function Find-InnoSetupCompiler {
     # Inno Setup 6 ships on GitHub's Windows runners; locally, install it with
     # `winget install JRSoftware.InnoSetup`.
@@ -98,13 +91,11 @@ try {
         $env:ZERUN_ENGINE_VERSION = $BetaVersion
         Push-Location (Join-Path $root 'apps/zgx')
         try {
-            Initialize-NativeOutput
             cargo build --release --locked --features beta
         } finally { Pop-Location }
         if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
         $built = (Resolve-Path -LiteralPath './apps/zgx/target/release/zerun-experimental.exe').Path
     } else {
-        Initialize-NativeOutput
         cargo build --release --locked -p zeron
         if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
         $built = (Resolve-Path -LiteralPath './target/release/zerun.exe').Path
@@ -125,7 +116,7 @@ try {
     $licenses = Join-Path $stage 'licenses/fonts'
     New-Item -ItemType Directory -Force -Path $licenses | Out-Null
     Copy-Item -Path 'crates/ui/assets/fonts/licenses/*' -Destination $licenses
-    Copy-Item -LiteralPath 'crates/voice/NOTICE.md' -Destination (Join-Path $stage 'licenses/parakeet-v3.txt')
+    Copy-Item -LiteralPath 'crates/voice/NOTICE.md' -Destination (Join-Path $stage 'licenses/speech-models.txt')
     if ($BetaVersion) {
         [IO.File]::WriteAllText((Join-Path $stage 'zerun-version'), $version)
         $beta = Join-Path $stage "beta/$version"

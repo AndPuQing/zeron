@@ -22,12 +22,14 @@ struct VoiceGlobal {
 }
 impl Global for VoiceGlobal {}
 pub(crate) fn init(root: PathBuf, cx: &mut App) {
-    let directory = root.join("models/parakeet-tdt-0.6b-v3-int8");
+    let model = zeron_voice::manifest();
+    let directory = root.join("models").join(&model.id);
     let card = cx.new(|_| VoiceCard {
         scroll: widgets::PageScroll::default(),
-        ready: zeron_voice::installed(&directory),
+        ready: model.installed(&directory),
         cache_present: directory.exists(),
         directory: directory.clone(),
+        model,
         cancel: None,
         task: None,
         progress: 0,
@@ -51,6 +53,7 @@ pub(crate) fn directory(cx: &App) -> PathBuf {
 }
 pub(crate) fn enabled(cx: &App) -> bool {
     settings::current(cx).dictation_enabled
+        && zeron_voice::cpu_supported()
         && cx
             .try_global::<VoiceGlobal>()
             .is_some_and(|g| g.card.read(cx).ready)
@@ -64,6 +67,7 @@ pub(crate) fn card(cx: &mut App) -> Entity<VoiceCard> {
 pub(crate) struct VoiceCard {
     scroll: widgets::PageScroll,
     directory: PathBuf,
+    model: zeron_voice::Manifest,
     ready: bool,
     cache_present: bool,
     cancel: Option<Arc<AtomicBool>>,
@@ -122,6 +126,8 @@ impl VoiceCard {
     fn primary(&mut self, cx: &mut Context<Self>) {
         if let Some(cancel) = &self.cancel {
             cancel.store(true, Ordering::Release);
+        } else if !zeron_voice::cpu_supported() {
+            self.error = Some(zeron_voice::CPU_UNSUPPORTED.into());
         } else if self.ready {
             self.set_enabled(!settings::current(cx).dictation_enabled, cx);
         } else {
@@ -200,7 +206,7 @@ impl VoiceCard {
             return;
         }
         self.set_enabled(false, cx);
-        zeron_voice::unload();
+        zeron_voice::unload(&self.directory);
         match std::fs::remove_dir_all(&self.directory) {
             Ok(()) => {
                 self.cache_present = false;
@@ -429,11 +435,15 @@ impl Render for VoiceCard {
                 .child(voice_control)
                 .search_anchor(SettingId::CodexVoiceStyle),
         );
-        let enabled = settings::current(cx).dictation_enabled;
+        let supported = zeron_voice::cpu_supported();
+        let enabled = supported && settings::current(cx).dictation_enabled;
         let downloading = self.cancel.is_some();
         let on = downloading || (enabled && self.ready);
-        let size_mb = zeron_voice::download_size() as f64 / 1e6;
-        let meta = if downloading {
+        let size = self.model.size();
+        let size_mb = size as f64 / 1e6;
+        let meta = if !supported {
+            Some(zeron_voice::CPU_UNSUPPORTED.to_owned())
+        } else if downloading {
             Some(format!(
                 "Downloading · {:.0} of {size_mb:.0} MB",
                 self.progress as f64 / 1e6
@@ -478,7 +488,7 @@ impl Render for VoiceCard {
                         .h_full()
                         .rounded_full()
                         .w(gpui::relative(
-                            (self.progress as f32 / zeron_voice::download_size() as f32)
+                            (self.progress as f32 / size as f32)
                                 .clamp(0.0, 1.0),
                         ))
                         .bg(theme.accent),
@@ -581,7 +591,7 @@ impl Render for VoiceCard {
                             .child(widgets::meta_line(
                                 &theme,
                                 vec![
-                                    "Parakeet v3".into_any_element(),
+                                    self.model.name.clone().into_any_element(),
                                     format!("{size_mb:.0} MB").into_any_element(),
                                 ],
                             )),
@@ -655,9 +665,10 @@ mod tests {
     #[gpui::test]
     fn dictation_partial_cache_is_removable_after_restart(cx: &mut gpui::TestAppContext) {
         let root = tempfile::tempdir().unwrap();
-        let cache = root.path().join("models/parakeet-tdt-0.6b-v3-int8");
+        let model = zeron_voice::manifest();
+        let cache = root.path().join("models").join(&model.id);
         std::fs::create_dir_all(&cache).unwrap();
-        std::fs::write(cache.join("encoder-model.int8.onnx.part"), b"partial").unwrap();
+        std::fs::write(cache.join(format!("{}.part", model.files[0].name)), b"partial").unwrap();
         cx.update(|cx| settings::init(settings::UiSettings::default(), root.path(), cx));
         let card = cx.update(card);
         card.update(cx, |card, cx| {

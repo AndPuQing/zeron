@@ -23,6 +23,7 @@
 #                  lib, zeron-proto lib `voice` tests, zeron-mcp lib, zeron-rpc
 #                  device_room, engine voice_runtime and device_routing. They need no
 #                  audio stack, and harness already depends on all of them.
+#   zeron-voice    desktop dictation, including download and capture lifecycle
 # nextest does not run doctests; these crates have none (their doc comments
 # contain no Rust code blocks).
 # Extra arguments are passed to nextest (the nightly job adds `--release`).
@@ -50,7 +51,7 @@ done
 exec cargo nextest run --config-file scripts/ci/nextest.toml --locked --no-fail-fast \
   -p zeron-harness -p zeron-engine -p zeron-sync -p zeron-update -p zeron-doc -p zeron-preview \
   -p zeron-visual -p zeron-visual-gpu -p zeron-term-link \
-  -p zeron-mcp -p zeron-proto -p zeron-rpc -p zeron-orb -p zeron-voice-session -p zeron-voice-media \
+  -p zeron-mcp -p zeron-proto -p zeron-rpc -p zeron-orb -p zeron-voice-session -p zeron-voice-media -p zeron-voice \
   -p zeron-cli -p zeron-launch -p zeron-notify \
   --features zeron-harness/native-fixture \
   --lib --bins "${tests[@]}" \

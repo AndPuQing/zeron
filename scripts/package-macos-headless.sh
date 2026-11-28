@@ -19,7 +19,7 @@ mkdir -p "$PAYLOAD/licenses/fonts"
 install -m 755 "$BINARY" "$PAYLOAD/zerun"
 install -m 644 "$ROOT/LICENSE" "$ROOT/THIRD_PARTY_NOTICES.md" "$PAYLOAD/"
 cp "$ROOT/crates/ui/assets/fonts/licenses/"* "$PAYLOAD/licenses/fonts/"
-cp "$ROOT/crates/voice/NOTICE.md" "$PAYLOAD/licenses/parakeet-v3.txt"
+cp "$ROOT/crates/voice/NOTICE.md" "$PAYLOAD/licenses/speech-models.txt"
 # Bundle signatures bind their Info.plist. A copied bundle executable must be
 # signed as a standalone program before it can run outside Zerun.app.
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then

@@ -42,7 +42,7 @@ conflicts.
 | --- | --- |
 | CI branch wiring | `main` → `dev` in workflow triggers and cache conditions; unified `ci.yml` plans and admits reusable suites, reuses passes for matching inputs, and cancels superseded PR runs; dev is the trusted default branch for caches |
 | Apple CI | native desktop checks, iOS UI checks and macOS packaging use Apple Silicon `macos-15` with Xcode 26.3; `macos-26-intel` runs the complete CoreText suite against newer ICU; frame-source, voice and TestFlight use `xcode-27`; the unified planner selects native, CoreText, GPUI and iOS checks by their dependencies; CoreText fidelity, complete companion UI coverage and alternate-pool diagnostics remain enabled; manual `suite` and `macos_runner` inputs target one failed suite and an alternate pool |
-| Windows Rust | CI and stable/Beta packaging use Rust 1.99.1 while `ort-sys` depends on its build-script directory layout; local Windows builds should use the same toolchain |
+| Windows Rust | CI and stable/Beta packaging use Rust 1.99.1. Use the same toolchain to reproduce Windows builds |
 | `deploy.yml` | landing/www jobs removed; edge deploys on `dev` |
 | Edge | `zerun-edge` worker, `zerun-blobs`/`zerun-releases` R2 buckets, host `edge.550w.host`, account `808eccb28c4b8ff2386cb40c20704b22`; WorkOS user directory migration `v6` without upstream Cloud migration `v5` |
 | Endpoints | shared `crates/cli`, `crates/client` and iOS sign-in point at `https://edge.550w.host` |
